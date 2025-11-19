@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: swyp
+
+  config:
+    import: classpath:env.properties
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MY_SQL_END_POINT}:3306/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
+    #useSSL=false&serverTimezone=Asia/Seoul
+    username: ${MY_SQL_DB_USERNAME}
+    password: ${MY_SQL_DB_PASSWORD}
+
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: false
+        default_batch_fetch_size: 1000
+        jdbc:
+          time_zone: Asia/Seoul
+        hbm2ddl:
+          halt_on_error: false
+    hibernate:
+      ddl-auto: none
+    open-in-view: true
+
+
+logging:
+  level:
+    p6spy: info
+
+jwt:
+  secret-key: ${JWT_SECRET_KEY}
+  #expiration: ${JWT_EXPIRATION}
+  issuer: ${JWT_ISSUER}
