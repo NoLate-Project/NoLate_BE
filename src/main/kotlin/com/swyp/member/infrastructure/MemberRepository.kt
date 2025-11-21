@@ -1,7 +1,6 @@
-package com.swyp.member.repository
+package com.swyp.member.infrastructure
 
 import com.swyp.member.domain.Member
-import com.swyp.member.repository.impl.MemberRepositoryCustom
 import org.springframework.data.jpa.repository.JpaRepository
 
 

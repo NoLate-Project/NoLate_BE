@@ -1,10 +1,11 @@
 package com.swyp.member.controller
 
+import com.swyp.global.common.ApiResponse
 import com.swyp.member.domain.MemberDto
-import com.swyp.member.service.MemberUseCase
+import com.swyp.member.application.MemberUseCase
+import com.swyp.member.domain.LoginType
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
-import org.springframework.data.jpa.domain.AbstractPersistable_.id
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 
@@ -15,32 +16,42 @@ class MemberController(
     private val memberUseCase: MemberUseCase
 ) {
 
-    @Operation(summary = "회원 등록")
+    @Operation(summary = "회원가입")
     @PostMapping
-    fun addMember(@RequestBody dto: MemberDto): ResponseEntity<MemberDto> {
-        val saved = memberUseCase.addMember(dto)
-        return ResponseEntity.ok(saved)
+    fun signUp(@RequestBody request: SignUpRequest): ApiResponse<MemberDto> {
+        val memberDto = MemberDto(
+            email = request.email,
+            password = request.password,
+            name = request.name
+        )
+        val result = memberUseCase.signUp(memberDto)
+        return ApiResponse.success(result)
     }
 
-    @Operation(summary = "회원 정보 수정")
-    @PutMapping
-    fun updateMember(@RequestBody dto: MemberDto): ResponseEntity<MemberDto> {
-        val updated = memberUseCase.updateMember(dto)
-        return ResponseEntity.ok(updated)
-    }
-
-    @Operation(summary = "회원 조회")
-    @GetMapping("/{id}")
-    fun findMember(@RequestBody dto : MemberDto): ResponseEntity<MemberDto> {
-        val member = memberUseCase.findMember(dto) ?: return ResponseEntity.notFound().build()
-
-        return ResponseEntity.ok(member)
-    }
-
-    @Operation(summary = "회원 삭제")
-    @DeleteMapping("/{id}")
-    fun deleteMember(@RequestBody dto : MemberDto): ResponseEntity<Void> {
-        memberUseCase.deleteMember(dto)
-        return ResponseEntity.ok().build()
-    }
 }
+
+
+
+data class SignUpRequest(
+    val email: String,
+    val password: String,
+    val name: String
+)
+
+data class LoginRequest(
+    val email: String,
+    val password: String
+)
+
+// 카카오/구글 SDK에서 검증 완료된 값들을 보내준다고 가정
+data class SnsLoginRequest(
+    val loginType: LoginType, // KAKAO / GOOGLE / ...
+    val snsId: String,
+    val email: String?,
+    val name: String
+)
+
+data class UpdateMemberRequest(
+    val email: String?,
+    val name: String
+)

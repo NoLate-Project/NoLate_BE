@@ -1,8 +1,8 @@
-package com.swyp.member.service
+package com.swyp.member.application
 
 import com.swyp.member.domain.Member
 import com.swyp.member.domain.MemberDto
-import com.swyp.member.repository.MemberRepository
+import com.swyp.member.infrastructure.MemberRepository
 import org.springframework.stereotype.Service
 
 @Service
@@ -25,4 +25,7 @@ class MemberService(
     fun deleteMember( member : Member){
         member.id?.let{it -> memberRepository.removeMemberById(it)}
     }
+
+
+
 }

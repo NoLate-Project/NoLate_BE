@@ -36,3 +36,9 @@ jwt:
   secret-key: ${JWT_SECRET_KEY}
   #expiration: ${JWT_EXPIRATION}
   issuer: ${JWT_ISSUER}
+  access-token-validity-in-seconds: 86400 # 1 day
+  refresh-token-validity-in-seconds: 604800 # 7 days
+
+
+server:
+  port: 7000
