@@ -14,5 +14,6 @@ enum class ErrorCode(
     MEMBER_NOT_FOUND("M001", "회원이 존재하지 않습니다."),
     MEMBER_DUPLICATE_EMAIL("M002", "이미 사용 중인 이메일입니다."),
     INVALID_CREDENTIALS("A003", "이메일 또는 비밀번호가 일치하지 않습니다."),
-
+    DUPLICATE_EMAIL("A002", "이미 가입된 이메일입니다."),
+    DUPLICATE_MEMBER("A003", "이미 COMMON 방식으로 가입된 이메일입니다.")
 }

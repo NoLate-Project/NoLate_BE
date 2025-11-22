@@ -1,4 +1,4 @@
-package com.swyp.member.domain
+package com.swyp.member.domain.Member
 
 enum class LoginType {
     COMMON, KAKAO, GOOGLE, APPLE, NAVER

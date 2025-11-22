@@ -1,4 +1,4 @@
-package com.swyp.member.domain
+package com.swyp.member.domain.Member
 
 import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.Pattern
@@ -18,11 +18,15 @@ class MemberDto(
 
     val loginType: LoginType? = LoginType.COMMON,
 
-    val snsId: String ?= ""
+    val snsId: String ?= "",
+
+    var accessToken : String ?= "",
+
+    var refreshToken : String ?= ""
 
 ) {
     // JPA가 사용할 기본 생성자
-    protected constructor() : this(null, "", "", "", null, "")
+    protected constructor() : this(null, "", "", "", null, "" ,"" , "")
 
     fun toEntity() : Member =
         Member(

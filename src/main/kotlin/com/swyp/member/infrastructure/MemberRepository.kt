@@ -1,10 +1,19 @@
 package com.swyp.member.infrastructure
 
-import com.swyp.member.domain.Member
+import com.swyp.member.domain.Member.LoginType
+import com.swyp.member.domain.Member.Member
 import org.springframework.data.jpa.repository.JpaRepository
 
 
 interface MemberRepository : JpaRepository<Member, Long> {
+
     fun removeMemberById(id: Long)
+
+    fun findByEmailAndPassword(email: String?, password: String?) : Member?
+
+    fun findByEmailAndLoginType(email: String, common: LoginType): Member?
+
+    fun findByLoginTypeAndSnsId(loginType: LoginType?, snsId: String): Member?
+
 
 }

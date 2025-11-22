@@ -1,6 +1,6 @@
 package com.swyp.global.security
 
-import com.swyp.member.domain.Member
+import com.swyp.member.domain.Member.Member
 import org.springframework.security.core.userdetails.UserDetails
 
 class MemberPrincipal (

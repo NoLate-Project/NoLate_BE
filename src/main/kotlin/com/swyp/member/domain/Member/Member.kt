@@ -1,10 +1,9 @@
-package com.swyp.member.domain
+package com.swyp.member.domain.Member
 
 import com.swyp.global.common.BaseEntity
 import jakarta.persistence.*
 import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.Pattern
-import org.aspectj.bridge.Message
 
 @Entity
 class Member (
@@ -13,19 +12,19 @@ class Member (
     val id: Long? = null,
 
     @Column(nullable = false)
-    val name: String? = "",
+    var name: String? = "",
 
     @Column(nullable = false)
     @param:Pattern(regexp = "^[a-zA-Z0-9!@#$%^&*]{8,16}$", message = ValidationMessage.PASSWORD)
-    val password: String? = "",
+    var password: String? = "",
 
     @Column(nullable = false) @param:Email(message = ValidationMessage.EMAIL)
-    val email : String ?= "",
+    var email : String ?= "",
 
     @Column(nullable = false) @Enumerated(EnumType.STRING)
-    val loginType : LoginType ?= LoginType.COMMON,
+    var loginType : LoginType ?= LoginType.COMMON,
 
-    val snsId : String ?= ""
+    var snsId : String ?= ""
 
 
 ) : BaseEntity() {

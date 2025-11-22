@@ -24,7 +24,7 @@ spring:
         hbm2ddl:
           halt_on_error: false
     hibernate:
-      ddl-auto: none
+      ddl-auto: create-drop
     open-in-view: true
 
 

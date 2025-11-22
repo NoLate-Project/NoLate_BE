@@ -41,6 +41,7 @@ dependencies {
 
     // Kotlin
     implementation 'org.jetbrains.kotlin:kotlin-reflect'
+    implementation 'org.mockito.kotlin:mockito-kotlin:5.2.1'
 
     // Lombok (optional)
     compileOnly 'org.projectlombok:lombok'
