@@ -7,6 +7,7 @@ enum class ErrorCode(
     // 공통
     INTERNAL_SERVER_ERROR("C000", "서버 에러가 발생했습니다."),
     INVALID_INPUT("C001", "요청 값이 올바르지 않습니다."),
+    INVALID_STATE("C002" ,"상태가 올바르지 않습니다."),
     UNAUTHORIZED("A001", "인증이 필요합니다."),
     FORBIDDEN("A002", "권한이 없습니다."),
 

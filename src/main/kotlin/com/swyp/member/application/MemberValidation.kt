@@ -53,6 +53,7 @@ class MemberValidator(
         val found = memberService.findByEmailAndLoginType(email, LoginType.COMMON)
             ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND, "존재하지 않는 회원이거나 로그인 방식이 다릅니다.")
 
+
         val encoded = found.password
             ?: throw BusinessException(ErrorCode.INVALID_CREDENTIALS, "비밀번호가 설정되지 않은 계정입니다.")
 

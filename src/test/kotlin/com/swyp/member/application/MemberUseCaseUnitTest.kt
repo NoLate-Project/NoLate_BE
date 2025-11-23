@@ -8,7 +8,10 @@ import com.swyp.global.security.JwtTokenProvider
 import com.swyp.member.domain.Member.LoginType
 import com.swyp.member.domain.Member.Member
 import com.swyp.member.domain.Member.MemberDto
+import com.swyp.member.domain.MemberSetting.MemberSetting
 import com.swyp.member.domain.MemberSetting.MemberSettingDto
+import com.swyp.member.domain.MemberSetting.ThemeType
+import com.swyp.member.domain.profile.MemberProfileDto
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -17,7 +20,6 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.*
-import org.mockito.stubbing.OngoingStubbing
 import org.springframework.security.crypto.password.PasswordEncoder
 import java.time.LocalDateTime
 import java.util.*
@@ -30,6 +32,9 @@ class MemberUseCaseUnitTest {
 
     @Mock
     lateinit var memberSettingService: MemberSettingService
+
+    @Mock
+    lateinit var memberProfileService: MemberProfileService
 
     @Mock
     lateinit var jwtTokenProvider: JwtTokenProvider
@@ -50,6 +55,7 @@ class MemberUseCaseUnitTest {
         memberUseCase = MemberUseCase(
             memberService = memberService,
             memberSettingService = memberSettingService,
+            memberProfileService = memberProfileService,
             jwtTokenProvider = jwtTokenProvider,
             passwordEncoder = passwordEncoder,
             memberValidator = memberValidator,
@@ -96,8 +102,9 @@ class MemberUseCaseUnitTest {
                 assertEquals(1L, it.memberId)
             })
 
-        // refreshTokenService 는 회원가입에선 사용 안 됨
+        // refreshTokenService, profileService 는 회원가입에선 사용 안 됨
         verifyNoInteractions(refreshTokenService)
+        verifyNoInteractions(memberProfileService)
 
         assertEquals(1L, result.id)
         assertEquals("user@test.com", result.email)
@@ -379,9 +386,169 @@ class MemberUseCaseUnitTest {
         memberUseCase.logout(refreshToken)
 
         // then
-        // validateAndGet은 호출되지 않고 바로 revoke만 호출
         verify(refreshTokenService, never()).validateAndGet(any())
         verify(refreshTokenService, times(1)).revokeToken(refreshToken)
     }
-}
 
+    @Test
+    fun `비밀번호 변경 성공 시 기존 비밀번호가 일치하면 새 비밀번호로 변경된다`() {
+        val memberId = 10L
+        val currentPassword = "old-pw"
+        val newPassword = "new-password"
+
+        val member = Member(
+            id = memberId,
+            email = "pw@test.com",
+            password = "encoded-old",
+            name = "유저",
+            loginType = LoginType.COMMON,
+            snsId = null
+        )
+
+        whenever(memberService.getFindMemberId(memberId))
+            .thenReturn(Optional.of(member))
+        whenever(passwordEncoder.matches(currentPassword, "encoded-old"))
+            .thenReturn(true)
+        whenever(passwordEncoder.encode(newPassword))
+            .thenReturn("encoded-new")
+
+        // when
+        memberUseCase.changePassword(memberId, currentPassword, newPassword)
+
+        // then
+        verify(memberService, times(1)).updateMember(check {
+            assertEquals("encoded-new", it.password)
+        })
+    }
+
+    @Test
+    fun `SNS 계정은 비밀번호 변경을 할 수 없다`() {
+        val memberId = 11L
+        val member = Member(
+            id = memberId,
+            email = "sns@test.com",
+            password = null,
+            name = "SNS유저",
+            loginType = LoginType.KAKAO,
+            snsId = "kakao-xyz"
+        )
+
+        whenever(memberService.getFindMemberId(memberId))
+            .thenReturn(Optional.of(member))
+
+        val ex = assertThrows<BusinessException> {
+            memberUseCase.changePassword(memberId, "any", "new-password")
+        }
+
+        assertTrue(ex.message?.contains("SNS") == true)
+        verify(memberService, never()).updateMember(any())
+    }
+
+    @Test
+    fun `withdraw는 COMMON 계정에서 비밀번호가 일치하면 refresh, setting, member에 대해 정리 작업을 수행한다`() {
+        val memberId = 20L
+        val member = Member(
+            id = memberId,
+            email = "withdraw@test.com",
+            password = "encoded-pw",
+            name = "탈퇴유저",
+            loginType = LoginType.COMMON,
+            snsId = null
+        )
+
+        val settingDto = MemberSettingDto(
+            id = 1L,
+            memberId = memberId,
+            pushEnabled = false,
+            emailEnabled = false,
+            marketingConsent = false,
+            theme = ThemeType.LIGTH
+        )
+
+        whenever(memberService.getFindMemberId(memberId))
+            .thenReturn(Optional.of(member))
+        whenever(passwordEncoder.matches("pw", "encoded-pw"))
+            .thenReturn(true)
+        whenever(memberSettingService.getByMemberId(memberId))
+            .thenReturn(settingDto)
+
+        // when
+        memberUseCase.withdraw(memberId, "pw")
+
+        // then
+        verify(refreshTokenService, times(1)).deleteAllByMemberId(memberId)
+        verify(memberSettingService, times(1)).softDelete(any<MemberSetting>())
+        verify(memberService, times(1)).softDelete(member)
+    }
+
+    @Test
+    fun `getMyProfile은 회원이 존재하고 프로필이 있으면 그대로 반환하고 없으면 기본 프로필을 생성한다`() {
+        val memberId = 30L
+        val member = Member(
+            id = memberId,
+            email = "profile@test.com",
+            password = "pw",
+            name = "프로필유저",
+            loginType = LoginType.COMMON,
+            snsId = null
+        )
+        whenever(memberService.getFindMemberId(memberId))
+            .thenReturn(Optional.of(member))
+
+        val existingProfile = MemberProfileDto(
+            id = 10L,
+            memberId = memberId,
+            nickname = "닉",
+            imgId = 10,
+            intro = "소개"
+        )
+
+        // 1) 프로필이 있는 경우
+        whenever(memberProfileService.getByMemberId(memberId))
+            .thenReturn(existingProfile)
+
+        val result1 = memberUseCase.getMyProfile(memberId)
+        assertEquals("닉", result1.nickname)
+
+        // 2) 프로필이 없는 경우 → 기본 생성
+        whenever(memberProfileService.getByMemberId(memberId))
+            .thenReturn(null)
+        val defaultProfile = MemberProfileDto(existingProfile.id, memberId, null, null, null)
+        whenever(memberProfileService.createDefaultProfile(memberId))
+            .thenReturn(defaultProfile)
+
+        val result2 = memberUseCase.getMyProfile(memberId)
+        assertEquals(memberId, result2.memberId)
+    }
+
+    @Test
+    fun `updateMyProfile은 회원 존재 여부를 확인한 후 profileService로 위임한다`() {
+        val memberId = 40L
+        val member = Member(
+            id = memberId,
+            email = "profile2@test.com",
+            password = "pw",
+            name = "유저2",
+            loginType = LoginType.COMMON,
+            snsId = null
+        )
+        whenever(memberService.getFindMemberId(memberId))
+            .thenReturn(Optional.of(member))
+
+        val reqDto = MemberProfileDto(
+            memberId = memberId,
+            nickname = "새닉",
+            imgId = null,
+            intro = "자기소개"
+        )
+
+        val updatedDto = reqDto.apply { this.intro = "저는 수정된 유저입니다." }
+        whenever(memberProfileService.updateProfile(memberId, reqDto))
+            .thenReturn(updatedDto)
+
+        val result = memberUseCase.updateMyProfile(memberId, reqDto)
+
+        assertEquals("새닉", result.nickname)
+        assertEquals("저는 수정된 유저입니다.", result.intro)
+    }
+}

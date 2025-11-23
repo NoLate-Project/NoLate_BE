@@ -214,7 +214,6 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
     @Test
     fun `tokenLogin은 refreshToken만으로 새 토큰 세트를 발급하고 DB의 refreshToken을 갱신한다`() {
-        // given - 회원가입 + 로그인
         val signUpDto = MemberDto(
             email = "tokenlogin@test.com",
             password = "pw-token",
@@ -279,7 +278,6 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         val newRefreshToken = refreshed.refreshToken!!
         assertTrue(jwtTokenProvider.validateToken(newRefreshToken))
 
-        // refresh 이후에도 refreshToken 개수는 유지(또는 정책에 따라 1개)
         assertEquals(countBefore, refreshTokenRepository.count())
     }
 
@@ -307,7 +305,6 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         // 로그아웃
         memberUseCase.logout(refreshToken)
 
-        // 로그아웃된 refreshToken으로 재로그인 시도 → 예외
         val ex = assertThrows<BusinessException> {
             memberUseCase.tokenLogin(refreshToken)
         }
@@ -315,5 +312,82 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         assertTrue(ex.message?.contains("리프레시 토큰") == true ||
                 ex.message?.contains("유효하지") == true ||
                 ex.message?.contains("회원 정보가 일치하지") == true)
+    }
+
+    @Test
+    fun `비밀번호 변경 후에는 새 비밀번호로는 로그인 가능하고 기존 비밀번호로는 로그인할 수 없다`() {
+        val signUpDto = MemberDto(
+            email = "changepw@test.com",
+            password = "old-pw",
+            name = "패스워드유저",
+            loginType = LoginType.COMMON
+        )
+        val signed = memberUseCase.signUp(signUpDto)
+        val memberId = signed.id!!
+
+        // 비밀번호 변경
+        memberUseCase.changePassword(memberId, "old-pw", "new-pw-1234")
+
+        // 새 비밀번호로 로그인 → 성공
+        val loginNew = memberUseCase.login(
+            MemberDto(
+                email = "changepw@test.com",
+                password = "new-pw-1234",
+                loginType = LoginType.COMMON
+            )
+        )
+        assertEquals(memberId, loginNew.id)
+
+        // 옛 비밀번호로 로그인 → 예외
+        val ex = assertThrows<BusinessException> {
+            memberUseCase.login(
+                MemberDto(
+                    email = "changepw@test.com",
+                    password = "old-pw",
+                    loginType = LoginType.COMMON
+                )
+            )
+        }
+        assertTrue(ex.message?.contains("비밀번호") == true || ex.message?.contains("일치하지") == true)
+    }
+
+    @Test
+    fun `회원 탈퇴 이후에는 같은 계정으로 다시 로그인할 수 없다`() {
+        val signUpDto = MemberDto(
+            email = "withdraw-it@test.com",
+            password = "pw-withdraw",
+            name = "탈퇴통합유저",
+            loginType = LoginType.COMMON
+        )
+        val signed = memberUseCase.signUp(signUpDto)
+        val memberId = signed.id!!
+
+        // 로그인 한 번 해서 refreshToken 생성
+        memberUseCase.login(
+            MemberDto(
+                email = "withdraw-it@test.com",
+                password = "pw-withdraw",
+                loginType = LoginType.COMMON
+            )
+        )
+        assertEquals(1, refreshTokenRepository.count())
+
+        // 탈퇴
+        memberUseCase.withdraw(memberId, "pw-withdraw")
+
+        // refreshToken 전부 삭제되었는지(혹은 soft delete 처리되었는지) 확인
+        assertEquals(0, refreshTokenRepository.count())
+
+        // 같은 계정으로 다시 로그인 시도 → 예외
+        val ex = assertThrows<BusinessException> {
+            memberUseCase.login(
+                MemberDto(
+                    email = "withdraw-it@test.com",
+                    password = "pw-withdraw",
+                    loginType = LoginType.COMMON
+                )
+            )
+        }
+        assertTrue(ex.message?.contains("회원") == true || ex.message?.contains("존재") == true)
     }
 }

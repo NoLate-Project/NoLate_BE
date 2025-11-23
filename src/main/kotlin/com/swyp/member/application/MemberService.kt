@@ -5,7 +5,6 @@ import com.swyp.member.domain.Member.Member
 import com.swyp.member.domain.Member.MemberDto
 import com.swyp.member.infrastructure.MemberRepository
 import jakarta.transaction.Transactional
-import org.springframework.data.jpa.domain.AbstractPersistable_.id
 import org.springframework.stereotype.Service
 import java.util.Optional
 
@@ -42,17 +41,22 @@ class MemberService(
 
     @Transactional
     fun getByEmailAndPassword(email: String?, password: String?) : MemberDto? {
-       return memberRepository.findByEmailAndPassword(email, password)?.toDto()
+       return memberRepository.findByEmailAndPasswordAndDeletedFalse(email, password)?.toDto()
     }
 
     @Transactional
     fun findByEmailAndLoginType(email: String, common: LoginType) : MemberDto?{
-       return memberRepository.findByEmailAndLoginType(email, common)?.toDto()
+       return memberRepository.findByEmailAndLoginTypeAndDeletedFalse(email, common)?.toDto()
     }
 
     @Transactional
     fun findByLoginTypeAndSnsId(loginType: LoginType?, snsId: String) : MemberDto? {
-       return memberRepository.findByLoginTypeAndSnsId(loginType, snsId)?.toDto()
+       return memberRepository.findByLoginTypeAndSnsIdAndDeletedFalse(loginType, snsId)?.toDto()
+    }
+
+    fun softDelete(member: Member) {
+        val saved = member.apply { this.deleted = true }
+        memberRepository.save(saved)
     }
 
 

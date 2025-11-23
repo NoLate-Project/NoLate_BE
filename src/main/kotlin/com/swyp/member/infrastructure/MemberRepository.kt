@@ -9,11 +9,11 @@ interface MemberRepository : JpaRepository<Member, Long> {
 
     fun removeMemberById(id: Long)
 
-    fun findByEmailAndPassword(email: String?, password: String?) : Member?
+    fun findByEmailAndPasswordAndDeletedFalse(email: String?, password: String?) : Member?
 
-    fun findByEmailAndLoginType(email: String, common: LoginType): Member?
+    fun findByEmailAndLoginTypeAndDeletedFalse(email: String, common: LoginType): Member?
 
-    fun findByLoginTypeAndSnsId(loginType: LoginType?, snsId: String): Member?
+    fun findByLoginTypeAndSnsIdAndDeletedFalse(loginType: LoginType?, snsId: String): Member?
 
 
 }

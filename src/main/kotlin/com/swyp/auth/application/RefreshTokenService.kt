@@ -50,4 +50,8 @@ class RefreshTokenService (
         return entity
     }
 
+    fun deleteAllByMemberId(memberId : Long) {
+        refreshTokenRepository.deleteAllByMemberId(memberId)
+    }
+
 }

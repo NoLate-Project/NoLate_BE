@@ -1,5 +1,6 @@
 package com.swyp.member.application
 
+import com.swyp.member.domain.MemberSetting.MemberSetting
 import com.swyp.member.domain.MemberSetting.MemberSettingDto
 import com.swyp.member.infrastructure.MemberSettingRepository
 import jakarta.transaction.Transactional
@@ -30,5 +31,10 @@ class MemberSettingService (
     fun createDefaultFor(memberId: Long) : MemberSettingDto {
        return memberSettingRepository.save(MemberSettingDto().apply { this.memberId = memberId }.toEntity()).toDto()
 
+    }
+
+    fun softDelete(memberSetting : MemberSetting ) {
+        val saved = memberSetting.apply { this.deleted = true }
+        memberSettingRepository.save(saved)
     }
 }
