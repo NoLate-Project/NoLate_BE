@@ -5,6 +5,7 @@ import io.jsonwebtoken.security.Keys
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.nio.charset.StandardCharsets
+import java.time.LocalDateTime
 import java.util.*
 
 @Component
@@ -88,6 +89,19 @@ class JwtTokenProvider(
             .build()
             .parseClaimsJws(token)
             .body
+    }
+
+    fun getRefreshTokenExpiryDate(): java.util.Date {
+        val now = System.currentTimeMillis()
+        val expiry = now + refreshTokenValidityInSeconds * 1000
+        return java.util.Date(expiry)
+    }
+
+    fun getRefreshTokenExpiryLocalDateTime(): LocalDateTime {
+        return getRefreshTokenExpiryDate()
+            .toInstant()
+            .atZone(java.time.ZoneId.systemDefault())
+            .toLocalDateTime()
     }
 
     companion object {

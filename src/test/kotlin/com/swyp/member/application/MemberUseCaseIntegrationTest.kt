@@ -1,6 +1,7 @@
 // src/test/kotlin/com/swyp/member/application/MemberUseCaseIntegrationTest.kt
 package com.swyp.member.application
 
+import com.swyp.auth.infrastructure.RefreshTokenRepository
 import com.swyp.global.error.BusinessException
 import com.swyp.global.security.JwtTokenProvider
 import com.swyp.member.domain.Member.LoginType
@@ -24,6 +25,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     private val memberUseCase: MemberUseCase,
     private val memberRepository: MemberRepository,
     private val memberSettingRepository: MemberSettingRepository,
+    private val refreshTokenRepository: RefreshTokenRepository,
     private val jwtTokenProvider: JwtTokenProvider,
     private val passwordEncoder: PasswordEncoder
 ) {
@@ -73,6 +75,9 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         assertEquals(saved.id, memberIdFromToken)
         assertEquals(saved.name, memberNameFromToken)
+
+        // refreshToken 이 DB에 저장되어 있는지 확인
+        assertEquals(1, refreshTokenRepository.count())
     }
 
     @Test
@@ -94,7 +99,6 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
             memberUseCase.signUp(dto)
         }
 
-        // ErrorCode까지 체크해도 되고, 일단 메시지만 확인
         assertTrue(ex.message?.contains("COMMON 방식으로 가입된 이메일") == true)
     }
 
@@ -122,7 +126,6 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
             memberUseCase.login(wrongLoginDto)
         }
 
-        // INVALID_CREDENTIALS 관련 메시지일 것
         assertTrue(ex.message?.contains("비밀번호") == true || ex.message?.contains("일치하지") == true)
     }
 
@@ -138,7 +141,6 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
             memberUseCase.login(loginDto)
         }
 
-        // MEMBER_NOT_FOUND 관련 메시지일 것
         assertTrue(ex.message?.contains("존재하지 않는") == true || ex.message?.contains("회원") == true)
     }
 
@@ -170,6 +172,8 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         val accessToken = result.accessToken!!
         assertTrue(jwtTokenProvider.validateToken(accessToken))
+
+        assertEquals(1, refreshTokenRepository.count())
     }
 
     @Test
@@ -206,5 +210,110 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         assertNotNull(second.accessToken)
         assertTrue(jwtTokenProvider.validateToken(second.accessToken!!))
+    }
+
+    @Test
+    fun `tokenLogin은 refreshToken만으로 새 토큰 세트를 발급하고 DB의 refreshToken을 갱신한다`() {
+        // given - 회원가입 + 로그인
+        val signUpDto = MemberDto(
+            email = "tokenlogin@test.com",
+            password = "pw-token",
+            name = "토큰로그인유저",
+            loginType = LoginType.COMMON
+        )
+        memberUseCase.signUp(signUpDto)
+
+        val loginResult = memberUseCase.login(
+            MemberDto(
+                email = "tokenlogin@test.com",
+                password = "pw-token",
+                loginType = LoginType.COMMON
+            )
+        )
+
+        val firstRefreshToken = loginResult.refreshToken!!
+        assertEquals(1, refreshTokenRepository.count())
+
+        // when - tokenLogin 호출
+        val reLoginResult = memberUseCase.tokenLogin(firstRefreshToken)
+
+        // then
+        assertEquals(loginResult.id, reLoginResult.id)
+        assertNotNull(reLoginResult.accessToken)
+        assertNotNull(reLoginResult.refreshToken)
+
+        val newRefreshToken = reLoginResult.refreshToken!!
+        assertTrue(jwtTokenProvider.validateToken(newRefreshToken))
+
+        // 정책상 한 회원당 refreshToken 한 개만 유지한다고 가정
+        assertEquals(1, refreshTokenRepository.count())
+    }
+
+    @Test
+    fun `refresh는 tokenLogin과 동일하게 refreshToken만으로 새 토큰 세트를 발급한다`() {
+        val signUpDto = MemberDto(
+            email = "refresh@test.com",
+            password = "pw-refresh",
+            name = "리프레시유저",
+            loginType = LoginType.COMMON
+        )
+        memberUseCase.signUp(signUpDto)
+
+        val loginResult = memberUseCase.login(
+            MemberDto(
+                email = "refresh@test.com",
+                password = "pw-refresh",
+                loginType = LoginType.COMMON
+            )
+        )
+
+        val oldRefreshToken = loginResult.refreshToken!!
+        val countBefore = refreshTokenRepository.count()
+
+        val refreshed = memberUseCase.refresh(oldRefreshToken)
+
+        assertEquals(loginResult.id, refreshed.id)
+        assertNotNull(refreshed.accessToken)
+        assertNotNull(refreshed.refreshToken)
+
+        val newRefreshToken = refreshed.refreshToken!!
+        assertTrue(jwtTokenProvider.validateToken(newRefreshToken))
+
+        // refresh 이후에도 refreshToken 개수는 유지(또는 정책에 따라 1개)
+        assertEquals(countBefore, refreshTokenRepository.count())
+    }
+
+    @Test
+    fun `logout 이후에는 해당 refreshToken으로 tokenLogin을 시도하면 예외를 던진다`() {
+        val signUpDto = MemberDto(
+            email = "logout@test.com",
+            password = "pw-logout",
+            name = "로그아웃유저",
+            loginType = LoginType.COMMON
+        )
+        memberUseCase.signUp(signUpDto)
+
+        val loginResult = memberUseCase.login(
+            MemberDto(
+                email = "logout@test.com",
+                password = "pw-logout",
+                loginType = LoginType.COMMON
+            )
+        )
+
+        val refreshToken = loginResult.refreshToken!!
+        assertEquals(1, refreshTokenRepository.count())
+
+        // 로그아웃
+        memberUseCase.logout(refreshToken)
+
+        // 로그아웃된 refreshToken으로 재로그인 시도 → 예외
+        val ex = assertThrows<BusinessException> {
+            memberUseCase.tokenLogin(refreshToken)
+        }
+
+        assertTrue(ex.message?.contains("리프레시 토큰") == true ||
+                ex.message?.contains("유효하지") == true ||
+                ex.message?.contains("회원 정보가 일치하지") == true)
     }
 }

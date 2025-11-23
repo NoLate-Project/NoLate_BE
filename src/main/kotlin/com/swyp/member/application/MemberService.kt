@@ -5,7 +5,9 @@ import com.swyp.member.domain.Member.Member
 import com.swyp.member.domain.Member.MemberDto
 import com.swyp.member.infrastructure.MemberRepository
 import jakarta.transaction.Transactional
+import org.springframework.data.jpa.domain.AbstractPersistable_.id
 import org.springframework.stereotype.Service
+import java.util.Optional
 
 @Service
 class MemberService(
@@ -34,7 +36,8 @@ class MemberService(
     }
 
     @Transactional
-    fun getFindMemberId(id: Long, password: String) {
+    fun getFindMemberId(id: Long) : Optional<Member> {
+       return memberRepository.findById(id)
     }
 
     @Transactional
