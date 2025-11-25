@@ -4,6 +4,7 @@ package com.swyp.member.application
 import com.swyp.auth.infrastructure.RefreshTokenRepository
 import com.swyp.global.error.BusinessException
 import com.swyp.global.security.JwtTokenProvider
+import com.swyp.member.application.useCase.MemberUseCase
 import com.swyp.member.domain.Member.LoginType
 import com.swyp.member.domain.Member.MemberDto
 import com.swyp.member.infrastructure.MemberRepository

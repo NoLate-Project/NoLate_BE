@@ -5,6 +5,11 @@ import com.swyp.auth.application.RefreshTokenService
 import com.swyp.auth.domain.RefreshToken
 import com.swyp.global.error.BusinessException
 import com.swyp.global.security.JwtTokenProvider
+import com.swyp.member.application.service.MemberProfileService
+import com.swyp.member.application.service.MemberService
+import com.swyp.member.application.service.MemberSettingService
+import com.swyp.member.application.service.MemberValidator
+import com.swyp.member.application.useCase.MemberUseCase
 import com.swyp.member.domain.Member.LoginType
 import com.swyp.member.domain.Member.Member
 import com.swyp.member.domain.Member.MemberDto

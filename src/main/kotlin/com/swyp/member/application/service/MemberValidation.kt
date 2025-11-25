@@ -1,9 +1,8 @@
-package com.swyp.member.application
+package com.swyp.member.application.service
 
 import com.swyp.global.error.BusinessException
 import com.swyp.global.error.ErrorCode
 import com.swyp.member.domain.Member.LoginType
-import com.swyp.member.domain.Member.Member
 import com.swyp.member.domain.Member.MemberDto
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Component

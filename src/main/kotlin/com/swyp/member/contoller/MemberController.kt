@@ -1,7 +1,7 @@
 package com.swyp.member.controller
 
 import com.swyp.global.common.ApiResponse
-import com.swyp.member.application.MemberUseCase
+import com.swyp.member.application.useCase.MemberUseCase
 import com.swyp.member.domain.Member.MemberDto
 import com.swyp.member.domain.Member.LoginType
 import io.swagger.v3.oas.annotations.Operation

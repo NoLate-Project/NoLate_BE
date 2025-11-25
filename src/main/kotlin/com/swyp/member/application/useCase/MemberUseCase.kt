@@ -1,9 +1,13 @@
-package com.swyp.member.application
+package com.swyp.member.application.useCase
 
 import com.swyp.auth.application.RefreshTokenService
 import com.swyp.global.error.BusinessException
 import com.swyp.global.error.ErrorCode
 import com.swyp.global.security.JwtTokenProvider
+import com.swyp.member.application.service.MemberProfileService
+import com.swyp.member.application.service.MemberService
+import com.swyp.member.application.service.MemberSettingService
+import com.swyp.member.application.service.MemberValidator
 import com.swyp.member.domain.Member.LoginType
 import com.swyp.member.domain.Member.Member
 import com.swyp.member.domain.Member.MemberDto
@@ -11,7 +15,7 @@ import com.swyp.member.domain.MemberSetting.MemberSettingDto
 import com.swyp.member.domain.profile.MemberProfileDto
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Component
-import org.springframework.transaction.annotation.Transactional  // ✅ 스프링 Transactional 사용 권장
+import org.springframework.transaction.annotation.Transactional
 
 @Component
 class MemberUseCase(

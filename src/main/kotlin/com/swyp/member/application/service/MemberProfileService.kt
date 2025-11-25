@@ -1,4 +1,4 @@
-package com.swyp.member.application
+package com.swyp.member.application.service
 
 import com.swyp.member.domain.profile.MemberProfile
 import com.swyp.member.domain.profile.MemberProfileDto
