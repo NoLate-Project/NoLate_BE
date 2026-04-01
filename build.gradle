@@ -1,6 +1,8 @@
 plugins {
     id 'org.jetbrains.kotlin.jvm' version '1.9.25'
     id 'org.jetbrains.kotlin.plugin.spring' version '1.9.25'
+    id 'nu.studer.jooq' version '8.2'
+    id 'org.jetbrains.kotlin.kapt' version '1.9.25'   // ✅ 추가
     id 'war'
     id 'org.springframework.boot' version '3.5.7'
     id 'io.spring.dependency-management' version '1.1.7'
@@ -8,8 +10,8 @@ plugins {
 }
 
 group = 'com'
-version = '0.0.1-SNAPSHOT'
-description = 'swyp'
+version = '0.0.1-NOLATESHOT'
+description = 'noLate'
 
 java {
     toolchain {
@@ -60,6 +62,28 @@ dependencies {
 
     // WAR deploy
     providedRuntime 'org.springframework.boot:spring-boot-starter-tomcat'
+
+    // ✅ QueryDSL (Spring Boot 3 / Jakarta)
+    implementation "com.querydsl:querydsl-jpa:5.0.0:jakarta"
+    kapt "com.querydsl:querydsl-apt:5.0.0:jakarta"
+
+    // ✅ (선택) 애노테이션들 처리용 - 보통 같이 넣으면 삽질 줄어듦
+    kapt "jakarta.annotation:jakarta.annotation-api"
+    kapt "jakarta.persistence:jakarta.persistence-api"
+
+
+
+//    // jOOQ ⭐⭐⭐
+//    implementation 'org.springframework.boot:spring-boot-starter-jooq'    // ✅ jOOQ codegen 실행용 classpath에 드라이버 추가
+//    jooqGenerator 'com.mysql:mysql-connector-j'
+}
+
+sourceSets {
+    main {
+        kotlin {
+            srcDir("build/generated/source/kapt/main")
+        }
+    }
 }
 
 kotlin {
@@ -77,3 +101,40 @@ allOpen {
 tasks.named('test') {
     useJUnitPlatform()
 }
+
+//jooq {
+//    version = "3.18.7"
+//
+//    configurations {
+//        main {
+//            generationTool {
+//                jdbc {
+//                    driver = "com.mysql.cj.jdbc.Driver"
+//                    url = "jdbc:mysql://localhost:3306/late_project"
+//                    user = "late_user"
+//                    password = "late1234"
+//                }
+//
+//                generator {
+//                    name = "org.jooq.codegen.DefaultGenerator"
+//
+//                    database {
+//                        name = "org.jooq.meta.mysql.MySQLDatabase"
+//                        inputSchema = "late_user"
+//                    }
+//
+//                    generate {
+//                        records = true
+//                        immutablePojos = true
+//                        fluentSetters = true
+//                    }
+//
+//                    target {
+//                        packageName = "com.noLate.jooq"
+//                        directory = "build/generated-src/jooq/main"
+//                    }
+//                }
+//            }
+//        }
+//    }
+//}

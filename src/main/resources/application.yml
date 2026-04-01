@@ -1,6 +1,7 @@
 spring:
   application:
-    name: swyp
+    name: noLate
+
 
   config:
     import: classpath:env.properties
@@ -13,7 +14,7 @@ spring:
     password: ${MY_SQL_DB_PASSWORD}
 
   jpa:
-    show-sql: false
+    show-sql: true
     properties:
       hibernate:
         format_sql: true
@@ -24,8 +25,10 @@ spring:
         hbm2ddl:
           halt_on_error: false
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: none
     open-in-view: true
+  jooq:
+    sql-dialect: mysql
 
 
 logging:
@@ -41,4 +44,4 @@ jwt:
 
 
 server:
-  port: 7000
+  port: 5522
