@@ -20,5 +20,8 @@ enum class ErrorCode(
     DUPLICATE_MEMBER("A003", "이미 COMMON 방식으로 가입된 이메일입니다."),
 
     // Token 영역
-    INVALID_TOKEN("T001", "잘못된 토큰 값입니다.")
+    INVALID_TOKEN("T001", "잘못된 토큰 값입니다."),
+
+    // Schedule 영역
+    SCHEDULE_NOT_FOUND("S001", "일정이 존재하지 않습니다.")
 }

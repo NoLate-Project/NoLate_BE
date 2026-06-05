@@ -1,7 +1,7 @@
 package com.noLate.member.infrastructure
 
-import com.noLate.member.domain.Member.LoginType
-import com.noLate.member.domain.Member.Member
+import com.noLate.member.domain.member.LoginType
+import com.noLate.member.domain.member.Member
 import org.springframework.data.jpa.repository.JpaRepository
 
 

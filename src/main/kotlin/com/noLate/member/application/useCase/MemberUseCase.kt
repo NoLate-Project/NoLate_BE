@@ -8,10 +8,10 @@ import com.noLate.member.application.service.MemberProfileService
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
 import com.noLate.member.application.service.MemberValidator
-import com.noLate.member.domain.Member.LoginType
-import com.noLate.member.domain.Member.Member
-import com.noLate.member.domain.Member.MemberDto
-import com.noLate.member.domain.MemberSetting.MemberSettingDto
+import com.noLate.member.domain.member.LoginType
+import com.noLate.member.domain.member.Member
+import com.noLate.member.domain.member.MemberDto
+import com.noLate.member.domain.memberSetting.MemberSettingDto
 import com.noLate.member.domain.profile.MemberProfileDto
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Component

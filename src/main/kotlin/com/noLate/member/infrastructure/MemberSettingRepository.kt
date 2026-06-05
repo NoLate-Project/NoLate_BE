@@ -1,6 +1,6 @@
 package com.noLate.member.infrastructure
 
-import com.noLate.member.domain.MemberSetting.MemberSetting
+import com.noLate.member.domain.memberSetting.MemberSetting
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.stereotype.Repository
 

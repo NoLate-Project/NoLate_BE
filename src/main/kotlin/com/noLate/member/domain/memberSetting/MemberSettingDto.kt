@@ -1,4 +1,4 @@
-package com.noLate.member.domain.MemberSetting
+package com.noLate.member.domain.memberSetting
 
 
 open class MemberSettingDto(

@@ -5,8 +5,8 @@ import com.noLate.auth.infrastructure.RefreshTokenRepository
 import com.noLate.global.error.BusinessException
 import com.noLate.global.security.JwtTokenProvider
 import com.noLate.member.application.useCase.MemberUseCase
-import com.noLate.member.domain.Member.LoginType
-import com.noLate.member.domain.Member.MemberDto
+import com.noLate.member.domain.member.LoginType
+import com.noLate.member.domain.member.MemberDto
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.member.infrastructure.MemberSettingRepository
 import org.junit.jupiter.api.Assertions.*

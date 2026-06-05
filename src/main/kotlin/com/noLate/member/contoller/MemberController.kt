@@ -2,8 +2,8 @@ package com.noLate.member.controller
 
 import com.noLate.global.common.ApiResponse
 import com.noLate.member.application.useCase.MemberUseCase
-import com.noLate.member.domain.Member.MemberDto
-import com.noLate.member.domain.Member.LoginType
+import com.noLate.member.domain.member.MemberDto
+import com.noLate.member.domain.member.LoginType
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.web.bind.annotation.*

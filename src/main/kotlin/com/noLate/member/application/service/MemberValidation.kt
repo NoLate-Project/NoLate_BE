@@ -2,8 +2,8 @@ package com.noLate.member.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
-import com.noLate.member.domain.Member.LoginType
-import com.noLate.member.domain.Member.MemberDto
+import com.noLate.member.domain.member.LoginType
+import com.noLate.member.domain.member.MemberDto
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Component
 

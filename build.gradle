@@ -44,6 +44,7 @@ dependencies {
     // Kotlin
     implementation 'org.jetbrains.kotlin:kotlin-reflect'
     implementation 'org.mockito.kotlin:mockito-kotlin:5.2.1'
+    implementation 'com.fasterxml.jackson.module:jackson-module-kotlin'
 
     // Lombok (optional)
     compileOnly 'org.projectlombok:lombok'

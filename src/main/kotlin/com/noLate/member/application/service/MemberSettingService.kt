@@ -1,7 +1,7 @@
 package com.noLate.member.application.service
 
-import com.noLate.member.domain.MemberSetting.MemberSetting
-import com.noLate.member.domain.MemberSetting.MemberSettingDto
+import com.noLate.member.domain.memberSetting.MemberSetting
+import com.noLate.member.domain.memberSetting.MemberSettingDto
 import com.noLate.member.infrastructure.MemberSettingRepository
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service

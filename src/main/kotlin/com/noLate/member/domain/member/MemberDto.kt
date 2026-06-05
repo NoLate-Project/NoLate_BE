@@ -1,4 +1,4 @@
-package com.noLate.member.domain.Member
+package com.noLate.member.domain.member
 
 import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.Pattern

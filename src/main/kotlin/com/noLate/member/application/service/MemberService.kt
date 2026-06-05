@@ -1,9 +1,10 @@
 package com.noLate.member.application.service
 
-import com.noLate.member.domain.Member.LoginType
-import com.noLate.member.domain.Member.Member
-import com.noLate.member.domain.Member.MemberDto
+import com.noLate.member.domain.member.LoginType
+import com.noLate.member.domain.member.Member
+import com.noLate.member.domain.member.MemberDto
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.global.security.MemberPrincipal
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service
 import java.util.Optional
@@ -37,6 +38,16 @@ class MemberService(
     @Transactional
     fun getFindMemberId(id: Long) : Optional<Member> {
        return memberRepository.findById(id)
+    }
+
+    @Transactional
+    fun getPrincipalById(id: Long): MemberPrincipal? {
+       val member = memberRepository.findById(id).orElse(null) ?: return null
+       return MemberPrincipal(
+           id = requireNotNull(member.id),
+           email = member.email ?: "",
+           name = member.name ?: ""
+       )
     }
 
     @Transactional

@@ -6,9 +6,13 @@ spring:
   config:
     import: classpath:env.properties
 
+  sql:
+    init:
+      mode: always
+
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MY_SQL_END_POINT}:3306/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
+    url: jdbc:mysql://${MY_SQL_END_POINT}:33061/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
     #useSSL=false&serverTimezone=Asia/Seoul
     username: ${MY_SQL_DB_USERNAME}
     password: ${MY_SQL_DB_PASSWORD}

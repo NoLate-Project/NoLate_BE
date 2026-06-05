@@ -1,6 +1,5 @@
 package com.noLate.global.security
 
-import com.noLate.member.domain.Member.Member
 import org.springframework.security.core.userdetails.UserDetails
 
 class MemberPrincipal (
@@ -22,13 +21,4 @@ class MemberPrincipal (
 
     override fun isEnabled() = true
 
-    companion object {
-        fun from(member: Member): MemberPrincipal {
-            return MemberPrincipal(
-                id = member.id!!,
-                email = member.email!!,
-                name = member.name!!
-            )
-        }
-    }
 }

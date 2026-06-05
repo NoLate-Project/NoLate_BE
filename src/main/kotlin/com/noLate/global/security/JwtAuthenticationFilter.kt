@@ -80,22 +80,15 @@ class JwtAuthenticationFilter(
                 log.info("JwtAuthenticationFilter - memberId from token = {}", memberId)
 
                 // 3-2) DB에서 회원 정보 조회
-                val memberOpt = memberService.getFindMemberId(memberId)
-                if (memberOpt.isPresent) {
-                    val member = memberOpt.get()
+                val principal = memberService.getPrincipalById(memberId)
+                if (principal != null) {
                     log.info(
                         "JwtAuthenticationFilter - member loaded. id={}, email={}",
-                        member.id,
-                        member.email
+                        principal.id,
+                        principal.email
                     )
 
                     // 3-3) Principal 생성
-                    val principal = MemberPrincipal(
-                        id = requireNotNull(member.id),
-                        email = member.email ?: "",
-                        name = member.name ?: ""
-                    )
-
                     // 3-4) Authentication 생성
                     val auth = UsernamePasswordAuthenticationToken(
                         principal,

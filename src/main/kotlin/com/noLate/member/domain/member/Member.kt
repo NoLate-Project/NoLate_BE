@@ -1,5 +1,4 @@
-package com.noLate.member.domain.Member
-
+package com.noLate.member.domain.member
 import com.noLate.global.common.BaseEntity
 import jakarta.persistence.*
 import jakarta.validation.constraints.Email
@@ -9,7 +8,7 @@ import jakarta.validation.constraints.Pattern
 class Member (
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long? = null,
+    var id: Long? = null,
 
     @Column(nullable = false)
     var name: String? = "",
@@ -22,7 +21,7 @@ class Member (
     var email : String ?= "",
 
     @Column(nullable = false) @Enumerated(EnumType.STRING)
-    var loginType : LoginType ?= LoginType.COMMON,
+    var loginType : LoginType?= LoginType.COMMON,
 
     var snsId : String ?= ""
 
@@ -33,16 +32,20 @@ class Member (
 
     fun toDto(): MemberDto =
         MemberDto(
-        id = this.id,
-        name = this.name,
-        password = this.password,
-        email = this.email,
-        loginType = this.loginType,
-        snsId = this.snsId
-    )
+            id = this.id,
+            name = this.name,
+            password = this.password,
+            email = this.email,
+            loginType = this.loginType,
+            snsId = this.snsId
+        )
 }
 
 object ValidationMessage {
     const val EMAIL = "이메일 형식이 아닙니다."
     const val PASSWORD = "비밀번호는 8~16자의 영문 대소문자, 숫자, 특수문자로 이루어져야 합니다."
+
+
+
+
 }
