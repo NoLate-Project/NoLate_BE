@@ -100,7 +100,22 @@ allOpen {
 }
 
 tasks.named('test') {
-    useJUnitPlatform()
+    // 일반 테스트에서는 외부 API 비용과 네트워크 의존성을 막기 위해 external 태그를 제외한다.
+    useJUnitPlatform {
+        excludeTags 'external'
+    }
+}
+
+// 실제 Groq 연결을 확인할 때만 명시적으로 실행하는 외부 통합 테스트 작업이다.
+tasks.register('groqIntegrationTest', Test) {
+    description = 'Runs schedule parser tests that call the real Groq API.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'external'
+    }
+    shouldRunAfter tasks.named('test')
 }
 
 //jooq {

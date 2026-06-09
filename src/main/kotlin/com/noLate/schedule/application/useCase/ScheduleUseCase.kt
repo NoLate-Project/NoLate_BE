@@ -1,13 +1,29 @@
 package com.noLate.schedule.application.useCase
 
 import com.noLate.schedule.application.service.ScheduleService
+import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleParseDto
 import org.springframework.stereotype.Component
 
 @Component
 class ScheduleUseCase(
     private val scheduleService: ScheduleService,
+    private val scheduleHybridParserService: ScheduleHybridParserService,
 ) {
+    /**
+     * 자유 형식 텍스트를 일정 입력 폼용 데이터로 분석한다.
+     *
+     * 이 단계에서는 DB에 저장하지 않으며, 규칙 우선 및 AI 폴백 정책은 전용 서비스에 위임한다.
+     */
+    fun parseScheduleText(
+        text: String?,
+        referenceDate: String?,
+        defaultDurationMinutes: Int?,
+    ): ScheduleParseDto {
+        return scheduleHybridParserService.parse(text, referenceDate, defaultDurationMinutes)
+    }
+
     /**
      * 일정관리 앱의 기본 생성 유스케이스.
      * 일정 본문과 함께 출발지/도착지/선택 경로까지 하나의 일정으로 저장한다.

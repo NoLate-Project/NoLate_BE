@@ -1,8 +1,10 @@
 package com.noLate.schedule.application.useCase
 
 import com.noLate.schedule.application.service.ScheduleService
+import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleTravelMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -15,17 +17,35 @@ import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
+/**
+ * 유스케이스가 저장 서비스와 텍스트 분석 서비스를 올바르게 위임하는지 검증한다.
+ */
 @ExtendWith(MockitoExtension::class)
 class ScheduleUseCaseUnitTest {
 
     @Mock
     lateinit var scheduleService: ScheduleService
 
+    // 외부 AI나 실제 파싱 로직 없이 유스케이스의 위임 계약만 검증하기 위한 mock이다.
+    @Mock
+    lateinit var scheduleHybridParserService: ScheduleHybridParserService
+
     private lateinit var scheduleUseCase: ScheduleUseCase
 
     @BeforeEach
     fun setUp() {
-        scheduleUseCase = ScheduleUseCase(scheduleService)
+        scheduleUseCase = ScheduleUseCase(scheduleService, scheduleHybridParserService)
+    }
+
+    @Test
+    fun `parseScheduleText는 자유 형식 문구 분석을 Parser에 위임한다`() {
+        val parsed = ScheduleParseDto(title = "촬영", date = "2026-05-30", time = "12:00")
+        whenever(scheduleHybridParserService.parse("예약 문구", "2026-01-01", 60)).thenReturn(parsed)
+
+        val result = scheduleUseCase.parseScheduleText("예약 문구", "2026-01-01", 60)
+
+        verify(scheduleHybridParserService, times(1)).parse("예약 문구", "2026-01-01", 60)
+        assertEquals(parsed, result)
     }
 
     @Test

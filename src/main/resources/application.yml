@@ -49,3 +49,11 @@ jwt:
 
 server:
   port: 5522
+
+schedule:
+  ai:
+    # 규칙 파서가 필수 값을 찾지 못했을 때만 사용하는 선택적 AI 보완 설정이다.
+    groq:
+      enabled: ${GROQ_ENABLED:false}
+      api-key: ${GROQ_API_KEY:}
+      model: ${GROQ_MODEL:openai/gpt-oss-20b}

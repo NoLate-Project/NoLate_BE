@@ -8,6 +8,7 @@ import com.noLate.global.security.MemberPrincipal
 import com.noLate.schedule.application.useCase.ScheduleUseCase
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.ScheduleTravelMode
 import io.swagger.v3.oas.annotations.Operation
@@ -29,6 +30,25 @@ import org.springframework.web.bind.annotation.RestController
 class ScheduleController(
     private val scheduleUseCase: ScheduleUseCase,
 ) {
+
+    /**
+     * 자유 형식 예약 문구 분석.
+     * 저장하지 않고 일정 입력 폼에 반영할 후보값과 누락 필드를 반환한다.
+     */
+    @Operation(summary = "자유 형식 일정 문구 분석")
+    @PostMapping("/parse")
+    fun parseScheduleText(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @RequestBody request: ParseScheduleTextRequest,
+    ): ApiResponse<ScheduleParseDto> {
+        requireMemberId(principal)
+        val result = scheduleUseCase.parseScheduleText(
+            text = request.text,
+            referenceDate = request.referenceDate,
+            defaultDurationMinutes = request.defaultDurationMinutes,
+        )
+        return ApiResponse.success(result)
+    }
 
     /**
      * 일정 저장.
@@ -198,6 +218,17 @@ class ScheduleController(
         return principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
     }
 }
+
+/**
+ * 일정 분석 API가 받는 입력 모델이다.
+ *
+ * referenceDate는 연도가 생략된 문장의 기준 날짜이며, 기본 소요 시간은 종료 시각 계산에 사용한다.
+ */
+data class ParseScheduleTextRequest(
+    val text: String,
+    val referenceDate: String? = null,
+    val defaultDurationMinutes: Int? = null,
+)
 
 data class AddScheduleRequest(
     val title: String,

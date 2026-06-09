@@ -1,0 +1,127 @@
+# IntelliJ HTTP Client에서 실행할 일정 분석 요청 모음이다.
+# 우측 상단 실행 환경을 local로 선택하고 아래 private 환경 파일을 먼저 만든다.
+#
+# http/http-client.private.env.json
+# {
+#   "local": {
+#     "groqApiKey": "gsk_...",
+#     "loginEmail": "로그인 이메일",
+#     "loginPassword": "로그인 비밀번호"
+#   }
+# }
+#
+# private 환경 파일은 .gitignore에 포함되어 저장소에 커밋되지 않는다.
+
+### Groq API를 직접 호출해 Structured Output 응답을 확인한다.
+POST {{groqBaseUrl}}/chat/completions
+Authorization: Bearer {{groqApiKey}}
+Content-Type: application/json
+
+{
+  "model": "{{groqModel}}",
+  "temperature": 0,
+  "max_completion_tokens": 300,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You extract Korean schedule information. Never invent missing values. Return dates as YYYY-MM-DD and times as HH:mm in 24-hour format. A district or neighborhood such as 강남 may be a destination. summary must exclude date, time, and destination. Confidence values must be between 0 and 1."
+    },
+    {
+      "role": "user",
+      "content": "Reference date: 2026-01-01\nSchedule text:\n20260530 강남 오후8시30분 고등학교친구 와 회식"
+    }
+  ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "schedule_extraction",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "date": { "type": ["string", "null"] },
+          "dateConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "time": { "type": ["string", "null"] },
+          "timeConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "destinationName": { "type": ["string", "null"] },
+          "destinationAddress": { "type": ["string", "null"] },
+          "destinationConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "summary": { "type": ["string", "null"] },
+          "summaryConfidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "required": [
+          "date",
+          "dateConfidence",
+          "time",
+          "timeConfidence",
+          "destinationName",
+          "destinationAddress",
+          "destinationConfidence",
+          "summary",
+          "summaryConfidence"
+        ]
+      }
+    }
+  }
+}
+
+> {%
+    client.test("Groq가 Structured Output을 반환한다", function () {
+        client.assert(response.status === 200, "Groq 응답 상태가 200이 아닙니다.");
+        const content = response.body.choices[0].message.content;
+        const parsed = JSON.parse(content);
+        client.assert(parsed.date === "2026-05-30", "날짜 추출 결과가 다릅니다.");
+        client.assert(parsed.time === "20:30", "시간 추출 결과가 다릅니다.");
+        client.assert(parsed.destinationName === "강남", "목적지 추출 결과가 다릅니다.");
+        client.log(JSON.stringify(parsed, null, 2));
+    });
+%}
+
+### 백엔드 일정 분석 API 호출에 사용할 JWT를 발급받는다.
+POST {{baseUrl}}/api/member/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{loginEmail}}",
+  "password": "{{loginPassword}}"
+}
+
+> {%
+    client.test("로그인 토큰을 발급한다", function () {
+        client.assert(response.status === 200, "로그인 요청이 실패했습니다.");
+        client.assert(response.body.data.accessToken, "accessToken이 없습니다.");
+    });
+    client.global.set("accessToken", response.body.data.accessToken);
+%}
+
+### 백엔드의 규칙 우선 및 Groq 폴백 파서를 호출한다.
+POST {{baseUrl}}/api/schedules/parse
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "text": "20260530 강남 오후8시30분 고등학교친구 와 회식",
+  "referenceDate": "2026-01-01",
+  "defaultDurationMinutes": 60
+}
+
+> {%
+    client.test("백엔드가 AI 보완 결과를 반환한다", function () {
+        client.assert(response.status === 200, "일정 분석 요청이 실패했습니다.");
+        client.assert(response.body.data.parseSource === "AI_ASSISTED", "AI 보완 결과가 아닙니다.");
+        client.assert(response.body.data.title === "강남 20:30", "일정 제목이 예상과 다릅니다.");
+        client.log(JSON.stringify(response.body.data, null, 2));
+    });
+%}
+
+### 긴 예약 양식도 같은 백엔드 API로 확인한다.
+POST {{baseUrl}}/api/schedules/parse
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "text": "예약자 성함 : 김혜림\n행사 연도 : 2026년\n행사 날짜 : 5월 16일\n행사 시간 : 오후 3시 30분\n행사 지역 : 인천\n장소명 : 그랜드 오스티엄 웨딩홀 3층 블리스홀",
+  "referenceDate": "2026-01-01",
+  "defaultDurationMinutes": 60
+}

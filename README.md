@@ -80,3 +80,18 @@
 ✔ 예외 처리  
 
 백엔드 공통 핵심의 완성형 셋업.
+
+---
+
+## Schedule AI fallback
+
+일정 문구는 먼저 규칙 파서로 분석하고, 날짜·시간·도착지 중 누락된 값이 있을 때만 Groq를 호출한다.
+전화번호와 이메일은 Groq 전송 전에 마스킹된다.
+
+```properties
+GROQ_ENABLED=true
+GROQ_API_KEY=발급받은_API_KEY
+GROQ_MODEL=openai/gpt-oss-20b
+```
+
+API 키가 없거나 Groq 호출이 실패하면 규칙 분석 결과를 유지하며 사용자 확인이 필요한 필드를 반환한다.

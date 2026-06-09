@@ -6,7 +6,7 @@ services:
     container_name: late_project_mysql
     restart: unless-stopped
     ports:
-      - "3306:3306"
+      - "33061:3306"
     env_file:
       - ./docker/mysql/.env
     command:
