@@ -76,7 +76,9 @@ class ScheduleTextParserService {
         val warnings = mutableListOf<String>()
         // 구조가 강한 전용 축약형을 먼저 적용하고, 없으면 일반 라벨과 문맥 규칙으로 내려간다.
         val dotAssignmentFields = chooseDotAssignmentFields(lines)
-        val selectedDate = dotAssignmentFields?.date ?: chooseDate(lines, baseDate, warnings)
+        val selectedDate = dotAssignmentFields?.date
+            ?: chooseDate(lines, baseDate, warnings)
+            ?: chooseRelativeWeekday(lines, baseDate)
         val selectedTime = dotAssignmentFields?.time ?: chooseTime(lines, selectedDate?.lineIndex)
         val compactFields = chooseCompactFields(lines)
         val customerName = chooseCustomerName(lines)
@@ -167,6 +169,32 @@ class ScheduleTextParserService {
             warnings += "연도가 없어 ${referenceDate.year}년으로 추정했습니다."
         }
         return SelectedDate(candidate.second, candidate.first.lineIndex)
+    }
+
+    // 날짜 없이 "금요일"처럼 요일만 적힌 경우 기준일 이후 가장 가까운 해당 요일을 사용한다.
+    private fun chooseRelativeWeekday(
+        lines: List<String>,
+        referenceDate: LocalDate,
+    ): SelectedDate? {
+        lines.forEachIndexed { lineIndex, line ->
+            val weekday = Regex("""(?:이번\s*)?([일월화수목금토])요일""")
+                .find(line)
+                ?.groupValues
+                ?.get(1)
+                ?: return@forEachIndexed
+            val targetDayValue = when (weekday) {
+                "월" -> 1
+                "화" -> 2
+                "수" -> 3
+                "목" -> 4
+                "금" -> 5
+                "토" -> 6
+                else -> 7
+            }
+            val daysToAdd = (targetDayValue - referenceDate.dayOfWeek.value + 7) % 7
+            return SelectedDate(referenceDate.plusDays(daysToAdd.toLong()), lineIndex)
+        }
+        return null
     }
 
     // 원문 어딘가에 별도로 적힌 행사 연도를 월/일 후보와 결합하기 위해 수집한다.

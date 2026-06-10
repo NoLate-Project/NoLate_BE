@@ -90,14 +90,17 @@ class GroqScheduleAiParser(
         mapOf(
             "model" to model,
             "temperature" to 0,
-            "max_completion_tokens" to 300,
+            // gpt-oss 모델의 reasoning token까지 completion 한도에 포함되므로 충분한 여유를 둔다.
+            "max_completion_tokens" to 1_400,
             "messages" to listOf(
                 mapOf(
                     "role" to "system",
                     "content" to """
                         You extract Korean schedule information.
-                        Never invent missing values.
+                        Output exactly one JSON object matching the schema.
+                        Never invent missing values. Use null and confidence 0 for unknown values.
                         Return dates as YYYY-MM-DD and times as HH:mm in 24-hour format.
+                        Resolve relative weekdays from the reference date.
                         A district or neighborhood such as 강남 may be a destination.
                         summary must exclude date, time, and destination.
                         Confidence values must be between 0 and 1.

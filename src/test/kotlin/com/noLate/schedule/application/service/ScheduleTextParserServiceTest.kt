@@ -249,6 +249,19 @@ class ScheduleTextParserServiceTest {
     }
 
     @Test
+    fun `parses weekday relative to reference date`() {
+        val result = parser.parse(
+            text = "금요일 오후 7시 강남역에서 친구와 저녁",
+            referenceDate = "2026-06-10",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-06-12", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("2026-06-12T10:00:00Z", result.startAt)
+    }
+
+    @Test
     fun `rejects blank text and invalid duration`() {
         assertThrows<BusinessException> {
             parser.parse(" ", "2026-01-01", null)
