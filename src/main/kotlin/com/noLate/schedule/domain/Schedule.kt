@@ -50,6 +50,15 @@ class Schedule(
     @Comment("일정 종료 시각")
     var endAt: Instant = Instant.EPOCH,
 
+    /** 사용자가 종료 시각을 명시했는지 여부 */
+    @Column(
+        name = "has_end_time",
+        nullable = false,
+        columnDefinition = "boolean default true",
+    )
+    @Comment("종료 시각 입력 여부")
+    var hasEndTime: Boolean = true,
+
     /** 종일 일정 여부 */
     @Column(name = "all_day", nullable = false)
     @Comment("종일 일정 여부")
@@ -103,6 +112,9 @@ class Schedule(
         destinationLat: Double?,
         destinationLng: Double?,
         routeJson: String?,
+        notificationEnabled: Boolean,
+        notificationLeadMinutes: Int?,
+        notificationIntervalMinutes: Int?,
     ) {
         if (
             travelMinutes == null &&
@@ -117,7 +129,8 @@ class Schedule(
             destinationAddress == null &&
             destinationLat == null &&
             destinationLng == null &&
-            routeJson == null
+            routeJson == null &&
+            !notificationEnabled
         ) {
             route = null
             return
@@ -141,5 +154,8 @@ class Schedule(
         next.destinationLat = destinationLat
         next.destinationLng = destinationLng
         next.routeJson = routeJson
+        next.notificationEnabled = notificationEnabled
+        next.notificationLeadMinutes = notificationLeadMinutes
+        next.notificationIntervalMinutes = notificationIntervalMinutes
     }
 }

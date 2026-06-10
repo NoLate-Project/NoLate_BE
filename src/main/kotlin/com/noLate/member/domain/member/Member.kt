@@ -1,5 +1,6 @@
 package com.noLate.member.domain.member
 import com.noLate.global.common.BaseEntity
+import com.noLate.subscription.domain.SubscriptionPlan
 import jakarta.persistence.*
 import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.Pattern
@@ -23,12 +24,21 @@ class Member (
     @Column(nullable = false) @Enumerated(EnumType.STRING)
     var loginType : LoginType?= LoginType.COMMON,
 
-    var snsId : String ?= ""
+    var snsId : String ?= "",
+
+    @Enumerated(EnumType.STRING)
+    @Column(
+        name = "subscription_plan",
+        nullable = false,
+        length = 20,
+        columnDefinition = "varchar(20) default 'FREE'",
+    )
+    var subscriptionPlan: SubscriptionPlan = SubscriptionPlan.FREE,
 
 
 ) : BaseEntity() {
     // JPA가 사용할 기본 생성자
-    protected constructor() : this(null, "", "" , "", null, "")
+    protected constructor() : this(null, "", "" , "", null, "", SubscriptionPlan.FREE)
 
     fun toDto(): MemberDto =
         MemberDto(

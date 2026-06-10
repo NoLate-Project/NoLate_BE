@@ -9,6 +9,7 @@ import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.subscription.application.SubscriptionPolicyService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -33,6 +34,9 @@ class ScheduleServiceUnitTest {
     @Mock
     lateinit var scheduleRepository: ScheduleRepository
 
+    @Mock
+    lateinit var subscriptionPolicyService: SubscriptionPolicyService
+
     private lateinit var scheduleService: ScheduleService
 
     private val objectMapper = ObjectMapper()
@@ -42,6 +46,7 @@ class ScheduleServiceUnitTest {
         scheduleService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
         )
     }
 
@@ -285,6 +290,27 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `addSchedule stores a point-in-time schedule when end time is omitted`() {
+        val dto = scheduleDto().copy(
+            endAt = null,
+            hasEndTime = false,
+        )
+        whenever(scheduleRepository.save(any<Schedule>()))
+            .thenAnswer { invocation ->
+                invocation.getArgument<Schedule>(0).apply { id = 20L }
+            }
+
+        val result = scheduleService.addSchedule(1L, dto)
+
+        verify(scheduleRepository).save(check {
+            assertEquals(it.startAt, it.endAt)
+            assertEquals(false, it.hasEndTime)
+        })
+        assertEquals(false, result.hasEndTime)
+        assertEquals(result.startAt, result.endAt)
+    }
+
+    @Test
     fun `updateSchedule throws when target schedule does not exist`() {
         // given
         val memberId = 1L
@@ -357,6 +383,10 @@ class ScheduleServiceUnitTest {
                 destinationLat = 37.2,
                 destinationLng = 127.2,
                 routeJson = """{"id":"route-1"}""",
+                notificationEnabled = false,
+                notificationLeadMinutes = null,
+                notificationIntervalMinutes = null,
             )
         }
+
 }

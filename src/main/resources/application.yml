@@ -12,7 +12,7 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MY_SQL_END_POINT}:33061/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
+    url: jdbc:mysql://${MY_SQL_END_POINT}:3306/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
     #useSSL=false&serverTimezone=Asia/Seoul
     username: ${MY_SQL_DB_USERNAME}
     password: ${MY_SQL_DB_PASSWORD}
@@ -29,7 +29,7 @@ spring:
         hbm2ddl:
           halt_on_error: false
     hibernate:
-      ddl-auto: none
+      ddl-auto: update
     open-in-view: true
   jooq:
     sql-dialect: mysql

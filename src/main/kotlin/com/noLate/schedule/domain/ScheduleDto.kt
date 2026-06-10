@@ -54,7 +54,10 @@ data class ScheduleDto(
     val startAt: String,
 
     /** 일정 종료 시각(ISO-8601) */
-    val endAt: String,
+    val endAt: String? = null,
+
+    /** 사용자가 종료 시각을 직접 입력했는지 여부 */
+    val hasEndTime: Boolean? = null,
 
     /** 종일 일정 여부 */
     val allDay: Boolean? = null,
@@ -85,6 +88,15 @@ data class ScheduleDto(
 
     /** 선택 경로 상세 JSON */
     val route: JsonNode? = null,
+
+    /** 실시간 ETA 기반 출발 알림 사용 여부 */
+    val notificationEnabled: Boolean? = null,
+
+    /** 권장 출발 시각 몇 분 전부터 알림을 시작할지 */
+    val notificationLeadMinutes: Int? = null,
+
+    /** 사용자 재알림 간격 */
+    val notificationIntervalMinutes: Int? = null,
 
     /** 마지막 수정 시각(ISO-8601) */
     val updatedAt: String? = null,

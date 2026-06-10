@@ -103,4 +103,23 @@ class ScheduleRoute(
     @Column(name = "route_json", columnDefinition = "LONGTEXT")
     @Comment("선택한 경로 상세 JSON")
     var routeJson: String? = null,
+
+    /** 실시간 ETA 기반 출발 알림 활성화 여부 */
+    @Column(
+        name = "notification_enabled",
+        nullable = false,
+        columnDefinition = "boolean default false",
+    )
+    @Comment("실시간 출발 알림 활성화 여부")
+    var notificationEnabled: Boolean = false,
+
+    /** 권장 출발 시각 기준 몇 분 전부터 알림을 시작할지 */
+    @Column(name = "notification_lead_minutes")
+    @Comment("알림 시작 시점(분)")
+    var notificationLeadMinutes: Int? = null,
+
+    /** 사용자에게 재알림을 보내는 최소 간격 */
+    @Column(name = "notification_interval_minutes")
+    @Comment("재알림 간격(분)")
+    var notificationIntervalMinutes: Int? = null,
 )

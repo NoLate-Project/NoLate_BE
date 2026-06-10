@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.time.Instant
+import java.time.LocalDateTime
 
 interface ScheduleRepository : JpaRepository<Schedule, Long> {
     @Query(
@@ -116,4 +117,22 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         @Param("fromAt") fromAt: Instant,
         @Param("toAt") toAt: Instant,
     ): List<Schedule>
+
+    @Query(
+        value = """
+        select count(*)
+        from schedules s
+        join schedule_routes sr on sr.schedule_id = s.id
+        where s.member_id = :memberId
+          and sr.notification_enabled = true
+          and s.create_dt >= :monthStart
+          and s.create_dt < :nextMonthStart
+        """,
+        nativeQuery = true,
+    )
+    fun countMonthlySmartSchedules(
+        @Param("memberId") memberId: Long,
+        @Param("monthStart") monthStart: LocalDateTime,
+        @Param("nextMonthStart") nextMonthStart: LocalDateTime,
+    ): Long
 }

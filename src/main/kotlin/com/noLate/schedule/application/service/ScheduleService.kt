@@ -9,6 +9,7 @@ import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.subscription.application.SubscriptionPolicyService
 import jakarta.transaction.Transactional
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
@@ -23,20 +24,21 @@ import java.time.temporal.ChronoUnit
 class ScheduleService(
     private val scheduleRepository: ScheduleRepository,
     private val objectMapper: ObjectMapper,
+    private val subscriptionPolicyService: SubscriptionPolicyService,
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
 
     @Transactional
     fun addSchedule(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
         val entity = Schedule(memberId = memberId)
-        entity.applyDto(scheduleDto)
+        entity.applyDto(memberId, scheduleDto)
         return scheduleRepository.save(entity).toDto()
     }
 
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
         val entity = findActive(memberId, scheduleId)
-        entity.applyDto(scheduleDto)
+        entity.applyDto(memberId, scheduleDto)
         return scheduleRepository.save(entity).toDto()
     }
 
@@ -140,16 +142,63 @@ class ScheduleService(
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
     }
 
-    private fun Schedule.applyDto(scheduleDto: ScheduleDto) {
+    private fun Schedule.applyDto(memberId: Long, scheduleDto: ScheduleDto) {
         title = requireText(scheduleDto.title, "title")
         startAt = parseInstant(scheduleDto.startAt, "startAt")
-        endAt = parseInstant(scheduleDto.endAt, "endAt")
-        if (!endAt.isAfter(startAt)) {
+        hasEndTime = scheduleDto.hasEndTime ?: (scheduleDto.endAt != null)
+        endAt = if (hasEndTime) {
+            parseInstant(scheduleDto.endAt, "endAt")
+        } else {
+            startAt
+        }
+        if (hasEndTime && !endAt.isAfter(startAt)) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "endAt must be after startAt.")
         }
 
         allDay = scheduleDto.allDay ?: false
         notes = scheduleDto.notes?.takeIf { it.isNotBlank() }
+
+        val wasNotificationEnabled = route?.notificationEnabled == true
+        val notificationEnabled = scheduleDto.notificationEnabled ?: wasNotificationEnabled
+        val policy = if (notificationEnabled) subscriptionPolicyService.getPolicy(memberId) else null
+        val notificationLeadMinutes = if (notificationEnabled) {
+            scheduleDto.notificationLeadMinutes
+                ?: route?.notificationLeadMinutes
+                ?: requireNotNull(policy).maxNotificationLeadMinutes
+        } else {
+            null
+        }
+        val notificationIntervalMinutes = if (notificationEnabled) {
+            scheduleDto.notificationIntervalMinutes
+                ?: route?.notificationIntervalMinutes
+                ?: requireNotNull(policy).minNotificationIntervalMinutes
+        } else {
+            null
+        }
+
+        if (
+            notificationEnabled &&
+            (
+                scheduleDto.origin?.lat == null ||
+                    scheduleDto.origin.lng == null ||
+                    scheduleDto.destination?.lat == null ||
+                    scheduleDto.destination.lng == null ||
+                    scheduleDto.travelMode == null
+                )
+        ) {
+            throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                "실시간 출발 알림을 사용하려면 출발지, 도착지와 이동 경로가 필요합니다.",
+            )
+        }
+
+        subscriptionPolicyService.validateNotificationSettings(
+            memberId = memberId,
+            notificationEnabled = notificationEnabled,
+            leadMinutes = notificationLeadMinutes,
+            intervalMinutes = notificationIntervalMinutes,
+            consumesNewQuota = notificationEnabled && !wasNotificationEnabled,
+        )
 
         updateCategorySnapshot(
             categoryId = requireText(scheduleDto.category.id, "category.id"),
@@ -171,6 +220,9 @@ class ScheduleService(
             destinationLat = scheduleDto.destination?.lat,
             destinationLng = scheduleDto.destination?.lng,
             routeJson = scheduleDto.route?.let { objectMapper.writeValueAsString(it) },
+            notificationEnabled = notificationEnabled,
+            notificationLeadMinutes = notificationLeadMinutes,
+            notificationIntervalMinutes = notificationIntervalMinutes,
         )
     }
 
@@ -183,6 +235,7 @@ class ScheduleService(
             title = title,
             startAt = startAt.toString(),
             endAt = endAt.toString(),
+            hasEndTime = hasEndTime,
             allDay = allDay,
             travelMinutes = routeInfo?.travelMinutes,
             departAt = routeInfo?.departAt?.toString(),
@@ -199,6 +252,9 @@ class ScheduleService(
             ),
             notes = notes,
             route = parseRoute(routeInfo?.routeJson),
+            notificationEnabled = routeInfo?.notificationEnabled ?: false,
+            notificationLeadMinutes = routeInfo?.notificationLeadMinutes,
+            notificationIntervalMinutes = routeInfo?.notificationIntervalMinutes,
             updatedAt = (updateDt ?: updatedAt)?.atZone(seoulZone)?.toInstant()?.toString(),
         )
     }

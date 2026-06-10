@@ -233,7 +233,8 @@ data class ParseScheduleTextRequest(
 data class AddScheduleRequest(
     val title: String,
     val startAt: String,
-    val endAt: String,
+    val endAt: String? = null,
+    val hasEndTime: Boolean? = null,
     val allDay: Boolean? = null,
     val travelMinutes: Int? = null,
     val departAt: String? = null,
@@ -244,12 +245,16 @@ data class AddScheduleRequest(
     val category: ScheduleCategoryDto,
     val notes: String? = null,
     val route: JsonNode? = null,
+    val notificationEnabled: Boolean? = null,
+    val notificationLeadMinutes: Int? = null,
+    val notificationIntervalMinutes: Int? = null,
 ) {
     fun toDto(): ScheduleDto =
         ScheduleDto(
             title = title,
             startAt = startAt,
             endAt = endAt,
+            hasEndTime = hasEndTime,
             allDay = allDay,
             travelMinutes = travelMinutes,
             departAt = departAt,
@@ -260,13 +265,17 @@ data class AddScheduleRequest(
             category = category,
             notes = notes,
             route = route,
+            notificationEnabled = notificationEnabled,
+            notificationLeadMinutes = notificationLeadMinutes,
+            notificationIntervalMinutes = notificationIntervalMinutes,
         )
 }
 
 data class UpdateScheduleRequest(
     val title: String,
     val startAt: String,
-    val endAt: String,
+    val endAt: String? = null,
+    val hasEndTime: Boolean? = null,
     val allDay: Boolean? = null,
     val travelMinutes: Int? = null,
     val departAt: String? = null,
@@ -277,12 +286,16 @@ data class UpdateScheduleRequest(
     val category: ScheduleCategoryDto,
     val notes: String? = null,
     val route: JsonNode? = null,
+    val notificationEnabled: Boolean? = null,
+    val notificationLeadMinutes: Int? = null,
+    val notificationIntervalMinutes: Int? = null,
 ) {
     fun toDto(): ScheduleDto =
         ScheduleDto(
             title = title,
             startAt = startAt,
             endAt = endAt,
+            hasEndTime = hasEndTime,
             allDay = allDay,
             travelMinutes = travelMinutes,
             departAt = departAt,
@@ -293,5 +306,8 @@ data class UpdateScheduleRequest(
             category = category,
             notes = notes,
             route = route,
+            notificationEnabled = notificationEnabled,
+            notificationLeadMinutes = notificationLeadMinutes,
+            notificationIntervalMinutes = notificationIntervalMinutes,
         )
 }
