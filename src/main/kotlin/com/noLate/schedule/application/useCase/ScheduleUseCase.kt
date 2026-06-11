@@ -2,13 +2,17 @@ package com.noLate.schedule.application.useCase
 
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
+import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.SchedulePushJobCreateRequest
+import com.noLate.schedule.domain.SchedulePushJobDto
 import org.springframework.stereotype.Component
 
 @Component
 class ScheduleUseCase(
     private val scheduleService: ScheduleService,
+    private val schedulePushJobService : SchedulePushJobService,
     private val scheduleHybridParserService: ScheduleHybridParserService,
 ) {
     /**
@@ -29,7 +33,10 @@ class ScheduleUseCase(
      * 일정 본문과 함께 출발지/도착지/선택 경로까지 하나의 일정으로 저장한다.
      */
     fun addSchedule(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
-        return scheduleService.addSchedule(memberId, scheduleDto)
+        // 스케줄 생성
+        val addSchedule = scheduleService.addSchedule(memberId, scheduleDto);
+
+        return addSchedule;
     }
 
     /**
