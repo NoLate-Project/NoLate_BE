@@ -1,8 +1,19 @@
 package com.noLate.schedule.infrastructure
 
 import com.noLate.schedule.domain.SchedulePushJob
+import com.noLate.schedule.domain.SchedulePushJobStatus
+import jakarta.persistence.LockModeType
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Lock
+import java.time.Instant
 
 
 interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    fun findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+        status: SchedulePushJobStatus,
+        nextCheckAt: Instant,
+    ): List<SchedulePushJob>
+
+    fun findByScheduleId(scheduleId: Long): SchedulePushJob?
 }

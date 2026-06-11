@@ -2,12 +2,16 @@
 package com.noLate.notification.controller
 
 import com.noLate.global.common.ApiResponse
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
+import com.noLate.global.security.MemberPrincipal
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.application.service.NotificationTokenService
 import com.noLate.notification.domain.PushPlatform
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.web.bind.annotation.*
+import org.springframework.security.core.annotation.AuthenticationPrincipal
 
 @RestController
 @RequestMapping("/api/notifications")
@@ -20,11 +24,11 @@ class NotificationController(
     @Operation(summary = "푸시 토큰 등록")
     @PostMapping("/token")
     fun registerToken(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: RegisterPushTokenRequest
     ): ApiResponse<Unit> {
-        // TODO: 실제 구현에선 memberId 를 JWT에서 가져오도록 변경
         notificationTokenService.registerToken(
-            memberId = request.memberId,
+            memberId = requireMemberId(principal),
             deviceId = request.deviceId,
             platform = request.platform,
             token = request.token
@@ -35,27 +39,29 @@ class NotificationController(
     @Operation(summary = "단일 사용자 테스트 푸시 발송")
     @PostMapping("/test/send")
     fun sendTest(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: SendTestNotificationRequest
     ): ApiResponse<Unit> {
         notificationUseCase.sendToMember(
-            memberId = request.memberId,
+            memberId = requireMemberId(principal),
             title = request.title,
             body = request.body,
             data = request.data ?: emptyMap()
         )
         return ApiResponse.success(Unit)
     }
+
+    private fun requireMemberId(principal: MemberPrincipal?): Long =
+        principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
 }
 
 data class RegisterPushTokenRequest(
-    val memberId: Long,               // 🔥 실제로는 JWT에서 꺼내 쓰는 걸 추천
     val deviceId: String?,
     val platform: PushPlatform,
     val token: String
 )
 
 data class SendTestNotificationRequest(
-    val memberId: Long,
     val title: String,
     val body: String,
     val data: Map<String, String>? = null

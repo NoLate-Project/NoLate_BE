@@ -51,9 +51,22 @@ server:
   port: 5522
 
 schedule:
+  push:
+    fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}
+    retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:5}
+  traffic:
+    tmap:
+      enabled: ${TMAP_ENABLED:false}
+      app-key: ${TMAP_APP_KEY:}
+      base-url: ${TMAP_BASE_URL:https://apis.openapi.sk.com}
   ai:
     # 규칙 파서가 필수 값을 찾지 못했을 때만 사용하는 선택적 AI 보완 설정이다.
     groq:
       enabled: ${GROQ_ENABLED:false}
       api-key: ${GROQ_API_KEY:}
       model: ${GROQ_MODEL:openai/gpt-oss-20b}
+
+firebase:
+  enabled: ${FIREBASE_ENABLED:false}
+  credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
+  project-id: ${FIREBASE_PROJECT_ID:}

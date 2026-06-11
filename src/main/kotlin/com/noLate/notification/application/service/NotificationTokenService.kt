@@ -59,6 +59,11 @@ class NotificationTokenService (
         notificationRepository.deleteAllByMemberId(memberId)
     }
 
+    @Transactional
+    fun removeTokenValue(memberId: Long, token: String) {
+        notificationRepository.deleteByMemberIdAndToken(memberId, token)
+    }
+
     /**
      * 해당 회원의 모든 기기 토큰 조회
      */

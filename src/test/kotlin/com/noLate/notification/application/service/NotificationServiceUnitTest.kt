@@ -134,6 +134,14 @@ class NotificationTokenServiceUnitTest {
     }
 
     @Test
+    fun `removeTokenValue는 회원과 토큰 값으로 무효 토큰을 삭제한다`() {
+        notificationTokenService.removeTokenValue(5L, "invalid-token")
+
+        verify(notificationDeviceTokenRepository)
+            .deleteByMemberIdAndToken(5L, "invalid-token")
+    }
+
+    @Test
     fun `getTokensByMember는 해당 회원의 토큰 목록을 반환한다`() {
         val memberId = 6L
         val tokens = listOf(

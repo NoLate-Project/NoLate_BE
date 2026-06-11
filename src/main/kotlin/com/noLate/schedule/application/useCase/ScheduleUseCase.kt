@@ -5,8 +5,7 @@ import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
-import com.noLate.schedule.domain.SchedulePushJobCreateRequest
-import com.noLate.schedule.domain.SchedulePushJobDto
+import jakarta.transaction.Transactional
 import org.springframework.stereotype.Component
 
 @Component
@@ -32,9 +31,13 @@ class ScheduleUseCase(
      * 일정관리 앱의 기본 생성 유스케이스.
      * 일정 본문과 함께 출발지/도착지/선택 경로까지 하나의 일정으로 저장한다.
      */
+    @Transactional
     fun addSchedule(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
-        // 스케줄 생성
+        // 1. 스케줄 생성
         val addSchedule = scheduleService.addSchedule(memberId, scheduleDto);
+
+        // 2. 스케줄 푸쉬 잡 생성
+        schedulePushJobService.registerFromScheduleDto(memberId, addSchedule);
 
         return addSchedule;
     }
@@ -43,16 +46,25 @@ class ScheduleUseCase(
      * 일정 편집 유스케이스.
      * 시간, 카테고리, 장소, 경로 정보를 모두 같은 화면 모델 기준으로 교체한다.
      */
+    @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
-        return scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
+        val updated = scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
+        if (updated.notificationEnabled == true) {
+            schedulePushJobService.registerFromScheduleDto(memberId, updated)
+        } else {
+            schedulePushJobService.cancelByScheduleId(scheduleId)
+        }
+        return updated
     }
 
     /**
      * 일정 삭제 유스케이스.
      * 복구 가능성을 남기기 위해 실제 삭제가 아니라 deleted flag를 변경한다.
      */
+    @Transactional
     fun deleteSchedule(memberId: Long, scheduleId: Long) {
         scheduleService.deleteSchedule(memberId, scheduleId)
+        schedulePushJobService.cancelByScheduleId(scheduleId)
     }
 
     /**

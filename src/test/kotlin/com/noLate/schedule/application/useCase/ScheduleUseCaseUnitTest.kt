@@ -2,6 +2,7 @@ package com.noLate.schedule.application.useCase
 
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
+import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
@@ -30,11 +31,18 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var scheduleHybridParserService: ScheduleHybridParserService
 
+    @Mock
+    lateinit var schedulePushJobService: SchedulePushJobService
+
     private lateinit var scheduleUseCase: ScheduleUseCase
 
     @BeforeEach
     fun setUp() {
-        scheduleUseCase = ScheduleUseCase(scheduleService, scheduleHybridParserService)
+        scheduleUseCase = ScheduleUseCase(
+            scheduleService,
+            schedulePushJobService,
+            scheduleHybridParserService,
+        )
     }
 
     @Test
@@ -62,6 +70,7 @@ class ScheduleUseCaseUnitTest {
 
         // then
         verify(scheduleService, times(1)).addSchedule(memberId, request)
+        verify(schedulePushJobService, times(1)).registerFromScheduleDto(memberId, saved)
         assertEquals(10L, result.id)
     }
 
