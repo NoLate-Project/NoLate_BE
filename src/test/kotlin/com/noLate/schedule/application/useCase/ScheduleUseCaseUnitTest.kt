@@ -14,6 +14,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -88,7 +89,26 @@ class ScheduleUseCaseUnitTest {
 
         // then
         verify(scheduleService, times(1)).updateSchedule(memberId, scheduleId, request)
+        verify(schedulePushJobService, times(1)).cancelByScheduleId(scheduleId)
         assertEquals("수정 일정", result.title)
+    }
+
+    @Test
+    fun `알림이 활성화된 일정 update는 push job을 새 일정 정보로 다시 등록한다`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val request = scheduleDto(title = "시간 변경").copy(
+            notificationEnabled = true,
+            notificationLeadMinutes = 60,
+            notificationIntervalMinutes = 20,
+        )
+        val updated = request.copy(id = scheduleId)
+        whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
+
+        scheduleUseCase.updateSchedule(memberId, scheduleId, request)
+
+        verify(schedulePushJobService).registerFromScheduleDto(memberId, updated)
+        verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
     }
 
     @Test

@@ -3,6 +3,10 @@ package com.noLate.schedule.application.service
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficRequest
+import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
+import com.noLate.schedule.application.service.policy.DepartureReminderDecision
+import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
+import com.noLate.schedule.application.service.policy.TrafficChangePolicy
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
@@ -22,7 +26,11 @@ class SchedulePushJobWorker(
     private val scheduleRepository: ScheduleRepository,
     private val trafficClient: TrafficClient,
     private val notificationUseCase: NotificationUseCase,
+    private val periodicPushPolicy: PeriodicPushPolicy,
+    private val departureReminderPolicy: DepartureReminderPolicy,
+    private val trafficChangePolicy: TrafficChangePolicy,
     @Value("\${schedule.push.retry-delay-minutes:5}") private val retryDelayMinutes: Long,
+    @Value("\${schedule.push.departure-alert-lead-minutes:15}") private val departureAlertLeadMinutes: Int,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "schedule-push-${UUID.randomUUID()}"
@@ -81,31 +89,76 @@ class SchedulePushJobWorker(
             )
             val travelMinutes = trafficClient.getTravelMinutes(request)
             val recommendedDepartureAt = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+            val reminderDecision = departureReminderPolicy.decide(
+                now = now,
+                recommendedDepartureAt = recommendedDepartureAt,
+                lastNotifiedDepartureAt = job.lastNotifiedDepartureAt,
+                alertLeadMinutes = departureAlertLeadMinutes,
+            )
+            val shouldPush = reminderDecision != DepartureReminderDecision.NONE
 
-            val sendResult = notificationUseCase.sendToMember(
-                memberId = job.memberId,
-                title = "출발 시간 안내",
-                body = "${schedule.title}까지 현재 교통 기준 ${travelMinutes}분이 걸립니다.",
-                data = mapOf(
-                    "type" to "SCHEDULE_TRAFFIC",
-                    "scheduleId" to job.scheduleId.toString(),
-                    "travelMinutes" to travelMinutes.toString(),
-                    "recommendedDepartureAt" to recommendedDepartureAt.toString(),
-                ),
-            )
-            log.info(
-                "Schedule push processed. jobId={}, scheduleId={}, travelMinutes={}, requested={}, sent={}, failed={}",
-                job.id,
-                job.scheduleId,
-                travelMinutes,
-                sendResult.requestedCount,
-                sendResult.sentCount,
-                sendResult.failedCount,
-            )
+            val pushSent = if (shouldPush) {
+                val message = trafficChangePolicy.createMessage(
+                    scheduleTitle = schedule.title,
+                    previousTravelMinutes = job.lastTravelMinutes,
+                    currentTravelMinutes = travelMinutes,
+                    recommendedDepartureAt = recommendedDepartureAt,
+                    decision = reminderDecision,
+                    alertLeadMinutes = departureAlertLeadMinutes,
+                )
+                val sendResult = notificationUseCase.sendToMember(
+                    memberId = job.memberId,
+                    title = message.title,
+                    body = message.body,
+                    data = mapOf(
+                        "type" to "SCHEDULE_TRAFFIC",
+                        "scheduleId" to job.scheduleId.toString(),
+                        "travelMinutes" to travelMinutes.toString(),
+                        "recommendedDepartureAt" to recommendedDepartureAt.toString(),
+                        "departNow" to
+                            (reminderDecision == DepartureReminderDecision.DEPART_NOW).toString(),
+                        "trafficChangeMinutes" to (message.trafficChangeMinutes?.toString() ?: "0"),
+                    ),
+                )
+                log.info(
+                    "Schedule push sent. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, sent={}, failed={}",
+                    job.id,
+                    job.scheduleId,
+                    reminderDecision,
+                    travelMinutes,
+                    sendResult.requestedCount,
+                    sendResult.sentCount,
+                    sendResult.failedCount,
+                )
+                sendResult.sentCount > 0
+            } else {
+                log.info(
+                    "Schedule ETA refreshed without push. jobId={}, scheduleId={}, travelMinutes={}, recommendedDepartureAt={}",
+                    job.id,
+                    job.scheduleId,
+                    travelMinutes,
+                    recommendedDepartureAt,
+                )
+                false
+            }
+
+            val departNow = reminderDecision == DepartureReminderDecision.DEPART_NOW
             job.finishCheck(
                 travelMinutes = travelMinutes,
                 recommendedDepartureAt = recommendedDepartureAt,
-                pushSent = sendResult.sentCount > 0,
+                pushSent = pushSent,
+                notifiedDepartureAt = recommendedDepartureAt.takeIf { pushSent },
+                nextCheckAt = if (departNow) {
+                    null
+                } else {
+                    periodicPushPolicy.nextCheckAt(
+                        now = now,
+                        recommendedDepartureAt = recommendedDepartureAt,
+                        intervalMinutes = job.intervalMinutes,
+                        alertLeadMinutes = departureAlertLeadMinutes,
+                    )
+                },
+                completeAfterCheck = departNow,
                 now = now,
             )
         } catch (exception: Exception) {

@@ -122,4 +122,57 @@ class NotificationUseCaseUnitTest {
         verify(notificationTokenService, times(1)).getTokensByMember(1L)
         verify(notificationTokenService, times(1)).getTokensByMember(2L)
     }
+
+    @Test
+    fun `여러 회원에게 서로 다른 일정 푸시를 보내도 토큰과 payload가 섞이지 않는다`() {
+        val firstToken = NotificationDeviceToken(
+            id = 1L,
+            memberId = 1L,
+            deviceId = "member-1-device",
+            platform = PushPlatform.ANDROID,
+            token = "member-1-token",
+        )
+        val secondToken = NotificationDeviceToken(
+            id = 2L,
+            memberId = 2L,
+            deviceId = "member-2-device",
+            platform = PushPlatform.IOS,
+            token = "member-2-token",
+        )
+        val firstData = mapOf("scheduleId" to "10", "type" to "SCHEDULE_TRAFFIC")
+        val secondData = mapOf("scheduleId" to "20", "type" to "SCHEDULE_TRAFFIC")
+
+        whenever(notificationTokenService.getTokensByMember(1L)).thenReturn(listOf(firstToken))
+        whenever(notificationTokenService.getTokensByMember(2L)).thenReturn(listOf(secondToken))
+        whenever(pushClient.sendToToken(any(), any(), any(), any()))
+            .thenReturn(PushSendResult("message-id"))
+
+        notificationUseCase.sendToMember(1L, "회원 1 알림", "회원 1 일정", firstData)
+        notificationUseCase.sendToMember(2L, "회원 2 알림", "회원 2 일정", secondData)
+
+        verify(pushClient).sendToToken(
+            "member-1-token",
+            "회원 1 알림",
+            "회원 1 일정",
+            firstData,
+        )
+        verify(pushClient).sendToToken(
+            "member-2-token",
+            "회원 2 알림",
+            "회원 2 일정",
+            secondData,
+        )
+        verify(pushClient, never()).sendToToken(
+            eq("member-1-token"),
+            any(),
+            any(),
+            eq(secondData),
+        )
+        verify(pushClient, never()).sendToToken(
+            eq("member-2-token"),
+            any(),
+            any(),
+            eq(firstData),
+        )
+    }
 }

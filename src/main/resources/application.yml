@@ -54,6 +54,7 @@ schedule:
   push:
     fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}
     retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:5}
+    departure-alert-lead-minutes: ${SCHEDULE_PUSH_DEPARTURE_ALERT_LEAD_MINUTES:15}
   traffic:
     tmap:
       enabled: ${TMAP_ENABLED:false}

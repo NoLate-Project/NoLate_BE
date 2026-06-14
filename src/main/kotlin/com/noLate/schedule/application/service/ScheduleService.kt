@@ -243,7 +243,7 @@ class ScheduleService(
         val notificationIntervalMinutes = if (notificationEnabled) {
             scheduleDto.notificationIntervalMinutes
                 ?: existingSchedule?.route?.notificationIntervalMinutes
-                ?: requireNotNull(policy).minNotificationIntervalMinutes
+                ?: requireNotNull(policy).minEtaRefreshIntervalMinutes
         } else {
             null
         }

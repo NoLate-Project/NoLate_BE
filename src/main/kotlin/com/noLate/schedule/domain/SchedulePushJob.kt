@@ -99,6 +99,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var lastRecommendedDepartureAt: Instant? = null
         protected set
 
+    @Column(name = "last_notified_departure_at")
+    @Comment("마지막으로 사용자에게 푸시 안내한 추천 출발 시간")
+    var lastNotifiedDepartureAt: Instant? = null
+        protected set
+
     @Column(name = "last_checked_at")
     @Comment("마지막 교통상황 체크 실행 시간")
     var lastCheckedAt: Instant? = null
@@ -187,6 +192,9 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         travelMinutes: Int,
         recommendedDepartureAt: Instant,
         pushSent: Boolean,
+        notifiedDepartureAt: Instant?,
+        nextCheckAt: Instant?,
+        completeAfterCheck: Boolean,
         now: Instant = Instant.now()
     ) {
         lastTravelMinutes = travelMinutes
@@ -196,14 +204,17 @@ class SchedulePushJob protected constructor() : BaseEntity() {
 
         if (pushSent) {
             lastPushedAt = now
+            lastNotifiedDepartureAt = notifiedDepartureAt
         }
 
-        if (!now.isBefore(departureAt)) {
+        if (completeAfterCheck) {
             complete()
             return
         }
 
-        nextCheckAt = calculateNextCheckAt(now)
+        this.nextCheckAt = requireNotNull(nextCheckAt) {
+            "계속 처리할 작업에는 다음 체크 시각이 필요합니다."
+        }
         status = SchedulePushJobStatus.ACTIVE
         clearLock()
     }
@@ -230,22 +241,16 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.intervalMinutes = intervalMinutes
         this.nextCheckAt = monitorStartAt
         this.status = SchedulePushJobStatus.ACTIVE
+        this.lastTravelMinutes = null
+        this.lastRecommendedDepartureAt = null
+        this.lastNotifiedDepartureAt = null
+        this.lastCheckedAt = null
+        this.lastPushedAt = null
+        this.checkCount = 0
+        this.retryCount = 0
         this.failureReason = null
 
         clearLock()
-    }
-
-    /**
-     * 현재 시간 기준 다음 교통상황 체크 시간을 계산한다.
-     */
-    fun calculateNextCheckAt(now: Instant): Instant {
-        val next = now.plusSeconds(intervalMinutes.toLong() * 60)
-
-        return if (next.isAfter(departureAt)) {
-            departureAt
-        } else {
-            next
-        }
     }
 
     /**
@@ -261,7 +266,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     }
 
     companion object {
-        private val ALLOWED_INTERVALS = setOf(20, 25, 30, 35, 40, 45, 50, 55, 60)
+        private val ALLOWED_INTERVALS = setOf(10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60)
 
         /**
          * SchedulePushJob을 생성한다.
