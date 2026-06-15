@@ -62,11 +62,6 @@ class JwtAuthenticationFilter(
             log.warn("JwtAuthenticationFilter - no JWT token found in request headers")
             filterChain.doFilter(request, response)
             return
-        } else {
-            log.info(
-                "JwtAuthenticationFilter - token resolved, prefix={}...",
-                token.take(15)
-            )
         }
 
         // 3) 토큰 유효성 검증
@@ -135,29 +130,26 @@ class JwtAuthenticationFilter(
 
         // 1) Authorization 헤더
         val bearer = request.getHeader("Authorization")
-        log.info("resolveToken - Authorization header = {}", bearer)
 
         if (!bearer.isNullOrBlank() && bearer.startsWith("Bearer ", ignoreCase = true)) {
-            val token = bearer.substring(7)
-            log.info("resolveToken - Bearer token found, prefix = {}...", token.take(15))
-            return token
+            // JWT는 일부 문자열만 노출해도 공격 단서가 될 수 있으므로 로그에 남기지 않는다.
+            log.debug("resolveToken - Bearer token found")
+            return bearer.substring(7)
         }
 
         // 2) legacy jwt-token 헤더
         val legacy = request.getHeader("jwt-token")
-        log.info("resolveToken - jwt-token header = {}", legacy)
 
         if (!legacy.isNullOrBlank()) {
-            log.info("resolveToken - using legacy jwt-token header, prefix = {}...", legacy.take(15))
+            log.debug("resolveToken - legacy jwt-token header found")
             return legacy
         }
 
-        // 3) 🔥 SSE / EventSource 전용: query parameter
+        // 3) SSE / EventSource 전용 query parameter
         val queryToken = request.getParameter("token")
-        log.info("resolveToken - query token = {}", queryToken?.take(15))
 
         if (!queryToken.isNullOrBlank()) {
-            log.info("resolveToken - using query token, prefix = {}...", queryToken.take(15))
+            log.debug("resolveToken - query token found")
             return queryToken
         }
 

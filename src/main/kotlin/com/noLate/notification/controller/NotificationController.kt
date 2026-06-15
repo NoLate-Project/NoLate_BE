@@ -6,6 +6,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.notification.application.service.NotificationTokenService
 import com.noLate.notification.domain.PushPlatform
 import io.swagger.v3.oas.annotations.Operation
@@ -41,14 +42,15 @@ class NotificationController(
     fun sendTest(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: SendTestNotificationRequest
-    ): ApiResponse<Unit> {
-        notificationUseCase.sendToMember(
+    ): ApiResponse<NotificationSendResult> {
+        // 테스트 API도 실제 결과를 반환해 Android 성공과 iOS 인증 실패 같은 부분 성공을 숨기지 않는다.
+        val result = notificationUseCase.sendToMember(
             memberId = requireMemberId(principal),
             title = request.title,
             body = request.body,
             data = request.data ?: emptyMap()
         )
-        return ApiResponse.success(Unit)
+        return ApiResponse.success(result)
     }
 
     private fun requireMemberId(principal: MemberPrincipal?): Long =

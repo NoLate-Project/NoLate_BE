@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     next_check_at DATETIME(6) NOT NULL COMMENT 'Next traffic check time',
     last_travel_minutes INT NULL COMMENT 'Last travel minutes',
     last_recommended_departure_at DATETIME(6) NULL COMMENT 'Last recommended departure time',
+    last_notified_departure_at DATETIME(6) NULL COMMENT 'Last departure time notified to the user',
     last_checked_at DATETIME(6) NULL COMMENT 'Last checked time',
     last_pushed_at DATETIME(6) NULL COMMENT 'Last push sent time',
     check_count INT NOT NULL DEFAULT 0 COMMENT 'Traffic check count',
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     create_dt DATETIME(6) NULL,
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_push_job_schedule_id (schedule_id),
     INDEX idx_schedule_push_job_status_next_check_at (status, next_check_at),
     INDEX idx_schedule_push_job_member_id (member_id),
     INDEX idx_schedule_push_job_schedule_id (schedule_id)

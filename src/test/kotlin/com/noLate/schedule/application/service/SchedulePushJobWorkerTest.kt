@@ -15,6 +15,7 @@ import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
@@ -289,6 +290,111 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `지금 출발 푸시가 한 기기에도 전송되지 않으면 완료하지 않고 재시도한다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 0, failedCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
+        assertEquals(testNow.plus(5, ChronoUnit.MINUTES), job.nextCheckAt)
+        assertEquals(1, job.retryCount)
+        assertNull(job.lastPushedAt)
+        assertTrue(job.failureReason.orEmpty().contains("푸시 공급자"))
+    }
+
+    @Test
+    fun `푸시 토큰이 없으면 원인을 기록하고 재시도한다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult())
+
+        worker().runDueJobs(testNow)
+
+        assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
+        assertEquals("등록된 푸시 토큰이 없습니다.", job.failureReason)
+        assertEquals(1, job.retryCount)
+    }
+
+    @Test
+    fun `최대 재시도 횟수에 도달하면 job을 실패 상태로 종료한다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        job.retryLater("첫 번째 실패", testNow)
+        job.retryLater("두 번째 실패", testNow)
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, failedCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        assertEquals(SchedulePushJobStatus.FAILED, job.status)
+        assertEquals(3, job.retryCount)
+        assertNull(job.lockedBy)
+    }
+
+    @Test
+    fun `일정 시작 직후에는 지연된 지금 출발 푸시를 발송한다`() {
+        val scheduleStartAt = testNow.minus(2, ChronoUnit.MINUTES)
+        val schedule = schedule(scheduleStartAt)
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = schedule.startAt.minus(90, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(1L),
+            title = eq("지금 출발하세요"),
+            body = any(),
+            data = check { assertEquals("true", it["departNow"]) },
+        )
+        assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
+    }
+
+    @Test
+    fun `일정 시작 후 유예 시간이 지나면 푸시 없이 job을 완료한다`() {
+        val scheduleStartAt = testNow.minus(11, ChronoUnit.MINUTES)
+        val schedule = schedule(scheduleStartAt)
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = schedule.startAt.minus(90, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any())
+        assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
+    }
+
+    @Test
     fun `여러 회원의 job이 동시에 검출되어도 각 회원 일정으로 푸시한다`() {
         val firstSchedule = schedule(
             startAt = shortScheduleStartAt,
@@ -368,8 +474,36 @@ class SchedulePushJobWorkerTest {
         departureReminderPolicy = DepartureReminderPolicy(),
         trafficChangePolicy = TrafficChangePolicy(),
         retryDelayMinutes = 5,
+        maxRetryCount = 3,
+        deliveryGraceMinutes = 10,
         departureAlertLeadMinutes = departureAlertLeadMinutes,
     )
+
+    /**
+     * 최종 출발 알림 시나리오에서 공통으로 사용하는 due job을 만든다.
+     */
+    private fun dueDepartureJob(schedule: Schedule) = SchedulePushJob.create(
+        memberId = schedule.memberId,
+        scheduleId = requireNotNull(schedule.id),
+        scheduleAt = schedule.startAt,
+        departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+        monitorStartAt = schedule.startAt.minus(90, ChronoUnit.MINUTES),
+        intervalMinutes = notificationIntervalMinutes,
+    )
+
+    /**
+     * 테스트가 발송 결과에만 집중할 수 있도록 due job 조회와 ETA 응답을 한곳에서 준비한다.
+     */
+    private fun stubDueJob(job: SchedulePushJob, schedule: Schedule, travelMinutes: Int) {
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
+    }
 
     private fun schedule(
         startAt: Instant = defaultScheduleStartAt,

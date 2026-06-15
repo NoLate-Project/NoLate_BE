@@ -3,7 +3,9 @@ package com.noLate.schedule.infrastructure
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.test.context.TestPropertySource
@@ -55,4 +57,29 @@ class SchedulePushJobRepositoryIntegrationTest @Autowired constructor(
 
         assertEquals(listOf(10L), dueJobs.map { it.scheduleId })
     }
+
+    @Test
+    fun `하나의 일정에는 push job을 중복 생성할 수 없다`() {
+        val first = createJob(scheduleId = 20L)
+        val duplicate = createJob(scheduleId = 20L)
+
+        repository.saveAndFlush(first)
+
+        assertThrows(DataIntegrityViolationException::class.java) {
+            repository.saveAndFlush(duplicate)
+        }
+    }
+
+    /**
+     * 중복 제약 테스트가 scheduleId 외의 값에 영향을 받지 않도록 동일한 기본 작업을 만든다.
+     */
+    private fun createJob(scheduleId: Long): SchedulePushJob =
+        SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = scheduleId,
+            scheduleAt = Instant.parse("2026-06-12T03:00:00Z"),
+            departureAt = Instant.parse("2026-06-12T02:00:00Z"),
+            monitorStartAt = Instant.parse("2026-06-12T01:00:00Z"),
+            intervalMinutes = 20,
+        )
 }

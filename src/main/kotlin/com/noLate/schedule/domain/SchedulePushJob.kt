@@ -10,6 +10,7 @@ import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Index
 import jakarta.persistence.Table
+import jakarta.persistence.UniqueConstraint
 import jakarta.persistence.Version
 import org.hibernate.annotations.Comment
 import java.time.Instant
@@ -17,6 +18,12 @@ import java.time.Instant
 @Entity
 @Table(
     name = "schedule_push_job",
+    uniqueConstraints = [
+        UniqueConstraint(
+            name = "uk_schedule_push_job_schedule_id",
+            columnNames = ["schedule_id"],
+        )
+    ],
     indexes = [
         Index(
             name = "idx_schedule_push_job_status_next_check_at",
@@ -201,6 +208,8 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         lastRecommendedDepartureAt = recommendedDepartureAt
         lastCheckedAt = now
         checkCount += 1
+        retryCount = 0
+        failureReason = null
 
         if (pushSent) {
             lastPushedAt = now
@@ -258,6 +267,15 @@ class SchedulePushJob protected constructor() : BaseEntity() {
      */
     fun isExpired(now: Instant): Boolean {
         return !now.isBefore(scheduleAt)
+    }
+
+    /**
+     * 스케줄러가 추천 출발 시각에 잠시 멈췄다가 복구되더라도 최종 알림을 놓치지 않도록
+     * 일정 시작 이후의 짧은 유예 시간까지 작업을 처리할 수 있게 한다.
+     */
+    fun isPastDeliveryWindow(now: Instant, graceMinutes: Long): Boolean {
+        require(graceMinutes >= 0) { "graceMinutes는 0 이상이어야 합니다." }
+        return now.isAfter(scheduleAt.plusSeconds(graceMinutes * 60))
     }
 
     private fun clearLock() {
