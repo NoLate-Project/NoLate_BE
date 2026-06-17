@@ -14,5 +14,5 @@ import org.springframework.stereotype.Component
 )
 class FallbackTrafficClient : TrafficClient {
     override fun getTravelMinutes(request: TrafficRequest): Int =
-        request.fallbackTravelMinutes
+        request.selectedRouteTravelMinutes ?: request.fallbackTravelMinutes
 }

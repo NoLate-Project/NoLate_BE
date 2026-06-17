@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.service
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.schedule.application.TrafficClient
@@ -49,6 +50,7 @@ class SchedulePushJobWorkerTest {
     private val seoulTimeFormatter = DateTimeFormatter
         .ofPattern("HH:mm")
         .withZone(ZoneId.of("Asia/Seoul"))
+    private val objectMapper = ObjectMapper()
 
     @Mock
     lateinit var pushJobRepository: SchedulePushJobRepository
@@ -465,9 +467,78 @@ class SchedulePushJobWorkerTest {
         assertEquals(50, secondJob.lastTravelMinutes)
     }
 
+    @Test
+    // Simulates a server crash or shutdown after a worker marked a job PROCESSING.
+    // The next worker run should unlock stale jobs and put them back into ACTIVE so they can be retried.
+    fun `PROCESSING job이 timeout을 넘으면 ACTIVE로 복구하고 즉시 재검사 대상으로 만든다`() {
+        val schedule = schedule()
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(60, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(30, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        job.startProcessing("previous-worker")
+
+        whenever(
+            pushJobRepository.findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
+                SchedulePushJobStatus.PROCESSING,
+                testNow.minus(10, ChronoUnit.MINUTES),
+            )
+        ).thenReturn(listOf(job))
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(emptyList())
+
+        assertEquals(0, worker().runDueJobs(testNow))
+
+        assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
+        assertEquals(testNow, job.nextCheckAt)
+        assertEquals(1, job.retryCount)
+        assertNull(job.lockedBy)
+        assertNull(job.lockedAt)
+        assertTrue(job.failureReason.orEmpty().contains("Processing timeout"))
+    }
+
+    @Test
+    fun `사용자가 선택한 경로의 ETA 스냅샷을 실시간 교통 조회 fallback으로 넘긴다`() {
+        val schedule = schedule(routeJson = """{"id":"selected-route","minutes":42,"source":"api"}""")
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(60, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(42)
+
+        worker().runDueJobs(testNow)
+
+        verify(trafficClient).getTravelMinutes(check<TrafficRequest> {
+            assertEquals(30, it.fallbackTravelMinutes)
+            assertEquals(42, it.selectedRouteTravelMinutes)
+            assertTrue(it.selectedRouteJson.orEmpty().contains("selected-route"))
+        })
+    }
+
     private fun worker() = SchedulePushJobWorker(
         pushJobRepository = pushJobRepository,
         scheduleRepository = scheduleRepository,
+        objectMapper = objectMapper,
         trafficClient = trafficClient,
         notificationUseCase = notificationUseCase,
         periodicPushPolicy = PeriodicPushPolicy(),
@@ -477,6 +548,7 @@ class SchedulePushJobWorkerTest {
         maxRetryCount = 3,
         deliveryGraceMinutes = 10,
         departureAlertLeadMinutes = departureAlertLeadMinutes,
+        processingTimeoutMinutes = 10,
     )
 
     /**
@@ -509,6 +581,7 @@ class SchedulePushJobWorkerTest {
         startAt: Instant = defaultScheduleStartAt,
         scheduleId: Long = 10L,
         memberId: Long = 1L,
+        routeJson: String? = null,
         title: String = "회의",
     ): Schedule =
         Schedule(
@@ -531,7 +604,7 @@ class SchedulePushJobWorkerTest {
                 destinationAddress = null,
                 destinationLat = 37.2,
                 destinationLng = 127.2,
-                routeJson = null,
+                routeJson = routeJson,
                 notificationEnabled = true,
                 notificationLeadMinutes = 60,
                 notificationIntervalMinutes = notificationIntervalMinutes,

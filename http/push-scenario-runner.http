@@ -1,0 +1,129 @@
+# PushScenarioRunner local verification
+#
+# Required server options:
+# - notification.push-scenario.enabled=true
+# - firebase.enabled=true for real app push delivery
+# - firebase.project-id and Firebase credentials for real app push delivery
+#
+# Required app state:
+# - Log in from the FE app.
+# - Allow notification permission.
+# - Let the FE app register its FCM token through POST /api/notifications/token.
+#
+# If firebase.enabled=false, the backend uses Dummy PushClient.
+# In that case this file verifies the BE send path and response only, not real app delivery.
+
+@baseUrl = http://localhost:5522
+@loginEmail = test@test.com
+@loginPassword = 0000
+@scheduleId = 4
+@titlePrefix = NoLate local push verification
+@changedTravelMinutes = 45
+@trafficChangeMinutes = 15
+
+### 1. Login and store JWT
+POST {{baseUrl}}/api/member/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{loginEmail}}",
+  "password": "{{loginPassword}}"
+}
+
+> {%
+    client.test("login returns access token", function () {
+        client.assert(response.status === 200, "login request failed");
+        client.assert(response.body.success === true, "login response is not successful");
+        client.assert(response.body.data.accessToken, "accessToken is missing");
+        client.assert(response.body.data.refreshToken, "refreshToken is missing");
+    });
+
+    client.global.set("accessToken", response.body.data.accessToken);
+    client.global.set("refreshToken", response.body.data.refreshToken);
+    client.global.set("memberId", response.body.data.id);
+%}
+
+### 2. Verify authenticated request
+GET {{baseUrl}}/api/member/profile
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.test("stored access token authenticates member API", function () {
+        client.assert(response.status === 200, "profile request failed");
+        client.assert(response.body.success === true, "profile response is not successful");
+    });
+%}
+
+### 3. Optional: send one simple notification through the normal notification API
+POST {{baseUrl}}/api/notifications/test/send
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "NoLate push path check",
+  "body": "This notification verifies the normal NotificationUseCase path.",
+  "data": {
+    "type": "PUSH_PATH_CHECK",
+    "scenario": "SINGLE_TEST_SEND"
+  }
+}
+
+> {%
+    client.test("normal notification API returns send result", function () {
+        client.assert(response.status === 200, "test notification request failed");
+        client.assert(response.body.success === true, "test notification response is not successful");
+        client.assert(response.body.data.requestedCount >= 0, "requestedCount is missing");
+        client.log("normal send result: " + JSON.stringify(response.body.data));
+    });
+%}
+
+### 4. Run PushScenarioRunner: TOKEN_CHECK, TRAFFIC_CHANGED, DEPARTURE_SOON, DEPART_NOW, DETAIL_NAVIGATION
+POST {{baseUrl}}/api/dev/push-scenarios/run
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "scheduleId": {{scheduleId}},
+  "titlePrefix": "{{titlePrefix}}",
+  "changedTravelMinutes": {{changedTravelMinutes}},
+  "trafficChangeMinutes": {{trafficChangeMinutes}}
+}
+
+> {%
+    client.test("PushScenarioRunner sends all push scenarios", function () {
+        client.assert(response.status === 200, "PushScenarioRunner request failed. Check notification.push-scenario.enabled=true.");
+        client.assert(response.body.success === true, "PushScenarioRunner response is not successful");
+
+        const data = response.body.data;
+        client.assert(data.scenarioCount === 5, "scenarioCount must be 5");
+        client.assert(data.results.length === 5, "results length must be 5");
+        client.assert(data.results[0].scenario === "TOKEN_CHECK", "first scenario must be TOKEN_CHECK");
+        client.assert(data.results[1].scenario === "TRAFFIC_CHANGED", "second scenario must be TRAFFIC_CHANGED");
+        client.assert(data.results[2].scenario === "DEPARTURE_SOON", "third scenario must be DEPARTURE_SOON");
+        client.assert(data.results[3].scenario === "DEPART_NOW", "fourth scenario must be DEPART_NOW");
+        client.assert(data.results[4].scenario === "DETAIL_NAVIGATION", "fifth scenario must be DETAIL_NAVIGATION");
+        client.assert(data.total.requestedCount >= 0, "total requestedCount is missing");
+
+        client.log("PushScenarioRunner result: " + JSON.stringify(data, null, 2));
+    });
+%}
+
+### 5. Optional: refresh JWT after verification
+POST {{baseUrl}}/api/member/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+> {%
+    client.test("refresh returns new token pair", function () {
+        client.assert(response.status === 200, "refresh request failed");
+        client.assert(response.body.success === true, "refresh response is not successful");
+        client.assert(response.body.data.accessToken, "new accessToken is missing");
+        client.assert(response.body.data.refreshToken, "new refreshToken is missing");
+    });
+
+    client.global.set("accessToken", response.body.data.accessToken);
+    client.global.set("refreshToken", response.body.data.refreshToken);
+%}

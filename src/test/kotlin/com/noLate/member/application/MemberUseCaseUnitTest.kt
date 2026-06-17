@@ -107,9 +107,9 @@ class MemberUseCaseUnitTest {
                 assertEquals(1L, it.memberId)
             })
 
-        // refreshTokenService, profileService 는 회원가입에선 사용 안 됨
+        // refreshTokenService는 회원가입에선 사용 안 되고, 기본 프로필은 생성한다
         verifyNoInteractions(refreshTokenService)
-        verifyNoInteractions(memberProfileService)
+        verify(memberProfileService, times(1)).createDefaultProfile(1L)
 
         assertEquals(1L, result.id)
         assertEquals("user@test.com", result.email)

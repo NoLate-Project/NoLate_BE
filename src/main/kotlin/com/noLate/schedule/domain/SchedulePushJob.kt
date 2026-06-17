@@ -192,6 +192,14 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         clearLock()
     }
 
+    fun recoverProcessingTimeout(reason: String, nextCheckAt: Instant) {
+        status = SchedulePushJobStatus.ACTIVE
+        failureReason = reason
+        retryCount += 1
+        this.nextCheckAt = nextCheckAt
+        clearLock()
+    }
+
     /**
      * 교통상황 체크 후 이동시간, 추천 출발 시간, 푸시 발송 여부를 반영한다.
      */

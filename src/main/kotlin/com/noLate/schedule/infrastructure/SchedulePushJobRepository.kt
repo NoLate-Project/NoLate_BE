@@ -15,5 +15,11 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
         nextCheckAt: Instant,
     ): List<SchedulePushJob>
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    fun findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
+        status: SchedulePushJobStatus,
+        lockedAt: Instant,
+    ): List<SchedulePushJob>
+
     fun findByScheduleId(scheduleId: Long): SchedulePushJob?
 }

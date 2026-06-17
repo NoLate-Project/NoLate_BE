@@ -70,6 +70,29 @@ class SchedulePushJobRepositoryIntegrationTest @Autowired constructor(
         }
     }
 
+    @Test
+    // Verifies the database query used by the worker recovery step.
+    // Only stale PROCESSING jobs should be selected; ACTIVE jobs must not be mixed into recovery.
+    fun `timeout boundary 이전에 잠긴 PROCESSING job만 복구 대상으로 조회한다`() {
+        val processingJob = createJob(scheduleId = 30L).apply {
+            startProcessing("worker-1")
+        }
+        val activeJob = createJob(scheduleId = 31L)
+
+        repository.save(processingJob)
+        repository.save(activeJob)
+        repository.flush()
+
+        val boundary = requireNotNull(processingJob.lockedAt).plusSeconds(1)
+        val staleJobs = repository
+            .findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
+                SchedulePushJobStatus.PROCESSING,
+                boundary,
+            )
+
+        assertEquals(listOf(30L), staleJobs.map { it.scheduleId })
+    }
+
     /**
      * 중복 제약 테스트가 scheduleId 외의 값에 영향을 받지 않도록 동일한 기본 작업을 만든다.
      */

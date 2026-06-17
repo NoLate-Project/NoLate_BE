@@ -9,6 +9,8 @@ data class TrafficRequest(
     val destinationLng: Double,
     val travelMode: ScheduleTravelMode,
     val fallbackTravelMinutes: Int,
+    val selectedRouteJson: String? = null,
+    val selectedRouteTravelMinutes: Int? = null,
 )
 
 interface TrafficClient {

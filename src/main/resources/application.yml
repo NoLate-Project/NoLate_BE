@@ -12,7 +12,7 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MY_SQL_END_POINT}:3306/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
+    url: jdbc:mysql://${MY_SQL_END_POINT}:${MY_SQL_PORT:3306}/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
     #useSSL=false&serverTimezone=Asia/Seoul
     username: ${MY_SQL_DB_USERNAME}
     password: ${MY_SQL_DB_PASSWORD}

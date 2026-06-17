@@ -23,6 +23,12 @@ class TmapTrafficClient(
         .build()
 
     override fun getTravelMinutes(request: TrafficRequest): Int {
+        return runCatching { getLiveTravelMinutes(request) }
+            .getOrElse { request.selectedRouteTravelMinutes ?: request.fallbackTravelMinutes }
+            .coerceAtLeast(1)
+    }
+
+    private fun getLiveTravelMinutes(request: TrafficRequest): Int {
         if (request.travelMode == ScheduleTravelMode.TRANSIT) {
             return getTransitTravelMinutes(request)
         }

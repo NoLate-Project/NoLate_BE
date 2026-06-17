@@ -18,6 +18,8 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.test.context.junit.jupiter.SpringExtension
 import org.springframework.transaction.annotation.Transactional
+import java.time.LocalDateTime
+import java.util.UUID
 
 @SpringBootTest
 @ExtendWith(SpringExtension::class)
@@ -37,7 +39,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         // 1) 회원가입
         val signUpDto = MemberDto(
-            email = "it1@test.com",
+            email = uniqueEmail("it1"),
             password = rawPassword,
             name = "통합테스트유저1",
             loginType = LoginType.COMMON
@@ -46,14 +48,14 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         val signedUpDto = memberUseCase.signUp(signUpDto)
 
         assertNotNull(signedUpDto.id)
-        assertEquals("it1@test.com", signedUpDto.email)
+        assertEquals(signUpDto.email, signedUpDto.email)
 
-        val saved = memberRepository.findAll().first()
+        val saved = memberRepository.findById(signedUpDto.id!!).orElseThrow()
         assertTrue(passwordEncoder.matches(rawPassword, saved.password))
 
         // 2) 로그인
         val loginDto = MemberDto(
-            email = "it1@test.com",
+            email = signUpDto.email,
             password = rawPassword,
             loginType = LoginType.COMMON
         )
@@ -78,7 +80,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         assertEquals(saved.name, memberNameFromToken)
 
         // refreshToken 이 DB에 저장되어 있는지 확인
-        assertEquals(1, refreshTokenRepository.count())
+        assertEquals(1, activeRefreshTokenCountFor(loginResult.id!!))
     }
 
     @Test
@@ -86,7 +88,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         val rawPassword = "raw-password-2"
 
         val dto = MemberDto(
-            email = "dup@test.com",
+            email = uniqueEmail("dup"),
             password = rawPassword,
             name = "중복테스트",
             loginType = LoginType.COMMON
@@ -109,7 +111,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         // 먼저 회원가입
         val signUpDto = MemberDto(
-            email = "wrongpw@test.com",
+            email = uniqueEmail("wrongpw"),
             password = rawPassword,
             name = "비번틀림",
             loginType = LoginType.COMMON
@@ -118,7 +120,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         // 잘못된 비밀번호로 로그인
         val wrongLoginDto = MemberDto(
-            email = "wrongpw@test.com",
+            email = signUpDto.email,
             password = "WRONG-PASSWORD",
             loginType = LoginType.COMMON
         )
@@ -133,7 +135,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     @Test
     fun `존재하지 않는 이메일로 COMMON 로그인을 시도하면 예외를 던진다`() {
         val loginDto = MemberDto(
-            email = "not-exist@test.com",
+            email = uniqueEmail("not-exist"),
             password = "any-password",
             loginType = LoginType.COMMON
         )
@@ -148,24 +150,25 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     @Test
     fun `SNS 첫 로그인 시 자동 회원 생성과 설정 생성 및 토큰 발급이 된다`() {
         val snsLoginDto = MemberDto(
-            email = "sns1@test.com",
+            email = uniqueEmail("sns1"),
             password = null,
             name = "SNS유저1",
             loginType = LoginType.KAKAO,
-            snsId = "kakao-111"
+            snsId = uniqueSnsId("kakao-111")
         )
 
-        assertEquals(0, memberRepository.count())
-        assertEquals(0, memberSettingRepository.count())
+        val memberCountBefore = memberRepository.count()
+        val settingCountBefore = memberSettingRepository.count()
+        val refreshCountBefore = refreshTokenRepository.count()
 
         val result = memberUseCase.login(snsLoginDto)
 
         // 회원이 새로 하나 생성되어야 함
-        assertEquals(1, memberRepository.count())
-        assertEquals(1, memberSettingRepository.count())
+        assertEquals(memberCountBefore + 1, memberRepository.count())
+        assertEquals(settingCountBefore + 1, memberSettingRepository.count())
 
         assertNotNull(result.id)
-        assertEquals("sns1@test.com", result.email)
+        assertEquals(snsLoginDto.email, result.email)
         assertEquals("SNS유저1", result.name)
         assertEquals(LoginType.KAKAO, result.loginType)
         assertNotNull(result.accessToken)
@@ -174,17 +177,17 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         val accessToken = result.accessToken!!
         assertTrue(jwtTokenProvider.validateToken(accessToken))
 
-        assertEquals(1, refreshTokenRepository.count())
+        assertEquals(refreshCountBefore + 1, refreshTokenRepository.count())
     }
 
     @Test
     fun `SNS 두 번째 로그인 시에는 기존 회원을 재사용하고 회원 수가 늘어나지 않는다`() {
         val snsLoginDto = MemberDto(
-            email = "sns2@test.com",
+            email = uniqueEmail("sns2"),
             password = null,
             name = "SNS유저2",
             loginType = LoginType.KAKAO,
-            snsId = "kakao-222"
+            snsId = uniqueSnsId("kakao-222")
         )
 
         // 첫 번째 SNS 로그인 → 자동 가입
@@ -206,7 +209,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         // 같은 회원 기준으로 로그인된 것인지 확인
         assertEquals(firstId, second.id)
-        assertEquals("sns2@test.com", second.email)
+        assertEquals(snsLoginDto.email, second.email)
         assertEquals("SNS유저2", second.name)
 
         assertNotNull(second.accessToken)
@@ -216,7 +219,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     @Test
     fun `tokenLogin은 refreshToken만으로 새 토큰 세트를 발급하고 DB의 refreshToken을 갱신한다`() {
         val signUpDto = MemberDto(
-            email = "tokenlogin@test.com",
+            email = uniqueEmail("tokenlogin"),
             password = "pw-token",
             name = "토큰로그인유저",
             loginType = LoginType.COMMON
@@ -225,14 +228,14 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         val loginResult = memberUseCase.login(
             MemberDto(
-                email = "tokenlogin@test.com",
+                email = signUpDto.email,
                 password = "pw-token",
                 loginType = LoginType.COMMON
             )
         )
 
         val firstRefreshToken = loginResult.refreshToken!!
-        assertEquals(1, refreshTokenRepository.count())
+        assertEquals(1, activeRefreshTokenCountFor(loginResult.id!!))
 
         // when - tokenLogin 호출
         val reLoginResult = memberUseCase.tokenLogin(firstRefreshToken)
@@ -246,13 +249,13 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         assertTrue(jwtTokenProvider.validateToken(newRefreshToken))
 
         // 정책상 한 회원당 refreshToken 한 개만 유지한다고 가정
-        assertEquals(1, refreshTokenRepository.count())
+        assertEquals(1, activeRefreshTokenCountFor(loginResult.id!!))
     }
 
     @Test
     fun `refresh는 tokenLogin과 동일하게 refreshToken만으로 새 토큰 세트를 발급한다`() {
         val signUpDto = MemberDto(
-            email = "refresh@test.com",
+            email = uniqueEmail("refresh"),
             password = "pw-refresh",
             name = "리프레시유저",
             loginType = LoginType.COMMON
@@ -261,7 +264,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         val loginResult = memberUseCase.login(
             MemberDto(
-                email = "refresh@test.com",
+                email = signUpDto.email,
                 password = "pw-refresh",
                 loginType = LoginType.COMMON
             )
@@ -285,7 +288,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     @Test
     fun `logout 이후에는 해당 refreshToken으로 tokenLogin을 시도하면 예외를 던진다`() {
         val signUpDto = MemberDto(
-            email = "logout@test.com",
+            email = uniqueEmail("logout"),
             password = "pw-logout",
             name = "로그아웃유저",
             loginType = LoginType.COMMON
@@ -294,14 +297,14 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         val loginResult = memberUseCase.login(
             MemberDto(
-                email = "logout@test.com",
+                email = signUpDto.email,
                 password = "pw-logout",
                 loginType = LoginType.COMMON
             )
         )
 
         val refreshToken = loginResult.refreshToken!!
-        assertEquals(1, refreshTokenRepository.count())
+        assertEquals(1, activeRefreshTokenCountFor(loginResult.id!!))
 
         // 로그아웃
         memberUseCase.logout(refreshToken)
@@ -318,7 +321,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     @Test
     fun `비밀번호 변경 후에는 새 비밀번호로는 로그인 가능하고 기존 비밀번호로는 로그인할 수 없다`() {
         val signUpDto = MemberDto(
-            email = "changepw@test.com",
+            email = uniqueEmail("changepw"),
             password = "old-pw",
             name = "패스워드유저",
             loginType = LoginType.COMMON
@@ -332,7 +335,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         // 새 비밀번호로 로그인 → 성공
         val loginNew = memberUseCase.login(
             MemberDto(
-                email = "changepw@test.com",
+                email = signUpDto.email,
                 password = "new-pw-1234",
                 loginType = LoginType.COMMON
             )
@@ -343,7 +346,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         val ex = assertThrows<BusinessException> {
             memberUseCase.login(
                 MemberDto(
-                    email = "changepw@test.com",
+                    email = signUpDto.email,
                     password = "old-pw",
                     loginType = LoginType.COMMON
                 )
@@ -355,7 +358,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     @Test
     fun `회원 탈퇴 이후에는 같은 계정으로 다시 로그인할 수 없다`() {
         val signUpDto = MemberDto(
-            email = "withdraw-it@test.com",
+            email = uniqueEmail("withdraw-it"),
             password = "pw-withdraw",
             name = "탈퇴통합유저",
             loginType = LoginType.COMMON
@@ -366,24 +369,24 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         // 로그인 한 번 해서 refreshToken 생성
         memberUseCase.login(
             MemberDto(
-                email = "withdraw-it@test.com",
+                email = signUpDto.email,
                 password = "pw-withdraw",
                 loginType = LoginType.COMMON
             )
         )
-        assertEquals(1, refreshTokenRepository.count())
+        assertEquals(1, activeRefreshTokenCountFor(memberId))
 
         // 탈퇴
         memberUseCase.withdraw(memberId, "pw-withdraw")
 
         // refreshToken 전부 삭제되었는지(혹은 soft delete 처리되었는지) 확인
-        assertEquals(0, refreshTokenRepository.count())
+        assertEquals(0, activeRefreshTokenCountFor(memberId))
 
         // 같은 계정으로 다시 로그인 시도 → 예외
         val ex = assertThrows<BusinessException> {
             memberUseCase.login(
                 MemberDto(
-                    email = "withdraw-it@test.com",
+                    email = signUpDto.email,
                     password = "pw-withdraw",
                     loginType = LoginType.COMMON
                 )
@@ -391,4 +394,16 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         }
         assertTrue(ex.message?.contains("회원") == true || ex.message?.contains("존재") == true)
     }
+
+    private fun activeRefreshTokenCountFor(memberId: Long): Int =
+        refreshTokenRepository.findAllByMemberIdAndRevokedIsFalseAndExpiresAtAfter(
+            memberId,
+            LocalDateTime.now(),
+        ).size
+
+    private fun uniqueEmail(prefix: String): String =
+        "$prefix-${UUID.randomUUID()}@test.com"
+
+    private fun uniqueSnsId(prefix: String): String =
+        "$prefix-${UUID.randomUUID()}"
 }

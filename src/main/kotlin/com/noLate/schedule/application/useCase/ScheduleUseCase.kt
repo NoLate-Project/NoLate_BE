@@ -7,13 +7,20 @@ import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Component
+import java.time.Clock
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
 
 @Component
 class ScheduleUseCase(
     private val scheduleService: ScheduleService,
     private val schedulePushJobService : SchedulePushJobService,
     private val scheduleHybridParserService: ScheduleHybridParserService,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
+    private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
     /**
      * 자유 형식 텍스트를 일정 입력 폼용 데이터로 분석한다.
      *
@@ -37,7 +44,9 @@ class ScheduleUseCase(
         val addSchedule = scheduleService.addSchedule(memberId, scheduleDto);
 
         // 2. 스케줄 푸쉬 잡 생성
-        schedulePushJobService.registerFromScheduleDto(memberId, addSchedule);
+        if (canCreatePushJob(addSchedule)) {
+            schedulePushJobService.registerFromScheduleDto(memberId, addSchedule)
+        }
 
         return addSchedule;
     }
@@ -49,12 +58,29 @@ class ScheduleUseCase(
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
         val updated = scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
-        if (updated.notificationEnabled == true) {
-            schedulePushJobService.registerFromScheduleDto(memberId, updated)
+        registerOrCancelPushJob(memberId, updated)
+        return updated
+    }
+
+    private fun registerOrCancelPushJob(memberId: Long, scheduleDto: ScheduleDto) {
+        val scheduleId = scheduleDto.id ?: return
+        if (canCreatePushJob(scheduleDto)) {
+            schedulePushJobService.registerFromScheduleDto(memberId, scheduleDto)
         } else {
             schedulePushJobService.cancelByScheduleId(scheduleId)
         }
-        return updated
+    }
+
+    private fun canCreatePushJob(scheduleDto: ScheduleDto): Boolean {
+        return scheduleDto.notificationEnabled == true &&
+            parseInstant(scheduleDto.startAt).isAfter(Instant.now(clock))
+    }
+
+    private fun parseInstant(value: String): Instant {
+        return runCatching { Instant.parse(value) }
+            .recoverCatching { OffsetDateTime.parse(value).toInstant() }
+            .recoverCatching { LocalDateTime.parse(value).atZone(seoulZone).toInstant() }
+            .getOrThrow()
     }
 
     /**

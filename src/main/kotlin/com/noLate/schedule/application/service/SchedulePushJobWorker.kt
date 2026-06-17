@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.service
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficRequest
@@ -24,6 +25,7 @@ import java.util.UUID
 class SchedulePushJobWorker(
     private val pushJobRepository: SchedulePushJobRepository,
     private val scheduleRepository: ScheduleRepository,
+    private val objectMapper: ObjectMapper,
     private val trafficClient: TrafficClient,
     private val notificationUseCase: NotificationUseCase,
     private val periodicPushPolicy: PeriodicPushPolicy,
@@ -33,6 +35,7 @@ class SchedulePushJobWorker(
     @Value("\${schedule.push.max-retry-count:3}") private val maxRetryCount: Int,
     @Value("\${schedule.push.delivery-grace-minutes:10}") private val deliveryGraceMinutes: Long,
     @Value("\${schedule.push.departure-alert-lead-minutes:15}") private val departureAlertLeadMinutes: Int,
+    @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "schedule-push-${UUID.randomUUID()}"
@@ -44,6 +47,8 @@ class SchedulePushJobWorker(
     }
 
     fun runDueJobs(now: Instant): Int {
+        recoverStaleProcessingJobs(now)
+
         val dueJobs = pushJobRepository
             .findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
@@ -55,6 +60,34 @@ class SchedulePushJobWorker(
         }
         dueJobs.forEach { process(it, now) }
         return dueJobs.size
+    }
+
+    private fun recoverStaleProcessingJobs(now: Instant) {
+        val timeoutBoundary = now.minus(processingTimeoutMinutes, ChronoUnit.MINUTES)
+        val staleJobs = pushJobRepository
+            .findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
+                SchedulePushJobStatus.PROCESSING,
+                timeoutBoundary,
+            )
+
+        if (staleJobs.isNotEmpty()) {
+            log.warn(
+                "Recovering stale schedule push jobs. count={}, timeoutBoundary={}",
+                staleJobs.size,
+                timeoutBoundary,
+            )
+        }
+
+        staleJobs.forEach { job ->
+            if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
+                job.complete()
+            } else {
+                job.recoverProcessingTimeout(
+                    reason = "Processing timeout. lockedBy=${job.lockedBy}, lockedAt=${job.lockedAt}",
+                    nextCheckAt = now,
+                )
+            }
+        }
     }
 
     private fun process(job: SchedulePushJob, now: Instant) {
@@ -82,6 +115,7 @@ class SchedulePushJobWorker(
             val fallbackMinutes = requireNotNull(route.travelMinutes) {
                 "교통 조회 fallback 이동 시간이 없습니다."
             }
+            val selectedRouteTravelMinutes = parseSelectedRouteTravelMinutes(route.routeJson)
             val request = TrafficRequest(
                 originLat = requireNotNull(route.originLat) { "출발지 위도가 없습니다." },
                 originLng = requireNotNull(route.originLng) { "출발지 경도가 없습니다." },
@@ -89,6 +123,8 @@ class SchedulePushJobWorker(
                 destinationLng = requireNotNull(route.destinationLng) { "도착지 경도가 없습니다." },
                 travelMode = requireNotNull(route.travelMode) { "이동 수단이 없습니다." },
                 fallbackTravelMinutes = fallbackMinutes,
+                selectedRouteJson = route.routeJson,
+                selectedRouteTravelMinutes = selectedRouteTravelMinutes,
             )
             val travelMinutes = trafficClient.getTravelMinutes(request)
             val recommendedDepartureAt = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
@@ -183,6 +219,27 @@ class SchedulePushJobWorker(
                 reason = exception.message?.take(500) ?: exception.javaClass.simpleName,
             )
         }
+    }
+
+    private fun parseSelectedRouteTravelMinutes(routeJson: String?): Int? {
+        if (routeJson.isNullOrBlank()) return null
+
+        return runCatching {
+            val root = objectMapper.readTree(routeJson)
+            sequenceOf(
+                root.path("minutes"),
+                root.path("travelMinutes"),
+                root.path("durationMinutes"),
+            )
+                .firstOrNull { it.isNumber }
+                ?.asDouble()
+                ?.let { ceilToPositiveMinutes(it) }
+        }.getOrNull()
+    }
+
+    private fun ceilToPositiveMinutes(value: Double): Int? {
+        if (!value.isFinite() || value <= 0) return null
+        return kotlin.math.ceil(value).toInt().coerceAtLeast(1)
     }
 
     /**
