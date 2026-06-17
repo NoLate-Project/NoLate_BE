@@ -4,9 +4,11 @@ package com.noLate.notification.application
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushPlatform
+import com.noLate.notification.domain.PushSendStatus
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -24,13 +26,17 @@ class NotificationUseCaseUnitTest {
     @Mock
     lateinit var pushClient: PushClient
 
+    @Mock
+    lateinit var pushSendHistoryService: PushSendHistoryService
+
     private lateinit var notificationUseCase: NotificationUseCase
 
     @BeforeEach
     fun setUp() {
         notificationUseCase = NotificationUseCase(
             notificationTokenService = notificationTokenService,
-            pushClient = pushClient
+            pushClient = pushClient,
+            pushSendHistoryService = pushSendHistoryService,
         )
     }
 
@@ -77,6 +83,22 @@ class NotificationUseCaseUnitTest {
             .sendToToken("token-1", title, body, data)
         verify(pushClient, times(1))
             .sendToToken("token-2", title, body, data)
+        verify(pushSendHistoryService).recordSuccess(
+            memberId = memberId,
+            token = tokens[0],
+            title = title,
+            body = body,
+            data = data,
+            fcmMessageId = "message-id",
+        )
+        verify(pushSendHistoryService).recordSuccess(
+            memberId = memberId,
+            token = tokens[1],
+            title = title,
+            body = body,
+            data = data,
+            fcmMessageId = "message-id",
+        )
         assertEquals(2, result.requestedCount)
         assertEquals(2, result.sentCount)
         assertEquals(0, result.failedCount)
@@ -98,10 +120,46 @@ class NotificationUseCaseUnitTest {
 
         val result = notificationUseCase.sendToMember(memberId, "제목", "내용")
 
+        verify(pushSendHistoryService).recordFailure(
+            memberId = memberId,
+            token = token,
+            title = "제목",
+            body = "내용",
+            data = emptyMap(),
+            status = PushSendStatus.INVALID_TOKEN,
+            errorCode = InvalidPushTokenException::class.java.simpleName,
+            errorMessage = "유효하지 않은 푸시 토큰입니다.",
+        )
         verify(notificationTokenService).removeTokenValue(memberId, "invalid-token")
         assertEquals(0, result.sentCount)
         assertEquals(1, result.failedCount)
         assertEquals(1, result.removedTokenCount)
+    }
+
+    @Test
+    fun `등록된 토큰이 없으면 NO_TOKEN 이력을 남긴다`() {
+        val memberId = 1L
+        val data = mapOf("type" to "SCHEDULE_TRAFFIC", "scheduleId" to "10")
+
+        whenever(notificationTokenService.getTokensByMember(memberId)).thenReturn(emptyList())
+
+        val result = notificationUseCase.sendToMember(
+            memberId = memberId,
+            title = "제목",
+            body = "내용",
+            data = data,
+        )
+
+        verify(pushSendHistoryService).recordNoToken(
+            memberId = memberId,
+            title = "제목",
+            body = "내용",
+            data = data,
+        )
+        verify(pushClient, never()).sendToToken(any(), any(), any(), any())
+        assertEquals(0, result.requestedCount)
+        assertEquals(0, result.sentCount)
+        assertEquals(0, result.failedCount)
     }
 
     @Test

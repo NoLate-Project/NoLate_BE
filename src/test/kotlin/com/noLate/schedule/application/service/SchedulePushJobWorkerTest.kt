@@ -106,8 +106,8 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
-    fun `ETA가 바뀌면 푸시하지 않고 변경된 출발 전 알림 시각으로 다음 체크를 재설정한다`() {
-        val previousTravelMinutes = 20
+    fun `ETA가 줄어들면 푸시하지 않고 변경된 출발 전 알림 시각으로 다음 체크를 재설정한다`() {
+        val previousTravelMinutes = 40
         val currentTravelMinutes = 30
         val schedule = schedule(shortScheduleStartAt)
         val previousRecommendedDepartureAt =
@@ -155,6 +155,63 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `ETA가 늘어나면 교통 변화 푸시를 보내고 다음 체크를 예약한다`() {
+        val previousTravelMinutes = 30
+        val currentTravelMinutes = 45
+        val schedule = schedule(defaultScheduleStartAt)
+        val previousRecommendedDepartureAt =
+            schedule.startAt.minus(previousTravelMinutes.toLong(), ChronoUnit.MINUTES)
+        val currentRecommendedDepartureAt =
+            schedule.startAt.minus(currentTravelMinutes.toLong(), ChronoUnit.MINUTES)
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = previousRecommendedDepartureAt,
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        job.startProcessing("previous-worker")
+        job.finishCheck(
+            travelMinutes = previousTravelMinutes,
+            recommendedDepartureAt = previousRecommendedDepartureAt,
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            now = testNow.minus(1, ChronoUnit.MINUTES),
+        )
+
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(1L),
+            title = eq("출발 시간 안내"),
+            body = check { assertTrue(it.contains("15분 늘었습니다")) },
+            data = check {
+                assertEquals("SCHEDULE_TRAFFIC", it["type"])
+                assertEquals("false", it["departNow"])
+                assertEquals("15", it["trafficChangeMinutes"])
+                assertEquals(currentRecommendedDepartureAt.toString(), it["recommendedDepartureAt"])
+            },
+        )
+        assertEquals(testNow, job.lastPushedAt)
+        assertNull(job.lastNotifiedDepartureAt)
+        assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
+    }
+
+    @Test
     fun `추천 출발 15분 전에 출발 준비 푸시를 보내고 ETA 조회를 계속한다`() {
         val travelMinutes = 45
         val schedule = schedule(shortScheduleStartAt)
@@ -190,6 +247,7 @@ class SchedulePushJobWorkerTest {
                 assertTrue(it.contains("15분 후"))
             },
             data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
                 assertEquals("false", it["departNow"])
                 assertEquals(recommendedDepartureAt.toString(), it["recommendedDepartureAt"])
             },
@@ -248,6 +306,7 @@ class SchedulePushJobWorkerTest {
                 assertTrue(it.contains(seoulTimeFormatter.format(currentRecommendedDepartureAt)))
             },
             data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
                 assertEquals("5", it["trafficChangeMinutes"])
                 assertEquals(currentRecommendedDepartureAt.toString(), it["recommendedDepartureAt"])
             },
@@ -285,7 +344,10 @@ class SchedulePushJobWorkerTest {
             memberId = eq(1L),
             title = eq("지금 출발하세요"),
             body = check { assertTrue(it.contains("지금 출발")) },
-            data = check { assertEquals("true", it["departNow"]) },
+            data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
+                assertEquals("true", it["departNow"])
+            },
         )
         assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
         assertEquals(testNow, job.lastPushedAt)
@@ -366,7 +428,10 @@ class SchedulePushJobWorkerTest {
             memberId = eq(1L),
             title = eq("지금 출발하세요"),
             body = any(),
-            data = check { assertEquals("true", it["departNow"]) },
+            data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
+                assertEquals("true", it["departNow"])
+            },
         )
         assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
     }
@@ -450,6 +515,7 @@ class SchedulePushJobWorkerTest {
             title = eq("출발 시간 안내"),
             body = check { assertTrue(it.contains("회원 1 일정")) },
             data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
                 assertEquals("10", it["scheduleId"])
                 assertEquals("45", it["travelMinutes"])
             },
@@ -459,6 +525,7 @@ class SchedulePushJobWorkerTest {
             title = eq("출발 시간 안내"),
             body = check { assertTrue(it.contains("회원 2 일정")) },
             data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
                 assertEquals("20", it["scheduleId"])
                 assertEquals("50", it["travelMinutes"])
             },

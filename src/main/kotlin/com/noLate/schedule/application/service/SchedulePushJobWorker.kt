@@ -134,7 +134,12 @@ class SchedulePushJobWorker(
                 lastNotifiedDepartureAt = job.lastNotifiedDepartureAt,
                 alertLeadMinutes = departureAlertLeadMinutes,
             )
-            val shouldPush = reminderDecision != DepartureReminderDecision.NONE
+            val trafficChangeMinutes = trafficChangeMinutes(
+                previousTravelMinutes = job.lastTravelMinutes,
+                currentTravelMinutes = travelMinutes,
+            )
+            val shouldPush = reminderDecision != DepartureReminderDecision.NONE ||
+                trafficChangeMinutes > 0
 
             val pushSent = if (shouldPush) {
                 val message = trafficChangePolicy.createMessage(
@@ -150,7 +155,7 @@ class SchedulePushJobWorker(
                     title = message.title,
                     body = message.body,
                     data = mapOf(
-                        "type" to "SCHEDULE_TRAFFIC",
+                        "type" to pushPayloadType(reminderDecision),
                         "scheduleId" to job.scheduleId.toString(),
                         "travelMinutes" to travelMinutes.toString(),
                         "recommendedDepartureAt" to recommendedDepartureAt.toString(),
@@ -184,11 +189,11 @@ class SchedulePushJobWorker(
             } else {
                 log.info(
                     "Schedule ETA refreshed without push. jobId={}, scheduleId={}, travelMinutes={}, recommendedDepartureAt={}",
-                    job.id,
-                    job.scheduleId,
-                    travelMinutes,
-                    recommendedDepartureAt,
-                )
+                job.id,
+                job.scheduleId,
+                travelMinutes,
+                recommendedDepartureAt,
+            )
                 false
             }
 
@@ -197,7 +202,9 @@ class SchedulePushJobWorker(
                 travelMinutes = travelMinutes,
                 recommendedDepartureAt = recommendedDepartureAt,
                 pushSent = pushSent,
-                notifiedDepartureAt = recommendedDepartureAt.takeIf { pushSent },
+                notifiedDepartureAt = recommendedDepartureAt.takeIf {
+                    pushSent && reminderDecision != DepartureReminderDecision.NONE
+                },
                 nextCheckAt = if (departNow) {
                     null
                 } else {
@@ -241,6 +248,18 @@ class SchedulePushJobWorker(
         if (!value.isFinite() || value <= 0) return null
         return kotlin.math.ceil(value).toInt().coerceAtLeast(1)
     }
+
+    private fun pushPayloadType(decision: DepartureReminderDecision): String =
+        when (decision) {
+            DepartureReminderDecision.ADVANCE_NOTICE,
+            DepartureReminderDecision.DEPART_NOW -> "SCHEDULE_DEPARTURE_REMINDER"
+            DepartureReminderDecision.NONE -> "SCHEDULE_TRAFFIC"
+        }
+
+    private fun trafficChangeMinutes(previousTravelMinutes: Int?, currentTravelMinutes: Int): Int =
+        previousTravelMinutes
+            ?.let { currentTravelMinutes - it }
+            ?: 0
 
     /**
      * 토큰 미등록과 공급자 발송 실패를 구분해 운영 로그와 작업 실패 사유에 남긴다.

@@ -1,6 +1,6 @@
 # Schedule / Push Codex Handoff
 
-Last verified: 2026-06-17 KST
+Last verified: 2026-06-18 KST
 
 이 문서는 다른 작업 공간에서 Codex로 이어서 작업할 때 필요한 일정 관리, ETA 재조회, PushJob, 앱 푸시 검증 맥락을 정리한 인수인계 문서다.
 
@@ -30,6 +30,17 @@ Last verified: 2026-06-17 KST
 - ETA 변화, 출발 임박, 주기 알림 정책 테스트 추가
 - `PushScenarioRunner` 개발/검증용 푸시 시나리오 Runner 추가
 - `.http` 파일로 로그인과 PushScenarioRunner 검증 요청 추가
+- ETA가 증가한 경우 실제 일정 PushJob에서 `SCHEDULE_TRAFFIC` payload 발송
+- 출발 임박 / 지금 출발 알림은 `SCHEDULE_DEPARTURE_REMINDER` payload로 발송
+- `SchedulePushScenarioRunner` 개발/검증용 Runner 추가
+  - 실제 `scheduleId`와 로그인 회원의 PushJob을 사용
+  - 기존 `SchedulePushJobWorker`를 직접 호출
+  - 실제 Firebase FCM 전송 경로로 Android 앱 수신 검증 가능
+- 3단계 진입: 서버 발송 push 이력 관리 추가
+  - Firebase Console은 Admin SDK로 보낸 개별 payload 목록을 보여주지 않으므로 BE에서 직접 관리
+  - `push_send_history` 테이블에 성공/실패/무효 토큰/토큰 없음 이력 저장
+  - `type`, `scheduleId`, `dataJson`, `fcmMessageId`, 오류 정보를 저장
+  - `GET /api/notifications/send-histories`로 로그인 사용자의 최근 발송 이력 조회 가능
 
 ### FE 완료
 
@@ -53,6 +64,16 @@ Last verified: 2026-06-17 KST
   - 일정 화면과 API 연동 흐름 보강
 - `app/_layout.tsx`, `src/AppProviders.tsx`
   - 앱 전역 provider 및 인증/알림 초기화 위치 정리
+- 로그인 복구 후 FCM token 재등록 bootstrap 추가
+  - 앱 재실행, 앱 데이터 초기화, BE token 비활성화 이후에도 `/api/notifications/token` 재등록
+- push payload type별 라우팅 정리
+  - `SCHEDULE_TRAFFIC`
+  - `SCHEDULE_DEPARTURE_REMINDER`
+  - `SCHEDULE_DETAIL`
+- 4단계 진입: 알림 payload에서 일정 상세 route 생성 규칙 고정
+  - `createScheduleDetailRoute(scheduleId)`로 `/schedule/[id]` 이동 객체 생성
+  - `getScheduleDetailRouteFromNotificationData(data)`로 payload에서 상세 이동 route 생성
+  - Android/iOS/foreground local notification이 같은 route 규칙을 사용
 - Android 설정
   - `android/app/src/main/AndroidManifest.xml`, `app.json`, `android/gradle.properties`에 알림/앱 실행 관련 설정 반영
 - 테스트
@@ -70,6 +91,23 @@ Last verified: 2026-06-17 KST
 - API로 생성한 일정의 PushJob 생성 확인
 - 최신 BE 코드 재기동 후 `routeJson.minutes=45`, `travelMinutes=30` 조건에서 PushJob `lastTravelMinutes=45`로 갱신 확인
 - 위 결과로 선택 경로 ETA fallback 흐름은 정상 동작 확인
+- Android emulator 실제 FCM 3종 수신 확인
+  - 앱 package: `com.anonymous.nolate_fe`
+  - 테스트 계정: `570000 / 0000`
+  - memberId: `58`
+  - 실제 scheduleId: `13`
+  - 일정명: `FCM 실제 일정 3종 검증`
+  - FE 앱에서 FCM token 발급 후 BE `/api/notifications/token` 등록 확인
+  - 실제 일정 등록 후 `SchedulePushScenarioRunner`로 기존 `SchedulePushJobWorker`를 호출
+  - Android notification list에서 `com.anonymous.nolate_fe` FCM notification 3건 확인
+  - Android notification shade UI dump에서 아래 문구 확인
+    - `지금 출발하세요`
+    - `FCM 실제 일정 3종 검증 일정에 늦지 않으려면 지금 출발해야 합니다.`
+    - `출발 시간 안내`
+    - `FCM 실제 일정 3종 검증 일정은 02:21 출발을 권장합니다. 약 15분 후 출발 준비를 해주세요.`
+    - `교통시간이 15분 늘었습니다. FCM 실제 일정 3종 검증 일정은 02:21 출발을 권장합니다.`
+  - 캡처 파일: `/Users/mac/IdeaProjects/NoLate/output/android/fcm-schedule-push-3types-background-shade.png`
+  - UI dump 파일: `/Users/mac/IdeaProjects/NoLate/output/android/fcm-shade-window.xml`
 
 ## Main Implementation Files
 
@@ -82,9 +120,14 @@ Last verified: 2026-06-17 KST
 - `src/main/kotlin/com/noLate/schedule/infrastructure/FallbackTrafficClient.kt`
 - `src/main/kotlin/com/noLate/schedule/infrastructure/TmapTrafficClient.kt`
 - `src/main/kotlin/com/noLate/schedule/infrastructure/SchedulePushJobRepository.kt`
+- `src/main/kotlin/com/noLate/schedule/dev/SchedulePushScenarioRunner.kt`
+- `src/main/kotlin/com/noLate/schedule/dev/SchedulePushScenarioController.kt`
 - `src/main/kotlin/com/noLate/global/config/TimeConfig.kt`
 - `src/main/kotlin/com/noLate/notification/dev/PushScenarioRunner.kt`
 - `src/main/kotlin/com/noLate/notification/dev/PushScenarioController.kt`
+- `src/main/kotlin/com/noLate/notification/domain/PushSendHistory.kt`
+- `src/main/kotlin/com/noLate/notification/application/service/PushSendHistoryService.kt`
+- `src/main/kotlin/com/noLate/notification/infrastructure/PushSendHistoryRepository.kt`
 - `http/push-scenario-runner.http`
 - `docs/push-scenario-runner.md`
 
@@ -96,6 +139,7 @@ Last verified: 2026-06-17 KST
 - `src/modules/auth/AuthContext.tsx`
 - `src/modules/schedule/calendarRange.ts`
 - `src/modules/notification/foregroundPush.ts`
+- `src/modules/notification/pushNavigation.ts`
 - `src/AppProviders.tsx`
 - `app/auth/login.tsx`
 - `app/auth/signup.tsx`
@@ -189,6 +233,44 @@ sequenceDiagram
   Runner-->>Dev: "scenarioCount / sendResult 반환"
 ```
 
+### Actual Schedule FCM E2E Flow
+
+<!-- mermaidId: actual-schedule-fcm-e2e-flow -->
+
+```mermaid
+sequenceDiagram
+  participant App as "FE Android App"
+  participant Auth as "BE Auth API"
+  participant Token as "BE Notification Token API"
+  participant Schedule as "BE Schedule API"
+  participant Job as "SchedulePushJob"
+  participant Runner as "SchedulePushScenarioRunner"
+  participant Worker as "SchedulePushJobWorker"
+  participant Traffic as "TrafficClient"
+  participant Noti as "NotificationUseCase"
+  participant FCM as "Firebase FCM"
+  participant Android as "Android Emulator"
+
+  App->>Auth: "로그인"
+  Auth-->>App: "accessToken / refreshToken"
+  App->>App: "Firebase Messaging getToken"
+  App->>Token: "POST /api/notifications/token"
+  Token-->>App: "token 등록 완료"
+  App->>Schedule: "POST /api/schedules notificationEnabled=true"
+  Schedule->>Job: "미래 일정 PushJob 생성"
+  Schedule-->>App: "scheduleId 반환"
+  App->>Runner: "POST /api/dev/schedule-push-scenarios/run scheduleId"
+  Runner->>Job: "실제 scheduleId/memberId PushJob 상태 준비"
+  Runner->>Worker: "runDueJobs(workerNow)"
+  Worker->>Traffic: "실시간 ETA 재조회"
+  Traffic-->>Worker: "currentTravelMinutes"
+  Worker->>Worker: "TRAFFIC / DEPARTURE_SOON / DEPART_NOW 판정"
+  Worker->>Noti: "payload type + scheduleId 전송 요청"
+  Noti->>FCM: "Firebase Admin send"
+  FCM-->>Android: "실제 FCM push delivery"
+  Android-->>App: "background notification 표시 또는 foreground message 수신"
+```
+
 ### Roadmap Status
 
 <!-- mermaidId: schedule-push-roadmap -->
@@ -196,29 +278,34 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   A["1단계 완료: PushJob 생성/취소 안정화"] --> B["2단계 완료: ETA fallback / PROCESSING 복구"]
-  B --> C["3단계 핵심 완료: 실제 ETA 변화 기반 푸시"]
-  C --> D["4단계 다음 작업: FE 푸시 payload 처리와 상세 이동"]
-  D --> E["5단계 다음 작업: 운영 안정화"]
+  B --> C["3단계 진행 중: 실제 ETA 변화 기반 푸시 / 발송 이력 관리"]
+  C --> D["4단계 진행 중: FE 푸시 payload 처리와 상세 이동"]
+  D --> E["5단계 진행 중: 실제 FCM E2E와 운영 안정화"]
 
   C1["완료: routeJson 선택 경로 ETA 추출"] --> C
   C2["완료: TrafficClient 실시간 ETA 재조회"] --> C
   C3["완료: 출발 임박 / 지금 출발 알림 정책"] --> C
+  C5["완료: push_send_history 발송 이력 저장"] --> C
   C4["보강: 교통 변화 기준값 튜닝"] -.-> C
 
-  D1["남음: 알림 터치 상세 이동"] --> D
-  D2["남음: 출발했어요 액션"] --> D
-  D3["남음: foreground/background 수신 UX 정리"] --> D
+  D1["완료: payload type별 schedule detail 대상 계산"] --> D
+  D5["완료: 알림 payload에서 상세 route 생성"] --> D
+  D2["남음: 알림 터치 상세 이동 실기기 검증"] --> D
+  D3["남음: 출발했어요 액션"] --> D
+  D4["진행 중: foreground/background 수신 UX 정리"] --> D
 
-  E1["남음: 실제 FCM E2E 검증"] --> E
+  E1["완료: Android emulator 실제 FCM 3종 수신"] --> E
   E2["남음: 중복 발송 방지 강화"] --> E
   E3["남음: 서버 다중 인스턴스 lock 검증"] --> E
 ```
 
-현재 기준으로 2단계는 완료다. 3단계도 BE 핵심 로직은 완료된 상태다. 다만 교통 변화 기준값을 제품 정책으로 확정하는 일, 실제 FCM 환경에서 앱 수신을 끝까지 확인하는 일, FE에서 payload별 화면 이동을 처리하는 일은 다음 단계로 남아 있다.
+현재 기준으로 2단계는 완료다. 3단계는 BE 핵심 로직, Android emulator 실제 FCM 3종 수신, 서버 발송 이력 저장까지 진입했다. 다만 교통 변화 기준값을 제품 정책으로 확정하는 일, 알림 터치 후 상세 이동을 실기기/에뮬레이터에서 끝까지 검증하는 일, 운영 환경 중복 발송 방지는 다음 단계로 남아 있다.
 
 ## PushScenarioRunner
 
 `PushScenarioRunner`는 자동 테스트가 아니라 개발/검증용 수동 E2E Runner다. 스케줄러 실행을 기다리지 않고 현재 로그인한 회원에게 대표 푸시 payload를 순차 발송한다.
+
+`SchedulePushScenarioRunner`는 실제 일정 기반 E2E Runner다. 단순 payload 발송이 아니라 로그인 회원의 실제 `scheduleId`, 실제 `SchedulePushJob`, 기존 `SchedulePushJobWorker`, 실제 `NotificationUseCase`, 실제 Firebase FCM 경로를 사용한다. 현재 Android emulator에서 검증한 3종 push 목적에는 이 Runner를 사용한다.
 
 ### 필수 조건
 
@@ -229,12 +316,59 @@ flowchart LR
 - 실제 앱 알림 확인 시 `firebase.enabled=true`
 - Firebase Admin 인증 정보 설정
 - Firebase project id 설정
+- 실제 일정 기반 3종 검증 시 `notification.push-schedule-scenario.enabled=true`
+- 실제 일정 기반 3종 검증 전 미래 일정 생성
+- 생성된 일정은 알림 ON, 출발 전 시간, PushJob 생성 조건을 만족해야 함
 
 ### 실행 파일
 
 - `http/push-scenario-runner.http`
 
+### 실제 일정 기반 Runner endpoint
+
+- `POST /api/dev/schedule-push-scenarios/run`
+- 인증: 로그인 사용자의 access token 필요
+- 기본 scenarios
+  - `TRAFFIC_CHANGED`: ETA 증가로 `SCHEDULE_TRAFFIC`
+  - `DEPARTURE_SOON`: 출발 임박으로 `SCHEDULE_DEPARTURE_REMINDER`
+  - `DEPART_NOW`: 지금 출발로 `SCHEDULE_DEPARTURE_REMINDER`
+
+요청 예시:
+
+```json
+{
+  "scheduleId": 13,
+  "trafficChangeMinutes": 15
+}
+```
+
+응답에서 확인할 핵심 값:
+
+```json
+{
+  "results": [
+    {
+      "scenario": "TRAFFIC_CHANGED",
+      "expectedPayloadType": "SCHEDULE_TRAFFIC",
+      "expectedDepartNow": false
+    },
+    {
+      "scenario": "DEPARTURE_SOON",
+      "expectedPayloadType": "SCHEDULE_DEPARTURE_REMINDER",
+      "expectedDepartNow": false
+    },
+    {
+      "scenario": "DEPART_NOW",
+      "expectedPayloadType": "SCHEDULE_DEPARTURE_REMINDER",
+      "expectedDepartNow": true
+    }
+  ]
+}
+```
+
 ### 포함 시나리오
+
+기존 payload-only `PushScenarioRunner` 포함 시나리오:
 
 - `TOKEN_CHECK`: 앱 푸시 수신 확인
 - `TRAFFIC_CHANGED`: 교통 시간 변경 알림
@@ -271,6 +405,7 @@ npx tsc --noEmit
 ```powershell
 cd D:\DevSpace\application\no-late\NoLate_BE
 $env:NOTIFICATION_PUSH_SCENARIO_ENABLED = "true"
+$env:NOTIFICATION_PUSH_SCHEDULE_SCENARIO_ENABLED = "true"
 $env:FIREBASE_ENABLED = "true"
 $env:FIREBASE_PROJECT_ID = "{firebase-project-id}"
 $env:FIREBASE_CREDENTIALS_PATH = "{firebase-admin-json-path}"
@@ -278,6 +413,17 @@ $env:FIREBASE_CREDENTIALS_PATH = "{firebase-admin-json-path}"
 ```
 
 실제 FCM 없이 BE 경로만 확인할 때는 `FIREBASE_ENABLED`를 켜지 않아도 된다. 이 경우 Dummy PushClient가 로그만 남긴다.
+
+macOS/zsh에서 Android emulator 실제 FCM 3종 검증을 진행한 명령 형태:
+
+```bash
+cd /Users/mac/IdeaProjects/NoLate/NoLate_BE
+NOTIFICATION_PUSH_SCENARIO_ENABLED=true \
+NOTIFICATION_PUSH_SCHEDULE_SCENARIO_ENABLED=true \
+./gradlew bootRun
+```
+
+이 환경에서는 `env.properties`의 Firebase 설정을 사용했다.
 
 ## Test Coverage
 
@@ -291,12 +437,17 @@ $env:FIREBASE_CREDENTIALS_PATH = "{firebase-admin-json-path}"
   - ETA 재조회와 fallback 검증
   - 추천 출발 시각 계산 검증
   - 정책상 푸시 발송/미발송 검증
+  - ETA 증가 시 `SCHEDULE_TRAFFIC` payload 발송 검증
+  - 출발 임박 / 지금 출발 시 `SCHEDULE_DEPARTURE_REMINDER` payload 발송 검증
   - PROCESSING 상태 복구 관련 검증
 - `src/test/kotlin/com/noLate/schedule/infrastructure/FallbackTrafficClientTest.kt`
   - 실시간 ETA 실패 시 선택 경로 ETA 및 기본 이동 시간 fallback 검증
 - `src/test/kotlin/com/noLate/notification/dev/PushScenarioRunnerTest.kt`
   - Runner가 대표 5개 시나리오를 순서대로 발송하는지 검증
   - 일정 번호가 없어도 토큰 수신 확인용 payload를 만들 수 있는지 검증
+- `src/test/kotlin/com/noLate/notification/application/service/PushSendHistoryServiceTest.kt`
+  - 발송 성공 시 `scheduleId`, `payloadType`, `fcmMessageId`, `dataJson` 저장 검증
+  - 토큰이 없을 때 `NO_TOKEN` 이력 저장 검증
 - `src/test/kotlin/com/noLate/member/...`
   - Member 관련 API/UseCase 테스트 보강
   - 테스트 메서드명과 주석은 한글 목적 중심으로 정리하는 방향으로 수정
@@ -310,13 +461,24 @@ $env:FIREBASE_CREDENTIALS_PATH = "{firebase-admin-json-path}"
 
 둘 다 성공했다.
 
+2026-06-18 KST에 추가 확인한 명령:
+
+```bash
+cd /Users/mac/IdeaProjects/NoLate/NoLate_BE
+./gradlew test --tests "com.noLate.schedule.application.service.SchedulePushJobWorkerTest" --rerun-tasks
+
+cd /Users/mac/IdeaProjects/NoLate/NoLate_FE
+npm run test -- --runInBand --silent
+npx tsc --noEmit
+```
+
+세 명령 모두 성공했다.
+
 ## Remaining Work
 
 ### 운영 전 필수 보강
 
-- FCM 실제 전송 환경에서 앱 수신 검증
-- FE에서 모든 push payload type 처리
-- 알림 클릭 시 일정 상세 화면 이동
+- 알림 클릭 시 일정 상세 화면 이동 실기기/에뮬레이터 검증
 - 푸시 중복 발송 방지 강화
   - 서버 다중 인스턴스
   - 재시도
@@ -328,6 +490,9 @@ $env:FIREBASE_CREDENTIALS_PATH = "{firebase-admin-json-path}"
 - 무한 재알림 방지
   - 최대 발송 횟수
   - 일정 시작 후 자동 종료
+- foreground 상태에서 system notification 표시 정책 확정
+  - 현재 실제 FCM message 수신 로그는 확인됨
+  - background 상태에서는 Android notification shade에 3건 표시 확인됨
 
 ### 차별화 기능 후보
 

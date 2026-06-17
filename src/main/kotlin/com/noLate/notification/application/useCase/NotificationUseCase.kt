@@ -3,13 +3,16 @@ package com.noLate.notification.application.useCase
 import com.noLate.notification.application.PushClient
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.PushSendHistoryService
+import com.noLate.notification.domain.PushSendStatus
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
 @Component
 class NotificationUseCase(
     private val notificationTokenService: NotificationTokenService,
-    private val pushClient: PushClient
+    private val pushClient: PushClient,
+    private val pushSendHistoryService: PushSendHistoryService,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -27,21 +30,58 @@ class NotificationUseCase(
         var failedCount = 0
         var removedTokenCount = 0
 
+        if (tokens.isEmpty()) {
+            pushSendHistoryService.recordNoToken(
+                memberId = memberId,
+                title = title,
+                body = body,
+                data = data,
+            )
+        }
+
         tokens.forEach { tokenEntity ->
             try {
-                pushClient.sendToToken(
+                val sendResult = pushClient.sendToToken(
                     token = tokenEntity.token,
                     title = title,
                     body = body,
                     data = data
                 )
+                pushSendHistoryService.recordSuccess(
+                    memberId = memberId,
+                    token = tokenEntity,
+                    title = title,
+                    body = body,
+                    data = data,
+                    fcmMessageId = sendResult.messageId,
+                )
                 sentCount += 1
             } catch (exception: InvalidPushTokenException) {
+                pushSendHistoryService.recordFailure(
+                    memberId = memberId,
+                    token = tokenEntity,
+                    title = title,
+                    body = body,
+                    data = data,
+                    status = PushSendStatus.INVALID_TOKEN,
+                    errorCode = exception.javaClass.simpleName,
+                    errorMessage = exception.message,
+                )
                 notificationTokenService.removeTokenValue(memberId, tokenEntity.token)
                 removedTokenCount += 1
                 failedCount += 1
                 log.info("Removed invalid push token. memberId={}", memberId)
             } catch (exception: Exception) {
+                pushSendHistoryService.recordFailure(
+                    memberId = memberId,
+                    token = tokenEntity,
+                    title = title,
+                    body = body,
+                    data = data,
+                    status = PushSendStatus.FAILED,
+                    errorCode = exception.javaClass.simpleName,
+                    errorMessage = exception.message,
+                )
                 failedCount += 1
                 log.warn("Push send failed. memberId={}, tokenId={}", memberId, tokenEntity.id, exception)
             }

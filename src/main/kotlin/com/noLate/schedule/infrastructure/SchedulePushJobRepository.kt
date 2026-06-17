@@ -22,4 +22,6 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
     ): List<SchedulePushJob>
 
     fun findByScheduleId(scheduleId: Long): SchedulePushJob?
+
+    fun findByScheduleIdAndMemberId(scheduleId: Long, memberId: Long): SchedulePushJob?
 }
