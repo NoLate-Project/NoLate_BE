@@ -87,19 +87,22 @@ class MemberUseCase(
                 // 없으면 자동 가입 + 기본 설정 생성
                 if (found == null) {
                     val name = requestDto.name ?: requestDto.email ?: "사용자"
+                    val email = requestDto.email?.takeIf { it.isNotBlank() }
+                        ?: createSyntheticSnsEmail(requestDto.loginType, snsId)
 
                     found = memberService.addMember(
                         Member().apply {
                             this.snsId = snsId
                             this.name = name
                             this.loginType = requestDto.loginType
-                            this.email = requestDto.email
+                            this.email = email
                         }
                     )
 
                     memberSettingService.createDefaultSetting(
                         MemberSettingDto().apply { memberId = requireNotNull(found.id) }
                     )
+                    memberProfileService.createDefaultProfile(requireNotNull(found.id))
                 }
 
                 found
@@ -123,6 +126,12 @@ class MemberUseCase(
             this.accessToken = accessToken
             this.refreshToken = refreshToken
         }
+    }
+
+    private fun createSyntheticSnsEmail(loginType: LoginType?, snsId: String): String {
+        val provider = loginType?.name?.lowercase() ?: "sns"
+        val safeSnsId = snsId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return "${provider}_$safeSnsId@social.local"
     }
 
     /**

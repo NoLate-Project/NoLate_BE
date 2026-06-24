@@ -44,3 +44,6 @@ http/http-client.private.env.json
 
 # Firebase Admin service-account private keys
 **/*firebase-adminsdk*.json
+
+# Local debug logs
+spy.log

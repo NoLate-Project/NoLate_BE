@@ -8,6 +8,7 @@ import com.noLate.member.application.useCase.MemberUseCase
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.MemberDto
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.member.infrastructure.MemberProfileRepository
 import com.noLate.member.infrastructure.MemberSettingRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -28,6 +29,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     private val memberUseCase: MemberUseCase,
     private val memberRepository: MemberRepository,
     private val memberSettingRepository: MemberSettingRepository,
+    private val memberProfileRepository: MemberProfileRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
     private val jwtTokenProvider: JwtTokenProvider,
     private val passwordEncoder: PasswordEncoder
@@ -159,6 +161,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         val memberCountBefore = memberRepository.count()
         val settingCountBefore = memberSettingRepository.count()
+        val profileCountBefore = memberProfileRepository.count()
         val refreshCountBefore = refreshTokenRepository.count()
 
         val result = memberUseCase.login(snsLoginDto)
@@ -166,8 +169,10 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         // 회원이 새로 하나 생성되어야 함
         assertEquals(memberCountBefore + 1, memberRepository.count())
         assertEquals(settingCountBefore + 1, memberSettingRepository.count())
+        assertEquals(profileCountBefore + 1, memberProfileRepository.count())
 
         assertNotNull(result.id)
+        assertNotNull(memberProfileRepository.findByMemberId(result.id!!))
         assertEquals(snsLoginDto.email, result.email)
         assertEquals("SNS유저1", result.name)
         assertEquals(LoginType.KAKAO, result.loginType)
