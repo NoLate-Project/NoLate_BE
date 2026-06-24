@@ -29,5 +29,8 @@ enum class ErrorCode(
 
     // Favorite Place 영역
     FAVORITE_PLACE_CATEGORY_NOT_FOUND("F001", "즐겨찾기 장소 카테고리가 존재하지 않습니다."),
-    FAVORITE_PLACE_NOT_FOUND("F002", "즐겨찾기 장소가 존재하지 않습니다.")
+    FAVORITE_PLACE_NOT_FOUND("F002", "즐겨찾기 장소가 존재하지 않습니다."),
+
+    // Recent Route Place 영역
+    RECENT_ROUTE_PLACE_NOT_FOUND("R001", "최근 검색 장소가 존재하지 않습니다.")
 }
