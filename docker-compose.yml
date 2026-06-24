@@ -15,21 +15,5 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
 
-  redis:
-    image: redis:7.4-alpine
-    container_name: late_project_redis
-    restart: unless-stopped
-    env_file:
-      - ./docker/redis/.env
-    ports:
-      - "${REDIS_PORT}:6379"
-    command: >
-      redis-server
-      --appendonly yes
-      --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - redis_data:/data
-
 volumes:
   mysql_data:
-  redis_data:

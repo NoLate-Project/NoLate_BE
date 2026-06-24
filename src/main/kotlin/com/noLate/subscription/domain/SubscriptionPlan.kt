@@ -10,7 +10,7 @@ enum class SubscriptionPlan(
         maxSmartSchedulesPerMonth = 5,
         maxNotificationLeadMinutes = 60,
         minNotificationIntervalMinutes = 30,
-        minEtaRefreshIntervalMinutes = 30,
+        minEtaRefreshIntervalMinutes = 20,
     ),
     PREMIUM(
         maxSmartSchedulesPerMonth = 100,

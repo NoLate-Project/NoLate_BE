@@ -41,3 +41,9 @@ out/
 
 # IntelliJ HTTP Client의 API 키와 로그인 정보를 저장하는 개인 환경 파일이다.
 http/http-client.private.env.json
+
+# Firebase Admin service-account private keys
+**/*firebase-adminsdk*.json
+
+# Local debug logs
+spy.log

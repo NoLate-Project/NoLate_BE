@@ -40,7 +40,7 @@ class SubscriptionPolicyService(
 
         val plan = getPlan(memberId)
         val normalizedLead = leadMinutes ?: plan.maxNotificationLeadMinutes
-        val normalizedInterval = intervalMinutes ?: plan.minNotificationIntervalMinutes
+        val normalizedInterval = intervalMinutes ?: plan.minEtaRefreshIntervalMinutes
 
         if (normalizedLead !in 10..plan.maxNotificationLeadMinutes) {
             throw BusinessException(
@@ -48,10 +48,10 @@ class SubscriptionPolicyService(
                 "${plan.name} 요금제는 알림을 최대 ${plan.maxNotificationLeadMinutes}분 전부터 시작할 수 있습니다.",
             )
         }
-        if (normalizedInterval < plan.minNotificationIntervalMinutes) {
+        if (normalizedInterval < plan.minEtaRefreshIntervalMinutes) {
             throw BusinessException(
                 ErrorCode.SUBSCRIPTION_POLICY_VIOLATION,
-                "${plan.name} 요금제의 최소 재알림 간격은 ${plan.minNotificationIntervalMinutes}분입니다.",
+                "${plan.name} 요금제의 최소 ETA 조회 간격은 ${plan.minEtaRefreshIntervalMinutes}분입니다.",
             )
         }
 

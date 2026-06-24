@@ -15,6 +15,7 @@ class NotificationTokenService (
      * FCM/APNs/Expo 등에서 받은 토큰 등록/갱신
      *
      * - 같은 (memberId + deviceId) 조합이 있으면 → token / platform 갱신
+     * - 같은 token 또는 deviceId가 다른 회원에게 남아 있으면 → 이전 소유권 제거
      * - deviceId 가 없으면 → 새 row insert (한 회원에 여러 기기 토큰 허용)
      */
     @Transactional
@@ -24,6 +25,20 @@ class NotificationTokenService (
         platform: PushPlatform,
         token: String
     ) {
+        val tokensOwnedByOtherMembers = buildList {
+            addAll(notificationRepository.findAllByToken(token))
+            if (!deviceId.isNullOrBlank()) {
+                addAll(notificationRepository.findAllByDeviceId(deviceId))
+            }
+        }
+            .distinctBy { it.id }
+            .filter { it.memberId != memberId }
+
+        if (tokensOwnedByOtherMembers.isNotEmpty()) {
+            notificationRepository.deleteAll(tokensOwnedByOtherMembers)
+            notificationRepository.flush()
+        }
+
         if (!deviceId.isNullOrBlank()) {
             val existing = notificationRepository.findByMemberIdAndDeviceId(memberId, deviceId)
             if (existing != null) {
@@ -57,6 +72,11 @@ class NotificationTokenService (
     @Transactional
     fun removeAllTokensByMember(memberId: Long) {
         notificationRepository.deleteAllByMemberId(memberId)
+    }
+
+    @Transactional
+    fun removeTokenValue(memberId: Long, token: String) {
+        notificationRepository.deleteByMemberIdAndToken(memberId, token)
     }
 
     /**

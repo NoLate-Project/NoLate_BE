@@ -10,5 +10,14 @@ interface PushClient {
         title: String,
         body: String,
         data: Map<String, String> = emptyMap()
-    )
+    ): PushSendResult
 }
+
+data class PushSendResult(
+    val messageId: String,
+)
+
+class InvalidPushTokenException(
+    val token: String,
+    cause: Throwable? = null,
+) : RuntimeException("유효하지 않은 푸시 토큰입니다.", cause)

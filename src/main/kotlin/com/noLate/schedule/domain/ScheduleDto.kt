@@ -1,103 +1,192 @@
 package com.noLate.schedule.domain
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
 
-/**
- * 일정 카테고리 화면 모델.
- *
- * 현재는 별도 카테고리 테이블이 없으므로 일정 저장 시점의 카테고리 값을 함께 저장한다.
- */
 data class ScheduleCategoryDto(
-    /** 카테고리 식별자 */
     val id: String? = null,
-
-    /** 카테고리 이름 */
     val title: String? = null,
-
-    /** 캘린더와 리스트에서 사용할 색상 코드 */
     val color: String? = null,
 )
 
-/**
- * 일정의 출발지 또는 도착지 위치 모델.
- *
- * 지도 검색 결과가 없을 수 있어 이름/주소/좌표는 모두 nullable로 유지한다.
- */
 data class SchedulePlaceDto(
-    /** 장소 이름 */
     val name: String? = null,
-
-    /** 장소 주소 */
     val address: String? = null,
-
-    /** WGS84 위도 */
     val lat: Double? = null,
-
-    /** WGS84 경도 */
     val lng: Double? = null,
 )
 
-/**
- * 일정 API와 UseCase 사이에서 사용하는 일정 데이터 모델.
- *
- * 생성/수정 요청, 목록 응답, 상세 응답에서 공통으로 쓰며,
- * route에는 선택한 경로의 path/환승/요금 정보를 JSON으로 보관한다.
- */
 data class ScheduleDto(
-    /** 일정 PK */
     val id: Long? = null,
-
-    /** 일정 제목 */
     val title: String,
-
-    /** 일정 시작 시각(ISO-8601) */
     val startAt: String,
-
-    /** 일정 종료 시각(ISO-8601) */
     val endAt: String? = null,
-
-    /** 사용자가 종료 시각을 직접 입력했는지 여부 */
     val hasEndTime: Boolean? = null,
-
-    /** 종일 일정 여부 */
     val allDay: Boolean? = null,
-
-    /** 이동 예상 시간(분) */
     val travelMinutes: Int? = null,
-
-    /** 출발 예정 시각(ISO-8601) */
     val departAt: String? = null,
-
-    /** 이동 수단 */
     val travelMode: ScheduleTravelMode? = null,
-
-    /** 출발지 정보 */
     val origin: SchedulePlaceDto? = null,
-
-    /** 도착지 정보 */
     val destination: SchedulePlaceDto? = null,
-
-    /** 장소 또는 경로 요약명 */
     val locationName: String? = null,
-
-    /** 일정 카테고리 */
     val category: ScheduleCategoryDto,
-
-    /** 일정 메모 */
     val notes: String? = null,
-
-    /** 선택 경로 상세 JSON */
     val route: JsonNode? = null,
-
-    /** 실시간 ETA 기반 출발 알림 사용 여부 */
     val notificationEnabled: Boolean? = null,
-
-    /** 권장 출발 시각 몇 분 전부터 알림을 시작할지 */
     val notificationLeadMinutes: Int? = null,
-
-    /** 사용자 재알림 간격 */
     val notificationIntervalMinutes: Int? = null,
-
-    /** 마지막 수정 시각(ISO-8601) */
     val updatedAt: String? = null,
-)
+) {
+
+    /**
+     * ScheduleDto의 값을 Schedule Entity로 변환한다.
+     *
+     * memberId는 DTO에 없기 때문에 외부에서 주입받는다.
+     */
+    fun toEntity(memberId: Long): Schedule {
+        val parsedStartAt = parseInstant(startAt)
+        val parsedHasEndTime = hasEndTime ?: (endAt != null)
+
+        val parsedEndAt = if (parsedHasEndTime) {
+            parseInstant(requireNotNull(endAt) { "endAt is required." })
+        } else {
+            parsedStartAt
+        }
+
+        val schedule = Schedule(
+            id = id,
+            memberId = memberId,
+            title = title,
+            startAt = parsedStartAt,
+            endAt = parsedEndAt,
+            hasEndTime = parsedHasEndTime,
+            allDay = allDay ?: false,
+            notes = notes?.takeIf { it.isNotBlank() },
+        )
+
+        schedule.updateCategorySnapshot(
+            categoryId = requireNotNull(category.id) { "category.id is required." },
+            title = requireNotNull(category.title) { "category.title is required." },
+            color = requireNotNull(category.color) { "category.color is required." },
+        )
+
+        schedule.updateRoute(
+            travelMinutes = travelMinutes,
+            departAt = departAt?.let { parseInstant(it) },
+            travelMode = travelMode,
+            locationName = locationName?.takeIf { it.isNotBlank() },
+            originName = origin?.name?.takeIf { it.isNotBlank() },
+            originAddress = origin?.address?.takeIf { it.isNotBlank() },
+            originLat = origin?.lat,
+            originLng = origin?.lng,
+            destinationName = destination?.name?.takeIf { it.isNotBlank() },
+            destinationAddress = destination?.address?.takeIf { it.isNotBlank() },
+            destinationLat = destination?.lat,
+            destinationLng = destination?.lng,
+            routeJson = route?.toString(),
+            notificationEnabled = notificationEnabled ?: false,
+            notificationLeadMinutes = notificationLeadMinutes,
+            notificationIntervalMinutes = notificationIntervalMinutes,
+        )
+
+        return schedule
+    }
+
+    companion object {
+        private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
+
+        fun fromEntity(
+            schedule: Schedule,
+            objectMapper: ObjectMapper,
+            zoneId: ZoneId = seoulZone,
+        ): ScheduleDto {
+            val category = schedule.categorySnapshot
+            val routeInfo = schedule.route
+
+            return ScheduleDto(
+                id = schedule.id,
+                title = schedule.title,
+                startAt = schedule.startAt.toString(),
+                endAt = schedule.endAt.toString(),
+                hasEndTime = schedule.hasEndTime,
+                allDay = schedule.allDay,
+                travelMinutes = routeInfo?.travelMinutes,
+                departAt = routeInfo?.departAt?.toString(),
+                travelMode = routeInfo?.travelMode,
+                origin = routeInfo?.let {
+                    toPlace(
+                        name = it.originName,
+                        address = it.originAddress,
+                        lat = it.originLat,
+                        lng = it.originLng,
+                    )
+                },
+                destination = routeInfo?.let {
+                    toPlace(
+                        name = it.destinationName,
+                        address = it.destinationAddress,
+                        lat = it.destinationLat,
+                        lng = it.destinationLng,
+                    )
+                },
+                locationName = routeInfo?.locationName,
+                category = ScheduleCategoryDto(
+                    id = category?.categoryId,
+                    title = category?.title,
+                    color = category?.color,
+                ),
+                notes = schedule.notes,
+                route = parseRoute(objectMapper, routeInfo?.routeJson),
+                notificationEnabled = routeInfo?.notificationEnabled ?: false,
+                notificationLeadMinutes = routeInfo?.notificationLeadMinutes,
+                notificationIntervalMinutes = routeInfo?.notificationIntervalMinutes,
+                updatedAt = (schedule.updateDt ?: schedule.updatedAt)
+                    ?.atZone(zoneId)
+                    ?.toInstant()
+                    ?.toString(),
+            )
+        }
+
+        private fun toPlace(
+            name: String?,
+            address: String?,
+            lat: Double?,
+            lng: Double?,
+        ): SchedulePlaceDto? {
+            if (name == null && address == null && lat == null && lng == null) {
+                return null
+            }
+
+            return SchedulePlaceDto(
+                name = name,
+                address = address,
+                lat = lat,
+                lng = lng,
+            )
+        }
+
+        private fun parseRoute(
+            objectMapper: ObjectMapper,
+            routeJson: String?,
+        ): JsonNode? {
+            if (routeJson.isNullOrBlank()) {
+                return null
+            }
+
+            return objectMapper.readTree(routeJson)
+        }
+
+        private fun parseInstant(value: String): Instant {
+            return runCatching { Instant.parse(value) }
+                .recoverCatching { OffsetDateTime.parse(value).toInstant() }
+                .recoverCatching { LocalDateTime.parse(value).atZone(seoulZone).toInstant() }
+                .getOrElse {
+                    throw IllegalArgumentException("날짜 형식이 올바르지 않습니다. value=$value")
+                }
+        }
+    }
+}

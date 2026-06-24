@@ -1,13 +1,10 @@
 package com.noLate.schedule.application.service
 
-import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.domain.Schedule
-import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
-import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.subscription.application.SubscriptionPolicyService
 import jakarta.transaction.Transactional
@@ -30,16 +27,35 @@ class ScheduleService(
 
     @Transactional
     fun addSchedule(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
-        val entity = Schedule(memberId = memberId)
-        entity.applyDto(memberId, scheduleDto)
-        return scheduleRepository.save(entity).toDto()
+        val normalizedDto = normalizeNotificationDto(
+            memberId = memberId,
+            scheduleDto = scheduleDto,
+            existingSchedule = null,
+        )
+        validateScheduleRange(normalizedDto)
+
+        val entity = normalizedDto.toEntity(memberId)
+
+        val savedEntity = scheduleRepository.save(entity)
+
+        return savedEntity.toDto(objectMapper)
     }
 
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
-        val entity = findActive(memberId, scheduleId)
-        entity.applyDto(memberId, scheduleDto)
-        return scheduleRepository.save(entity).toDto()
+        val existingSchedule = findActive(memberId, scheduleId)
+
+        val normalizedDto = normalizeNotificationDto(
+            memberId = memberId,
+            scheduleDto = scheduleDto.copy(id = scheduleId),
+            existingSchedule = existingSchedule,
+        )
+        validateScheduleRange(normalizedDto)
+
+        applyDto(existingSchedule, normalizedDto)
+        val savedEntity = scheduleRepository.save(existingSchedule)
+
+        return savedEntity.toDto(objectMapper)
     }
 
     @Transactional
@@ -52,18 +68,19 @@ class ScheduleService(
     @Transactional
     fun getScheduleList(memberId: Long): List<ScheduleDto> {
         return scheduleRepository.findScheduleList(memberId)
-            .map { it.toDto() }
+            .map { it.toDto(objectMapper) }
     }
 
     @Transactional
     fun getScheduleDetail(memberId: Long, scheduleId: Long): ScheduleDto {
-        return findActive(memberId, scheduleId).toDto()
+        return findActive(memberId, scheduleId).toDto(objectMapper)
     }
 
     @Transactional
     fun getCalendarScheduleList(memberId: Long, startAt: String, endAt: String): List<ScheduleDto> {
         val rangeStart = parseInstant(startAt, "startAt")
         val rangeEnd = parseInstant(endAt, "endAt")
+
         if (rangeEnd.isBefore(rangeStart)) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "endAt must be after startAt.")
         }
@@ -74,13 +91,18 @@ class ScheduleService(
                 rangeStart = rangeStart,
                 rangeEnd = rangeEnd,
             )
-            .map { it.toDto() }
+            .map { it.toDto(objectMapper) }
     }
 
     @Transactional
     fun getDailyScheduleList(memberId: Long, date: String): List<ScheduleDto> {
-        val dayStart = parseDate(date, "date").atStartOfDay(seoulZone).toInstant()
-        val dayEnd = dayStart.plus(1, ChronoUnit.DAYS).minusNanos(1)
+        val dayStart = parseDate(date, "date")
+            .atStartOfDay(seoulZone)
+            .toInstant()
+
+        val dayEnd = dayStart
+            .plus(1, ChronoUnit.DAYS)
+            .minusNanos(1)
 
         return scheduleRepository
             .findOverlappingScheduleList(
@@ -88,7 +110,7 @@ class ScheduleService(
                 rangeStart = dayStart,
                 rangeEnd = dayEnd,
             )
-            .map { it.toDto() }
+            .map { it.toDto(objectMapper) }
     }
 
     @Transactional
@@ -102,7 +124,7 @@ class ScheduleService(
                 fromAt = normalizedFromAt,
                 pageable = PageRequest.of(0, normalizedLimit),
             )
-            .map { it.toDto() }
+            .map { it.toDto(objectMapper) }
     }
 
     @Transactional
@@ -119,13 +141,15 @@ class ScheduleService(
             categoryId = categoryId?.takeIf { it.isNotBlank() },
             rangeStart = startAt?.let { parseInstant(it, "startAt") },
             rangeEnd = endAt?.let { parseInstant(it, "endAt") },
-        ).map { it.toDto() }
+        ).map { it.toDto(objectMapper) }
     }
 
     @Transactional
     fun getDepartureReadyScheduleList(memberId: Long, fromAt: String?, toAt: String?): List<ScheduleDto> {
         val normalizedFromAt = fromAt?.let { parseInstant(it, "fromAt") } ?: Instant.now()
-        val normalizedToAt = toAt?.let { parseInstant(it, "toAt") } ?: normalizedFromAt.plus(1, ChronoUnit.DAYS)
+        val normalizedToAt = toAt?.let { parseInstant(it, "toAt") }
+            ?: normalizedFromAt.plus(1, ChronoUnit.DAYS)
+
         if (normalizedToAt.isBefore(normalizedFromAt)) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "toAt must be after fromAt.")
         }
@@ -134,7 +158,7 @@ class ScheduleService(
             memberId = memberId,
             fromAt = normalizedFromAt,
             toAt = normalizedToAt,
-        ).map { it.toDto() }
+        ).map { it.toDto(objectMapper) }
     }
 
     private fun findActive(memberId: Long, scheduleId: Long): Schedule {
@@ -142,36 +166,84 @@ class ScheduleService(
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
     }
 
-    private fun Schedule.applyDto(memberId: Long, scheduleDto: ScheduleDto) {
-        title = requireText(scheduleDto.title, "title")
-        startAt = parseInstant(scheduleDto.startAt, "startAt")
-        hasEndTime = scheduleDto.hasEndTime ?: (scheduleDto.endAt != null)
-        endAt = if (hasEndTime) {
-            parseInstant(scheduleDto.endAt, "endAt")
-        } else {
-            startAt
-        }
-        if (hasEndTime && !endAt.isAfter(startAt)) {
+    private fun validateScheduleRange(scheduleDto: ScheduleDto) {
+        if (scheduleDto.hasEndTime == false || scheduleDto.endAt == null) return
+
+        val startAt = parseInstant(scheduleDto.startAt, "startAt")
+        val endAt = parseInstant(scheduleDto.endAt, "endAt")
+        if (!endAt.isAfter(startAt)) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "endAt must be after startAt.")
         }
+    }
 
-        allDay = scheduleDto.allDay ?: false
-        notes = scheduleDto.notes?.takeIf { it.isNotBlank() }
+    private fun applyDto(schedule: Schedule, scheduleDto: ScheduleDto) {
+        val source = scheduleDto.toEntity(schedule.memberId)
+        val category = requireNotNull(source.categorySnapshot)
+        val route = source.route
 
-        val wasNotificationEnabled = route?.notificationEnabled == true
+        schedule.title = source.title
+        schedule.startAt = source.startAt
+        schedule.endAt = source.endAt
+        schedule.hasEndTime = source.hasEndTime
+        schedule.allDay = source.allDay
+        schedule.notes = source.notes
+        schedule.updateCategorySnapshot(
+            categoryId = category.categoryId,
+            title = category.title,
+            color = category.color,
+        )
+        schedule.updateRoute(
+            travelMinutes = route?.travelMinutes,
+            departAt = route?.departAt,
+            travelMode = route?.travelMode,
+            locationName = route?.locationName,
+            originName = route?.originName,
+            originAddress = route?.originAddress,
+            originLat = route?.originLat,
+            originLng = route?.originLng,
+            destinationName = route?.destinationName,
+            destinationAddress = route?.destinationAddress,
+            destinationLat = route?.destinationLat,
+            destinationLng = route?.destinationLng,
+            routeJson = route?.routeJson,
+            notificationEnabled = route?.notificationEnabled ?: false,
+            notificationLeadMinutes = route?.notificationLeadMinutes,
+            notificationIntervalMinutes = route?.notificationIntervalMinutes,
+        )
+    }
+
+    /**
+     * 알림 관련 값들을 정책 기준으로 보정하고 검증한다.
+     *
+     * ScheduleDto.toEntity()는 단순 변환만 담당하고,
+     * 구독 정책 검증은 Service에서 처리한다.
+     */
+    private fun normalizeNotificationDto(
+        memberId: Long,
+        scheduleDto: ScheduleDto,
+        existingSchedule: Schedule?,
+    ): ScheduleDto {
+        val wasNotificationEnabled = existingSchedule?.route?.notificationEnabled == true
         val notificationEnabled = scheduleDto.notificationEnabled ?: wasNotificationEnabled
-        val policy = if (notificationEnabled) subscriptionPolicyService.getPolicy(memberId) else null
+
+        val policy = if (notificationEnabled) {
+            subscriptionPolicyService.getPolicy(memberId)
+        } else {
+            null
+        }
+
         val notificationLeadMinutes = if (notificationEnabled) {
             scheduleDto.notificationLeadMinutes
-                ?: route?.notificationLeadMinutes
+                ?: existingSchedule?.route?.notificationLeadMinutes
                 ?: requireNotNull(policy).maxNotificationLeadMinutes
         } else {
             null
         }
+
         val notificationIntervalMinutes = if (notificationEnabled) {
             scheduleDto.notificationIntervalMinutes
-                ?: route?.notificationIntervalMinutes
-                ?: requireNotNull(policy).minNotificationIntervalMinutes
+                ?: existingSchedule?.route?.notificationIntervalMinutes
+                ?: requireNotNull(policy).minEtaRefreshIntervalMinutes
         } else {
             null
         }
@@ -179,12 +251,12 @@ class ScheduleService(
         if (
             notificationEnabled &&
             (
-                scheduleDto.origin?.lat == null ||
-                    scheduleDto.origin.lng == null ||
-                    scheduleDto.destination?.lat == null ||
-                    scheduleDto.destination.lng == null ||
-                    scheduleDto.travelMode == null
-                )
+                    scheduleDto.origin?.lat == null ||
+                            scheduleDto.origin.lng == null ||
+                            scheduleDto.destination?.lat == null ||
+                            scheduleDto.destination.lng == null ||
+                            scheduleDto.travelMode == null
+                    )
         ) {
             throw BusinessException(
                 ErrorCode.INVALID_INPUT,
@@ -200,82 +272,16 @@ class ScheduleService(
             consumesNewQuota = notificationEnabled && !wasNotificationEnabled,
         )
 
-        updateCategorySnapshot(
-            categoryId = requireText(scheduleDto.category.id, "category.id"),
-            title = requireText(scheduleDto.category.title, "category.title"),
-            color = requireText(scheduleDto.category.color, "category.color"),
-        )
-
-        updateRoute(
-            travelMinutes = scheduleDto.travelMinutes,
-            departAt = scheduleDto.departAt?.let { parseInstant(it, "departAt") },
-            travelMode = scheduleDto.travelMode,
-            locationName = scheduleDto.locationName?.takeIf { it.isNotBlank() },
-            originName = scheduleDto.origin?.name?.takeIf { it.isNotBlank() },
-            originAddress = scheduleDto.origin?.address?.takeIf { it.isNotBlank() },
-            originLat = scheduleDto.origin?.lat,
-            originLng = scheduleDto.origin?.lng,
-            destinationName = scheduleDto.destination?.name?.takeIf { it.isNotBlank() },
-            destinationAddress = scheduleDto.destination?.address?.takeIf { it.isNotBlank() },
-            destinationLat = scheduleDto.destination?.lat,
-            destinationLng = scheduleDto.destination?.lng,
-            routeJson = scheduleDto.route?.let { objectMapper.writeValueAsString(it) },
+        return scheduleDto.copy(
             notificationEnabled = notificationEnabled,
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
         )
     }
 
-    private fun Schedule.toDto(): ScheduleDto {
-        val category = categorySnapshot
-        val routeInfo = route
-
-        return ScheduleDto(
-            id = id,
-            title = title,
-            startAt = startAt.toString(),
-            endAt = endAt.toString(),
-            hasEndTime = hasEndTime,
-            allDay = allDay,
-            travelMinutes = routeInfo?.travelMinutes,
-            departAt = routeInfo?.departAt?.toString(),
-            travelMode = routeInfo?.travelMode,
-            origin = routeInfo?.let { toPlace(it.originName, it.originAddress, it.originLat, it.originLng) },
-            destination = routeInfo?.let {
-                toPlace(it.destinationName, it.destinationAddress, it.destinationLat, it.destinationLng)
-            },
-            locationName = routeInfo?.locationName,
-            category = ScheduleCategoryDto(
-                id = category?.categoryId,
-                title = category?.title,
-                color = category?.color,
-            ),
-            notes = notes,
-            route = parseRoute(routeInfo?.routeJson),
-            notificationEnabled = routeInfo?.notificationEnabled ?: false,
-            notificationLeadMinutes = routeInfo?.notificationLeadMinutes,
-            notificationIntervalMinutes = routeInfo?.notificationIntervalMinutes,
-            updatedAt = (updateDt ?: updatedAt)?.atZone(seoulZone)?.toInstant()?.toString(),
-        )
-    }
-
-    private fun toPlace(name: String?, address: String?, lat: Double?, lng: Double?): SchedulePlaceDto? {
-        if (name == null && address == null && lat == null && lng == null) return null
-        return SchedulePlaceDto(
-            name = name,
-            address = address,
-            lat = lat,
-            lng = lng,
-        )
-    }
-
-    private fun parseRoute(routeJson: String?): JsonNode? {
-        if (routeJson.isNullOrBlank()) return null
-        return objectMapper.readTree(routeJson)
-    }
-
     private fun parseInstant(value: String?, fieldName: String): Instant {
         val raw = requireText(value, fieldName)
+
         return runCatching { Instant.parse(raw) }
             .recoverCatching { OffsetDateTime.parse(raw).toInstant() }
             .recoverCatching { LocalDateTime.parse(raw).atZone(seoulZone).toInstant() }
@@ -286,6 +292,7 @@ class ScheduleService(
 
     private fun parseDate(value: String?, fieldName: String): LocalDate {
         val raw = requireText(value, fieldName)
+
         return runCatching { LocalDate.parse(raw) }
             .getOrElse {
                 throw BusinessException(ErrorCode.INVALID_INPUT, "$fieldName must be ISO date.")
@@ -294,9 +301,11 @@ class ScheduleService(
 
     private fun requireText(value: String?, fieldName: String): String {
         val text = value?.trim()
+
         if (text.isNullOrBlank()) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "$fieldName is required.")
         }
+
         return text
     }
 }

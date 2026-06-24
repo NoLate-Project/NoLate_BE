@@ -12,7 +12,7 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MY_SQL_END_POINT}:3306/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
+    url: jdbc:mysql://${MY_SQL_END_POINT}:${MY_SQL_PORT:3306}/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
     #useSSL=false&serverTimezone=Asia/Seoul
     username: ${MY_SQL_DB_USERNAME}
     password: ${MY_SQL_DB_PASSWORD}
@@ -51,9 +51,27 @@ server:
   port: 5522
 
 schedule:
+  push:
+    fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}
+    retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:5}
+    # 푸시 공급자의 일시 장애가 지속될 때 무한 재시도를 막는 작업 단위 한도다.
+    max-retry-count: ${SCHEDULE_PUSH_MAX_RETRY_COUNT:3}
+    # 스케줄러 지연 시에도 일정 시작 직후까지 최종 출발 알림을 복구할 수 있게 한다.
+    delivery-grace-minutes: ${SCHEDULE_PUSH_DELIVERY_GRACE_MINUTES:10}
+    departure-alert-lead-minutes: ${SCHEDULE_PUSH_DEPARTURE_ALERT_LEAD_MINUTES:15}
+  traffic:
+    tmap:
+      enabled: ${TMAP_ENABLED:false}
+      app-key: ${TMAP_APP_KEY:}
+      base-url: ${TMAP_BASE_URL:https://apis.openapi.sk.com}
   ai:
     # 규칙 파서가 필수 값을 찾지 못했을 때만 사용하는 선택적 AI 보완 설정이다.
     groq:
       enabled: ${GROQ_ENABLED:false}
       api-key: ${GROQ_API_KEY:}
       model: ${GROQ_MODEL:openai/gpt-oss-20b}
+
+firebase:
+  enabled: ${FIREBASE_ENABLED:false}
+  credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
+  project-id: ${FIREBASE_PROJECT_ID:}

@@ -107,9 +107,9 @@ class MemberUseCaseUnitTest {
                 assertEquals(1L, it.memberId)
             })
 
-        // refreshTokenService, profileService 는 회원가입에선 사용 안 됨
+        // refreshTokenService는 회원가입에선 사용 안 되고, 기본 프로필은 생성한다
         verifyNoInteractions(refreshTokenService)
-        verifyNoInteractions(memberProfileService)
+        verify(memberProfileService, times(1)).createDefaultProfile(1L)
 
         assertEquals(1L, result.id)
         assertEquals("user@test.com", result.email)
@@ -224,6 +224,7 @@ class MemberUseCaseUnitTest {
             .createDefaultSetting(check<MemberSettingDto> {
                 assertEquals(10L, it.memberId)
             })
+        verify(memberProfileService, times(1)).createDefaultProfile(10L)
         verify(jwtTokenProvider, times(1))
             .createAccessToken(10L, "SNS유저")
         verify(jwtTokenProvider, times(1))
@@ -236,6 +237,67 @@ class MemberUseCaseUnitTest {
         assertEquals("SNS유저", result.name)
         assertEquals("access-token-sns", result.accessToken)
         assertEquals("refresh-token-sns", result.refreshToken)
+    }
+
+    @Test
+    fun `SNS 첫 로그인에서 이메일이 없으면 내부 대체 이메일로 저장하고 기본 프로필을 생성한다`() {
+        // given
+        val snsLoginRequest = MemberDto(
+            id = null,
+            email = null,
+            password = null,
+            name = "이메일없는SNS유저",
+            loginType = LoginType.NAVER,
+            snsId = "naver/without-email"
+        )
+
+        whenever(memberValidator.requireSnsId(snsLoginRequest))
+            .thenReturn("naver/without-email")
+
+        whenever(memberService.findByLoginTypeAndSnsId(LoginType.NAVER, "naver/without-email"))
+            .thenReturn(null)
+
+        whenever(memberService.addMember(any<Member>()))
+            .thenAnswer {
+                val member = it.getArgument<Member>(0)
+                MemberDto(
+                    id = 11L,
+                    email = member.email,
+                    password = member.password,
+                    name = member.name,
+                    loginType = member.loginType,
+                    snsId = member.snsId
+                )
+            }
+
+        whenever(jwtTokenProvider.createAccessToken(11L, "이메일없는SNS유저"))
+            .thenReturn("access-token-no-email")
+        whenever(jwtTokenProvider.createRefreshToken(11L, "이메일없는SNS유저"))
+            .thenReturn("refresh-token-no-email")
+        val expiry = LocalDateTime.now().plusDays(7)
+        whenever(jwtTokenProvider.getRefreshTokenExpiryLocalDateTime())
+            .thenReturn(expiry)
+
+        // when
+        val result = memberUseCase.login(snsLoginRequest)
+
+        // then
+        verify(memberService, times(1)).addMember(check<Member> {
+            assertEquals("naver_naver_without-email@social.local", it.email)
+            assertEquals(LoginType.NAVER, it.loginType)
+            assertEquals("naver/without-email", it.snsId)
+        })
+        verify(memberSettingService, times(1))
+            .createDefaultSetting(check<MemberSettingDto> {
+                assertEquals(11L, it.memberId)
+            })
+        verify(memberProfileService, times(1)).createDefaultProfile(11L)
+        verify(refreshTokenService, times(1))
+            .saveNewToken(eq(11L), eq("refresh-token-no-email"), eq(expiry))
+
+        assertEquals("naver_naver_without-email@social.local", result.email)
+        assertEquals("access-token-no-email", result.accessToken)
+        assertEquals("refresh-token-no-email", result.refreshToken)
     }
 
     @Test

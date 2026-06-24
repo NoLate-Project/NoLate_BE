@@ -120,6 +120,24 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
 
     @Query(
         value = """
+        select s.*
+        from schedules s
+        join schedule_routes sr on sr.schedule_id = s.id
+        left join schedule_push_job spj on spj.schedule_id = s.id
+        where s.deleted = false
+          and sr.notification_enabled = true
+          and s.start_at > :now
+          and spj.id is null
+        order by s.start_at asc
+        """,
+        nativeQuery = true,
+    )
+    fun findNotificationEnabledWithoutPushJob(
+        @Param("now") now: Instant,
+    ): List<Schedule>
+
+    @Query(
+        value = """
         select count(*)
         from schedules s
         join schedule_routes sr on sr.schedule_id = s.id

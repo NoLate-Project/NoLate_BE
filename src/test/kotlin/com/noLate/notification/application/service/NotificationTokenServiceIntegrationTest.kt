@@ -22,7 +22,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
     @Test
     fun `deviceId 기반 등록시 기존 레코드가 있으면 갱신된다`() {
         // given
-        val memberId = 1L
+        val memberId = 900_001L
         val deviceId = "dev-1"
 
         // 첫 등록
@@ -33,7 +33,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
             token = "old-token"
         )
 
-        assertEquals(1, notificationDeviceTokenRepository.count())
+        assertEquals(1, notificationDeviceTokenRepository.findAllByMemberId(memberId).size)
 
         // when - 같은 deviceId로 새 토큰 등록 (플랫폼도 변경)
         notificationTokenService.registerToken(
@@ -44,7 +44,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         )
 
         // then - 레코드 수는 그대로 1, 값만 갱신
-        val all = notificationDeviceTokenRepository.findAll()
+        val all = notificationDeviceTokenRepository.findAllByMemberId(memberId)
         assertEquals(1, all.size)
 
         val saved = all.first()
@@ -57,7 +57,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
     @Test
     fun `deviceId 없이 여러 토큰을 등록하면 여러 레코드가 생성된다`() {
         // given
-        val memberId = 2L
+        val memberId = 900_002L
 
         // when
         notificationTokenService.registerToken(
@@ -75,7 +75,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         )
 
         // then
-        val tokens = notificationDeviceTokenRepository.findAll()
+        val tokens = notificationDeviceTokenRepository.findAllByMemberId(memberId)
         assertEquals(2, tokens.size)
 
         val tokenValues = tokens.map { it.token }.toSet()
@@ -86,7 +86,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
     @Test
     fun `removeToken은 해당 memberId와 deviceId에 해당하는 토큰만 삭제한다`() {
         // given
-        val memberId = 3L
+        val memberId = 900_003L
 
         notificationTokenService.registerToken(
             memberId = memberId,
@@ -101,13 +101,13 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
             token = "t2"
         )
 
-        assertEquals(2, notificationDeviceTokenRepository.count())
+        assertEquals(2, notificationDeviceTokenRepository.findAllByMemberId(memberId).size)
 
         // when - dev-1 삭제
         notificationTokenService.removeToken(memberId, "dev-1")
 
         // then
-        val tokens = notificationDeviceTokenRepository.findAll()
+        val tokens = notificationDeviceTokenRepository.findAllByMemberId(memberId)
         assertEquals(1, tokens.size)
         assertEquals("dev-2", tokens.first().deviceId)
         assertEquals("t2", tokens.first().token)
@@ -116,7 +116,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
     @Test
     fun `removeAllTokensByMember는 해당 회원의 모든 토큰을 삭제한다`() {
         // given
-        val memberId = 4L
+        val memberId = 900_004L
 
         notificationTokenService.registerToken(
             memberId = memberId,
@@ -131,20 +131,20 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
             token = "t2"
         )
 
-        assertEquals(2, notificationDeviceTokenRepository.count())
+        assertEquals(2, notificationDeviceTokenRepository.findAllByMemberId(memberId).size)
 
         // when
         notificationTokenService.removeAllTokensByMember(memberId)
 
         // then
-        assertEquals(0, notificationDeviceTokenRepository.count())
+        assertEquals(0, notificationDeviceTokenRepository.findAllByMemberId(memberId).size)
     }
 
     @Test
     fun `getTokensByMember는 해당 회원의 토큰만 조회한다`() {
         // given
-        val memberId1 = 5L
-        val memberId2 = 6L
+        val memberId1 = 900_005L
+        val memberId2 = 900_006L
 
         notificationTokenService.registerToken(
             memberId = memberId1,
@@ -173,5 +173,32 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         val tokenValues = tokensForMember1.map { it.token }.toSet()
         assertTrue(tokenValues.contains("m1-t1"))
         assertTrue(tokenValues.contains("m1-t2"))
+    }
+
+    @Test
+    fun `같은 기기로 다른 회원이 로그인하면 토큰 소유권이 새 회원으로 이동한다`() {
+        val previousMemberId = 900_007L
+        val currentMemberId = 900_008L
+        val deviceId = "shared-device"
+        val token = "shared-token"
+
+        notificationTokenService.registerToken(
+            memberId = previousMemberId,
+            deviceId = deviceId,
+            platform = PushPlatform.ANDROID,
+            token = token,
+        )
+        notificationTokenService.registerToken(
+            memberId = currentMemberId,
+            deviceId = deviceId,
+            platform = PushPlatform.ANDROID,
+            token = token,
+        )
+
+        assertTrue(notificationDeviceTokenRepository.findAllByMemberId(previousMemberId).isEmpty())
+        val currentTokens = notificationDeviceTokenRepository.findAllByMemberId(currentMemberId)
+        assertEquals(1, currentTokens.size)
+        assertEquals(token, currentTokens.single().token)
+        assertEquals(deviceId, currentTokens.single().deviceId)
     }
 }
