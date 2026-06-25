@@ -138,6 +138,7 @@ class SchedulePushJobWorker(
                 previousTravelMinutes = job.lastTravelMinutes,
                 currentTravelMinutes = travelMinutes,
             )
+            // 이동 시간이 늘어난 경우만 즉시 보낸다. 줄어든 경우는 다음 경계 시각만 재계산해 불필요한 알림을 줄인다.
             val shouldPush = reminderDecision != DepartureReminderDecision.NONE ||
                 trafficChangeMinutes > 0
 
@@ -231,6 +232,7 @@ class SchedulePushJobWorker(
     private fun parseSelectedRouteTravelMinutes(routeJson: String?): Int? {
         if (routeJson.isNullOrBlank()) return null
 
+        // FE 경로 후보 payload가 버전별로 다른 필드명을 썼던 이력을 흡수한다.
         return runCatching {
             val root = objectMapper.readTree(routeJson)
             sequenceOf(

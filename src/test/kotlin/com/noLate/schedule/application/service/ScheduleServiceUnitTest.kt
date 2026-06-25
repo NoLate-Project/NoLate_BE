@@ -147,9 +147,11 @@ class ScheduleServiceUnitTest {
             assertEquals(false, it.route?.notificationEnabled)
             assertEquals(null, it.route?.notificationLeadMinutes)
             assertEquals(null, it.route?.notificationIntervalMinutes)
+            assertNotNull(it.route?.departedAt)
             assertEquals(25, it.route?.travelMinutes)
         })
         assertEquals(false, result.notificationEnabled)
+        assertNotNull(result.departedAt)
         assertEquals(25, result.travelMinutes)
     }
 
@@ -399,6 +401,7 @@ class ScheduleServiceUnitTest {
             updateRoute(
                 travelMinutes = travelMinutes,
                 departAt = Instant.parse("2026-06-05T00:30:00Z"),
+                departedAt = null,
                 travelMode = ScheduleTravelMode.TRANSIT,
                 locationName = "Office",
                 originName = "Home",

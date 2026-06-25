@@ -1,6 +1,6 @@
 # Schedule Push Notification Status
 
-Last verified: 2026-06-14 (Asia/Seoul)
+Last verified: 2026-06-25 (Asia/Seoul)
 
 This document is the handoff point for future Codex sessions working on schedule push notifications.
 
@@ -12,7 +12,8 @@ This document is the handoff point for future Codex sessions working on schedule
 4. At 15 minutes before the current recommended departure time, an advance push is sent.
 5. If ETA changes after an advance push, the departure time is recalculated and a correction push is sent.
 6. At the recommended departure time, a depart-now push is sent and the job is completed.
-7. Updating a schedule resets its job timing and notification history. Disabling or deleting it cancels the job.
+7. A depart-now push can expose a `지금 출발` action. The action marks the schedule as departed and cancels the remaining push job.
+8. Updating a schedule resets its job timing and notification history. Disabling or deleting it cancels the job.
 
 ## Main Code
 
@@ -25,11 +26,13 @@ Backend:
 - `src/main/kotlin/com/noLate/schedule/domain/SchedulePushJob.kt`
 - `src/main/kotlin/com/noLate/notification/application/useCase/NotificationUseCase.kt`
 - `src/main/kotlin/com/noLate/notification/application/service/NotificationTokenService.kt`
+- `src/main/kotlin/com/noLate/schedule/controller/ScheduleController.kt`
 
 Frontend:
 
 - `NoLate_FE/src/modules/notification/pushRegistration.ts`
 - `NoLate_FE/src/modules/notification/foregroundPush.ts`
+- `NoLate_FE/src/modules/notification/pushNavigation.ts`
 - `NoLate_FE/app/_layout.tsx`
 
 ## Automated Verification
@@ -47,6 +50,9 @@ Verified:
 - Member payloads delivered only to that member's tokens
 - Token ownership moves to the latest account when a device changes accounts
 - Repository due-job filtering
+- Final notification retry when provider delivery fails
+- `depart-now` API disables route notifications while preserving route data
+- Frontend `지금 출발` action calls the `depart-now` API
 
 ```bash
 ./gradlew test \
@@ -56,7 +62,7 @@ Verified:
   --tests 'com.noLate.schedule.infrastructure.SchedulePushJobRepositoryIntegrationTest'
 ```
 
-Result on 2026-06-14: all 16 selected tests passed.
+Result on 2026-06-25: selected push/schedule/backend tests passed in the latest verification run. FE TypeScript and notification wrapper tests also passed before build 21 upload.
 
 ## Runtime Verification
 
@@ -66,15 +72,19 @@ Result on 2026-06-14: all 16 selected tests passed.
 - A multi-account run independently stored member 1 ETA 30 and member 20 ETA 35.
 - Duplicate tokens previously assigned to multiple members were cleaned up.
 - iOS Simulator displayed an injected APNs notification banner.
+- Android emulator displayed the three real schedule push types from the backend FCM path.
+- Firebase Apple app configuration has APNs auth keys registered.
+- TestFlight build 21 was uploaded to App Store Connect with production APS entitlement.
 
 ## Remaining Acceptance Checks
 
-1. Complete Apple Developer enrollment and upload an APNs `.p8` key to Firebase.
-2. Receive and tap a backend push on a signed physical iPhone build.
+1. Install TestFlight build 21 on a physical iPhone, sign in again, and confirm the latest token is registered.
+2. Receive and tap backend schedule pushes on the signed physical iPhone build.
 3. Confirm the tap opens the matching authenticated schedule detail.
-4. Visually confirm Android delivery on a connected device or emulator.
+4. Tap `지금 출발` and confirm the schedule notification is disabled and PushJob is canceled.
 5. Test two physical devices with two different accounts.
 6. Enable real TMAP and repeat controlled ETA-change scenarios.
+7. Deploy the latest BE commit to the operating server before validating `depart-now` from TestFlight.
 
 ## Time Zone Warning
 

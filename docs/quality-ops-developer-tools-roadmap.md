@@ -1,6 +1,6 @@
 # Quality / Ops / Developer Tools Roadmap
 
-Last verified: 2026-06-17 KST
+Last verified: 2026-06-25 KST
 
 테스트, CI, 환경변수, 로컬 실행, 관측성, 개발 검증 도구의 상세 로드맵이다.
 
@@ -23,6 +23,8 @@ Last verified: 2026-06-17 KST
 
 - Jest 테스트 일부
 - TypeScript compile 확인 가능
+- Xcode archive/export로 TestFlight IPA 생성 확인
+- App Store Connect API key 기반 `altool` 업로드 경로 확인
 
 ### 개발 검증 문서
 
@@ -61,6 +63,8 @@ Last verified: 2026-06-17 KST
   - external calendar sync status
 - Docker compose 또는 devcontainer 정리
 - 앱 실기기 E2E 체크리스트
+- 운영 BE 배포 절차 문서화
+- TestFlight 업로드 전 빌드 번호 증가 자동화
 
 ## Roadmap
 
@@ -79,6 +83,7 @@ flowchart LR
   G --> H["DB migration / local bootstrap"]
   H --> I["관측성 / 로그 / metric"]
   I --> J["실기기 E2E 체크리스트"]
+  J --> K["운영 배포 / TestFlight release checklist"]
 ```
 
 ## Verification Commands
@@ -113,3 +118,4 @@ cd D:\DevSpace\application\no-late\NoLate_BE
 4. 환경변수 샘플 문서 추가
 5. secret scan 정책 추가
 6. 실기기 E2E 체크리스트 문서화
+7. 운영 BE deploy 절차와 TestFlight build-number bump 절차 문서화

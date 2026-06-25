@@ -47,6 +47,11 @@ class ScheduleRoute(
     @Comment("출발 예정 시각")
     var departAt: Instant? = null,
 
+    /** 사용자가 출발 완료 처리한 시각 */
+    @Column(name = "departed_at")
+    @Comment("출발 완료 처리 시각")
+    var departedAt: Instant? = null,
+
     /** 이동 수단 */
     @Enumerated(EnumType.STRING)
     @Column(name = "travel_mode", length = 20)

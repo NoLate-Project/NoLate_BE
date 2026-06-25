@@ -68,6 +68,8 @@ class ScheduleService(
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
         val entity = findActive(memberId, scheduleId)
+        // 출발 처리는 경로 정보를 보존하되 해당 일정의 남은 실시간 알림만 꺼 둔다.
+        entity.route?.departedAt = Instant.now()
         entity.route?.notificationEnabled = false
         entity.route?.notificationLeadMinutes = null
         entity.route?.notificationIntervalMinutes = null
@@ -205,6 +207,7 @@ class ScheduleService(
         schedule.updateRoute(
             travelMinutes = route?.travelMinutes,
             departAt = route?.departAt,
+            departedAt = route?.departedAt,
             travelMode = route?.travelMode,
             locationName = route?.locationName,
             originName = route?.originName,

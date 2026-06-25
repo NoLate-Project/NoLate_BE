@@ -661,6 +661,7 @@ class SchedulePushJobWorkerTest {
             updateRoute(
                 travelMinutes = 30,
                 departAt = startAt.minus(30, ChronoUnit.MINUTES),
+                departedAt = null,
                 travelMode = ScheduleTravelMode.CAR,
                 locationName = "회사",
                 originName = "집",

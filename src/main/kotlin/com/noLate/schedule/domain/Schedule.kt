@@ -95,6 +95,7 @@ class Schedule(
     fun updateRoute(
         travelMinutes: Int?,
         departAt: Instant?,
+        departedAt: Instant?,
         travelMode: ScheduleTravelMode?,
         locationName: String?,
         originName: String?,
@@ -113,6 +114,7 @@ class Schedule(
         if (
             travelMinutes == null &&
             departAt == null &&
+            departedAt == null &&
             travelMode == null &&
             locationName == null &&
             originName == null &&
@@ -137,6 +139,7 @@ class Schedule(
         next.schedule = this
         next.travelMinutes = travelMinutes
         next.departAt = departAt
+        next.departedAt = departedAt
         next.travelMode = travelMode
         next.locationName = locationName
         next.originName = originName
@@ -169,6 +172,7 @@ class Schedule(
             allDay = allDay,
             travelMinutes = routeInfo?.travelMinutes,
             departAt = routeInfo?.departAt?.toString(),
+            departedAt = routeInfo?.departedAt?.toString(),
             travelMode = routeInfo?.travelMode,
             origin = routeInfo?.let {
                 toPlace(
