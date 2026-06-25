@@ -51,21 +51,24 @@ flowchart TD
 
 ## Suggested Work Order
 
-1. iPhone TestFlight build 21에서 실제 일정 푸시 수신과 알림 터치 상세 이동 검증
+1. iPhone TestFlight build 24에서 실제 일정 푸시 수신과 알림 터치 상세 이동 검증
 2. 운영 BE에 `depart-now` API와 최신 푸시 문구 배포 확인
 3. routeJson FE/BE 계약 문서화
 4. 발송 이벤트 단위 중복 방지(outbox 또는 idempotency key) 설계
-5. External Calendar Integration 1단계 설계
+5. 일정 상세/푸시 맥락의 날씨 정보 UX 설계
+   - 우선순위는 push 실기기 acceptance 이후
+   - 1차 범위는 도착지 기준 현재 날씨와 일정 시작 시간대 예보
+6. External Calendar Integration 1단계 설계
    - Google Calendar import
    - Apple Calendar 또는 기기 캘린더 import
    - 외부 event와 NoLate Schedule 매핑
-6. Member/Auth 보안 보강
+7. Member/Auth 보안 보강
    - 비밀번호 재설정
    - 이메일 인증
    - 로그인 rate limit
-7. Subscription plan 변경과 paywall 설계
-8. CI와 환경변수 문서화
-9. 실제 Firebase/Tmap/Groq/Google Calendar 외부 연동 테스트 분리 실행
+8. Subscription plan 변경과 paywall 설계
+9. CI와 환경변수 문서화
+10. 실제 Firebase/Tmap/Groq/Google Calendar 외부 연동 테스트 분리 실행
 
 ## Verification Commands
 

@@ -42,7 +42,7 @@ Last verified: 2026-06-25 KST
 - foreground push를 같은 payload 규칙으로 local notification 표시
 - `departNow=true` 일정 알림에 `지금 출발` 액션 버튼 연결
 - `지금 출발` 액션에서 `POST /api/schedules/{scheduleId}/depart-now` 호출
-- iOS TestFlight build 21 업로드 완료
+- iOS TestFlight build 24 업로드 완료
 
 ### 주요 구현 파일
 
@@ -68,7 +68,7 @@ Last verified: 2026-06-25 KST
 ## Next Work
 
 - background/terminated 상태 알림 클릭 동작 실기기 검증
-- iPhone TestFlight build 21에서 실제 일정 푸시 3종 수신 검증
+- iPhone TestFlight build 24에서 실제 일정 푸시 3종 수신 검증
 - `지금 출발` 액션 후 BE에서 PushJob이 취소되는지 운영 환경에서 검증
 - 추가 알림 액션 후보 검증
   - "일정 보기"
@@ -79,6 +79,9 @@ Last verified: 2026-06-25 KST
 - Firebase credential 운영 환경 분리
 - invalid token 삭제 지표/로그 모니터링
 - 실제 Firebase E2E 테스트 절차 문서화
+- 후속 UX 후보로 일정 상세/푸시 맥락의 날씨 정보 카드 검토
+  - 1차 후보: 도착지 기준 현재 날씨와 일정 시작 시간대 예보
+  - 구현 시 API key 보호를 위해 BE weather proxy 또는 서버 캐시 계층 우선 검토
 
 ## Roadmap
 
@@ -105,7 +108,7 @@ sequenceDiagram
 
 ## Suggested First Slice
 
-1. iPhone TestFlight build 21에서 실제 일정 push token 재등록 확인
+1. iPhone TestFlight build 24에서 실제 일정 push token 재등록 확인
 2. `SCHEDULE_TRAFFIC`, `SCHEDULE_DEPARTURE_REMINDER`, `SCHEDULE_DETAIL` 수신 검증
 3. background/terminated 클릭 시 일정 상세 이동 실기기 테스트
 4. `departNow=true` 알림의 `지금 출발` 액션과 PushJob 취소 검증

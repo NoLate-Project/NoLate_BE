@@ -62,7 +62,7 @@ Verified:
   --tests 'com.noLate.schedule.infrastructure.SchedulePushJobRepositoryIntegrationTest'
 ```
 
-Result on 2026-06-25: selected push/schedule/backend tests passed in the latest verification run. FE TypeScript and notification wrapper tests also passed before build 21 upload.
+Result on 2026-06-25: selected push/schedule/backend tests passed in the latest verification run. FE TypeScript and notification wrapper tests also passed before build 24 upload.
 
 ## Runtime Verification
 
@@ -74,11 +74,12 @@ Result on 2026-06-25: selected push/schedule/backend tests passed in the latest 
 - iOS Simulator displayed an injected APNs notification banner.
 - Android emulator displayed the three real schedule push types from the backend FCM path.
 - Firebase Apple app configuration has APNs auth keys registered.
-- TestFlight build 21 was uploaded to App Store Connect with production APS entitlement.
+- TestFlight build 24 was uploaded to App Store Connect with production APS entitlement.
+- Delivery UUID: `0d9b768b-cf18-4869-afad-b7e8f2729603`; build status `VALID`.
 
 ## Remaining Acceptance Checks
 
-1. Install TestFlight build 21 on a physical iPhone, sign in again, and confirm the latest token is registered.
+1. Install TestFlight build 24 on a physical iPhone, sign in again, and confirm the latest token is registered.
 2. Receive and tap backend schedule pushes on the signed physical iPhone build.
 3. Confirm the tap opens the matching authenticated schedule detail.
 4. Tap `지금 출발` and confirm the schedule notification is disabled and PushJob is canceled.

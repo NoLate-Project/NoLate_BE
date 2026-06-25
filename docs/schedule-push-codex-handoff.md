@@ -86,7 +86,7 @@ Last verified: 2026-06-25 KST
   - `android/app/src/main/AndroidManifest.xml`, `app.json`, `android/gradle.properties`에 알림/앱 실행 관련 설정 반영
 - iOS 설정
   - Firebase Apple 앱 구성에 APNs 인증 키가 등록됐다.
-  - TestFlight용 iOS build 21 업로드 완료.
+  - TestFlight용 iOS build 24 업로드 완료.
   - archive에서 `APS_ENVIRONMENT=production`이 적용된 것을 확인했다.
 - 테스트
   - `__tests__/apiWrappers.test.ts`
@@ -121,8 +121,9 @@ Last verified: 2026-06-25 KST
   - 캡처 파일: `/Users/mac/IdeaProjects/NoLate/output/android/fcm-schedule-push-3types-background-shade.png`
   - UI dump 파일: `/Users/mac/IdeaProjects/NoLate/output/android/fcm-shade-window.xml`
 - iOS TestFlight 배포 확인
-  - 2026-06-25 기준 build 21 IPA export 및 App Store Connect 업로드 성공
-  - Delivery UUID: `c5075a75-7ded-4e1d-ae2a-e1ffe9d75b54`
+  - 2026-06-25 기준 build 24 IPA export 및 App Store Connect 업로드 성공
+  - Delivery UUID: `0d9b768b-cf18-4869-afad-b7e8f2729603`
+  - `altool --build-status` 결과: `VALID`, `APP_STORE_ELIGIBLE`
   - iPhone 실기기에서 일정 푸시 3종 수신, 알림 터치 상세 이동, `지금 출발` 액션은 아직 최종 acceptance 대상이다.
 
 ## Main Implementation Files
@@ -311,13 +312,13 @@ flowchart LR
   D4["진행 중: foreground/background 수신 UX 정리"] --> E
 
   E1["완료: Android emulator 실제 FCM 3종 수신"] --> E
-  E2["완료: iOS TestFlight build 21 업로드"] --> E
+  E2["완료: iOS TestFlight build 24 업로드"] --> E
   E3["남음: iPhone 실제 일정 푸시 acceptance"] --> E
   E4["남음: 중복 발송 방지 강화"] --> E
   E5["남음: 서버 다중 인스턴스 lock 검증"] --> E
 ```
 
-현재 기준으로 **4단계까지 완료했고 5단계 진행 중**이다. 3단계 BE 핵심 로직, Android emulator 실제 FCM 3종 수신, 서버 발송 이력 저장, FE 상세 이동 규칙, `지금 출발` 액션, TestFlight build 21 업로드까지 끝났다. 다만 iPhone 실기기 일정 푸시 acceptance, 운영 BE 재배포 확인, 교통 변화 기준값 정책 확정, 운영 환경 중복 발송 방지는 다음 단계로 남아 있다.
+현재 기준으로 **4단계까지 완료했고 5단계 진행 중**이다. 3단계 BE 핵심 로직, Android emulator 실제 FCM 3종 수신, 서버 발송 이력 저장, FE 상세 이동 규칙, `지금 출발` 액션, TestFlight build 24 업로드까지 끝났다. 다만 iPhone 실기기 일정 푸시 acceptance, 운영 BE 재배포 확인, 교통 변화 기준값 정책 확정, 운영 환경 중복 발송 방지는 다음 단계로 남아 있다.
 
 ## PushScenarioRunner
 
@@ -518,6 +519,9 @@ npx tsc --noEmit
 - 출발 시각이 앞당겨질 때 더 강한 긴급 알림
 - 사용자가 "출발했어요"를 누르면 후속 알림 종료
 - 위치 권한이 있으면 실제 출발 여부 감지
+- 날씨 정보 연동
+  - 지금 push acceptance가 우선이므로 후속 단계로 분리
+  - 일정 상세 드롭다운 또는 경로 카드에 도착지 기준 날씨/예보를 작게 노출하는 방향 검토
 - 대중교통 막차, 환승, 도보시간 반영
 - 알림 액션에서 일정 상세, 길찾기, 출발 완료로 바로 이동
 
