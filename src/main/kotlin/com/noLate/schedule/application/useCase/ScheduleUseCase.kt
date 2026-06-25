@@ -94,6 +94,16 @@ class ScheduleUseCase(
     }
 
     /**
+     * 사용자가 푸시의 "지금 출발" 액션을 선택했을 때 더 이상의 출발 알림을 중지한다.
+     */
+    @Transactional
+    fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
+        val updated = scheduleService.markDeparted(memberId, scheduleId)
+        schedulePushJobService.cancelByScheduleId(scheduleId)
+        return updated
+    }
+
+    /**
      * 전체 일정 목록 유스케이스.
      * 동기화나 단순 리스트 화면처럼 범위 제한 없이 사용자의 활성 일정을 가져올 때 쓴다.
      */

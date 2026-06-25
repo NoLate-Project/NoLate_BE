@@ -29,6 +29,7 @@ data class ScheduleDto(
     val allDay: Boolean? = null,
     val travelMinutes: Int? = null,
     val departAt: String? = null,
+    val departedAt: String? = null,
     val travelMode: ScheduleTravelMode? = null,
     val origin: SchedulePlaceDto? = null,
     val destination: SchedulePlaceDto? = null,
@@ -77,6 +78,7 @@ data class ScheduleDto(
         schedule.updateRoute(
             travelMinutes = travelMinutes,
             departAt = departAt?.let { parseInstant(it) },
+            departedAt = departedAt?.let { parseInstant(it) },
             travelMode = travelMode,
             locationName = locationName?.takeIf { it.isNotBlank() },
             originName = origin?.name?.takeIf { it.isNotBlank() },
@@ -116,6 +118,7 @@ data class ScheduleDto(
                 allDay = schedule.allDay,
                 travelMinutes = routeInfo?.travelMinutes,
                 departAt = routeInfo?.departAt?.toString(),
+                departedAt = routeInfo?.departedAt?.toString(),
                 travelMode = routeInfo?.travelMode,
                 origin = routeInfo?.let {
                     toPlace(

@@ -152,6 +152,21 @@ class ScheduleUseCaseUnitTest {
     }
 
     @Test
+    fun `출발 처리는 일정 알림을 끄고 남아 있는 push job을 취소한다`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val updated = scheduleDto(notificationEnabled = false).copy(id = scheduleId)
+        whenever(scheduleService.markDeparted(memberId, scheduleId)).thenReturn(updated)
+
+        val result = scheduleUseCase.markDeparted(memberId, scheduleId)
+
+        verify(scheduleService).markDeparted(memberId, scheduleId)
+        verify(schedulePushJobService).cancelByScheduleId(scheduleId)
+        verify(schedulePushJobService, never()).registerFromScheduleDto(eq(memberId), org.mockito.kotlin.any())
+        assertEquals(false, result.notificationEnabled)
+    }
+
+    @Test
     fun `캘린더 화면의 기간 조회는 일정 서비스에 그대로 위임한다`() {
         val memberId = 1L
         val startAt = "2026-06-01T00:00:00Z"

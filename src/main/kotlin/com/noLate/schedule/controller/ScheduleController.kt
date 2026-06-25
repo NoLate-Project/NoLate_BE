@@ -94,6 +94,19 @@ class ScheduleController(
     }
 
     /**
+     * 사용자가 출발했음을 기록하고 해당 일정의 실시간 출발 푸시를 중지한다.
+     */
+    @Operation(summary = "출발 처리 및 실시간 출발 알림 중지")
+    @PostMapping("/{scheduleId}/depart-now")
+    fun markScheduleDeparted(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @PathVariable scheduleId: Long,
+    ): ApiResponse<ScheduleDto> {
+        val result = scheduleUseCase.markDeparted(requireMemberId(principal), scheduleId)
+        return ApiResponse.success(result)
+    }
+
+    /**
      * 전체 일정 목록 조회.
      * 초기 동기화나 전체 리스트 화면에서 사용한다.
      */

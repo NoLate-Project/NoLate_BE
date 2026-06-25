@@ -1,6 +1,6 @@
 # Notification / FCM / App Push Roadmap
 
-Last verified: 2026-06-17 KST
+Last verified: 2026-06-25 KST
 
 앱으로 실제 푸시를 보내고, FE 앱이 알림을 수신/표시/이동 처리하는 기반 기능의 상세 로드맵이다.
 
@@ -34,7 +34,15 @@ Last verified: 2026-06-17 KST
 - Android 13+ notification permission 요청
 - foreground push를 local notification으로 표시
 - 알림 데이터에서 `scheduleId` 추출
-- 알림 클릭 시 schedule open callback 연결 지점 마련
+- payload type별 일정 상세 이동 규칙
+  - `SCHEDULE_TRAFFIC`
+  - `SCHEDULE_DEPARTURE_REMINDER`
+  - `SCHEDULE_DETAIL`
+- 알림 클릭 시 `/schedule/[id]` route 생성
+- foreground push를 같은 payload 규칙으로 local notification 표시
+- `departNow=true` 일정 알림에 `지금 출발` 액션 버튼 연결
+- `지금 출발` 액션에서 `POST /api/schedules/{scheduleId}/depart-now` 호출
+- iOS TestFlight build 24 업로드 완료
 
 ### 주요 구현 파일
 
@@ -59,22 +67,21 @@ Last verified: 2026-06-17 KST
 
 ## Next Work
 
-- payload `type`별 FE 라우팅 정책 확정
-  - `SCHEDULE_TRAFFIC`
-  - `SCHEDULE_DEPARTURE_REMINDER`
-  - `SCHEDULE_DETAIL`
-  - `PUSH_SCENARIO_TOKEN_CHECK`
 - background/terminated 상태 알림 클릭 동작 실기기 검증
-- 알림 클릭 시 실제 일정 상세 화면 이동 완성
-- 알림 액션 버튼
+- iPhone TestFlight build 24에서 실제 일정 푸시 3종 수신 검증
+- `지금 출발` 액션 후 BE에서 PushJob이 취소되는지 운영 환경에서 검증
+- 추가 알림 액션 후보 검증
   - "일정 보기"
   - "길찾기"
-  - "출발했어요"
+  - "10분 뒤 다시 알림"
 - Android notification channel 이름/우선순위/소리 정책 정리
 - iOS 권한/foreground 표시 정책 정리
 - Firebase credential 운영 환경 분리
 - invalid token 삭제 지표/로그 모니터링
 - 실제 Firebase E2E 테스트 절차 문서화
+- 후속 UX 후보로 일정 상세/푸시 맥락의 날씨 정보 카드 검토
+  - 1차 후보: 도착지 기준 현재 날씨와 일정 시작 시간대 예보
+  - 구현 시 API key 보호를 위해 BE weather proxy 또는 서버 캐시 계층 우선 검토
 
 ## Roadmap
 
@@ -101,8 +108,8 @@ sequenceDiagram
 
 ## Suggested First Slice
 
-1. FE payload type enum 정리
-2. `SCHEDULE_TRAFFIC` 클릭 시 일정 상세 이동
-3. foreground 수신 시 동일 payload로 local notification 표시
-4. background/terminated 클릭 실기기 테스트
-5. PushScenarioRunner로 payload별 수신 검증
+1. iPhone TestFlight build 24에서 실제 일정 push token 재등록 확인
+2. `SCHEDULE_TRAFFIC`, `SCHEDULE_DEPARTURE_REMINDER`, `SCHEDULE_DETAIL` 수신 검증
+3. background/terminated 클릭 시 일정 상세 이동 실기기 테스트
+4. `departNow=true` 알림의 `지금 출발` 액션과 PushJob 취소 검증
+5. PushScenarioRunner 결과와 실제 일정 기반 Runner 결과를 같은 체크리스트에 기록

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS schedule_routes (
     schedule_id BIGINT NOT NULL COMMENT 'Schedule id',
     travel_minutes INT NULL COMMENT 'Estimated travel minutes',
     depart_at DATETIME(6) NULL COMMENT 'Departure time',
+    departed_at DATETIME(6) NULL COMMENT 'Departure completion time',
     travel_mode VARCHAR(20) NULL COMMENT 'Travel mode',
     location_name VARCHAR(255) NULL COMMENT 'Location or route summary',
     origin_name VARCHAR(255) NULL COMMENT 'Origin place name',
@@ -90,3 +91,71 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     INDEX idx_schedule_push_job_member_id (member_id),
     INDEX idx_schedule_push_job_schedule_id (schedule_id)
 ) COMMENT='Schedule push jobs';
+
+CREATE TABLE IF NOT EXISTS favorite_place_categories (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Favorite place category primary key',
+    member_id BIGINT NOT NULL COMMENT 'Owner member id',
+    name VARCHAR(80) NOT NULL COMMENT 'User-defined category name',
+    color VARCHAR(32) NOT NULL DEFAULT '#5A96FF' COMMENT 'Category display color',
+    icon_key VARCHAR(40) NULL COMMENT 'Category icon key',
+    sort_order INT NOT NULL DEFAULT 0 COMMENT 'User-defined sort order',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_favorite_place_categories_member_deleted_sort (member_id, deleted, sort_order)
+) COMMENT='User-defined favorite place categories';
+
+CREATE TABLE IF NOT EXISTS favorite_places (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Favorite place primary key',
+    member_id BIGINT NOT NULL COMMENT 'Owner member id',
+    category_id BIGINT NULL COMMENT 'Favorite place category id',
+    label VARCHAR(120) NOT NULL COMMENT 'User-defined place label',
+    place_name VARCHAR(255) NULL COMMENT 'Provider place name',
+    address VARCHAR(500) NULL COMMENT 'Place address',
+    lat DOUBLE NOT NULL COMMENT 'Latitude',
+    lng DOUBLE NOT NULL COMMENT 'Longitude',
+    provider VARCHAR(30) NULL COMMENT 'Place provider',
+    provider_place_id VARCHAR(128) NULL COMMENT 'Provider place id',
+    is_default_origin BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Default origin flag',
+    sort_order INT NOT NULL DEFAULT 0 COMMENT 'User-defined sort order',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_favorite_places_member_deleted_sort (member_id, deleted, sort_order),
+    INDEX idx_favorite_places_member_default_origin (member_id, deleted, is_default_origin),
+    INDEX idx_favorite_places_category (category_id),
+    CONSTRAINT fk_favorite_places_category
+        FOREIGN KEY (category_id) REFERENCES favorite_place_categories (id)
+        ON DELETE SET NULL
+) COMMENT='User favorite places';
+
+CREATE TABLE IF NOT EXISTS recent_route_places (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Recent route place primary key',
+    member_id BIGINT NOT NULL COMMENT 'Owner member id',
+    label VARCHAR(120) NOT NULL COMMENT 'Display place label',
+    place_name VARCHAR(255) NULL COMMENT 'Provider place name',
+    address VARCHAR(500) NULL COMMENT 'Place address',
+    lat DOUBLE NOT NULL COMMENT 'Latitude',
+    lng DOUBLE NOT NULL COMMENT 'Longitude',
+    provider VARCHAR(30) NULL COMMENT 'Place provider',
+    provider_place_id VARCHAR(128) NULL COMMENT 'Provider place id',
+    last_used_at DATETIME(6) NOT NULL COMMENT 'Last selected datetime',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_recent_route_places_member_deleted_used (member_id, deleted, last_used_at),
+    INDEX idx_recent_route_places_member_provider (member_id, deleted, provider, provider_place_id),
+    INDEX idx_recent_route_places_member_coords (member_id, deleted, lat, lng)
+) COMMENT='User recent route search places';

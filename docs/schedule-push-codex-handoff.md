@@ -1,6 +1,6 @@
 # Schedule / Push Codex Handoff
 
-Last verified: 2026-06-18 KST
+Last verified: 2026-06-25 KST
 
 이 문서는 다른 작업 공간에서 Codex로 이어서 작업할 때 필요한 일정 관리, ETA 재조회, PushJob, 앱 푸시 검증 맥락을 정리한 인수인계 문서다.
 
@@ -41,6 +41,11 @@ Last verified: 2026-06-18 KST
   - `push_send_history` 테이블에 성공/실패/무효 토큰/토큰 없음 이력 저장
   - `type`, `scheduleId`, `dataJson`, `fcmMessageId`, 오류 정보를 저장
   - `GET /api/notifications/send-histories`로 로그인 사용자의 최근 발송 이력 조회 가능
+- `POST /api/schedules/{scheduleId}/depart-now` 추가
+  - 알림의 `지금 출발` 액션을 누르면 일정의 실시간 출발 알림을 끄고 PushJob을 취소한다.
+  - 경로/이동 시간 데이터는 유지해 일정 상세와 이후 분석에 사용할 수 있게 한다.
+- 최신 BE 코드는 `origin/master`에 push 완료했다.
+  - 운영 서버에서 pull/redeploy가 끝나야 TestFlight 앱의 `지금 출발` 액션이 실제 API까지 완전히 동작한다.
 
 ### FE 완료
 
@@ -74,8 +79,15 @@ Last verified: 2026-06-18 KST
   - `createScheduleDetailRoute(scheduleId)`로 `/schedule/[id]` 이동 객체 생성
   - `getScheduleDetailRouteFromNotificationData(data)`로 payload에서 상세 이동 route 생성
   - Android/iOS/foreground local notification이 같은 route 규칙을 사용
+- `SCHEDULE_DEPARTURE_REMINDER` + `departNow=true` payload에 `지금 출발` 알림 액션 연결
+  - 알림 액션은 `markScheduleDeparted(scheduleId)`를 호출한다.
+  - 일반 알림 터치는 기존처럼 일정 상세 이동 규칙을 따른다.
 - Android 설정
   - `android/app/src/main/AndroidManifest.xml`, `app.json`, `android/gradle.properties`에 알림/앱 실행 관련 설정 반영
+- iOS 설정
+  - Firebase Apple 앱 구성에 APNs 인증 키가 등록됐다.
+  - TestFlight용 iOS build 24 업로드 완료.
+  - archive에서 `APS_ENVIRONMENT=production`이 적용된 것을 확인했다.
 - 테스트
   - `__tests__/apiWrappers.test.ts`
   - `__tests__/calendarRange.test.ts`
@@ -108,6 +120,11 @@ Last verified: 2026-06-18 KST
     - `교통시간이 15분 늘었습니다. FCM 실제 일정 3종 검증 일정은 02:21 출발을 권장합니다.`
   - 캡처 파일: `/Users/mac/IdeaProjects/NoLate/output/android/fcm-schedule-push-3types-background-shade.png`
   - UI dump 파일: `/Users/mac/IdeaProjects/NoLate/output/android/fcm-shade-window.xml`
+- iOS TestFlight 배포 확인
+  - 2026-06-25 기준 build 24 IPA export 및 App Store Connect 업로드 성공
+  - Delivery UUID: `0d9b768b-cf18-4869-afad-b7e8f2729603`
+  - `altool --build-status` 결과: `VALID`, `APP_STORE_ELIGIBLE`
+  - iPhone 실기기에서 일정 푸시 3종 수신, 알림 터치 상세 이동, `지금 출발` 액션은 아직 최종 acceptance 대상이다.
 
 ## Main Implementation Files
 
@@ -279,7 +296,7 @@ sequenceDiagram
 flowchart LR
   A["1단계 완료: PushJob 생성/취소 안정화"] --> B["2단계 완료: ETA fallback / PROCESSING 복구"]
   B --> C["3단계 진행 중: 실제 ETA 변화 기반 푸시 / 발송 이력 관리"]
-  C --> D["4단계 진행 중: FE 푸시 payload 처리와 상세 이동"]
+  C --> D["4단계 완료: FE 푸시 payload 처리 / 상세 이동 / 알림 액션"]
   D --> E["5단계 진행 중: 실제 FCM E2E와 운영 안정화"]
 
   C1["완료: routeJson 선택 경로 ETA 추출"] --> C
@@ -290,16 +307,18 @@ flowchart LR
 
   D1["완료: payload type별 schedule detail 대상 계산"] --> D
   D5["완료: 알림 payload에서 상세 route 생성"] --> D
-  D2["남음: 알림 터치 상세 이동 실기기 검증"] --> D
-  D3["남음: 출발했어요 액션"] --> D
-  D4["진행 중: foreground/background 수신 UX 정리"] --> D
+  D2["완료: 지금 출발 알림 액션 API 연결"] --> D
+  D3["남음: 알림 터치 상세 이동 실기기 검증"] --> E
+  D4["진행 중: foreground/background 수신 UX 정리"] --> E
 
   E1["완료: Android emulator 실제 FCM 3종 수신"] --> E
-  E2["남음: 중복 발송 방지 강화"] --> E
-  E3["남음: 서버 다중 인스턴스 lock 검증"] --> E
+  E2["완료: iOS TestFlight build 24 업로드"] --> E
+  E3["남음: iPhone 실제 일정 푸시 acceptance"] --> E
+  E4["남음: 중복 발송 방지 강화"] --> E
+  E5["남음: 서버 다중 인스턴스 lock 검증"] --> E
 ```
 
-현재 기준으로 2단계는 완료다. 3단계는 BE 핵심 로직, Android emulator 실제 FCM 3종 수신, 서버 발송 이력 저장까지 진입했다. 다만 교통 변화 기준값을 제품 정책으로 확정하는 일, 알림 터치 후 상세 이동을 실기기/에뮬레이터에서 끝까지 검증하는 일, 운영 환경 중복 발송 방지는 다음 단계로 남아 있다.
+현재 기준으로 **4단계까지 완료했고 5단계 진행 중**이다. 3단계 BE 핵심 로직, Android emulator 실제 FCM 3종 수신, 서버 발송 이력 저장, FE 상세 이동 규칙, `지금 출발` 액션, TestFlight build 24 업로드까지 끝났다. 다만 iPhone 실기기 일정 푸시 acceptance, 운영 BE 재배포 확인, 교통 변화 기준값 정책 확정, 운영 환경 중복 발송 방지는 다음 단계로 남아 있다.
 
 ## PushScenarioRunner
 
@@ -500,6 +519,9 @@ npx tsc --noEmit
 - 출발 시각이 앞당겨질 때 더 강한 긴급 알림
 - 사용자가 "출발했어요"를 누르면 후속 알림 종료
 - 위치 권한이 있으면 실제 출발 여부 감지
+- 날씨 정보 연동
+  - 지금 push acceptance가 우선이므로 후속 단계로 분리
+  - 일정 상세 드롭다운 또는 경로 카드에 도착지 기준 날씨/예보를 작게 노출하는 방향 검토
 - 대중교통 막차, 환승, 도보시간 반영
 - 알림 액션에서 일정 상세, 길찾기, 출발 완료로 바로 이동
 

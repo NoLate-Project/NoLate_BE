@@ -95,6 +95,53 @@ class ScheduleTextParserServiceTest {
     }
 
     @Test
+    fun `parses pasted wedding reservation form with venue name label`() {
+        val text = """
+            ★메인촬영★
+
+            1. 배우자 성함 :  정원우
+            2. 전화번호 : 010-2866-9137
+            3. 이메일 : rhwrka54@naver.com
+            4. 예약자성함 : 고은샘
+            5. 전화번호 : 010-5124-6609
+
+            돌스냅의 경우, 아기이름 :
+            6. 촬영종류(메인스냅, 서브스냅, DVD1캠, DVD2캠, 웨딩야촬, 스튜디오, 돌스냅) : 메인스냅, 서브스냅, DVD2캠
+            7.현금영수증번호(핸폰/사업자) : 핸폰 010-2866-9137
+            8. 본식(촬영)년도 : 2026년
+            9. 본식(촬영)날짜 : 6월 13일
+            10. 본식(촬영)요일 : 토요일
+            11. 본식(촬영)시간 : 14:30분
+            12. 웨딩지역(시, 구, 동) : 경기도 수원 팔달두 권광로 178
+            13. 웨딩(촬영)장소명 : 수원 더케이 웨딩컨벤션
+            14. 본식메인업체명 :
+            15. DVD업체명 :
+            16. 만원의행복스냅 방문경로 : 인스타 광고
+
+            축가(신랑)
+            부케대신 닭날리기
+
+            더시그너스 웨딩홀 -> 이름변경
+        """.trimIndent()
+
+        val result = parser.parse(text, "2026-01-01", 60)
+
+        assertEquals("수원 더케이 웨딩컨벤션 14:30", result.title)
+        assertEquals(
+            "예약자: 고은샘\n촬영 종류: 메인스냅, 서브스냅, DVD2캠",
+            result.notes,
+        )
+        assertEquals("2026-06-13", result.date)
+        assertEquals("14:30", result.time)
+        assertEquals("2026-06-13T05:30:00Z", result.startAt)
+        assertEquals("2026-06-13T06:30:00Z", result.endAt)
+        assertEquals("수원 더케이 웨딩컨벤션", result.destination?.name)
+        assertEquals("경기도 수원 팔달두 권광로 178", result.destination?.address)
+        assertTrue(result.originRequired)
+        assertTrue(result.warnings.isEmpty())
+    }
+
+    @Test
     fun `supports compact date and meridiem time formats`() {
         val result = parser.parse(
             text = "행사명: 가족 촬영\n일시: 2026-08-15 오후 2:30\n장소: 시민회관",

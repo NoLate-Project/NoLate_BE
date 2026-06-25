@@ -3,6 +3,11 @@ package com.noLate.notification.infrastructure
 import com.google.auth.oauth2.GoogleCredentials
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.firebase.messaging.AndroidConfig
+import com.google.firebase.messaging.AndroidNotification
+import com.google.firebase.messaging.ApnsConfig
+import com.google.firebase.messaging.Aps
+import com.google.firebase.messaging.ApsAlert
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingException
 import com.google.firebase.messaging.MessagingErrorCode
@@ -17,6 +22,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import java.io.FileInputStream
+
+private const val ANDROID_CHANNEL_ID = "schedule-push"
+private const val SCHEDULE_DEPART_NOW_CATEGORY = "schedule_depart_now"
 
 @Configuration
 @ConditionalOnProperty(prefix = "firebase", name = ["enabled"], havingValue = "true")
@@ -57,25 +65,85 @@ class FirebasePushConfiguration {
                 body: String,
                 data: Map<String, String>,
             ): PushSendResult {
+                val departNowAction = data.isDepartNowSchedulePush()
+                val messageData = data.withNotificationActionCategory(departNowAction)
                 val message = Message.builder()
                     .setToken(token)
                     .setNotification(Notification.builder().setTitle(title).setBody(body).build())
-                    .putAllData(data)
+                    .setAndroidConfig(createAndroidConfig())
+                    .setApnsConfig(createApnsConfig(title, body, departNowAction))
+                    .putAllData(messageData)
                     .build()
                 return try {
                     PushSendResult(messageId = firebaseMessaging.send(message))
                 } catch (exception: FirebaseMessagingException) {
-                    if (
-                        exception.messagingErrorCode == MessagingErrorCode.UNREGISTERED ||
-                        exception.messagingErrorCode == MessagingErrorCode.INVALID_ARGUMENT
-                    ) {
+                    if (exception.isInvalidPushToken()) {
                         throw InvalidPushTokenException(token, exception)
                     }
                     throw exception
                 }
             }
         }
+
+    private fun createAndroidConfig(): AndroidConfig =
+        AndroidConfig.builder()
+            .setPriority(AndroidConfig.Priority.HIGH)
+            .setNotification(
+                AndroidNotification.builder()
+                    .setChannelId(ANDROID_CHANNEL_ID)
+                    .setSound("default")
+                    .build()
+            )
+            .build()
+
+    private fun createApnsConfig(title: String, body: String, departNowAction: Boolean): ApnsConfig =
+        ApnsConfig.builder()
+            .putHeader("apns-push-type", "alert")
+            .putHeader("apns-priority", "10")
+            .setAps(
+                Aps.builder()
+                    .apply {
+                        if (departNowAction) {
+                            setCategory(SCHEDULE_DEPART_NOW_CATEGORY)
+                        }
+                    }
+                    .setAlert(
+                        ApsAlert.builder()
+                            .setTitle(title)
+                            .setBody(body)
+                            .build()
+                    )
+                    .setSound("default")
+                    .setContentAvailable(true)
+                    .build()
+            )
+            .build()
 }
+
+private fun Map<String, String>.isDepartNowSchedulePush(): Boolean =
+    this["type"] == "SCHEDULE_DEPARTURE_REMINDER" &&
+        this["departNow"] == "true" &&
+        this["scheduleId"]?.isNotBlank() == true
+
+private fun Map<String, String>.withNotificationActionCategory(
+    departNowAction: Boolean,
+): Map<String, String> {
+    if (!departNowAction) return this
+
+    return this + mapOf(
+        "categoryId" to SCHEDULE_DEPART_NOW_CATEGORY,
+        "categoryIdentifier" to SCHEDULE_DEPART_NOW_CATEGORY,
+    )
+}
+
+private fun FirebaseMessagingException.isInvalidPushToken(): Boolean =
+    messagingErrorCode == MessagingErrorCode.UNREGISTERED ||
+        messagingErrorCode == MessagingErrorCode.INVALID_ARGUMENT ||
+        containsBadEnvironmentKeyInToken()
+
+private fun FirebaseMessagingException.containsBadEnvironmentKeyInToken(): Boolean =
+    generateSequence(this as Throwable?) { it.cause }
+        .any { it.message?.contains("BadEnvironmentKeyInToken") == true }
 
 @ConfigurationProperties("firebase")
 data class FirebaseProperties(
