@@ -32,9 +32,9 @@ class TrafficChangePolicyTest {
             alertLeadMinutes = alertLeadMinutes,
         )
 
-        assertEquals("출발 시간 안내", message.title)
+        assertEquals("출발 준비하세요", message.title)
         assertEquals(
-            "회의 일정은 $expectedDepartureText 출발을 권장합니다. 약 15분 후 출발 준비를 해주세요.",
+            "'회의' 권장 출발 $expectedDepartureText. 약 15분 남았어요.",
             message.body,
         )
     }
@@ -50,9 +50,10 @@ class TrafficChangePolicyTest {
             alertLeadMinutes = alertLeadMinutes,
         )
 
+        assertEquals("이동 시간이 늘었어요", message.title)
         assertEquals(15, message.trafficChangeMinutes)
-        assertTrue(message.body.contains("15분 늘었습니다"))
-        assertTrue(message.body.contains("$expectedDepartureText 출발"))
+        assertTrue(message.body.contains("15분 더 걸려요"))
+        assertTrue(message.body.contains("권장 출발 $expectedDepartureText"))
     }
 
     @Test
@@ -68,7 +69,7 @@ class TrafficChangePolicyTest {
 
         assertEquals(0, message.trafficChangeMinutes)
         assertEquals(
-            "회의 일정은 $expectedDepartureText 출발을 권장합니다. 약 15분 후 출발 예정입니다.",
+            "'회의' 권장 출발 $expectedDepartureText. 약 15분 남았어요.",
             message.body,
         )
     }
@@ -84,9 +85,10 @@ class TrafficChangePolicyTest {
             alertLeadMinutes = alertLeadMinutes,
         )
 
+        assertEquals("이동 시간이 줄었어요", message.title)
         assertEquals(-15, message.trafficChangeMinutes)
-        assertTrue(message.body.contains("15분 줄었습니다"))
-        assertTrue(message.body.contains("$expectedDepartureText 출발"))
+        assertTrue(message.body.contains("15분 덜 걸려요"))
+        assertTrue(message.body.contains("권장 출발 $expectedDepartureText"))
     }
 
     @Test
@@ -102,6 +104,6 @@ class TrafficChangePolicyTest {
 
         assertEquals("지금 출발하세요", message.title)
         assertTrue(message.body.contains("지금 출발"))
-        assertTrue(message.body.contains("20분 늘었습니다"))
+        assertTrue(message.body.contains("20분 늘었어요"))
     }
 }

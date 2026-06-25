@@ -26,34 +26,40 @@ class TrafficChangePolicy {
         decision: DepartureReminderDecision,
         alertLeadMinutes: Int,
     ): SchedulePushMessage {
+        val titleText = scheduleTitle.trim().ifBlank { "일정" }
         val departureText = timeFormatter.format(recommendedDepartureAt)
         val delta = previousTravelMinutes?.let { currentTravelMinutes - it }
 
         if (decision == DepartureReminderDecision.DEPART_NOW) {
             val trafficChange = delta
                 ?.takeIf { it > 0 }
-                ?.let { " 교통시간이 이전보다 ${it}분 늘었습니다." }
+                ?.let { " 이동 시간이 ${it}분 늘었어요." }
                 .orEmpty()
             return SchedulePushMessage(
                 title = "지금 출발하세요",
-                body = "$scheduleTitle 일정에 늦지 않으려면 지금 출발해야 합니다.$trafficChange",
+                body = "'$titleText'에 늦지 않으려면 지금 출발하세요.$trafficChange",
                 trafficChangeMinutes = delta,
             )
         }
 
         val body = when {
             delta == null ->
-                "$scheduleTitle 일정은 $departureText 출발을 권장합니다. 약 ${alertLeadMinutes}분 후 출발 준비를 해주세요."
+                "'$titleText' 권장 출발 $departureText. 약 ${alertLeadMinutes}분 남았어요."
             delta > 0 ->
-                "교통시간이 ${delta}분 늘었습니다. $scheduleTitle 일정은 $departureText 출발을 권장합니다."
+                "이전보다 ${delta}분 더 걸려요. '$titleText' 권장 출발 $departureText."
             delta < 0 ->
-                "교통시간이 ${-delta}분 줄었습니다. $scheduleTitle 일정은 $departureText 출발을 권장합니다."
+                "이전보다 ${-delta}분 덜 걸려요. '$titleText' 권장 출발 $departureText."
             else ->
-                "$scheduleTitle 일정은 $departureText 출발을 권장합니다. 약 ${alertLeadMinutes}분 후 출발 예정입니다."
+                "'$titleText' 권장 출발 $departureText. 약 ${alertLeadMinutes}분 남았어요."
         }
 
         return SchedulePushMessage(
-            title = "출발 시간 안내",
+            title = when {
+                delta == null -> "출발 준비하세요"
+                delta > 0 -> "이동 시간이 늘었어요"
+                delta < 0 -> "이동 시간이 줄었어요"
+                else -> "출발 시간 안내"
+            },
             body = body,
             trafficChangeMinutes = delta,
         )

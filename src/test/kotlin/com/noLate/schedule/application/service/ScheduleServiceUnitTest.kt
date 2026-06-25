@@ -128,6 +128,32 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `markDeparted disables route notification without removing route data`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val existing = scheduleEntity(
+            id = scheduleId,
+            memberId = memberId,
+            notificationEnabled = true,
+        )
+
+        whenever(scheduleRepository.findScheduleDetail(scheduleId, memberId))
+            .thenReturn(existing)
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        val result = scheduleService.markDeparted(memberId, scheduleId)
+
+        verify(scheduleRepository).save(check {
+            assertEquals(false, it.route?.notificationEnabled)
+            assertEquals(null, it.route?.notificationLeadMinutes)
+            assertEquals(null, it.route?.notificationIntervalMinutes)
+            assertEquals(25, it.route?.travelMinutes)
+        })
+        assertEquals(false, result.notificationEnabled)
+        assertEquals(25, result.travelMinutes)
+    }
+
+    @Test
     fun `getCalendarScheduleList reads schedules overlapping requested range`() {
         // given
         val memberId = 1L
@@ -354,6 +380,7 @@ class ScheduleServiceUnitTest {
         memberId: Long = 1L,
         title: String = "Team sync",
         travelMinutes: Int? = 25,
+        notificationEnabled: Boolean = false,
     ): Schedule =
         Schedule(
             id = id,
@@ -383,9 +410,9 @@ class ScheduleServiceUnitTest {
                 destinationLat = 37.2,
                 destinationLng = 127.2,
                 routeJson = """{"id":"route-1"}""",
-                notificationEnabled = false,
-                notificationLeadMinutes = null,
-                notificationIntervalMinutes = null,
+                notificationEnabled = notificationEnabled,
+                notificationLeadMinutes = 60.takeIf { notificationEnabled },
+                notificationIntervalMinutes = 20.takeIf { notificationEnabled },
             )
         }
 

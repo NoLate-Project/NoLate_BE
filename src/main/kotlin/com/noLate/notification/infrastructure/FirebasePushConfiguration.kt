@@ -24,6 +24,7 @@ import org.springframework.context.annotation.Configuration
 import java.io.FileInputStream
 
 private const val ANDROID_CHANNEL_ID = "schedule-push"
+private const val SCHEDULE_DEPART_NOW_CATEGORY = "schedule_depart_now"
 
 @Configuration
 @ConditionalOnProperty(prefix = "firebase", name = ["enabled"], havingValue = "true")
@@ -64,12 +65,14 @@ class FirebasePushConfiguration {
                 body: String,
                 data: Map<String, String>,
             ): PushSendResult {
+                val departNowAction = data.isDepartNowSchedulePush()
+                val messageData = data.withNotificationActionCategory(departNowAction)
                 val message = Message.builder()
                     .setToken(token)
                     .setNotification(Notification.builder().setTitle(title).setBody(body).build())
                     .setAndroidConfig(createAndroidConfig())
-                    .setApnsConfig(createApnsConfig(title, body))
-                    .putAllData(data)
+                    .setApnsConfig(createApnsConfig(title, body, departNowAction))
+                    .putAllData(messageData)
                     .build()
                 return try {
                     PushSendResult(messageId = firebaseMessaging.send(message))
@@ -93,12 +96,17 @@ class FirebasePushConfiguration {
             )
             .build()
 
-    private fun createApnsConfig(title: String, body: String): ApnsConfig =
+    private fun createApnsConfig(title: String, body: String, departNowAction: Boolean): ApnsConfig =
         ApnsConfig.builder()
             .putHeader("apns-push-type", "alert")
             .putHeader("apns-priority", "10")
             .setAps(
                 Aps.builder()
+                    .apply {
+                        if (departNowAction) {
+                            setCategory(SCHEDULE_DEPART_NOW_CATEGORY)
+                        }
+                    }
                     .setAlert(
                         ApsAlert.builder()
                             .setTitle(title)
@@ -110,6 +118,22 @@ class FirebasePushConfiguration {
                     .build()
             )
             .build()
+}
+
+private fun Map<String, String>.isDepartNowSchedulePush(): Boolean =
+    this["type"] == "SCHEDULE_DEPARTURE_REMINDER" &&
+        this["departNow"] == "true" &&
+        this["scheduleId"]?.isNotBlank() == true
+
+private fun Map<String, String>.withNotificationActionCategory(
+    departNowAction: Boolean,
+): Map<String, String> {
+    if (!departNowAction) return this
+
+    return this + mapOf(
+        "categoryId" to SCHEDULE_DEPART_NOW_CATEGORY,
+        "categoryIdentifier" to SCHEDULE_DEPART_NOW_CATEGORY,
+    )
 }
 
 private fun FirebaseMessagingException.isInvalidPushToken(): Boolean =

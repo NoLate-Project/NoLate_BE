@@ -66,6 +66,16 @@ class ScheduleService(
     }
 
     @Transactional
+    fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
+        val entity = findActive(memberId, scheduleId)
+        entity.route?.notificationEnabled = false
+        entity.route?.notificationLeadMinutes = null
+        entity.route?.notificationIntervalMinutes = null
+
+        return scheduleRepository.save(entity).toDto(objectMapper)
+    }
+
+    @Transactional
     fun getScheduleList(memberId: Long): List<ScheduleDto> {
         return scheduleRepository.findScheduleList(memberId)
             .map { it.toDto(objectMapper) }

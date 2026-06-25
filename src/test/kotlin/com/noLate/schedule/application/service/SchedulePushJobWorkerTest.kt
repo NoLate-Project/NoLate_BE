@@ -197,8 +197,8 @@ class SchedulePushJobWorkerTest {
 
         verify(notificationUseCase).sendToMember(
             memberId = eq(1L),
-            title = eq("출발 시간 안내"),
-            body = check { assertTrue(it.contains("15분 늘었습니다")) },
+            title = eq("이동 시간이 늘었어요"),
+            body = check { assertTrue(it.contains("15분 더 걸려요")) },
             data = check {
                 assertEquals("SCHEDULE_TRAFFIC", it["type"])
                 assertEquals("false", it["departNow"])
@@ -241,10 +241,10 @@ class SchedulePushJobWorkerTest {
 
         verify(notificationUseCase).sendToMember(
             memberId = eq(1L),
-            title = eq("출발 시간 안내"),
+            title = eq("출발 준비하세요"),
             body = check {
                 assertTrue(it.contains(seoulTimeFormatter.format(recommendedDepartureAt)))
-                assertTrue(it.contains("15분 후"))
+                assertTrue(it.contains("15분 남았어요"))
             },
             data = check {
                 assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
@@ -300,9 +300,9 @@ class SchedulePushJobWorkerTest {
 
         verify(notificationUseCase).sendToMember(
             memberId = eq(1L),
-            title = eq("출발 시간 안내"),
+            title = eq("이동 시간이 늘었어요"),
             body = check {
-                assertTrue(it.contains("5분 늘었습니다"))
+                assertTrue(it.contains("5분 더 걸려요"))
                 assertTrue(it.contains(seoulTimeFormatter.format(currentRecommendedDepartureAt)))
             },
             data = check {
@@ -512,7 +512,7 @@ class SchedulePushJobWorkerTest {
         verify(scheduleRepository, never()).findScheduleDetail(20L, 1L)
         verify(notificationUseCase).sendToMember(
             memberId = eq(1L),
-            title = eq("출발 시간 안내"),
+            title = eq("출발 준비하세요"),
             body = check { assertTrue(it.contains("회원 1 일정")) },
             data = check {
                 assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
@@ -522,7 +522,7 @@ class SchedulePushJobWorkerTest {
         )
         verify(notificationUseCase).sendToMember(
             memberId = eq(2L),
-            title = eq("출발 시간 안내"),
+            title = eq("출발 준비하세요"),
             body = check { assertTrue(it.contains("회원 2 일정")) },
             data = check {
                 assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
