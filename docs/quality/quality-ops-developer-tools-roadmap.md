@@ -1,6 +1,6 @@
 # Quality / Ops / Developer Tools Roadmap
 
-Last verified: 2026-06-25 KST
+Last verified: 2026-06-26 KST
 
 테스트, CI, 환경변수, 로컬 실행, 관측성, 개발 검증 도구의 상세 로드맵이다.
 
@@ -15,6 +15,7 @@ Last verified: 2026-06-25 KST
 - Gradle test 통과 확인
 - schedule/member/notification/subscription 단위 테스트와 일부 통합 테스트
 - 외부 API 테스트는 `external` tag로 분리된 구조
+- 2026-06-26 기준 BE 작업 브랜치에 `origin/main` 최신 변경 반영
 - HTTP Client 파일
   - `http/schedule-parser.http`
   - `http/push-scenario-runner.http`
@@ -65,6 +66,11 @@ Last verified: 2026-06-25 KST
 - 앱 실기기 E2E 체크리스트
 - 운영 BE 배포 절차 문서화
 - TestFlight 업로드 전 빌드 번호 증가 자동화
+- push acceptance 체크리스트
+  - TestFlight 최신 빌드에서 token 재등록
+  - 실제 일정 push 3종 수신
+  - 알림 터치 상세 이동
+  - 출발 완료 액션 후 PushJob 취소
 
 ## Roadmap
 

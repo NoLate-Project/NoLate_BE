@@ -1,6 +1,6 @@
 # Notification / FCM / App Push Roadmap
 
-Last verified: 2026-06-25 KST
+Last verified: 2026-06-26 KST
 
 앱으로 실제 푸시를 보내고, FE 앱이 알림을 수신/표시/이동 처리하는 기반 기능의 상세 로드맵이다.
 
@@ -21,10 +21,16 @@ Last verified: 2026-06-25 KST
 - 다른 회원에 묶인 token/device 정리
 - 회원별 토큰 조회 후 PushClient 전송
 - Firebase PushClient
+- Firebase APNs alert payload 구성
+- `departNow=true` 일정 알림에 iOS notification category `schedule_depart_now` 부여
+- Android `schedule-push` channel, high priority, default sound 설정
 - Dummy PushClient
 - invalid token 응답 시 토큰 삭제
+- `BadEnvironmentKeyInToken` 응답을 invalid token 계열로 처리
 - `/api/notifications/test/send` 단일 테스트 전송 API
 - `PushScenarioRunner` 개발 검증 도구
+- `push_send_history` 발송 이력 저장
+- `GET /api/notifications/send-histories` 최근 발송 이력 조회
 
 ### FE 완료
 
@@ -40,9 +46,9 @@ Last verified: 2026-06-25 KST
   - `SCHEDULE_DETAIL`
 - 알림 클릭 시 `/schedule/[id]` route 생성
 - foreground push를 같은 payload 규칙으로 local notification 표시
-- `departNow=true` 일정 알림에 `지금 출발` 액션 버튼 연결
-- `지금 출발` 액션에서 `POST /api/schedules/{scheduleId}/depart-now` 호출
-- iOS TestFlight build 24 업로드 완료
+- `departNow=true` 일정 알림에 출발 완료 액션 버튼 연결
+- 출발 완료 액션에서 `POST /api/schedules/{scheduleId}/depart-now` 호출
+- iOS TestFlight 빌드에서 production APS entitlement 확인
 
 ### 주요 구현 파일
 
@@ -53,6 +59,11 @@ Last verified: 2026-06-25 KST
 - `src/main/kotlin/com/noLate/notification/infrastructure/PushClientApplication.kt`
 - `src/main/kotlin/com/noLate/notification/dev/PushScenarioRunner.kt`
 - `src/main/kotlin/com/noLate/notification/dev/PushScenarioController.kt`
+- `src/main/kotlin/com/noLate/notification/domain/PushSendHistory.kt`
+- `src/main/kotlin/com/noLate/notification/application/service/PushSendHistoryService.kt`
+- `src/main/kotlin/com/noLate/notification/infrastructure/PushSendHistoryRepository.kt`
+- `src/main/kotlin/com/noLate/schedule/controller/ScheduleController.kt`
+- `src/main/kotlin/com/noLate/schedule/application/useCase/ScheduleUseCase.kt`
 - `NoLate_FE/src/api/notification.ts`
 - `NoLate_FE/src/modules/notification/pushRegistration.ts`
 - `NoLate_FE/src/modules/notification/foregroundPush.ts`
@@ -64,12 +75,16 @@ Last verified: 2026-06-25 KST
 - `src/test/kotlin/com/noLate/notification/application/service/NotificationTokenServiceIntegrationTest.kt`
 - `src/test/kotlin/com/noLate/notification/application/useCase/NotificationUseCaseUnitTest.kt`
 - `src/test/kotlin/com/noLate/notification/dev/PushScenarioRunnerTest.kt`
+- `src/test/kotlin/com/noLate/notification/application/service/PushSendHistoryServiceTest.kt`
+- `src/test/kotlin/com/noLate/schedule/application/useCase/ScheduleUseCaseUnitTest.kt`
 
 ## Next Work
 
 - background/terminated 상태 알림 클릭 동작 실기기 검증
-- iPhone TestFlight build 24에서 실제 일정 푸시 3종 수신 검증
-- `지금 출발` 액션 후 BE에서 PushJob이 취소되는지 운영 환경에서 검증
+- iPhone TestFlight 최신 빌드에서 실제 일정 푸시 3종 수신 검증
+- 출발 완료 액션 후 BE에서 PushJob이 취소되는지 운영 환경에서 검증
+- 운영 BE가 `POST /api/schedules/{scheduleId}/depart-now`를 포함한 최신 commit으로 배포됐는지 확인
+- iOS 알림 액션은 알림을 길게 누르거나 확장했을 때 노출되는 제약을 UX에 반영
 - 추가 알림 액션 후보 검증
   - "일정 보기"
   - "길찾기"
@@ -108,8 +123,8 @@ sequenceDiagram
 
 ## Suggested First Slice
 
-1. iPhone TestFlight build 24에서 실제 일정 push token 재등록 확인
+1. iPhone TestFlight 최신 빌드에서 실제 일정 push token 재등록 확인
 2. `SCHEDULE_TRAFFIC`, `SCHEDULE_DEPARTURE_REMINDER`, `SCHEDULE_DETAIL` 수신 검증
 3. background/terminated 클릭 시 일정 상세 이동 실기기 테스트
-4. `departNow=true` 알림의 `지금 출발` 액션과 PushJob 취소 검증
+4. `departNow=true` 알림의 출발 완료 액션과 PushJob 취소 검증
 5. PushScenarioRunner 결과와 실제 일정 기반 Runner 결과를 같은 체크리스트에 기록
