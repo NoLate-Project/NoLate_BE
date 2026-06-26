@@ -1,19 +1,20 @@
 version: "3.9"
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: late_project_mysql
-    restart: unless-stopped
+  app:
+    container_name: nolate-app
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "33061:3306"
-    env_file:
-      - ./docker/mysql/.env
-    command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      - "5522:8080"
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_CONFIG_IMPORT: optional:file:/config/env.properties
+      LOGGING_FILE_NAME: /logs/app.log
     volumes:
-      - mysql_data:/var/lib/mysql
-
-volumes:
-  mysql_data:
+      - ./src/main/resources/env.properties:/config/env.properties:ro
+      - ./logs:/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

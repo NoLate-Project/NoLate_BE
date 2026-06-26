@@ -30,6 +30,23 @@ CREATE TABLE IF NOT EXISTS schedule_category_snapshots (
         ON DELETE CASCADE
 ) COMMENT='Category display snapshot for each schedule';
 
+CREATE TABLE IF NOT EXISTS schedule_categories (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule category primary key',
+    member_id BIGINT NOT NULL COMMENT 'Owner member id',
+    title VARCHAR(80) NOT NULL COMMENT 'User-defined category title',
+    color VARCHAR(32) NOT NULL DEFAULT '#5A96FF' COMMENT 'Category display color',
+    icon_key VARCHAR(40) NULL COMMENT 'UI icon key',
+    sort_order INT NOT NULL DEFAULT 0 COMMENT 'User-defined sort order',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_schedule_categories_member_deleted_sort (member_id, deleted, sort_order)
+) COMMENT='User-defined schedule categories';
+
 CREATE TABLE IF NOT EXISTS schedule_routes (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule route primary key',
     schedule_id BIGINT NOT NULL COMMENT 'Schedule id',
