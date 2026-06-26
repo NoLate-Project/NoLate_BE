@@ -239,9 +239,17 @@ class ScheduleController(
  */
 data class ParseScheduleTextRequest(
     val text: String,
+    val inputType: ScheduleParseInputType? = null,
     val referenceDate: String? = null,
     val defaultDurationMinutes: Int? = null,
 )
+
+enum class ScheduleParseInputType {
+    TEXT,
+    CONVERSATION,
+    IMAGE_OCR,
+    SHARE_TEXT,
+}
 
 data class AddScheduleRequest(
     val title: String,

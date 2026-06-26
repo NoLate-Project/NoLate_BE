@@ -1,88 +1,62 @@
-# NoLate BE Roadmap
+# NoLate Project Roadmap
 
 Last verified: 2026-06-26 KST
 
-이 문서는 NoLate BE 문서의 상위 인덱스다. 각 도메인의 구체적인 설계, 완료 범위, 다음 작업, 테스트 후보는 분야별 디렉터리의 개별 md 파일에서 관리한다.
+이 문서는 NoLate 문서의 상위 인덱스다. 세부 구현, 검증 절차, 테스트 목록은 분야별 문서에서 관리하고, 이 파일에는 현재 제품 상태와 우선순위만 둔다.
 
-## Roadmap Index
+## Current Focus
 
-| Area | Detail Document | Current Status | Next Focus |
+MVP 1차 목표는 **일정 기반 출발 알림 엔진의 신뢰성 검증**이다.
+
+사용자가 일정, 목적지, 도착 시간을 등록하면 NoLate가 경로와 ETA를 기준으로 추천 출발 시각을 계산하고, 교통 상황이나 일정 정보가 바뀌어도 올바른 사용자와 기기에만 출발 알림을 보내야 한다.
+
+MVP 1차 완료 조건:
+
+- 실제 일정 기반 push 3종을 실기기에서 수신한다.
+- 알림 터치가 정확한 일정 상세로 이동한다.
+- `departNow=true` 출발 완료 액션이 운영 BE까지 성공하고 PushJob을 취소한다.
+- 일정 변경, 교통 변경, 기기 변경 상황에서 중복 발송이나 잘못된 사용자 발송이 없다.
+
+## Area Index
+
+| Area | Source Of Truth | Status | Next Focus |
 | --- | --- | --- | --- |
-| Schedule / Push | [`schedule/schedule-push-codex-handoff.md`](schedule/schedule-push-codex-handoff.md) | 4단계 완료, 5단계 진행 중 | iOS 실기기 3종 push acceptance, 운영 BE 배포 검증, 중복 발송 방지 |
+| Schedule / Push | [`schedule/PUSH_NOTIFICATION_STATUS.md`](schedule/PUSH_NOTIFICATION_STATUS.md) | 코드와 자동 테스트 기준 4단계 완료, 5단계 acceptance 진행 중 | iPhone TestFlight, 운영 BE, 중복 발송 방지 |
+| Schedule / Push Implementation | [`schedule/schedule-push-implementation-guide.md`](schedule/schedule-push-implementation-guide.md) | 구현/검증 가이드 | 최신 남은 작업과 실행 절차 유지 |
+| Push Scenario Runner | [`schedule/push-scenario-runner.md`](schedule/push-scenario-runner.md) | 수동 E2E 도구 완료 | 실제 일정 기반 Runner 결과 기록 |
+| Quick Schedule | [`schedule/quick-schedule-creation-roadmap.md`](schedule/quick-schedule-creation-roadmap.md) | 자연어 일정 생성 기반 완료, 확장 설계 진행 | 입력 채널 확장, OCR/share |
+| Notification / FCM / App Push | [`notification/notification-fcm-app-push-roadmap.md`](notification/notification-fcm-app-push-roadmap.md) | payload 라우팅, 상세 이동 규칙, depart-now action 구현 완료 | 실기기 클릭/액션 검증 |
+| FE App / Route UX | [`frontend/fe-app-route-ux-roadmap.md`](frontend/fe-app-route-ux-roadmap.md) | 로그인, 일정, 경로, 알림 UX 기반 완료 | 실기기 UX 검증, 오류/빈 상태 정리 |
+| MVP Acceptance | [`quality/mvp-acceptance-checklist.md`](quality/mvp-acceptance-checklist.md) | 남은 BE/FE 검증 항목 정리 | 체크리스트 실행 결과 기록 |
+| Quality / Ops | [`quality/quality-ops-developer-tools-roadmap.md`](quality/quality-ops-developer-tools-roadmap.md) | BE/FE 테스트 일부, TestFlight 업로드 경로 확인 | CI, 환경변수, 관측성, 운영 배포 절차 |
 | Member / Auth / Profile | [`member/member-auth-profile-roadmap.md`](member/member-auth-profile-roadmap.md) | 회원가입, 로그인, refresh, 프로필, 비밀번호, 탈퇴 완료 | 이메일 인증, 비밀번호 재설정, SNS 토큰 검증 |
-| Notification / FCM / App Push | [`notification/notification-fcm-app-push-roadmap.md`](notification/notification-fcm-app-push-roadmap.md) | payload 라우팅, 상세 이동 규칙, `depart-now` API/action 완료 | iOS 실기기 알림 액션 acceptance, 권한/토큰 복구 UX |
-| Subscription / Policy | [`subscription/subscription-policy-roadmap.md`](subscription/subscription-policy-roadmap.md) | FREE/PREMIUM 정책 모델, 내 정책 조회, 일정 정책 검증 완료 | 결제/구독 모델, plan 변경, paywall |
-| FE App / Route UX | [`frontend/fe-app-route-ux-roadmap.md`](frontend/fe-app-route-ux-roadmap.md) | 로그인, 일정/경로, 프로필, 알림 이동/액션 기반 완료 | 실기기 UX 검증, 권한/빈/오류 상태 정리 |
-| External Calendar Integration | [`integrations/external-calendar-integration-roadmap.md`](integrations/external-calendar-integration-roadmap.md) | 로드맵 단계 정의 | Google/Apple import MVP 설계 |
-| Quality / Ops / Developer Tools | [`quality/quality-ops-developer-tools-roadmap.md`](quality/quality-ops-developer-tools-roadmap.md) | BE/FE 테스트 일부, HTTP Client 검증, TestFlight 업로드 경로 확인 | CI, 환경변수 문서, 관측성, E2E 체크리스트 |
+| Subscription / Policy | [`subscription/subscription-policy-roadmap.md`](subscription/subscription-policy-roadmap.md) | FREE/PREMIUM 정책 모델과 일정 정책 검증 완료 | 결제/구독 모델, plan 변경, paywall |
+| External Calendar | [`integrations/external-calendar-integration-roadmap.md`](integrations/external-calendar-integration-roadmap.md) | 로드맵 정의 | Google/Apple import MVP 설계 |
 
-## Supporting Docs
-
-| Area | Document | Purpose |
-| --- | --- | --- |
-| Schedule / Push | [`schedule/PUSH_NOTIFICATION_STATUS.md`](schedule/PUSH_NOTIFICATION_STATUS.md) | 일정 푸시 알림의 제품 규칙, 주요 코드, 검증 상태 |
-| Schedule / Push | [`schedule/push-scenario-runner.md`](schedule/push-scenario-runner.md) | PushScenarioRunner 사용법과 수동 검증 흐름 |
-
-## Current Phase Summary
+## Current Phase
 
 전체 진행은 **4단계 완료, 5단계 진행 중**이다.
 
 1. PushJob 생성/취소 안정화: 완료
-2. ETA fallback/복구/재시도 안정화: 완료
+2. ETA fallback, PROCESSING 복구, 재시도 안정화: 완료
 3. 실제 FCM 발송과 발송 이력 관리: 완료
-4. FE payload 라우팅, 상세 이동 규칙, `depart-now`/출발 완료 액션: 완료
-5. 실기기 E2E와 운영 안정화: 진행 중
+4. FE payload 라우팅, 상세 이동 규칙, `depart-now` 액션: 완료
+5. 실기기 acceptance와 운영 안정화: 진행 중
 
-2026-06-26 기준 BE 작업 브랜치에는 `origin/main` 최신 변경을 반영했다. 현재 push 기능은 코드 구현과 단위/통합 테스트 기준으로 4단계까지 완료되어 있으며, 5단계는 TestFlight 실기기 acceptance와 운영 배포 검증이 남아 있다.
+## Recommended Work Order
 
-## Roadmap Overview
-
-<!-- mermaidId: no-late-roadmap-overview -->
-
-```mermaid
-flowchart TD
-  A["NoLate 전체 로드맵"] --> B["Schedule / Push"]
-  A --> C["Member / Auth / Profile"]
-  A --> D["Notification / FCM / App Push"]
-  A --> E["Subscription / Policy"]
-  A --> F["FE App / Route UX"]
-  A --> G["External Calendar Integration"]
-  A --> H["Quality / Ops / Developer Tools"]
-
-  B --> B1["상세: schedule/schedule-push-codex-handoff.md"]
-  C --> C1["상세: member/member-auth-profile-roadmap.md"]
-  D --> D1["상세: notification/notification-fcm-app-push-roadmap.md"]
-  E --> E1["상세: subscription/subscription-policy-roadmap.md"]
-  F --> F1["상세: frontend/fe-app-route-ux-roadmap.md"]
-  G --> G1["상세: integrations/external-calendar-integration-roadmap.md"]
-  H --> H1["상세: quality/quality-ops-developer-tools-roadmap.md"]
-```
-
-## Suggested Work Order
-
-1. iPhone TestFlight 최신 빌드에서 실제 일정 푸시 3종 수신과 알림 터치 상세 이동 검증
-2. `departNow=true` 알림 액션에서 `POST /api/schedules/{scheduleId}/depart-now`가 운영 BE까지 성공하는지 검증
-3. 운영 BE에 `depart-now` API와 최신 푸시 문구 배포 확인
-4. routeJson FE/BE 계약 문서화
-5. 발송 이벤트 단위 중복 방지(outbox 또는 idempotency key) 설계
-6. 일정 상세/푸시 맥락의 날씨 정보 UX 설계
-   - 우선순위는 push 실기기 acceptance 이후
-   - 1차 범위는 도착지 기준 현재 날씨와 일정 시작 시간대 예보
-7. External Calendar Integration 1단계 설계
-   - Google Calendar import
-   - Apple Calendar 또는 기기 캘린더 import
-   - 외부 event와 NoLate Schedule 매핑
-8. Member/Auth 보안 보강
-   - 비밀번호 재설정
-   - 이메일 인증
-   - 로그인 rate limit
-9. Subscription plan 변경과 paywall 설계
-10. CI와 환경변수 문서화
-11. 실제 Firebase/Tmap/Groq/Google Calendar 외부 연동 테스트 분리 실행
+1. 운영 BE에 `POST /api/schedules/{scheduleId}/depart-now` 포함 최신 commit 배포 확인
+2. iPhone TestFlight 최신 빌드에서 token 재등록 확인
+3. 실제 일정 기반 push 3종 수신 확인
+4. background/terminated 상태 알림 터치 상세 이동 확인
+5. `departNow=true` 알림 액션 후 PushJob 취소 확인
+6. 서버 다중 인스턴스 또는 재시도 상황의 중복 발송 방지 검증
+7. 실제 Tmap ETA 변화 시나리오 검증
+8. CI에 BE test, FE test, FE typecheck 추가
 
 ## Verification Commands
 
-자세한 테스트/운영 검증 명령은 [`quality/quality-ops-developer-tools-roadmap.md`](quality/quality-ops-developer-tools-roadmap.md)에서 관리한다.
+자세한 검증 명령과 운영 체크리스트는 [`quality/quality-ops-developer-tools-roadmap.md`](quality/quality-ops-developer-tools-roadmap.md)에서 관리한다.
 
 BE:
 

@@ -102,6 +102,7 @@ Content-Type: application/json
 
 {
   "text": "20260530 강남 오후8시30분 고등학교친구 와 회식",
+  "inputType": "CONVERSATION",
   "referenceDate": "2026-01-01",
   "defaultDurationMinutes": 60
 }
@@ -122,6 +123,7 @@ Content-Type: application/json
 
 {
   "text": "예약자 성함 : 김혜림\n행사 연도 : 2026년\n행사 날짜 : 5월 16일\n행사 시간 : 오후 3시 30분\n행사 지역 : 인천\n장소명 : 그랜드 오스티엄 웨딩홀 3층 블리스홀",
+  "inputType": "TEXT",
   "referenceDate": "2026-01-01",
   "defaultDurationMinutes": 60
 }
