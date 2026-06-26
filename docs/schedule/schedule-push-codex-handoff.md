@@ -146,7 +146,7 @@ Last verified: 2026-06-25 KST
 - `src/main/kotlin/com/noLate/notification/application/service/PushSendHistoryService.kt`
 - `src/main/kotlin/com/noLate/notification/infrastructure/PushSendHistoryRepository.kt`
 - `http/push-scenario-runner.http`
-- `docs/push-scenario-runner.md`
+- [`push-scenario-runner.md`](push-scenario-runner.md)
 
 ### FE
 

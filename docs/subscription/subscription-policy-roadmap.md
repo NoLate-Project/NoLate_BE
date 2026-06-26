@@ -6,7 +6,7 @@ Last verified: 2026-06-17 KST
 
 상위 로드맵:
 
-- `docs/no-late-codex-roadmaps.md`
+- [`../roadmap.md`](../roadmap.md)
 
 ## Current Status
 

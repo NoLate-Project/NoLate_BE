@@ -6,7 +6,7 @@ Last verified: 2026-06-25 KST
 
 상위 로드맵:
 
-- `docs/no-late-codex-roadmaps.md`
+- [`../roadmap.md`](../roadmap.md)
 
 ## Current Status
 
@@ -28,15 +28,15 @@ Last verified: 2026-06-25 KST
 
 ### 개발 검증 문서
 
-- `docs/schedule-push-codex-handoff.md`
-- `docs/push-scenario-runner.md`
-- `docs/no-late-codex-roadmaps.md`
-- `docs/member-auth-profile-roadmap.md`
-- `docs/notification-fcm-app-push-roadmap.md`
-- `docs/subscription-policy-roadmap.md`
-- `docs/fe-app-route-ux-roadmap.md`
-- `docs/external-calendar-integration-roadmap.md`
-- `docs/quality-ops-developer-tools-roadmap.md`
+- [`../schedule/schedule-push-codex-handoff.md`](../schedule/schedule-push-codex-handoff.md)
+- [`../schedule/push-scenario-runner.md`](../schedule/push-scenario-runner.md)
+- [`../roadmap.md`](../roadmap.md)
+- [`../member/member-auth-profile-roadmap.md`](../member/member-auth-profile-roadmap.md)
+- [`../notification/notification-fcm-app-push-roadmap.md`](../notification/notification-fcm-app-push-roadmap.md)
+- [`../subscription/subscription-policy-roadmap.md`](../subscription/subscription-policy-roadmap.md)
+- [`../frontend/fe-app-route-ux-roadmap.md`](../frontend/fe-app-route-ux-roadmap.md)
+- [`../integrations/external-calendar-integration-roadmap.md`](../integrations/external-calendar-integration-roadmap.md)
+- [`quality-ops-developer-tools-roadmap.md`](quality-ops-developer-tools-roadmap.md)
 
 ## Next Work
 

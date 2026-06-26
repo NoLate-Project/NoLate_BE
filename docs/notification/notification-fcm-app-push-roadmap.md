@@ -6,11 +6,11 @@ Last verified: 2026-06-25 KST
 
 일정 ETA 기반 푸시 정책은 별도 문서에서 관리한다.
 
-- `docs/schedule-push-codex-handoff.md`
+- [`../schedule/schedule-push-codex-handoff.md`](../schedule/schedule-push-codex-handoff.md)
 
 상위 로드맵:
 
-- `docs/no-late-codex-roadmaps.md`
+- [`../roadmap.md`](../roadmap.md)
 
 ## Current Status
 
