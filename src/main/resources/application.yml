@@ -2,9 +2,8 @@ spring:
   application:
     name: noLate
 
-
   config:
-    import: classpath:env.properties
+    import: optional:file:/config/env.properties
 
   sql:
     init:
