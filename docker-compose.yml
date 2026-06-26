@@ -15,6 +15,7 @@ services:
       LOGGING_FILE_NAME: /logs/app.log
     volumes:
       - ./src/main/resources/env.properties:/config/env.properties:ro
+      - /mnt/toshiba1t/config/firebase.json:/config/firebase.json:ro
       - ./logs:/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
