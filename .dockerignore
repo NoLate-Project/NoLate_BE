@@ -1,0 +1,7 @@
+.git
+.gradle
+build
+logs
+.env
+
+src/main/resources/env.properties
