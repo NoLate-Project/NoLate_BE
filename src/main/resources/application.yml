@@ -3,7 +3,7 @@ spring:
     name: noLate
 
   config:
-    import: optional:file:/config/env.properties
+    import: optional:file:${CONFIG_FILE:src/main/resources/env.properties}
 
   sql:
     init:

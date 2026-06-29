@@ -107,6 +107,19 @@ class ScheduleController(
     }
 
     /**
+     * 사용자가 푸시의 "5분 뒤 다시 알림" 액션을 선택했을 때 출발 알림을 재예약한다.
+     */
+    @Operation(summary = "출발 알림 5분 뒤 다시 알림")
+    @PostMapping("/{scheduleId}/departure-reminder/snooze")
+    fun snoozeDepartureReminder(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @PathVariable scheduleId: Long,
+    ): ApiResponse<Unit> {
+        scheduleUseCase.snoozeDepartureReminder(requireMemberId(principal), scheduleId)
+        return ApiResponse.success(Unit)
+    }
+
+    /**
      * 전체 일정 목록 조회.
      * 초기 동기화나 전체 리스트 화면에서 사용한다.
      */

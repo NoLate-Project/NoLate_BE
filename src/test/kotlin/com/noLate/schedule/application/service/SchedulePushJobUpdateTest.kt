@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.schedule.domain.ScheduleCategoryDto
+import com.noLate.schedule.domain.ScheduleDepartureReminderStage
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.SchedulePushJob
@@ -56,10 +57,13 @@ class SchedulePushJobUpdateTest {
             recommendedDepartureAt = originalScheduleAt.minus(35, ChronoUnit.MINUTES),
             pushSent = true,
             notifiedDepartureAt = originalScheduleAt.minus(35, ChronoUnit.MINUTES),
+            departureReminderStage = ScheduleDepartureReminderStage.DEPART_NOW,
+            departureReminderBoundaryAt = originalScheduleAt.minus(35, ChronoUnit.MINUTES),
             nextCheckAt = originalMonitorStartAt.plus(20, ChronoUnit.MINUTES),
             completeAfterCheck = false,
             now = originalMonitorStartAt,
         )
+        job.snoozeUntil(originalMonitorStartAt.plus(30, ChronoUnit.MINUTES))
 
         whenever(repository.findByScheduleId(10L)).thenReturn(job)
         whenever(repository.save(any<SchedulePushJob>())).thenAnswer { it.getArgument(0) }
@@ -82,6 +86,10 @@ class SchedulePushJobUpdateTest {
         assertNull(job.lastNotifiedDepartureAt)
         assertNull(job.lastCheckedAt)
         assertNull(job.lastPushedAt)
+        assertNull(job.departureNoticeSentAt)
+        assertNull(job.lastDepartureReminderStage)
+        assertNull(job.lastDepartureReminderBoundaryAt)
+        assertNull(job.snoozedUntil)
         assertNull(job.failureReason)
     }
 

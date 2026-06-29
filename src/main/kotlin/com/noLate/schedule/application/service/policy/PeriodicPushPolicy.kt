@@ -22,10 +22,10 @@ class PeriodicPushPolicy {
     ): Instant {
         val intervalCheckAt = now.plus(intervalMinutes.toLong(), ChronoUnit.MINUTES)
         val alertAt = recommendedDepartureAt.minus(alertLeadMinutes.toLong(), ChronoUnit.MINUTES)
-        val nextNotificationBoundary = if (now.isBefore(alertAt)) {
-            alertAt
-        } else {
-            recommendedDepartureAt
+        val nextNotificationBoundary = when {
+            now.isBefore(alertAt) -> alertAt
+            now.isBefore(recommendedDepartureAt) -> recommendedDepartureAt
+            else -> intervalCheckAt
         }
 
         return minOf(intervalCheckAt, nextNotificationBoundary)

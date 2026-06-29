@@ -33,8 +33,8 @@ class SchedulePushJobWorker(
     private val trafficChangePolicy: TrafficChangePolicy,
     @Value("\${schedule.push.retry-delay-minutes:5}") private val retryDelayMinutes: Long,
     @Value("\${schedule.push.max-retry-count:3}") private val maxRetryCount: Int,
-    @Value("\${schedule.push.delivery-grace-minutes:10}") private val deliveryGraceMinutes: Long,
     @Value("\${schedule.push.departure-alert-lead-minutes:15}") private val departureAlertLeadMinutes: Int,
+    @Value("\${schedule.push.departure-snooze-minutes:5}") private val departureSnoozeMinutes: Int,
     @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -79,7 +79,7 @@ class SchedulePushJobWorker(
         }
 
         staleJobs.forEach { job ->
-            if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
+            if (job.isExpired(now)) {
                 job.complete()
             } else {
                 job.recoverProcessingTimeout(
@@ -94,8 +94,8 @@ class SchedulePushJobWorker(
         job.startProcessing(workerId)
 
         try {
-            // 일정 시작 직후까지는 장애 복구를 위한 최종 발송 기회를 남긴다.
-            if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
+            // 일정이 시작된 뒤에는 "출발" 알림의 의미가 사라지므로 남은 후속 푸시를 종료한다.
+            if (job.isExpired(now)) {
                 job.complete()
                 return
             }
@@ -131,13 +131,19 @@ class SchedulePushJobWorker(
             val reminderDecision = departureReminderPolicy.decide(
                 now = now,
                 recommendedDepartureAt = recommendedDepartureAt,
+                scheduleAt = schedule.startAt,
                 lastNotifiedDepartureAt = job.lastNotifiedDepartureAt,
+                departureNoticeSentAt = job.departureNoticeSentAt,
+                lastDepartureReminderBoundaryAt = job.lastDepartureReminderBoundaryAt,
+                snoozedUntil = job.snoozedUntil,
                 alertLeadMinutes = departureAlertLeadMinutes,
             )
             val trafficChangeMinutes = trafficChangeMinutes(
                 previousTravelMinutes = job.lastTravelMinutes,
                 currentTravelMinutes = travelMinutes,
             )
+            val showDepartureActions = reminderDecision.departNowAction ||
+                (job.departureNoticeSentAt != null && !now.isBefore(recommendedDepartureAt))
             // 이동 시간이 늘어난 경우만 즉시 보낸다. 줄어든 경우는 다음 경계 시각만 재계산해 불필요한 알림을 줄인다.
             val shouldPush = reminderDecision != DepartureReminderDecision.NONE ||
                 trafficChangeMinutes > 0
@@ -156,12 +162,13 @@ class SchedulePushJobWorker(
                     title = message.title,
                     body = message.body,
                     data = mapOf(
-                        "type" to pushPayloadType(reminderDecision),
+                        "type" to pushPayloadType(reminderDecision, showDepartureActions),
                         "scheduleId" to job.scheduleId.toString(),
                         "travelMinutes" to travelMinutes.toString(),
                         "recommendedDepartureAt" to recommendedDepartureAt.toString(),
-                        "departNow" to
-                            (reminderDecision == DepartureReminderDecision.DEPART_NOW).toString(),
+                        "departNow" to showDepartureActions.toString(),
+                        "departureReminderDecision" to reminderDecision.name,
+                        "snoozeMinutes" to departureSnoozeMinutes.toString(),
                         "trafficChangeMinutes" to (message.trafficChangeMinutes?.toString() ?: "0"),
                     ),
                 )
@@ -198,7 +205,21 @@ class SchedulePushJobWorker(
                 false
             }
 
-            val departNow = reminderDecision == DepartureReminderDecision.DEPART_NOW
+            val nextCheckAt = nextCheckAt(
+                job = job,
+                now = now,
+                recommendedDepartureAt = recommendedDepartureAt,
+                scheduleAt = schedule.startAt,
+                effectiveDepartureNoticeSentAt = if (
+                    pushSent &&
+                    reminderDecision == DepartureReminderDecision.DEPART_NOW &&
+                    job.departureNoticeSentAt == null
+                ) {
+                    now
+                } else {
+                    job.departureNoticeSentAt
+                },
+            )
             job.finishCheck(
                 travelMinutes = travelMinutes,
                 recommendedDepartureAt = recommendedDepartureAt,
@@ -206,17 +227,15 @@ class SchedulePushJobWorker(
                 notifiedDepartureAt = recommendedDepartureAt.takeIf {
                     pushSent && reminderDecision != DepartureReminderDecision.NONE
                 },
-                nextCheckAt = if (departNow) {
-                    null
-                } else {
-                    periodicPushPolicy.nextCheckAt(
-                        now = now,
-                        recommendedDepartureAt = recommendedDepartureAt,
-                        intervalMinutes = job.intervalMinutes,
-                        alertLeadMinutes = departureAlertLeadMinutes,
-                    )
-                },
-                completeAfterCheck = departNow,
+                departureReminderStage = reminderDecision.stage.takeIf { pushSent },
+                departureReminderBoundaryAt = departureReminderBoundaryAt(
+                    decision = reminderDecision,
+                    job = job,
+                    recommendedDepartureAt = recommendedDepartureAt,
+                ).takeIf { pushSent && reminderDecision.stage != null },
+                clearSnooze = pushSent && reminderDecision == DepartureReminderDecision.SNOOZE,
+                nextCheckAt = nextCheckAt,
+                completeAfterCheck = nextCheckAt == null,
                 now = now,
             )
         } catch (exception: Exception) {
@@ -251,17 +270,75 @@ class SchedulePushJobWorker(
         return kotlin.math.ceil(value).toInt().coerceAtLeast(1)
     }
 
-    private fun pushPayloadType(decision: DepartureReminderDecision): String =
-        when (decision) {
-            DepartureReminderDecision.ADVANCE_NOTICE,
-            DepartureReminderDecision.DEPART_NOW -> "SCHEDULE_DEPARTURE_REMINDER"
-            DepartureReminderDecision.NONE -> "SCHEDULE_TRAFFIC"
+    private fun pushPayloadType(decision: DepartureReminderDecision, showDepartureActions: Boolean): String =
+        when {
+            showDepartureActions -> "SCHEDULE_DEPARTURE_REMINDER"
+            else -> when (decision) {
+                DepartureReminderDecision.ADVANCE_NOTICE,
+                DepartureReminderDecision.DEPART_NOW -> "SCHEDULE_DEPARTURE_REMINDER"
+                DepartureReminderDecision.SNOOZE,
+                DepartureReminderDecision.AFTER_DEPARTURE_3,
+                DepartureReminderDecision.AFTER_DEPARTURE_7,
+                DepartureReminderDecision.BEFORE_SCHEDULE_3,
+                DepartureReminderDecision.BEFORE_SCHEDULE_1 -> "SCHEDULE_DEPARTURE_REMINDER"
+                DepartureReminderDecision.NONE -> "SCHEDULE_TRAFFIC"
+            }
         }
 
     private fun trafficChangeMinutes(previousTravelMinutes: Int?, currentTravelMinutes: Int): Int =
         previousTravelMinutes
             ?.let { currentTravelMinutes - it }
             ?: 0
+
+    private fun nextCheckAt(
+        job: SchedulePushJob,
+        now: Instant,
+        recommendedDepartureAt: Instant,
+        scheduleAt: Instant,
+        effectiveDepartureNoticeSentAt: Instant?,
+    ): Instant? {
+        if (!now.isBefore(scheduleAt)) return null
+
+        val trafficCheckAt = periodicPushPolicy.nextCheckAt(
+            now = now,
+            recommendedDepartureAt = recommendedDepartureAt,
+            intervalMinutes = job.intervalMinutes,
+            alertLeadMinutes = departureAlertLeadMinutes,
+        )
+        val reminderCheckAt = departureReminderPolicy.nextReminderBoundary(
+            now = now,
+            recommendedDepartureAt = recommendedDepartureAt,
+            scheduleAt = scheduleAt,
+            lastNotifiedDepartureAt = job.lastNotifiedDepartureAt,
+            departureNoticeSentAt = effectiveDepartureNoticeSentAt,
+            lastDepartureReminderBoundaryAt = job.lastDepartureReminderBoundaryAt,
+            snoozedUntil = job.snoozedUntil,
+            alertLeadMinutes = departureAlertLeadMinutes,
+        )
+
+        // 일정 시작 시각에도 한 번 깨워 job을 닫아 두면, 다음 긴 ETA 주기를 기다리지 않는다.
+        return listOfNotNull(trafficCheckAt, reminderCheckAt, scheduleAt)
+            .filter { it.isAfter(now) }
+            .minOrNull()
+    }
+
+    private fun departureReminderBoundaryAt(
+        decision: DepartureReminderDecision,
+        job: SchedulePushJob,
+        recommendedDepartureAt: Instant,
+    ): Instant? =
+        when (decision) {
+            DepartureReminderDecision.DEPART_NOW -> recommendedDepartureAt
+            DepartureReminderDecision.AFTER_DEPARTURE_3 ->
+                requireNotNull(job.departureNoticeSentAt).plus(3, ChronoUnit.MINUTES)
+            DepartureReminderDecision.AFTER_DEPARTURE_7 ->
+                requireNotNull(job.departureNoticeSentAt).plus(7, ChronoUnit.MINUTES)
+            DepartureReminderDecision.BEFORE_SCHEDULE_3 -> job.scheduleAt.minus(3, ChronoUnit.MINUTES)
+            DepartureReminderDecision.BEFORE_SCHEDULE_1 -> job.scheduleAt.minus(1, ChronoUnit.MINUTES)
+            DepartureReminderDecision.NONE,
+            DepartureReminderDecision.ADVANCE_NOTICE,
+            DepartureReminderDecision.SNOOZE -> null
+        }
 
     /**
      * 토큰 미등록과 공급자 발송 실패를 구분해 운영 로그와 작업 실패 사유에 남긴다.
@@ -281,14 +358,14 @@ class SchedulePushJobWorker(
     }
 
     /**
-     * 일시 장애는 제한 횟수만 재시도하고, 일정 시작 후 유예 시간이 지나면 명시적으로 실패시킨다.
+     * 일시 장애는 제한 횟수만 재시도하고, 일정 시작 이후로 재시도가 밀리면 명시적으로 실패시킨다.
      * 다음 재시도 시각도 발송 가능 시간의 끝을 넘지 않도록 제한한다.
      */
     private fun retryOrFail(job: SchedulePushJob, now: Instant, reason: String) {
-        val deliveryDeadline = job.scheduleAt.plus(deliveryGraceMinutes, ChronoUnit.MINUTES)
+        val deliveryDeadline = job.scheduleAt
         val nextRetryAt = now.plus(retryDelayMinutes, ChronoUnit.MINUTES)
         val retryLimitReached = job.retryCount + 1 >= maxRetryCount
-        val noRetryWindowLeft = nextRetryAt.isAfter(deliveryDeadline)
+        val noRetryWindowLeft = !nextRetryAt.isBefore(deliveryDeadline)
 
         if (retryLimitReached || noRetryWindowLeft) {
             job.fail(reason)

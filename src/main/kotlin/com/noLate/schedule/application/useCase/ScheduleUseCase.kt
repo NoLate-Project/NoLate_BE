@@ -104,6 +104,14 @@ class ScheduleUseCase(
     }
 
     /**
+     * 사용자가 푸시의 "5분 뒤 다시 알림" 액션을 선택했을 때 출발 알림 job을 다시 깨운다.
+     */
+    @Transactional
+    fun snoozeDepartureReminder(memberId: Long, scheduleId: Long) {
+        schedulePushJobService.snoozeDepartureReminder(memberId, scheduleId)
+    }
+
+    /**
      * 전체 일정 목록 유스케이스.
      * 동기화나 단순 리스트 화면처럼 범위 제한 없이 사용자의 활성 일정을 가져올 때 쓴다.
      */
