@@ -9,6 +9,7 @@ import com.noLate.schedule.application.useCase.ScheduleUseCase
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.ScheduleTravelMode
 import io.swagger.v3.oas.annotations.Operation
@@ -44,6 +45,7 @@ class ScheduleController(
         requireMemberId(principal)
         val result = scheduleUseCase.parseScheduleText(
             text = request.text,
+            inputType = request.inputType ?: ScheduleParseInputType.TEXT,
             referenceDate = request.referenceDate,
             defaultDurationMinutes = request.defaultDurationMinutes,
         )
@@ -256,13 +258,6 @@ data class ParseScheduleTextRequest(
     val referenceDate: String? = null,
     val defaultDurationMinutes: Int? = null,
 )
-
-enum class ScheduleParseInputType {
-    TEXT,
-    CONVERSATION,
-    IMAGE_OCR,
-    SHARE_TEXT,
-}
 
 data class AddScheduleRequest(
     val title: String,

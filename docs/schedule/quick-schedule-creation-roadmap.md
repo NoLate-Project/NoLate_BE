@@ -58,7 +58,10 @@ Supported `inputType` values:
 - `TEXT`
 - `CONVERSATION`
 - `IMAGE_OCR`
+- `VOICE_TRANSCRIPT`
 - `SHARE_TEXT`
+
+사진 OCR과 음성 STT는 FE에서 처리하고, BE는 추출된 텍스트만 받는다. 음성은 FE 네이티브 STT 결과를 `inputType: "VOICE_TRANSCRIPT"`와 함께 `POST /api/schedules/parse`로 전달한다.
 
 ## Acceptance Criteria
 
@@ -76,4 +79,3 @@ Supported `inputType` values:
 4. 이미지 선택/OCR 라이브러리 후보를 결정한다.
 5. OCR 결과를 기존 파서로 연결한다.
 6. iOS 공유 인입 기술 검증을 별도 브랜치에서 진행한다.
-

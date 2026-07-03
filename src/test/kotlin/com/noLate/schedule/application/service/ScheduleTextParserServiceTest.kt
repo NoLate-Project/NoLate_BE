@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.schedule.domain.ScheduleOriginSource
+import com.noLate.schedule.domain.ScheduleParseInputType
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -240,6 +241,57 @@ class ScheduleTextParserServiceTest {
         assertNull(result.destination)
         assertEquals("20:30", result.title)
         assertNull(result.notes)
+    }
+
+    @Test
+    fun `parses one shot voice transcript without asking follow up questions`() {
+        val result = parser.parse(
+            text = "내일 오후 세 시 강남역에서 민수랑 미팅 추가해줘",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-02",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("민수랑 미팅", result.title)
+        assertEquals("2026-07-03", result.date)
+        assertEquals("15:00", result.time)
+        assertEquals("2026-07-03T06:00:00Z", result.startAt)
+        assertEquals("강남역", result.destination?.name)
+        assertTrue(result.originRequired)
+    }
+
+    @Test
+    fun `parses voice transcript with next week and Korean number time`() {
+        val result = parser.parse(
+            text = "다음 주 월요일 오전 열 시 병원 진료",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-02",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("병원 진료", result.title)
+        assertEquals("2026-07-06", result.date)
+        assertEquals("10:00", result.time)
+        assertEquals("병원", result.destination?.name)
+    }
+
+    @Test
+    fun `parses OCR text when colon separators are missing`() {
+        val result = parser.parse(
+            text = """
+                예약일 7월 12일
+                예약시간 오후 3시 반
+                장소 강남역
+            """.trimIndent(),
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-02",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("강남역 15:30", result.title)
+        assertEquals("2026-07-12", result.date)
+        assertEquals("15:30", result.time)
+        assertEquals("강남역", result.destination?.name)
     }
 
     @Test

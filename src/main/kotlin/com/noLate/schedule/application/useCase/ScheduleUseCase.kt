@@ -5,7 +5,9 @@ import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import jakarta.transaction.Transactional
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.Instant
@@ -20,6 +22,7 @@ class ScheduleUseCase(
     private val scheduleHybridParserService: ScheduleHybridParserService,
     private val clock: Clock = Clock.systemUTC(),
 ) {
+    private val log = LoggerFactory.getLogger(javaClass)
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
     /**
      * 자유 형식 텍스트를 일정 입력 폼용 데이터로 분석한다.
@@ -28,10 +31,21 @@ class ScheduleUseCase(
      */
     fun parseScheduleText(
         text: String?,
+        inputType: ScheduleParseInputType,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
     ): ScheduleParseDto {
-        return scheduleHybridParserService.parse(text, referenceDate, defaultDurationMinutes)
+        val result = scheduleHybridParserService.parse(text, inputType, referenceDate, defaultDurationMinutes)
+        log.info(
+            "Schedule parse completed. inputType={}, textLength={}, parseSource={}, aiAttempted={}, needsReview={}, missingFields={}",
+            inputType,
+            text?.length ?: 0,
+            result.parseSource,
+            result.aiAttempted,
+            result.needsReview,
+            result.missingFields,
+        )
+        return result
     }
 
     /**
