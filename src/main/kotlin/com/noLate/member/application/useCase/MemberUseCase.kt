@@ -83,9 +83,11 @@ class MemberUseCase(
                 val snsId = memberValidator.requireSnsId(requestDto)
 
                 var found = memberService.findByLoginTypeAndSnsId(requestDto.loginType, snsId)
+                var isNewSnsMember = false
 
                 // 없으면 자동 가입 + 기본 설정 생성
                 if (found == null) {
+                    isNewSnsMember = true
                     val name = requestDto.name ?: requestDto.email ?: "사용자"
                     val email = requestDto.email?.takeIf { it.isNotBlank() }
                         ?: createSyntheticSnsEmail(requestDto.loginType, snsId)
@@ -105,7 +107,11 @@ class MemberUseCase(
                     memberProfileService.createDefaultProfile(requireNotNull(found.id))
                 }
 
-                found
+                found.apply {
+                    // FE는 이 값으로 신규 SNS 사용자를 캘린더 큐레이션으로 보낸다.
+                    // 기존 SNS 사용자는 기존처럼 바로 일정 화면으로 이동한다.
+                    this.isNewMember = isNewSnsMember
+                }
             }
         } ?: throw IllegalStateException("로그인 과정에서 memberDto가 null입니다.")
 

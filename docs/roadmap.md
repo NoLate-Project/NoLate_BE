@@ -30,6 +30,7 @@ MVP 1차 완료 조건:
 | MVP Acceptance | [`quality/mvp-acceptance-checklist.md`](quality/mvp-acceptance-checklist.md) | 남은 BE/FE 검증 항목 정리 | 체크리스트 실행 결과 기록 |
 | Quality / Ops | [`quality/quality-ops-developer-tools-roadmap.md`](quality/quality-ops-developer-tools-roadmap.md) | BE/FE 테스트 일부, TestFlight 업로드 경로 확인 | CI, 환경변수, 관측성, 운영 배포 절차 |
 | Member / Auth / Profile | [`member/member-auth-profile-roadmap.md`](member/member-auth-profile-roadmap.md) | 회원가입, 로그인, refresh, 프로필, 비밀번호, 탈퇴 완료 | 이메일 인증, 비밀번호 재설정, SNS 토큰 검증 |
+| Onboarding / Calendar Curation | [`onboarding/calendar-curation-onboarding-roadmap.md`](onboarding/calendar-curation-onboarding-roadmap.md) | device calendar import 1차 구현 | 온보딩 상태 영구 저장, 외부 event link |
 | Subscription / Policy | [`subscription/subscription-policy-roadmap.md`](subscription/subscription-policy-roadmap.md) | FREE/PREMIUM 정책 모델과 일정 정책 검증 완료 | 결제/구독 모델, plan 변경, paywall |
 | External Calendar | [`integrations/external-calendar-integration-roadmap.md`](integrations/external-calendar-integration-roadmap.md) | 로드맵 정의 | Google/Apple import MVP 설계 |
 

@@ -69,6 +69,14 @@ schedule:
       api-key: ${GROQ_API_KEY:}
       model: ${GROQ_MODEL:openai/gpt-oss-20b}
 
+transit:
+  seoul:
+    api-key: ${SEOUL_OPENAPI_KEY:}
+    subway-api-key: ${SEOUL_SUBWAY_API_KEY:}
+    bus-api-key: ${SEOUL_BUS_API_KEY:}
+    subway-base-url: ${SEOUL_SUBWAY_BASE_URL:http://swopenAPI.seoul.go.kr/api/subway}
+    bus-base-url: ${SEOUL_BUS_BASE_URL:http://ws.bus.go.kr/api/rest}
+
 firebase:
   enabled: ${FIREBASE_ENABLED:false}
   credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
