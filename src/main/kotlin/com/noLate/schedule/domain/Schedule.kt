@@ -29,6 +29,10 @@ class Schedule(
     @Comment("일정을 소유한 회원 id")
     var memberId: Long = 0,
 
+    @Column(name = "category_id")
+    @Comment("현재 연결된 일정 카테고리 id. 표시 안정성은 별도 스냅샷이 담당한다.")
+    var categoryId: Long? = null,
+
     @Column(nullable = false, length = 120)
     @Comment("일정 제목")
     var title: String = "",
@@ -83,6 +87,10 @@ class Schedule(
             categorySnapshot = it
         }
 
+        // 기존 API 응답 호환을 위해 스냅샷의 categoryId는 문자열로 유지한다.
+        // 공유 카테고리 조회는 Long FK 형태가 있어야 인덱스를 타므로 숫자형 id는
+        // schedules.category_id에도 함께 반영한다.
+        this.categoryId = categoryId.toLongOrNull()
         next.schedule = this
         next.categoryId = categoryId
         next.title = title
@@ -165,6 +173,7 @@ class Schedule(
 
         return ScheduleDto(
             id = id,
+            ownerMemberId = memberId,
             title = title,
             startAt = startAt.toString(),
             endAt = endAt.toString(),
