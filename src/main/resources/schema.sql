@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS schedules (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule primary key',
     member_id BIGINT NOT NULL COMMENT 'Owner member id',
+    category_id BIGINT NULL COMMENT 'Current schedule category id for share permission lookup',
     title VARCHAR(120) NOT NULL COMMENT 'Schedule title',
     start_at DATETIME(6) NOT NULL COMMENT 'Schedule start time',
     end_at DATETIME(6) NOT NULL COMMENT 'Schedule end time',
@@ -14,7 +15,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     create_dt DATETIME(6) NULL COMMENT 'BaseEntity created time',
     update_dt DATETIME(6) NULL COMMENT 'BaseEntity updated time',
     PRIMARY KEY (id),
-    INDEX idx_schedules_member_deleted_start (member_id, deleted, start_at)
+    INDEX idx_schedules_member_deleted_start (member_id, deleted, start_at),
+    INDEX idx_schedules_category_deleted_start (category_id, deleted, start_at)
 ) COMMENT='Schedule core table';
 
 CREATE TABLE IF NOT EXISTS schedule_category_snapshots (
@@ -46,6 +48,78 @@ CREATE TABLE IF NOT EXISTS schedule_categories (
     PRIMARY KEY (id),
     INDEX idx_schedule_categories_member_deleted_sort (member_id, deleted, sort_order)
 ) COMMENT='User-defined schedule categories';
+
+CREATE TABLE IF NOT EXISTS schedule_shares (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule share primary key',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    schedule_id BIGINT NOT NULL COMMENT 'Shared schedule id',
+    owner_member_id BIGINT NOT NULL COMMENT 'Schedule owner member id',
+    target_member_id BIGINT NOT NULL COMMENT 'Shared target member id',
+    permission VARCHAR(30) NOT NULL COMMENT 'Share permission',
+    status VARCHAR(30) NOT NULL COMMENT 'Share status',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_shares_schedule_target (schedule_id, target_member_id),
+    INDEX idx_schedule_shares_target_status (target_member_id, status, deleted),
+    INDEX idx_schedule_shares_owner_schedule (owner_member_id, schedule_id),
+    CONSTRAINT fk_schedule_shares_schedule
+        FOREIGN KEY (schedule_id) REFERENCES schedules (id)
+        ON DELETE CASCADE
+) COMMENT='Per-schedule share permissions';
+
+CREATE TABLE IF NOT EXISTS schedule_category_shares (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule category share primary key',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    category_id BIGINT NOT NULL COMMENT 'Shared schedule category id',
+    owner_member_id BIGINT NOT NULL COMMENT 'Schedule category owner member id',
+    target_member_id BIGINT NOT NULL COMMENT 'Shared target member id',
+    permission VARCHAR(30) NOT NULL COMMENT 'Share permission',
+    status VARCHAR(30) NOT NULL COMMENT 'Share status',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_category_shares_category_target (category_id, target_member_id),
+    INDEX idx_schedule_category_shares_target_status (target_member_id, status, deleted),
+    INDEX idx_schedule_category_shares_owner_category (owner_member_id, category_id),
+    CONSTRAINT fk_schedule_category_shares_category
+        FOREIGN KEY (category_id) REFERENCES schedule_categories (id)
+        ON DELETE CASCADE
+) COMMENT='Per-schedule-category share permissions';
+
+CREATE TABLE IF NOT EXISTS schedule_share_invitations (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Share invitation primary key',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    resource_type VARCHAR(30) NOT NULL COMMENT 'SCHEDULE or CATEGORY',
+    resource_id BIGINT NOT NULL COMMENT 'Schedule id or category id',
+    owner_member_id BIGINT NOT NULL COMMENT 'Resource owner member id',
+    permission VARCHAR(30) NOT NULL COMMENT 'Permission granted on accept',
+    token_hash VARCHAR(128) NOT NULL COMMENT 'SHA-256 hash of invitation token',
+    status VARCHAR(30) NOT NULL COMMENT 'Invitation status',
+    expires_at DATETIME(6) NOT NULL COMMENT 'Invitation expiration datetime',
+    max_accept_count INT NOT NULL DEFAULT 1 COMMENT 'Maximum accepted members',
+    accepted_count INT NOT NULL DEFAULT 0 COMMENT 'Accepted members count',
+    accepted_member_id BIGINT NULL COMMENT 'Last accepted member id for single-use links',
+    accepted_at DATETIME(6) NULL COMMENT 'Last accepted datetime',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_share_invitations_token_hash (token_hash),
+    INDEX idx_schedule_share_invitations_owner_resource (owner_member_id, resource_type, resource_id),
+    INDEX idx_schedule_share_invitations_status_expires (status, expires_at)
+) COMMENT='Link-based schedule and category share invitations';
 
 CREATE TABLE IF NOT EXISTS schedule_routes (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule route primary key',

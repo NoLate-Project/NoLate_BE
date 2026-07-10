@@ -188,6 +188,12 @@ class ScheduleCategoryServiceUnitTest {
                     .filter { !it.deleted }
                     .sortedWith(compareBy<ScheduleCategory> { it.sortOrder }.thenBy { it.id ?: Long.MAX_VALUE })
             }
+        whenever(categoryRepository.findVisibleCategories(memberId))
+            .thenAnswer {
+                categories
+                    .filter { !it.deleted }
+                    .sortedWith(compareBy<ScheduleCategory> { it.sortOrder }.thenBy { it.id ?: Long.MAX_VALUE })
+            }
         lenient().whenever(categoryRepository.findByIdAndMemberIdAndDeletedFalse(any(), any()))
             .thenAnswer { invocation ->
                 val id = invocation.getArgument<Long>(0)

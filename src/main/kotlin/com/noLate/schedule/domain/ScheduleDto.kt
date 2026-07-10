@@ -22,6 +22,7 @@ data class SchedulePlaceDto(
 
 data class ScheduleDto(
     val id: Long? = null,
+    val ownerMemberId: Long? = null,
     val title: String,
     val startAt: String,
     val endAt: String? = null,
@@ -111,6 +112,7 @@ data class ScheduleDto(
 
             return ScheduleDto(
                 id = schedule.id,
+                ownerMemberId = schedule.memberId,
                 title = schedule.title,
                 startAt = schedule.startAt.toString(),
                 endAt = schedule.endAt.toString(),

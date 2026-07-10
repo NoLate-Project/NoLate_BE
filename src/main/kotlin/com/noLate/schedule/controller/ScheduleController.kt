@@ -249,6 +249,7 @@ enum class ScheduleParseInputType {
     CONVERSATION,
     IMAGE_OCR,
     SHARE_TEXT,
+    VOICE_TRANSCRIPT,
 }
 
 data class AddScheduleRequest(

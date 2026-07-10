@@ -30,8 +30,10 @@ class ScheduleCategoryService(
     @Transactional
     fun getCategories(memberId: Long): List<ScheduleCategorySettingDto> {
         ensureDefaultCategories(memberId)
-        return categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId)
-            .map { it.toDto() }
+        return categoryRepository.findVisibleCategories(memberId)
+            .map { category ->
+                category.toDto().copy(shared = category.memberId != memberId)
+            }
     }
 
     @Transactional

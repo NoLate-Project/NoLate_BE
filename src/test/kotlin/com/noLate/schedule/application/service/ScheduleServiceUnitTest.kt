@@ -92,7 +92,7 @@ class ScheduleServiceUnitTest {
         val existing = scheduleEntity(id = scheduleId, memberId = memberId, title = "Old schedule")
         val updateDto = scheduleDto(title = "Updated schedule", travelMinutes = 40)
 
-        whenever(scheduleRepository.findScheduleDetail(scheduleId, memberId))
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId))
             .thenReturn(existing)
         whenever(scheduleRepository.save(existing)).thenReturn(existing)
 
@@ -100,7 +100,7 @@ class ScheduleServiceUnitTest {
         val result = scheduleService.updateSchedule(memberId, scheduleId, updateDto)
 
         // then
-        verify(scheduleRepository, times(1)).findScheduleDetail(scheduleId, memberId)
+        verify(scheduleRepository, times(1)).findOwnedScheduleDetail(scheduleId, memberId)
         verify(scheduleRepository, times(1)).save(existing)
         assertEquals("Updated schedule", result.title)
         assertEquals(40, result.travelMinutes)
@@ -113,7 +113,7 @@ class ScheduleServiceUnitTest {
         val scheduleId = 10L
         val existing = scheduleEntity(id = scheduleId, memberId = memberId)
 
-        whenever(scheduleRepository.findScheduleDetail(scheduleId, memberId))
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId))
             .thenReturn(existing)
         whenever(scheduleRepository.save(existing)).thenReturn(existing)
 
@@ -137,7 +137,7 @@ class ScheduleServiceUnitTest {
             notificationEnabled = true,
         )
 
-        whenever(scheduleRepository.findScheduleDetail(scheduleId, memberId))
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId))
             .thenReturn(existing)
         whenever(scheduleRepository.save(existing)).thenReturn(existing)
 
@@ -167,7 +167,7 @@ class ScheduleServiceUnitTest {
             departedAt = firstDepartedAt,
         )
 
-        whenever(scheduleRepository.findScheduleDetail(scheduleId, memberId))
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId))
             .thenReturn(existing)
         whenever(scheduleRepository.save(existing)).thenReturn(existing)
 
@@ -369,7 +369,7 @@ class ScheduleServiceUnitTest {
         val memberId = 1L
         val scheduleId = 404L
 
-        whenever(scheduleRepository.findScheduleDetail(scheduleId, memberId))
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId))
             .thenReturn(null)
 
         // when & then

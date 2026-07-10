@@ -58,6 +58,7 @@ class ScheduleCategory(
             color = color,
             iconKey = iconKey,
             sortOrder = sortOrder,
+            ownerMemberId = memberId,
             updatedAt = (updateDt ?: updatedAt)?.toString(),
         )
     }
@@ -69,5 +70,8 @@ data class ScheduleCategorySettingDto(
     val color: String,
     val iconKey: String? = null,
     val sortOrder: Int,
+    val ownerMemberId: Long? = null,
+    val shared: Boolean = false,
+    val sharePermission: ScheduleSharePermission? = null,
     val updatedAt: String? = null,
 )

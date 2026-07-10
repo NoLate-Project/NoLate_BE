@@ -43,7 +43,7 @@ class ScheduleService(
 
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
-        val existingSchedule = findActive(memberId, scheduleId)
+        val existingSchedule = findOwnedActive(memberId, scheduleId)
 
         val normalizedDto = normalizeNotificationDto(
             memberId = memberId,
@@ -60,14 +60,14 @@ class ScheduleService(
 
     @Transactional
     fun deleteSchedule(memberId: Long, scheduleId: Long) {
-        val entity = findActive(memberId, scheduleId)
+        val entity = findOwnedActive(memberId, scheduleId)
         entity.softDelete()
         scheduleRepository.save(entity)
     }
 
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
-        val entity = findActive(memberId, scheduleId)
+        val entity = findOwnedActive(memberId, scheduleId)
         // 출발 완료는 알림 액션에서 중복 호출될 수 있으므로 최초 완료 시각을 보존한다.
         // 경로 정보는 남겨 두고 해당 일정의 남은 실시간 알림만 비활성화한다.
         entity.route?.departedAt = entity.route?.departedAt ?: Instant.now()
@@ -176,6 +176,11 @@ class ScheduleService(
 
     private fun findActive(memberId: Long, scheduleId: Long): Schedule {
         return scheduleRepository.findScheduleDetail(scheduleId, memberId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+    }
+
+    private fun findOwnedActive(memberId: Long, scheduleId: Long): Schedule {
+        return scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
     }
 
