@@ -1,5 +1,3 @@
-version: "3.9"정
-
 services:
   app:
     container_name: nolate-app
