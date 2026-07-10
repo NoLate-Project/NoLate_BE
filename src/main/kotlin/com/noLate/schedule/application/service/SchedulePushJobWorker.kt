@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.Instant
+import java.time.Duration
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 
@@ -35,6 +36,7 @@ class SchedulePushJobWorker(
     @Value("\${schedule.push.max-retry-count:3}") private val maxRetryCount: Int,
     @Value("\${schedule.push.delivery-grace-minutes:10}") private val deliveryGraceMinutes: Long,
     @Value("\${schedule.push.departure-alert-lead-minutes:15}") private val departureAlertLeadMinutes: Int,
+    @Value("\${schedule.push.departure-reminder-interval-minutes:5}") private val departureReminderIntervalMinutes: Int,
     @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -132,8 +134,20 @@ class SchedulePushJobWorker(
                 now = now,
                 recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = job.lastNotifiedDepartureAt,
+                lastReminderBoundaryAt = job.lastReminderBoundaryAt,
                 alertLeadMinutes = departureAlertLeadMinutes,
+                reminderIntervalMinutes = departureReminderIntervalMinutes,
             )
+            val reminderBoundaryAt = if (reminderDecision == DepartureReminderDecision.ADVANCE_NOTICE) {
+                departureReminderPolicy.reminderBoundaryAt(
+                    now = now,
+                    recommendedDepartureAt = recommendedDepartureAt,
+                    alertLeadMinutes = departureAlertLeadMinutes,
+                    reminderIntervalMinutes = departureReminderIntervalMinutes,
+                )
+            } else {
+                null
+            }
             val trafficChangeMinutes = trafficChangeMinutes(
                 previousTravelMinutes = job.lastTravelMinutes,
                 currentTravelMinutes = travelMinutes,
@@ -150,6 +164,10 @@ class SchedulePushJobWorker(
                     recommendedDepartureAt = recommendedDepartureAt,
                     decision = reminderDecision,
                     alertLeadMinutes = departureAlertLeadMinutes,
+                    reminderMinutesBeforeDeparture = reminderMinutesBeforeDeparture(
+                        reminderBoundaryAt = reminderBoundaryAt,
+                        recommendedDepartureAt = recommendedDepartureAt,
+                    ),
                 )
                 val sendResult = notificationUseCase.sendToMember(
                     memberId = job.memberId,
@@ -206,6 +224,7 @@ class SchedulePushJobWorker(
                 notifiedDepartureAt = recommendedDepartureAt.takeIf {
                     pushSent && reminderDecision != DepartureReminderDecision.NONE
                 },
+                reminderBoundaryAt = reminderBoundaryAt,
                 nextCheckAt = if (departNow) {
                     null
                 } else {
@@ -214,6 +233,7 @@ class SchedulePushJobWorker(
                         recommendedDepartureAt = recommendedDepartureAt,
                         intervalMinutes = job.intervalMinutes,
                         alertLeadMinutes = departureAlertLeadMinutes,
+                        reminderIntervalMinutes = departureReminderIntervalMinutes,
                     )
                 },
                 completeAfterCheck = departNow,
@@ -262,6 +282,15 @@ class SchedulePushJobWorker(
         previousTravelMinutes
             ?.let { currentTravelMinutes - it }
             ?: 0
+
+    private fun reminderMinutesBeforeDeparture(
+        reminderBoundaryAt: Instant?,
+        recommendedDepartureAt: Instant,
+    ): Int =
+        reminderBoundaryAt
+            ?.let { Duration.between(it, recommendedDepartureAt).toMinutes().toInt() }
+            ?.coerceAtLeast(0)
+            ?: departureAlertLeadMinutes
 
     /**
      * 토큰 미등록과 공급자 발송 실패를 구분해 운영 로그와 작업 실패 사유에 남긴다.

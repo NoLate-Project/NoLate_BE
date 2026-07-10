@@ -18,6 +18,7 @@ class PeriodicPushPolicyTest {
     private val testNow = Instant.parse("2026-06-12T01:00:00Z")
     private val intervalMinutes = 20
     private val alertLeadMinutes = 15
+    private val reminderIntervalMinutes = 5
 
     private val policy = PeriodicPushPolicy()
 
@@ -29,6 +30,7 @@ class PeriodicPushPolicyTest {
             recommendedDepartureAt = recommendedDepartureAt,
             intervalMinutes = intervalMinutes,
             alertLeadMinutes = alertLeadMinutes,
+            reminderIntervalMinutes = reminderIntervalMinutes,
         )
 
         assertEquals(testNow.plus(intervalMinutes.toLong(), ChronoUnit.MINUTES), next)
@@ -43,19 +45,36 @@ class PeriodicPushPolicyTest {
             recommendedDepartureAt = recommendedDepartureAt,
             intervalMinutes = intervalMinutes,
             alertLeadMinutes = alertLeadMinutes,
+            reminderIntervalMinutes = reminderIntervalMinutes,
         )
 
         assertEquals(alertAt, next)
     }
 
     @Test
-    fun `출발 전 알림 시각이 지난 뒤에는 추천 출발 시각을 다음 경계로 사용한다`() {
+    fun `출발 전 알림 시각이 지난 뒤에는 다음 5분 리마인드 경계를 사용한다`() {
         val recommendedDepartureAt = testNow.plus(8, ChronoUnit.MINUTES)
+        val expectedNextReminderAt = testNow.plus(3, ChronoUnit.MINUTES)
         val next = policy.nextCheckAt(
             now = testNow,
             recommendedDepartureAt = recommendedDepartureAt,
             intervalMinutes = intervalMinutes,
             alertLeadMinutes = alertLeadMinutes,
+            reminderIntervalMinutes = reminderIntervalMinutes,
+        )
+
+        assertEquals(expectedNextReminderAt, next)
+    }
+
+    @Test
+    fun `다음 5분 리마인드 경계가 추천 출발 이후면 추천 출발 시각을 사용한다`() {
+        val recommendedDepartureAt = testNow.plus(3, ChronoUnit.MINUTES)
+        val next = policy.nextCheckAt(
+            now = testNow,
+            recommendedDepartureAt = recommendedDepartureAt,
+            intervalMinutes = intervalMinutes,
+            alertLeadMinutes = alertLeadMinutes,
+            reminderIntervalMinutes = reminderIntervalMinutes,
         )
 
         assertEquals(recommendedDepartureAt, next)

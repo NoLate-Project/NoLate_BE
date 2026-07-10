@@ -8,9 +8,8 @@ import java.time.format.DateTimeFormatter
 /**
  * 이전 교통 조회 결과와 현재 결과를 비교해 사용자가 이해하기 쉬운 알림을 만든다.
  *
- * 매 주기마다 푸시는 발송하지만, 이동 시간이 늘어난 경우에는 증가한 분량과
- * 새 추천 출발 시각을 명시한다. 이동 시간이 동일하거나 감소한 경우에도 현재
- * 이동 시간과 추천 출발 시각을 제공해 반복 알림 자체의 의미를 유지한다.
+ * 리마인드 경계마다 현재 추천 출발 시각을 안내한다. 이동 시간이 늘어난 경우에는
+ * 증가한 분량을 명시하고, 일반 리마인드는 실제 남은 분을 표시한다.
  */
 @Component
 class TrafficChangePolicy {
@@ -25,6 +24,7 @@ class TrafficChangePolicy {
         recommendedDepartureAt: Instant,
         decision: DepartureReminderDecision,
         alertLeadMinutes: Int,
+        reminderMinutesBeforeDeparture: Int = alertLeadMinutes,
     ): SchedulePushMessage {
         val titleText = scheduleTitle.trim().ifBlank { "일정" }
         val departureText = timeFormatter.format(recommendedDepartureAt)
@@ -44,13 +44,13 @@ class TrafficChangePolicy {
 
         val body = when {
             delta == null ->
-                "'$titleText' 권장 출발 $departureText. 약 ${alertLeadMinutes}분 남았어요."
+                "'$titleText' 권장 출발 $departureText. 약 ${reminderMinutesBeforeDeparture}분 남았어요."
             delta > 0 ->
                 "이전보다 ${delta}분 더 걸려요. '$titleText' 권장 출발 $departureText."
             delta < 0 ->
                 "이전보다 ${-delta}분 덜 걸려요. '$titleText' 권장 출발 $departureText."
             else ->
-                "'$titleText' 권장 출발 $departureText. 약 ${alertLeadMinutes}분 남았어요."
+                "'$titleText' 권장 출발 $departureText. 약 ${reminderMinutesBeforeDeparture}분 남았어요."
         }
 
         return SchedulePushMessage(

@@ -101,8 +101,9 @@ class GroqScheduleAiParser(
                         Never invent missing values. Use null and confidence 0 for unknown values.
                         Return dates as YYYY-MM-DD and times as HH:mm in 24-hour format.
                         Resolve relative weekdays from the reference date.
+                        In Korean route memo expressions, "A -> B", "A → B", "A에서 B까지", and "A 출발 B 도착" mean origin A and destination B.
                         A district or neighborhood such as 강남 may be a destination.
-                        summary must exclude date, time, and destination.
+                        summary must exclude date, time, origin, and destination.
                         Confidence values must be between 0 and 1.
                     """.trimIndent(),
                 ),
@@ -135,6 +136,9 @@ class GroqScheduleAiParser(
                 "dateConfidence" to confidence,
                 "time" to nullableString,
                 "timeConfidence" to confidence,
+                "originName" to nullableString,
+                "originAddress" to nullableString,
+                "originConfidence" to confidence,
                 "destinationName" to nullableString,
                 "destinationAddress" to nullableString,
                 "destinationConfidence" to confidence,
@@ -146,6 +150,9 @@ class GroqScheduleAiParser(
                 "dateConfidence",
                 "time",
                 "timeConfidence",
+                "originName",
+                "originAddress",
+                "originConfidence",
                 "destinationName",
                 "destinationAddress",
                 "destinationConfidence",

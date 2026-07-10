@@ -56,6 +56,7 @@ schedule:
     # 푸시 공급자의 일시 장애가 지속될 때 무한 재시도를 막는 작업 단위 한도다.
     max-retry-count: ${SCHEDULE_PUSH_MAX_RETRY_COUNT:3}
     departure-alert-lead-minutes: ${SCHEDULE_PUSH_DEPARTURE_ALERT_LEAD_MINUTES:15}
+    departure-reminder-interval-minutes: ${SCHEDULE_PUSH_DEPARTURE_REMINDER_INTERVAL_MINUTES:5}
     departure-snooze-minutes: ${SCHEDULE_PUSH_DEPARTURE_SNOOZE_MINUTES:5}
   traffic:
     tmap:

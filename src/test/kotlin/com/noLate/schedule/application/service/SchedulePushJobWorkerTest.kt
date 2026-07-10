@@ -45,6 +45,7 @@ class SchedulePushJobWorkerTest {
     private val testNow = Instant.parse("2026-06-12T01:00:00Z")
     private val notificationIntervalMinutes = 20
     private val departureAlertLeadMinutes = 15
+    private val departureReminderIntervalMinutes = 5
     private val defaultScheduleStartAt = testNow.plus(120, ChronoUnit.MINUTES)
     private val shortScheduleStartAt = testNow.plus(60, ChronoUnit.MINUTES)
     private val seoulTimeFormatter = DateTimeFormatter
@@ -254,7 +255,72 @@ class SchedulePushJobWorkerTest {
         )
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(recommendedDepartureAt, job.lastNotifiedDepartureAt)
-        assertEquals(recommendedDepartureAt, job.nextCheckAt)
+        assertEquals(testNow, job.lastReminderBoundaryAt)
+        assertEquals(testNow.plus(departureReminderIntervalMinutes.toLong(), ChronoUnit.MINUTES), job.nextCheckAt)
+    }
+
+    @Test
+    fun `출발 준비 알림 후 5분 경계에 다시 리마인드 푸시를 보낸다`() {
+        val travelMinutes = 45
+        val schedule = schedule(shortScheduleStartAt)
+        val recommendedDepartureAt =
+            schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+        val firstReminderBoundaryAt =
+            recommendedDepartureAt.minus(departureAlertLeadMinutes.toLong(), ChronoUnit.MINUTES)
+        val secondReminderAt = firstReminderBoundaryAt.plus(
+            departureReminderIntervalMinutes.toLong(),
+            ChronoUnit.MINUTES,
+        )
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = schedule.startAt.minus(90, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        job.startProcessing("previous-worker")
+        job.finishCheck(
+            travelMinutes = travelMinutes,
+            recommendedDepartureAt = recommendedDepartureAt,
+            pushSent = true,
+            notifiedDepartureAt = recommendedDepartureAt,
+            reminderBoundaryAt = firstReminderBoundaryAt,
+            nextCheckAt = secondReminderAt,
+            completeAfterCheck = false,
+            now = firstReminderBoundaryAt,
+        )
+
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                secondReminderAt,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(secondReminderAt)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(1L),
+            title = eq("출발 시간 안내"),
+            body = check {
+                assertTrue(it.contains(seoulTimeFormatter.format(recommendedDepartureAt)))
+                assertTrue(it.contains("10분 남았어요"))
+            },
+            data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
+                assertEquals("false", it["departNow"])
+            },
+        )
+        assertEquals(secondReminderAt, job.lastReminderBoundaryAt)
+        assertEquals(
+            secondReminderAt.plus(departureReminderIntervalMinutes.toLong(), ChronoUnit.MINUTES),
+            job.nextCheckAt,
+        )
     }
 
     @Test
@@ -312,6 +378,7 @@ class SchedulePushJobWorkerTest {
             },
         )
         assertEquals(currentRecommendedDepartureAt, job.lastNotifiedDepartureAt)
+        assertEquals(testNow, job.lastReminderBoundaryAt)
     }
 
     @Test
@@ -615,6 +682,7 @@ class SchedulePushJobWorkerTest {
         maxRetryCount = 3,
         deliveryGraceMinutes = 10,
         departureAlertLeadMinutes = departureAlertLeadMinutes,
+        departureReminderIntervalMinutes = departureReminderIntervalMinutes,
         processingTimeoutMinutes = 10,
     )
 

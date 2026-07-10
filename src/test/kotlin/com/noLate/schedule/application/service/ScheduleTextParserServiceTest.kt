@@ -309,6 +309,72 @@ class ScheduleTextParserServiceTest {
     }
 
     @Test
+    fun `parses arrow route expression from handwriting OCR text`() {
+        val result = parser.parse(
+            text = "NoLate 손글씨 OCR QA #01\n수요일 7시 강남역 -> 판교 네이버",
+            referenceDate = "2026-07-01",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-01", result.date)
+        assertEquals("07:00", result.time)
+        assertEquals("2026-06-30T22:00:00Z", result.startAt)
+        assertEquals("강남역", result.origin?.name)
+        assertEquals("판교 네이버", result.destination?.name)
+        assertEquals("판교 네이버 07:00", result.title)
+        assertEquals(ScheduleOriginSource.TEXT, result.originSource)
+        assertFalse(result.originRequired)
+        assertFalse("origin" in result.missingFields)
+        assertFalse("destination" in result.missingFields)
+    }
+
+    @Test
+    fun `parses evening time and trims memo word from arrow destination`() {
+        val result = parser.parse(
+            text = "7월 16일 저녁 7시 사당 -> 신촌 스터디",
+            referenceDate = "2026-07-01",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-16", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("2026-07-16T10:00:00Z", result.startAt)
+        assertEquals("사당", result.origin?.name)
+        assertEquals("신촌", result.destination?.name)
+        assertEquals("신촌 19:00", result.title)
+        assertFalse(result.originRequired)
+    }
+
+    @Test
+    fun `parses Korean route expression without spaces`() {
+        val result = parser.parse(
+            text = "금요일 19:00 강남역에서 판교 네이버까지",
+            referenceDate = "2026-07-01",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-03", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("2026-07-03T10:00:00Z", result.startAt)
+        assertEquals("강남역", result.origin?.name)
+        assertEquals("판교 네이버", result.destination?.name)
+        assertFalse(result.originRequired)
+    }
+
+    @Test
+    fun `does not treat rename arrow without date or time context as route`() {
+        val result = parser.parse(
+            text = "행사 날짜: 2026-06-13\n행사 시간: 14:30\n장소: 수원 더케이 웨딩컨벤션\n더시그너스 웨딩홀 -> 이름변경",
+            referenceDate = "2026-01-01",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("수원 더케이 웨딩컨벤션", result.destination?.name)
+        assertNull(result.origin)
+        assertTrue(result.originRequired)
+    }
+
+    @Test
     fun `rejects blank text and invalid duration`() {
         assertThrows<BusinessException> {
             parser.parse(" ", "2026-01-01", null)

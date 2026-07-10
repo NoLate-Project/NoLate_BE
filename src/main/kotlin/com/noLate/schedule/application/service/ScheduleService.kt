@@ -68,8 +68,9 @@ class ScheduleService(
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
         val entity = findActive(memberId, scheduleId)
-        // 출발 처리는 경로 정보를 보존하되 해당 일정의 남은 실시간 알림만 꺼 둔다.
-        entity.route?.departedAt = Instant.now()
+        // 출발 완료는 알림 액션에서 중복 호출될 수 있으므로 최초 완료 시각을 보존한다.
+        // 경로 정보는 남겨 두고 해당 일정의 남은 실시간 알림만 비활성화한다.
+        entity.route?.departedAt = entity.route?.departedAt ?: Instant.now()
         entity.route?.notificationEnabled = false
         entity.route?.notificationLeadMinutes = null
         entity.route?.notificationIntervalMinutes = null

@@ -72,6 +72,38 @@ class ScheduleHybridParserServiceTest {
     }
 
     @Test
+    fun `fills missing origin with confident AI result`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(
+                    originName = "강남역",
+                    originConfidence = 0.95,
+                    destinationName = "판교 네이버",
+                    destinationConfidence = 0.95,
+                    summary = "이동",
+                    summaryConfidence = 0.9,
+                ),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            "20260701 7시 이동",
+            "2026-07-01",
+            60,
+        )
+
+        assertEquals(1, aiParser.calls)
+        assertEquals("강남역", result.origin?.name)
+        assertEquals("판교 네이버", result.destination?.name)
+        assertEquals("판교 네이버 07:00", result.title)
+        assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
+        assertFalse(result.needsReview)
+        assertFalse("origin" in result.missingFields)
+    }
+
+    @Test
     fun `does not apply low confidence AI values`() {
         val aiParser = RecordingAiParser(
             ScheduleAiParseOutcome(

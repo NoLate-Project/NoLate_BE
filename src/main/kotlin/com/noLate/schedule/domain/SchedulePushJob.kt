@@ -111,6 +111,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var lastNotifiedDepartureAt: Instant? = null
         protected set
 
+    @Column(name = "last_reminder_boundary_at")
+    @Comment("마지막으로 발송한 5분 단위 리마인드 경계 시간")
+    var lastReminderBoundaryAt: Instant? = null
+        protected set
+
     @Column(name = "last_checked_at")
     @Comment("마지막 교통상황 체크 실행 시간")
     var lastCheckedAt: Instant? = null
@@ -208,6 +213,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         recommendedDepartureAt: Instant,
         pushSent: Boolean,
         notifiedDepartureAt: Instant?,
+        reminderBoundaryAt: Instant? = null,
         nextCheckAt: Instant?,
         completeAfterCheck: Boolean,
         now: Instant = Instant.now()
@@ -222,6 +228,9 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         if (pushSent) {
             lastPushedAt = now
             lastNotifiedDepartureAt = notifiedDepartureAt
+            if (reminderBoundaryAt != null) {
+                lastReminderBoundaryAt = reminderBoundaryAt
+            }
         }
 
         if (completeAfterCheck) {
@@ -261,6 +270,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.lastTravelMinutes = null
         this.lastRecommendedDepartureAt = null
         this.lastNotifiedDepartureAt = null
+        this.lastReminderBoundaryAt = null
         this.lastCheckedAt = null
         this.lastPushedAt = null
         this.checkCount = 0

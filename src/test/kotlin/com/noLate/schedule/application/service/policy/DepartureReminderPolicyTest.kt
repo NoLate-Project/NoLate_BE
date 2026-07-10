@@ -17,6 +17,7 @@ class DepartureReminderPolicyTest {
      */
     private val recommendedDepartureAt = Instant.parse("2026-06-12T02:00:00Z")
     private val alertLeadMinutes = 15
+    private val reminderIntervalMinutes = 5
 
     private val policy = DepartureReminderPolicy()
 
@@ -28,7 +29,9 @@ class DepartureReminderPolicyTest {
                 now = recommendedDepartureAt.minus(alertLeadMinutes + 1L, ChronoUnit.MINUTES),
                 recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = null,
+                lastReminderBoundaryAt = null,
                 alertLeadMinutes = alertLeadMinutes,
+                reminderIntervalMinutes = reminderIntervalMinutes,
             ),
         )
     }
@@ -41,20 +44,43 @@ class DepartureReminderPolicyTest {
                 now = recommendedDepartureAt.minus(alertLeadMinutes.toLong(), ChronoUnit.MINUTES),
                 recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = null,
+                lastReminderBoundaryAt = null,
                 alertLeadMinutes = alertLeadMinutes,
+                reminderIntervalMinutes = reminderIntervalMinutes,
             ),
         )
     }
 
     @Test
-    fun `현재 추천 출발 시각을 이미 안내했다면 같은 알림을 반복하지 않는다`() {
+    fun `같은 5분 경계를 이미 안내했다면 같은 알림을 반복하지 않는다`() {
+        val reminderBoundaryAt = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES)
+
         assertEquals(
             DepartureReminderDecision.NONE,
             policy.decide(
                 now = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES),
                 recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = recommendedDepartureAt,
+                lastReminderBoundaryAt = reminderBoundaryAt,
                 alertLeadMinutes = alertLeadMinutes,
+                reminderIntervalMinutes = reminderIntervalMinutes,
+            ),
+        )
+    }
+
+    @Test
+    fun `다음 5분 경계에 도달하면 같은 추천 출발 시각도 다시 안내한다`() {
+        val firstReminderBoundaryAt = recommendedDepartureAt.minus(15, ChronoUnit.MINUTES)
+
+        assertEquals(
+            DepartureReminderDecision.ADVANCE_NOTICE,
+            policy.decide(
+                now = recommendedDepartureAt.minus(10, ChronoUnit.MINUTES),
+                recommendedDepartureAt = recommendedDepartureAt,
+                lastNotifiedDepartureAt = recommendedDepartureAt,
+                lastReminderBoundaryAt = firstReminderBoundaryAt,
+                alertLeadMinutes = alertLeadMinutes,
+                reminderIntervalMinutes = reminderIntervalMinutes,
             ),
         )
     }
@@ -67,7 +93,9 @@ class DepartureReminderPolicyTest {
                 now = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES),
                 recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = recommendedDepartureAt.plus(10, ChronoUnit.MINUTES),
+                lastReminderBoundaryAt = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES),
                 alertLeadMinutes = alertLeadMinutes,
+                reminderIntervalMinutes = reminderIntervalMinutes,
             ),
         )
     }
@@ -80,7 +108,22 @@ class DepartureReminderPolicyTest {
                 now = recommendedDepartureAt,
                 recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = recommendedDepartureAt,
+                lastReminderBoundaryAt = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES),
                 alertLeadMinutes = alertLeadMinutes,
+                reminderIntervalMinutes = reminderIntervalMinutes,
+            ),
+        )
+    }
+
+    @Test
+    fun `현재 시각에 해당하는 5분 리마인드 경계를 계산한다`() {
+        assertEquals(
+            recommendedDepartureAt.minus(10, ChronoUnit.MINUTES),
+            policy.reminderBoundaryAt(
+                now = recommendedDepartureAt.minus(8, ChronoUnit.MINUTES),
+                recommendedDepartureAt = recommendedDepartureAt,
+                alertLeadMinutes = alertLeadMinutes,
+                reminderIntervalMinutes = reminderIntervalMinutes,
             ),
         )
     }

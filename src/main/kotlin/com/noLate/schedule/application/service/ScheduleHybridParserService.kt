@@ -86,6 +86,7 @@ class ScheduleHybridParserService(
     private fun hasAiContribution(rule: ScheduleParseDto, merged: ScheduleParseDto): Boolean =
         rule.date != merged.date ||
             rule.time != merged.time ||
+            rule.origin != merged.origin ||
             rule.destination != merged.destination ||
             rule.notes != merged.notes
 
@@ -101,6 +102,13 @@ class ScheduleHybridParserService(
     ): ScheduleParseDto {
         val date = rule.date ?: ai.date.takeConfident(ai.dateConfidence)?.takeIf(::isValidDate)
         val time = rule.time ?: ai.time.takeConfident(ai.timeConfidence)?.takeIf(::isValidTime)
+        // 규칙 파서가 "A -> B" 같은 이동 표현을 놓친 경우 AI가 보완한 출발지를 반영한다.
+        // 단, 사용자가 명시한 규칙 결과를 AI가 덮어쓰지 않도록 rule.origin이 비어 있을 때만 채운다.
+        val origin = rule.origin ?: ai.originConfidence
+            .takeIf { it >= aiConfidenceThreshold }
+            ?.let {
+                toPlace(ai.originName, ai.originAddress)
+            }
         val destination = rule.destination ?: ai.destinationConfidence
             .takeIf { it >= aiConfidenceThreshold }
             ?.let {
@@ -125,6 +133,7 @@ class ScheduleHybridParserService(
                 ?.atZone(seoulZone)
                 ?.toInstant()
                 ?.toString(),
+            origin = origin,
             destination = destination,
         )
     }

@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     last_travel_minutes INT NULL COMMENT 'Last travel minutes',
     last_recommended_departure_at DATETIME(6) NULL COMMENT 'Last recommended departure time',
     last_notified_departure_at DATETIME(6) NULL COMMENT 'Last departure time notified to the user',
+    last_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last 5-minute reminder boundary time',
     last_checked_at DATETIME(6) NULL COMMENT 'Last checked time',
     last_pushed_at DATETIME(6) NULL COMMENT 'Last push sent time',
     check_count INT NOT NULL DEFAULT 0 COMMENT 'Traffic check count',

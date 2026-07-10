@@ -65,13 +65,13 @@ class FirebasePushConfiguration {
                 body: String,
                 data: Map<String, String>,
             ): PushSendResult {
-                val departNowAction = data.isDepartNowSchedulePush()
-                val messageData = data.withNotificationActionCategory(departNowAction)
+                val scheduleReminderAction = data.isScheduleDepartureReminder()
+                val messageData = data.withNotificationActionCategory(scheduleReminderAction)
                 val message = Message.builder()
                     .setToken(token)
                     .setNotification(Notification.builder().setTitle(title).setBody(body).build())
                     .setAndroidConfig(createAndroidConfig())
-                    .setApnsConfig(createApnsConfig(title, body, departNowAction))
+                    .setApnsConfig(createApnsConfig(title, body, scheduleReminderAction))
                     .putAllData(messageData)
                     .build()
                 return try {
@@ -96,14 +96,14 @@ class FirebasePushConfiguration {
             )
             .build()
 
-    private fun createApnsConfig(title: String, body: String, departNowAction: Boolean): ApnsConfig =
+    private fun createApnsConfig(title: String, body: String, scheduleReminderAction: Boolean): ApnsConfig =
         ApnsConfig.builder()
             .putHeader("apns-push-type", "alert")
             .putHeader("apns-priority", "10")
             .setAps(
                 Aps.builder()
                     .apply {
-                        if (departNowAction) {
+                        if (scheduleReminderAction) {
                             setCategory(SCHEDULE_DEPART_NOW_CATEGORY)
                         }
                     }
@@ -120,15 +120,14 @@ class FirebasePushConfiguration {
             .build()
 }
 
-private fun Map<String, String>.isDepartNowSchedulePush(): Boolean =
+private fun Map<String, String>.isScheduleDepartureReminder(): Boolean =
     this["type"] == "SCHEDULE_DEPARTURE_REMINDER" &&
-        this["departNow"] == "true" &&
-        this["scheduleId"]?.isNotBlank() == true
+        this["scheduleId"]?.matches(Regex("[1-9]\\d*")) == true
 
 private fun Map<String, String>.withNotificationActionCategory(
-    departNowAction: Boolean,
+    scheduleReminderAction: Boolean,
 ): Map<String, String> {
-    if (!departNowAction) return this
+    if (!scheduleReminderAction) return this
 
     return this + mapOf(
         "categoryId" to SCHEDULE_DEPART_NOW_CATEGORY,

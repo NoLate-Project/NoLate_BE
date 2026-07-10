@@ -36,9 +36,23 @@ class ScheduleTextParserService {
     private val compactDatePattern = Regex("""(?:^|\D)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)""")
     private val koreanDatePattern = Regex("""(?:^|\D)(\d{1,2})\s*월\s*(\d{1,2})\s*일?(?!\d)""")
     private val shortDatePattern = Regex("""(?:^|\D)(\d{1,2})\s*[./-]\s*(\d{1,2})(?!\d)""")
-    private val koreanTimePattern = Regex("""(오전|오후)?\s*(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분?)?""")
+    private val koreanTimePattern = Regex("""(오전|오후|저녁|밤|낮|새벽|아침)?\s*(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분?)?""")
     private val colonTimePattern =
-        Regex("""(?:^|[^\d])(오전|오후)?\s*([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?!\d)""")
+        Regex("""(?:^|[^\d])(오전|오후|저녁|밤|낮|새벽|아침)?\s*([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?!\d)""")
+    private val routeArrowPattern = Regex("""\s*(?:->|→|=>|➜|➡)\s*""")
+    private val weekdayTokenPattern = Regex("""(?:(?:다음|이번)\s*)?[일월화수목금토]요일""")
+    private val routePurposeTokens = setOf(
+        "회의",
+        "미팅",
+        "점심",
+        "운동",
+        "프로젝트",
+        "스터디",
+        "발표준비",
+        "가족식사",
+        "고객미팅",
+        "약속",
+    )
 
     /**
      * 원문을 정규화한 뒤 날짜, 시간, 장소, 메모 후보를 순서대로 추출한다.
@@ -81,14 +95,20 @@ class ScheduleTextParserService {
             ?: chooseRelativeWeekday(lines, baseDate)
         val selectedTime = dotAssignmentFields?.time ?: chooseTime(lines, selectedDate?.lineIndex)
         val compactFields = chooseCompactFields(lines)
+        // OCR로 들어오는 손글씨 메모는 "수요일 7시 강남역 -> 판교 네이버"처럼
+        // 라벨 없이 시간과 이동 방향만 적힌 경우가 많다. 기존 라벨 기반 추출보다
+        // 신뢰도는 낮지만, 화살표/까지 표현이 명시된 줄에서만 사용해 오탐을 줄인다.
+        val routeExpressionFields = chooseRouteExpressionFields(lines)
         val customerName = chooseCustomerName(lines)
             ?: compactFields?.customerName
             ?: dotAssignmentFields?.customerName
         val eventType = chooseEventType(lines)
         val origin = chooseOrigin(lines)
+            ?: routeExpressionFields?.originName?.let { SchedulePlaceDto(name = it) }
         val destination = chooseDestination(lines)
             ?: compactFields?.destinationName?.let { SchedulePlaceDto(name = it) }
             ?: dotAssignmentFields?.destinationName?.let { SchedulePlaceDto(name = it) }
+            ?: routeExpressionFields?.destinationName?.let { SchedulePlaceDto(name = it) }
         val title = buildTitle(destination, selectedTime)
         val notes = buildNotes(
             customerName = customerName,
@@ -309,12 +329,18 @@ class ScheduleTextParserService {
     }
 
     // 오전/오후 및 24시간 표기를 하나의 LocalTime으로 정규화한다.
+    // 저녁/밤/낮/새벽 같은 생활 표현은 OCR 메모에서 자주 나오므로 명시적으로 처리한다.
+    // "저녁 7시"를 07:00으로 저장하면 실제 일정이 반나절 어긋나므로, 오후권 표현은
+    // 12시간제를 24시간제로 올리고 "밤 12시"처럼 자정에 가까운 표현은 00:00으로 본다.
     private fun parseTime(meridiem: String?, hourText: String, minuteText: String?): LocalTime? {
         var hour = hourText.toIntOrNull() ?: return null
         val minute = minuteText?.toIntOrNull() ?: 0
         if (hour !in 0..23 || minute !in 0..59) return null
-        if (meridiem == "오후" && hour < 12) hour += 12
-        if (meridiem == "오전" && hour == 12) hour = 0
+        when (meridiem) {
+            "오후", "저녁", "낮" -> if (hour < 12) hour += 12
+            "밤" -> hour = if (hour == 12) 0 else if (hour < 12) hour + 12 else hour
+            "오전", "새벽", "아침" -> if (hour == 12) hour = 0
+        }
         return runCatching { LocalTime.of(hour, minute) }.getOrNull()
     }
 
@@ -404,6 +430,98 @@ class ScheduleTextParserService {
         if (customerName == null && destinationName == null) return null
         return CompactFields(customerName, destinationName)
     }
+
+    /**
+     * 라벨 없는 이동 메모를 해석한다.
+     *
+     * 예: "수요일 7시 강남역 -> 판교 네이버", "19:00 강남역에서 판교까지".
+     * 이 규칙은 화살표나 "까지"처럼 이동 방향을 강하게 나타내는 줄에만 적용한다.
+     * 단순히 "강남역에서 친구와 저녁" 같은 문장까지 출발/도착으로 오인하지 않도록,
+     * 날짜/요일/시간 문맥이 있는 줄을 대상으로 하고 출발지는 시간 표현 뒤의 마지막 장소 후보만 사용한다.
+     */
+    private fun chooseRouteExpressionFields(lines: List<String>): RouteExpressionFields? {
+        lines.forEach { line ->
+            if (!hasDateOrTimeContext(line)) return@forEach
+
+            parseArrowRouteExpression(line)?.let { return it }
+            parseKoreanRouteExpression(line)?.let { return it }
+        }
+        return null
+    }
+
+    private fun parseArrowRouteExpression(line: String): RouteExpressionFields? {
+        val parts = routeArrowPattern.split(line, limit = 2)
+        if (parts.size != 2) return null
+
+        val origin = cleanRouteEndpoint(extractRouteOriginCandidate(parts[0]))
+        val destination = cleanRouteEndpoint(extractRouteDestinationCandidate(parts[1]))
+        if (origin == null || destination == null) return null
+        if (origin == destination) return null
+        return RouteExpressionFields(originName = origin, destinationName = destination)
+    }
+
+    private fun parseKoreanRouteExpression(line: String): RouteExpressionFields? {
+        val match = Regex("""(.+?)(?:에서|출발)\s*(.+?)(?:까지|도착)(?:\s|$)(.*)""")
+            .find(line)
+            ?: return null
+        val origin = cleanRouteEndpoint(extractRouteOriginCandidate(match.groupValues[1]))
+        val destination = cleanRouteEndpoint(extractRouteDestinationCandidate(match.groupValues[2]))
+        if (origin == null || destination == null) return null
+        if (origin == destination) return null
+        return RouteExpressionFields(originName = origin, destinationName = destination)
+    }
+
+    private fun hasDateOrTimeContext(line: String): Boolean =
+        koreanTimePattern.containsMatchIn(line) ||
+            colonTimePattern.containsMatchIn(line) ||
+            fullDatePattern.containsMatchIn(line) ||
+            compactDatePattern.containsMatchIn(line) ||
+            koreanDatePattern.containsMatchIn(line) ||
+            shortDatePattern.containsMatchIn(line) ||
+            weekdayTokenPattern.containsMatchIn(line)
+
+    private fun extractRouteOriginCandidate(leftSide: String): String {
+        val lastContextEnd = routeContextPatterns()
+            .flatMap { pattern -> pattern.findAll(leftSide).map { it.range.last + 1 }.toList() }
+            .maxOrNull()
+            ?: 0
+
+        return leftSide.substring(lastContextEnd)
+    }
+
+    private fun extractRouteDestinationCandidate(rightSide: String): String {
+        val tokens = rightSide
+            .trim()
+            .split(Regex("""\s+"""))
+            .filter { it.isNotBlank() }
+            .toMutableList()
+
+        if (tokens.size >= 2 && tokens.last().replace(Regex("""[^\p{L}\p{N}]"""), "") in routePurposeTokens) {
+            tokens.removeAt(tokens.lastIndex)
+        }
+
+        return tokens.joinToString(" ")
+    }
+
+    private fun cleanRouteEndpoint(value: String): String? =
+        value
+            .replace(Regex("""NoLate\s+손글씨\s+OCR\s+QA\s*#?\d*"""), " ")
+            .replace(Regex("""NoLate\s+이미지\s+OCR\s+QA\s*#?\d*"""), " ")
+            .replace(Regex("""[()\[\]{}]"""), " ")
+            .trim(' ', '.', ',', '/', '-', '>', '→', ':', '：')
+            .replace(Regex("""\s+"""), " ")
+            .takeIf { it.isNotBlank() && it.any { char -> char in '가'..'힣' } }
+
+    private fun routeContextPatterns(): List<Regex> =
+        listOf(
+            fullDatePattern,
+            compactDatePattern,
+            koreanDatePattern,
+            shortDatePattern,
+            weekdayTokenPattern,
+            koreanTimePattern,
+            colonTimePattern,
+        )
 
     /**
      * "20260530/1030.업체.(m)작가.장소.예약자.m" 형식만 엄격하게 해석한다.
@@ -612,6 +730,11 @@ class ScheduleTextParserService {
     private data class CompactFields(
         val customerName: String?,
         val destinationName: String?,
+    )
+
+    private data class RouteExpressionFields(
+        val originName: String,
+        val destinationName: String,
     )
 
     private data class DotAssignmentFields(

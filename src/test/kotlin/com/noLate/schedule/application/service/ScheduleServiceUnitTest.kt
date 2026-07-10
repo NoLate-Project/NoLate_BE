@@ -156,6 +156,31 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `markDeparted keeps first departedAt when notification action is repeated`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val firstDepartedAt = Instant.parse("2026-06-05T00:40:00Z")
+        val existing = scheduleEntity(
+            id = scheduleId,
+            memberId = memberId,
+            notificationEnabled = true,
+            departedAt = firstDepartedAt,
+        )
+
+        whenever(scheduleRepository.findScheduleDetail(scheduleId, memberId))
+            .thenReturn(existing)
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        val result = scheduleService.markDeparted(memberId, scheduleId)
+
+        verify(scheduleRepository).save(check {
+            assertEquals(firstDepartedAt, it.route?.departedAt)
+            assertEquals(false, it.route?.notificationEnabled)
+        })
+        assertEquals(firstDepartedAt.toString(), result.departedAt)
+    }
+
+    @Test
     fun `getCalendarScheduleList reads schedules overlapping requested range`() {
         // given
         val memberId = 1L
@@ -383,6 +408,7 @@ class ScheduleServiceUnitTest {
         title: String = "Team sync",
         travelMinutes: Int? = 25,
         notificationEnabled: Boolean = false,
+        departedAt: Instant? = null,
     ): Schedule =
         Schedule(
             id = id,
@@ -401,7 +427,7 @@ class ScheduleServiceUnitTest {
             updateRoute(
                 travelMinutes = travelMinutes,
                 departAt = Instant.parse("2026-06-05T00:30:00Z"),
-                departedAt = null,
+                departedAt = departedAt,
                 travelMode = ScheduleTravelMode.TRANSIT,
                 locationName = "Office",
                 originName = "Home",
