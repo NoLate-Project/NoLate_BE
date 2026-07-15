@@ -26,6 +26,8 @@ class TransitArrivalController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestParam stationName: String,
         @RequestParam(required = false) lineName: String?,
+        @RequestParam(required = false) directionName: String?,
+        @RequestParam(required = false) directionCode: String?,
         @RequestParam(required = false, defaultValue = "3") limit: Int,
     ): ApiResponse<List<TransitArrivalDto>> {
         requireMemberId(principal)
@@ -33,6 +35,8 @@ class TransitArrivalController(
             transitArrivalService.getSubwayArrivals(
                 stationName = stationName,
                 lineName = lineName,
+                directionName = directionName,
+                directionCode = directionCode,
                 limit = limit,
             )
         )
@@ -42,8 +46,11 @@ class TransitArrivalController(
     @GetMapping("/bus")
     fun getBusArrivals(
         @AuthenticationPrincipal principal: MemberPrincipal?,
-        @RequestParam arsId: String,
+        @RequestParam(required = false) arsId: String?,
         @RequestParam(required = false) routeName: String?,
+        @RequestParam(required = false) cityCode: String?,
+        @RequestParam(required = false) nodeId: String?,
+        @RequestParam(required = false) stationName: String?,
         @RequestParam(required = false, defaultValue = "2") limit: Int,
     ): ApiResponse<List<TransitArrivalDto>> {
         requireMemberId(principal)
@@ -51,6 +58,9 @@ class TransitArrivalController(
             transitArrivalService.getBusArrivals(
                 arsId = arsId,
                 routeName = routeName,
+                cityCode = cityCode,
+                nodeId = nodeId,
+                stationName = stationName,
                 limit = limit,
             )
         )
