@@ -5,6 +5,7 @@ import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Component
 import java.time.Clock
@@ -31,7 +32,24 @@ class ScheduleUseCase(
         referenceDate: String?,
         defaultDurationMinutes: Int?,
     ): ScheduleParseDto {
+        // 기존 호출자와 테스트가 사용하던 3개 인자 경로는 그대로 보존한다. 신규 API 요청만
+        // 아래의 입력 타입 포함 오버로드를 사용하므로, 일반 텍스트 분석의 동작에는 영향이 없다.
         return scheduleHybridParserService.parse(text, referenceDate, defaultDurationMinutes)
+    }
+
+    /**
+     * 입력 채널을 보존한 일정 분석 경로다.
+     *
+     * Controller에서 받은 enum을 문자열로 다시 변환하지 않고 그대로 넘겨, FE와 BE 사이의
+     * VOICE_TRANSCRIPT 계약이 컴파일 시점에도 검증되도록 한다.
+     */
+    fun parseScheduleText(
+        text: String?,
+        inputType: ScheduleParseInputType,
+        referenceDate: String?,
+        defaultDurationMinutes: Int?,
+    ): ScheduleParseDto {
+        return scheduleHybridParserService.parse(text, inputType, referenceDate, defaultDurationMinutes)
     }
 
     /**

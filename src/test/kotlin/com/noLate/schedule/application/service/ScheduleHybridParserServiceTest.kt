@@ -3,6 +3,7 @@ package com.noLate.schedule.application.service
 import com.noLate.schedule.application.ScheduleAiParseOutcome
 import com.noLate.schedule.application.ScheduleAiParseResult
 import com.noLate.schedule.application.ScheduleAiParser
+import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.ScheduleParseSource
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -37,6 +38,29 @@ class ScheduleHybridParserServiceTest {
         assertEquals(ScheduleParseSource.RULE, result.parseSource)
         assertFalse(result.aiAttempted)
         assertFalse(result.needsReview)
+    }
+
+    @Test
+    fun `requires review without AI when complete OCR fields contain conflicting weekdays`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(destinationName = "다른 장소", destinationConfidence = 1.0),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "금요일 토요일 오후 7시 강남역 >> 내방역",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(0, aiParser.calls)
+        assertEquals(ScheduleParseSource.RULE, result.parseSource)
+        assertTrue(result.needsReview)
+        assertTrue(result.warnings.any { "서로 다른 요일" in it })
     }
 
     @Test
@@ -150,6 +174,31 @@ class ScheduleHybridParserServiceTest {
         assertEquals(ScheduleParseSource.RULE_FALLBACK, result.parseSource)
         assertTrue(result.needsReview)
         assertTrue(result.warnings.any { "AI 분석에 실패" in it })
+    }
+
+    @Test
+    fun `does not call AI when voice transcript needs review`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(destinationName = "AI가 추론한 장소", destinationConfidence = 1.0),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        // 목적지가 없는 불완전한 문장이어도 음성은 원샷 규칙 분석 결과만 반환해야 한다.
+        // AI 결과가 준비되어 있어도 호출 횟수가 0인지 확인해 외부 전송을 막는다.
+        val result = service.parse(
+            text = "다음 수요일 오후 7시 약속 등록해줘",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(0, aiParser.calls)
+        assertFalse(result.aiAttempted)
+        assertTrue(result.needsReview)
+        assertTrue("destination" in result.missingFields)
     }
 
     @Test

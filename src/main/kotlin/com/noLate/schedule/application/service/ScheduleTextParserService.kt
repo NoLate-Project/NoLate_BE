@@ -4,6 +4,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.domain.ScheduleOriginSource
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
 import org.springframework.stereotype.Service
 import java.time.DateTimeException
@@ -39,7 +40,16 @@ class ScheduleTextParserService {
     private val koreanTimePattern = Regex("""(오전|오후|저녁|밤|낮|새벽|아침)?\s*(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분?)?""")
     private val colonTimePattern =
         Regex("""(?:^|[^\d])(오전|오후|저녁|밤|낮|새벽|아침)?\s*([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?!\d)""")
-    private val routeArrowPattern = Regex("""\s*(?:->|→|=>|➜|➡)\s*""")
+    /**
+     * 손글씨 화살표는 OCR 결과에서 `->`뿐 아니라 `>>`, `≫`, `»`, 단독 숫자 `3`으로도
+     * 흔들린다. 숫자 3은 반드시 양옆에 공백이 있는 경우만 허용해 `오후 3시`, `3번 출구`,
+     * 건물 주소의 번지수를 이동 구분자로 잘못 자르지 않게 한다.
+     *
+     * 이 패턴은 [chooseRouteExpressionFields]가 날짜·요일·시간 문맥을 확인한 줄에만 적용하므로
+     * 일반 메모의 비교 기호나 이름 변경 화살표까지 출발지/도착지로 해석하지 않는다.
+     */
+    private val routeArrowPattern =
+        Regex("""(?:\s*(?:->|=>|→|➜|➡|>+|≫|»|〉|》)\s*|\s+3\s+)""")
     private val weekdayTokenPattern = Regex("""(?:(?:다음|이번)\s*)?[일월화수목금토]요일""")
     private val routePurposeTokens = setOf(
         "회의",
@@ -63,13 +73,20 @@ class ScheduleTextParserService {
         text: String?,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
+    ): ScheduleParseDto = parse(
+        text = text,
+        inputType = ScheduleParseInputType.TEXT,
+        referenceDate = referenceDate,
+        defaultDurationMinutes = defaultDurationMinutes,
+    )
+
+    fun parse(
+        text: String?,
+        inputType: ScheduleParseInputType,
+        referenceDate: String?,
+        defaultDurationMinutes: Int?,
     ): ScheduleParseDto {
-        val normalized = text
-            ?.replace('\u00a0', ' ')
-            ?.replace("\r\n", "\n")
-            ?.replace('\r', '\n')
-            ?.trim()
-            .orEmpty()
+        val normalized = normalizeInputText(text, inputType)
         if (normalized.isBlank()) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "text is required.")
         }
@@ -98,7 +115,7 @@ class ScheduleTextParserService {
         // OCR로 들어오는 손글씨 메모는 "수요일 7시 강남역 -> 판교 네이버"처럼
         // 라벨 없이 시간과 이동 방향만 적힌 경우가 많다. 기존 라벨 기반 추출보다
         // 신뢰도는 낮지만, 화살표/까지 표현이 명시된 줄에서만 사용해 오탐을 줄인다.
-        val routeExpressionFields = chooseRouteExpressionFields(lines)
+        val routeExpressionFields = chooseRouteExpressionFields(lines, inputType)
         val customerName = chooseCustomerName(lines)
             ?: compactFields?.customerName
             ?: dotAssignmentFields?.customerName
@@ -118,6 +135,9 @@ class ScheduleTextParserService {
             position = dotAssignmentFields?.position,
         )
 
+        if (inputType == ScheduleParseInputType.IMAGE_OCR) {
+            addOcrAmbiguityWarnings(lines, selectedDate?.date, warnings)
+        }
         verifyWeekday(lines, selectedDate?.date, warnings)
 
         // 화면 표시는 서울 시간대를 사용하고 저장 API가 받는 시각은 UTC ISO 문자열로 변환한다.
@@ -152,6 +172,36 @@ class ScheduleTextParserService {
     }
 
     /**
+     * 입력 장치가 만든 표현 차이만 제거하고 날짜·장소 자체는 추론하지 않는다.
+     *
+     * 음성 명령의 끝부분을 먼저 제거해야 "판교 네이버까지 일정 추가해줘"에서 목적지가
+     * "판교 네이버까지 일정 추가해줘"로 저장되지 않는다. OCR은 표 구분선으로 자주 인식되는
+     * 세로 막대를 줄바꿈으로 바꿔 기존 라벨 기반 파서가 각 필드를 독립적으로 읽게 한다.
+     */
+    private fun normalizeInputText(text: String?, inputType: ScheduleParseInputType): String {
+        val common = text
+            ?.replace('\u00a0', ' ')
+            ?.replace("\r\n", "\n")
+            ?.replace('\r', '\n')
+            ?.replace(Regex("""[ \t]+"""), " ")
+            ?.trim()
+            .orEmpty()
+
+        return when (inputType) {
+            ScheduleParseInputType.IMAGE_OCR -> common
+                .replace(Regex("""[|｜]"""), "\n")
+                .replace(Regex("""([가-힣])\s+(:|：)"""), "$1$2")
+            ScheduleParseInputType.VOICE_TRANSCRIPT -> common
+                .replace(
+                    Regex("""\s*(일정\s*)?(추가|등록|저장|잡아)\s*(해줘|해 줘|해주세요|해 주세요)?[.!?。]*$"""),
+                    "",
+                )
+                .trim()
+            else -> common
+        }
+    }
+
+    /**
      * 연도가 없는 입력의 기준 날짜를 검증한다. 미입력 시 서비스 기준 시간대의 오늘을 쓴다.
      */
     private fun parseReferenceDate(referenceDate: String?): LocalDate {
@@ -160,6 +210,90 @@ class ScheduleTextParserService {
             .getOrElse {
                 throw BusinessException(ErrorCode.INVALID_INPUT, "referenceDate must be ISO date.")
             }
+    }
+
+    /**
+     * 사진 OCR에서 서로 충돌하는 일정 후보를 발견하면 자동 선택 결과는 유지하되 반드시
+     * 사용자 검토 경고를 남긴다.
+     *
+     * 취소선을 Vision이 제거된 글자가 아니라 정상 텍스트로 읽는 경우가 있어 `금요일 토요일`
+     * 중 첫 번째 값만 조용히 저장하면 실제 일정이 일주일 어긋날 수 있다. 같은 이유로 날짜나
+     * 시간이 둘 이상이면 AI가 임의로 하나를 고르게 하지 않고 미리보기에서 확인하도록 한다.
+     */
+    private fun addOcrAmbiguityWarnings(
+        lines: List<String>,
+        selectedDate: LocalDate?,
+        warnings: MutableList<String>,
+    ) {
+        val weekdayValues = lines
+            .asSequence()
+            .flatMap { line -> weekdayTokenPattern.findAll(line) }
+            .mapNotNull { match ->
+                Regex("""([일월화수목금토])요일""")
+                    .find(match.value)
+                    ?.groupValues
+                    ?.get(1)
+            }
+            .distinct()
+            .toList()
+
+        if (weekdayValues.size > 1) {
+            warnings += "OCR에서 서로 다른 요일이 인식되어 확인이 필요합니다: " +
+                weekdayValues.joinToString(", ") { "${it}요일" }
+        }
+
+        val dateCandidates = collectDateCandidates(lines)
+            .filter { it.score > -4 }
+            .filter { toLocalDate(it.year ?: 2000, it.month, it.day) != null }
+        val monthDays = dateCandidates.map { it.month to it.day }.distinct()
+        val explicitYears = dateCandidates.mapNotNull { it.year }.distinct()
+        if (monthDays.size > 1 || explicitYears.size > 1) {
+            val labels = dateCandidates
+                .map { candidate ->
+                    candidate.year?.let { "$it-${candidate.month}-${candidate.day}" }
+                        ?: "${candidate.month}월 ${candidate.day}일"
+                }
+                .distinct()
+            warnings += "OCR에서 서로 다른 날짜가 인식되어 확인이 필요합니다: ${labels.joinToString(", ")}"
+        }
+
+        val timeValues = collectOcrTimeValues(lines)
+        if (timeValues.size > 1) {
+            warnings += "OCR에서 서로 다른 시간이 인식되어 확인이 필요합니다: " +
+                timeValues.sorted().joinToString(", ") { it.toString() }
+        }
+
+        if (selectedDate != null && weekdayValues.isNotEmpty()) {
+            val actualWeekday = weekdays[selectedDate.dayOfWeek.value % 7]
+            if (weekdayValues.any { it != actualWeekday }) {
+                warnings += "OCR의 날짜와 요일이 일치하지 않아 확인이 필요합니다."
+            }
+        }
+    }
+
+    /**
+     * OCR 충돌 감지는 점수가 가장 높은 시간 하나를 고르는 일반 파서와 달리, 원문에서 유효하게
+     * 읽힌 모든 시간을 수집한다. 동일한 시간이 두 형식으로 중복 인식돼도 Set으로 한 번만 센다.
+     */
+    private fun collectOcrTimeValues(lines: List<String>): Set<LocalTime> = buildSet {
+        lines.forEach { line ->
+            koreanTimePattern.findAll(line).forEach { match ->
+                parseTime(
+                    meridiem = match.groupValues[1].ifBlank { null },
+                    hourText = match.groupValues[2],
+                    minuteText = match.groupValues[3].ifBlank { null },
+                )?.let(::add)
+            }
+            colonTimePattern.findAll(line).forEach { match ->
+                parseTime(
+                    meridiem = match.groupValues[1].ifBlank { null },
+                    hourText = match.groupValues[2],
+                    minuteText = match.groupValues[3],
+                )?.let(::add)
+            }
+            if ("정오" in line) add(LocalTime.NOON)
+            if ("자정" in line) add(LocalTime.MIDNIGHT)
+        }
     }
 
     /**
@@ -439,9 +573,20 @@ class ScheduleTextParserService {
      * 단순히 "강남역에서 친구와 저녁" 같은 문장까지 출발/도착으로 오인하지 않도록,
      * 날짜/요일/시간 문맥이 있는 줄을 대상으로 하고 출발지는 시간 표현 뒤의 마지막 장소 후보만 사용한다.
      */
-    private fun chooseRouteExpressionFields(lines: List<String>): RouteExpressionFields? {
-        lines.forEach { line ->
-            if (!hasDateOrTimeContext(line)) return@forEach
+    private fun chooseRouteExpressionFields(
+        lines: List<String>,
+        inputType: ScheduleParseInputType,
+    ): RouteExpressionFields? {
+        lines.forEachIndexed { index, line ->
+            val hasLocalContext = hasDateOrTimeContext(line)
+            val hasAdjacentOcrContext = inputType == ScheduleParseInputType.IMAGE_OCR &&
+                listOfNotNull(lines.getOrNull(index - 1), lines.getOrNull(index + 1))
+                    .any(::hasDateOrTimeContext)
+
+            // Vision은 한 줄 손글씨도 날짜·시간과 경로를 서로 다른 observation으로 나누곤 한다.
+            // OCR 입력에서만 바로 인접한 줄의 문맥을 허용해 이 분리를 복구하고, 일반 텍스트의
+            // 관계없는 화살표까지 경로로 해석하는 기존 오탐 방지는 그대로 유지한다.
+            if (!hasLocalContext && !hasAdjacentOcrContext) return@forEachIndexed
 
             parseArrowRouteExpression(line)?.let { return it }
             parseKoreanRouteExpression(line)?.let { return it }

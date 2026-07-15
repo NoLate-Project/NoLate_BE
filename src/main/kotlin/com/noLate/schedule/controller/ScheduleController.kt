@@ -9,6 +9,7 @@ import com.noLate.schedule.application.useCase.ScheduleUseCase
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.ScheduleTravelMode
 import io.swagger.v3.oas.annotations.Operation
@@ -44,6 +45,9 @@ class ScheduleController(
         requireMemberId(principal)
         val result = scheduleUseCase.parseScheduleText(
             text = request.text,
+            // 구버전 FE가 inputType을 보내지 않아도 기존 TEXT 동작을 유지한다.
+            // 값이 있으면 음성/OCR 정규화 정책이 적용되도록 서비스 계층까지 전달한다.
+            inputType = request.inputType ?: ScheduleParseInputType.TEXT,
             referenceDate = request.referenceDate,
             defaultDurationMinutes = request.defaultDurationMinutes,
         )
@@ -243,14 +247,6 @@ data class ParseScheduleTextRequest(
     val referenceDate: String? = null,
     val defaultDurationMinutes: Int? = null,
 )
-
-enum class ScheduleParseInputType {
-    TEXT,
-    CONVERSATION,
-    IMAGE_OCR,
-    SHARE_TEXT,
-    VOICE_TRANSCRIPT,
-}
 
 data class AddScheduleRequest(
     val title: String,

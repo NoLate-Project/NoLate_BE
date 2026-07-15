@@ -6,6 +6,7 @@ import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.ScheduleTravelMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -57,6 +58,37 @@ class ScheduleUseCaseUnitTest {
         val result = scheduleUseCase.parseScheduleText("내일 점심 약속", "2026-01-01", 60)
 
         verify(scheduleHybridParserService, times(1)).parse("내일 점심 약속", "2026-01-01", 60)
+        assertEquals(parsed, result)
+    }
+
+    @Test
+    fun `음성 입력 타입을 유실하지 않고 일정 파서로 넘긴다`() {
+        // enum이 Controller에서만 역직렬화되고 중간 계층에서 버려지면 음성 전용 무AI 정책을
+        // 적용할 수 없다. UseCase가 VOICE_TRANSCRIPT를 그대로 전달하는지 별도로 고정한다.
+        val text = "수요일 저녁 7시 강남역에서 판교 네이버까지"
+        val parsed = ScheduleParseDto(title = "판교 네이버 19:00", date = "2026-07-15", time = "19:00")
+        whenever(
+            scheduleHybridParserService.parse(
+                text,
+                ScheduleParseInputType.VOICE_TRANSCRIPT,
+                "2026-07-11",
+                60,
+            )
+        ).thenReturn(parsed)
+
+        val result = scheduleUseCase.parseScheduleText(
+            text = text,
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        verify(scheduleHybridParserService).parse(
+            text,
+            ScheduleParseInputType.VOICE_TRANSCRIPT,
+            "2026-07-11",
+            60,
+        )
         assertEquals(parsed, result)
     }
 

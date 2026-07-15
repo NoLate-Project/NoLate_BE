@@ -3,6 +3,7 @@ package com.noLate.schedule.application.service
 import com.noLate.schedule.application.ScheduleAiParseResult
 import com.noLate.schedule.application.ScheduleAiParser
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.ScheduleParseSource
 import com.noLate.schedule.domain.SchedulePlaceDto
 import org.springframework.stereotype.Service
@@ -34,14 +35,34 @@ class ScheduleHybridParserService(
         text: String?,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
+    ): ScheduleParseDto = parse(
+        text = text,
+        inputType = ScheduleParseInputType.TEXT,
+        referenceDate = referenceDate,
+        defaultDurationMinutes = defaultDurationMinutes,
+    )
+
+    fun parse(
+        text: String?,
+        inputType: ScheduleParseInputType,
+        referenceDate: String?,
+        defaultDurationMinutes: Int?,
     ): ScheduleParseDto {
-        val ruleResult = ruleParser.parse(text, referenceDate, defaultDurationMinutes)
+        val ruleResult = ruleParser.parse(text, inputType, referenceDate, defaultDurationMinutes)
         if (isRuleResultConfident(ruleResult)) {
             return ruleResult.copy(
                 parseSource = ScheduleParseSource.RULE,
                 aiAttempted = false,
-                needsReview = false,
+                // 필수 필드가 모두 있어도 OCR이 취소선이나 복수 후보를 읽었다면 자동 확정하지 않는다.
+                needsReview = hasBlockingOcrWarning(ruleResult.warnings),
             )
+        }
+
+        // 음성은 iOS STT가 이미 텍스트로 변환한 뒤 한 번만 서버로 전달된다. 제품 요구사항상
+        // 사용자와 후속 대화를 하지 않고 AI에도 전송하지 않으므로, 규칙 결과의 누락 필드를
+        // 그대로 미리보기 화면에 알려 사용자가 저장 전에 직접 보완하도록 한다.
+        if (inputType == ScheduleParseInputType.VOICE_TRANSCRIPT) {
+            return ruleOnlyVoiceResult(ruleResult)
         }
 
         // 외부 서비스에는 연락처와 이메일을 제거한 텍스트만 전달한다.
@@ -64,7 +85,7 @@ class ScheduleHybridParserService(
                 listOfNotNull(outcome.warning, lowConfidenceWarning)
             ).distinct()
 
-        // 날짜, 시간, 목적지 중 하나라도 없으면 저장 전 사용자 확인을 요구한다.
+        // 날짜, 시간, 목적지 중 하나라도 없거나 OCR 후보가 충돌하면 저장 전 사용자 확인을 요구한다.
         return merged.copy(
             parseSource = if (aiApplied) {
                 ScheduleParseSource.AI_ASSISTED
@@ -72,8 +93,19 @@ class ScheduleHybridParserService(
                 ScheduleParseSource.RULE_FALLBACK
             },
             aiAttempted = outcome.attempted,
-            needsReview = missingFields.any { it in setOf("date", "time", "destination") },
+            needsReview = missingFields.any { it in setOf("date", "time", "destination") } ||
+                hasBlockingOcrWarning(warnings),
             warnings = warnings,
+            missingFields = missingFields,
+        )
+    }
+
+    private fun ruleOnlyVoiceResult(result: ScheduleParseDto): ScheduleParseDto {
+        val missingFields = calculateMissingFields(result)
+        return result.copy(
+            parseSource = ScheduleParseSource.RULE_FALLBACK,
+            aiAttempted = false,
+            needsReview = missingFields.any { it in setOf("date", "time", "destination") },
             missingFields = missingFields,
         )
     }
@@ -82,6 +114,15 @@ class ScheduleHybridParserService(
         result.date != null &&
             result.time != null &&
             result.destination != null
+
+    /**
+     * 일반적인 추정 경고와 달리 OCR 충돌은 잘못된 날짜를 조용히 저장할 수 있는 차단 사유다.
+     * 문구 판별을 한곳에 모아 규칙 단독 결과와 AI 병합 결과가 같은 검토 정책을 사용하게 한다.
+     */
+    private fun hasBlockingOcrWarning(warnings: List<String>): Boolean =
+        warnings.any { warning ->
+            warning.startsWith("OCR") && "확인이 필요" in warning
+        }
 
     private fun hasAiContribution(rule: ScheduleParseDto, merged: ScheduleParseDto): Boolean =
         rule.date != merged.date ||
