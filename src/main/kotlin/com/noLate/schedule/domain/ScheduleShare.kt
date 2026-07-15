@@ -51,6 +51,62 @@ data class ScheduleShareDto(
     val updatedAt: String? = null,
 )
 
+data class ScheduleShareInboxDto(
+    val pendingInvitations: List<ScheduleSharePendingInvitationDto> = emptyList(),
+    val receivedShares: List<ScheduleShareInboxItemDto>,
+)
+
+data class ScheduleShareOutboxDto(
+    val sharedResources: List<ScheduleShareOutboxItemDto>,
+    val activeInvitations: List<ScheduleShareInvitationSummaryDto>,
+)
+
+data class ScheduleSharePendingInvitationDto(
+    val id: String,
+    val resourceType: ScheduleShareResourceType,
+    val resourceId: String,
+    val title: String,
+    val color: String? = null,
+    val ownerMemberId: Long,
+    val ownerEmail: String? = null,
+    val permission: ScheduleSharePermission,
+    val expiresAt: String,
+)
+
+data class ScheduleShareInboxItemDto(
+    val shareId: String,
+    val resourceType: ScheduleShareResourceType,
+    val resourceId: String,
+    val title: String,
+    val color: String? = null,
+    val ownerMemberId: Long,
+    val ownerEmail: String? = null,
+    val permission: ScheduleSharePermission,
+    val sharedAt: String? = null,
+)
+
+data class ScheduleShareOutboxItemDto(
+    val resourceType: ScheduleShareResourceType,
+    val resourceId: String,
+    val title: String,
+    val color: String? = null,
+    val shareCount: Int,
+    val shares: List<ScheduleShareDto>,
+)
+
+data class ScheduleShareInvitationSummaryDto(
+    val id: String,
+    val resourceType: ScheduleShareResourceType,
+    val resourceId: String,
+    val title: String,
+    val color: String? = null,
+    val permission: ScheduleSharePermission,
+    val status: ScheduleShareInvitationStatus,
+    val expiresAt: String,
+    val maxAcceptCount: Int,
+    val acceptedCount: Int,
+)
+
 @Entity
 @Table(
     name = "schedule_shares",

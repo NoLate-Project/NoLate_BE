@@ -6,8 +6,10 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.schedule.application.service.ScheduleShareService
 import com.noLate.schedule.domain.ScheduleShareDto
+import com.noLate.schedule.domain.ScheduleShareInboxDto
 import com.noLate.schedule.domain.ScheduleShareInvitationAcceptDto
 import com.noLate.schedule.domain.ScheduleShareInvitationDto
+import com.noLate.schedule.domain.ScheduleShareOutboxDto
 import com.noLate.schedule.domain.ScheduleSharePermission
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
@@ -20,6 +22,37 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+
+@RestController
+@RequestMapping("/api/shares")
+@Tag(name = "Share Inbox", description = "공유함 API")
+class ShareInboxController(
+    private val scheduleShareService: ScheduleShareService,
+) {
+    @Operation(summary = "내가 받은 공유 목록 조회")
+    @GetMapping("/inbox")
+    fun getShareInbox(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+    ): ApiResponse<ScheduleShareInboxDto> {
+        return ApiResponse.success(
+            scheduleShareService.getShareInbox(
+                memberId = requireShareMemberId(principal),
+            )
+        )
+    }
+
+    @Operation(summary = "내가 공유한 항목과 활성 링크 조회")
+    @GetMapping("/outbox")
+    fun getShareOutbox(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+    ): ApiResponse<ScheduleShareOutboxDto> {
+        return ApiResponse.success(
+            scheduleShareService.getShareOutbox(
+                ownerMemberId = requireShareMemberId(principal),
+            )
+        )
+    }
+}
 
 @RestController
 @RequestMapping("/api/schedules/{scheduleId}/shares")
@@ -53,6 +86,7 @@ class ScheduleShareController(
                 ownerMemberId = requireShareMemberId(principal),
                 scheduleId = scheduleId,
                 targetEmail = request.targetEmail,
+                targetAppId = request.targetAppId,
                 permission = request.permission ?: ScheduleSharePermission.VIEWER,
             )
         )
@@ -156,6 +190,7 @@ class ScheduleCategoryShareController(
                 ownerMemberId = requireShareMemberId(principal),
                 categoryId = categoryId,
                 targetEmail = request.targetEmail,
+                targetAppId = request.targetAppId,
                 permission = request.permission ?: ScheduleSharePermission.VIEWER,
             )
         )
@@ -249,7 +284,12 @@ class ShareInvitationController(
 }
 
 data class CreateShareRequest(
-    val targetEmail: String,
+    /**
+     * 이메일과 앱 ID는 공유 대상을 찾는 서로 다른 키다.
+     * 잘못된 대상을 조용히 선택하지 않도록 서비스에서 둘 중 정확히 하나만 허용한다.
+     */
+    val targetEmail: String? = null,
+    val targetAppId: Long? = null,
     val permission: ScheduleSharePermission? = ScheduleSharePermission.VIEWER,
 )
 

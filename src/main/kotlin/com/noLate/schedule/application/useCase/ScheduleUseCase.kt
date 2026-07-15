@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.useCase
 
 import com.noLate.schedule.application.service.ScheduleService
+import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleDto
@@ -19,6 +20,7 @@ class ScheduleUseCase(
     private val scheduleService: ScheduleService,
     private val schedulePushJobService : SchedulePushJobService,
     private val scheduleHybridParserService: ScheduleHybridParserService,
+    private val scheduleDepartureStatusService: ScheduleDepartureStatusService,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
@@ -116,9 +118,19 @@ class ScheduleUseCase(
      */
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
-        val updated = scheduleService.markDeparted(memberId, scheduleId)
-        schedulePushJobService.cancelByScheduleId(scheduleId)
-        return updated
+        val detail = scheduleService.getScheduleDetail(memberId, scheduleId)
+
+        scheduleDepartureStatusService.markDeparted(memberId, scheduleId)
+
+        val updated = if (detail.ownerMemberId == memberId) {
+            scheduleService.markDeparted(memberId, scheduleId).also {
+                schedulePushJobService.cancelByScheduleId(scheduleId)
+            }
+        } else {
+            scheduleService.getScheduleDetail(memberId, scheduleId)
+        }
+
+        return scheduleDepartureStatusService.attachDepartureParticipants(memberId, updated)
     }
 
     /**
@@ -134,7 +146,10 @@ class ScheduleUseCase(
      * 일정 편집 화면 진입 시 최신 저장 상태를 가져온다.
      */
     fun getScheduleDetail(memberId: Long, scheduleId: Long): ScheduleDto {
-        return scheduleService.getScheduleDetail(memberId, scheduleId)
+        return scheduleDepartureStatusService.attachDepartureParticipants(
+            currentMemberId = memberId,
+            scheduleDto = scheduleService.getScheduleDetail(memberId, scheduleId),
+        )
     }
 
     /**

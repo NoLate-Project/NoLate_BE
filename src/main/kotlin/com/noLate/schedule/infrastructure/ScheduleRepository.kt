@@ -340,4 +340,17 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         @Param("scheduleId") scheduleId: Long,
         @Param("memberId") memberId: Long,
     ): Schedule?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select s
+        from Schedule s
+        where s.id = :scheduleId
+          and s.deleted = false
+        """
+    )
+    fun findActiveForDepartureUpdate(
+        @Param("scheduleId") scheduleId: Long,
+    ): Schedule?
 }

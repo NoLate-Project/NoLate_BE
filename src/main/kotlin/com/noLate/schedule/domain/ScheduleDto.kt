@@ -20,6 +20,19 @@ data class SchedulePlaceDto(
     val lng: Double? = null,
 )
 
+enum class ScheduleDepartureParticipantRole {
+    OWNER,
+    SHARED,
+}
+
+data class ScheduleDepartureParticipantDto(
+    val memberId: Long,
+    val email: String? = null,
+    val role: ScheduleDepartureParticipantRole,
+    val departed: Boolean,
+    val departedAt: String? = null,
+)
+
 data class ScheduleDto(
     val id: Long? = null,
     val ownerMemberId: Long? = null,
@@ -31,6 +44,8 @@ data class ScheduleDto(
     val travelMinutes: Int? = null,
     val departAt: String? = null,
     val departedAt: String? = null,
+    val myDepartedAt: String? = null,
+    val departureParticipants: List<ScheduleDepartureParticipantDto> = emptyList(),
     val travelMode: ScheduleTravelMode? = null,
     val origin: SchedulePlaceDto? = null,
     val destination: SchedulePlaceDto? = null,

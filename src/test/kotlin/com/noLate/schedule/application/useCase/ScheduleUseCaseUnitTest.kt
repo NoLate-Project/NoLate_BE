@@ -1,8 +1,10 @@
 package com.noLate.schedule.application.useCase
 
 import com.noLate.schedule.application.service.ScheduleHybridParserService
+import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleService
+import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
@@ -35,6 +37,9 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var schedulePushJobService: SchedulePushJobService
 
+    @Mock
+    lateinit var scheduleDepartureStatusService: ScheduleDepartureStatusService
+
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
 
     private lateinit var scheduleUseCase: ScheduleUseCase
@@ -45,6 +50,7 @@ class ScheduleUseCaseUnitTest {
             scheduleService = scheduleService,
             schedulePushJobService = schedulePushJobService,
             scheduleHybridParserService = scheduleHybridParserService,
+            scheduleDepartureStatusService = scheduleDepartureStatusService,
             clock = clock,
         )
     }
@@ -187,15 +193,41 @@ class ScheduleUseCaseUnitTest {
     fun `출발 처리는 일정 알림을 끄고 남아 있는 push job을 취소한다`() {
         val memberId = 1L
         val scheduleId = 10L
-        val updated = scheduleDto(notificationEnabled = false).copy(id = scheduleId)
+        val before = scheduleDto(notificationEnabled = true).copy(id = scheduleId, ownerMemberId = memberId)
+        val updated = scheduleDto(notificationEnabled = false).copy(id = scheduleId, ownerMemberId = memberId)
+        whenever(scheduleService.getScheduleDetail(memberId, scheduleId)).thenReturn(before)
+        whenever(scheduleDepartureStatusService.markDeparted(memberId, scheduleId))
+            .thenReturn(ScheduleDepartureStatus(scheduleId = scheduleId, memberId = memberId, departedAt = Instant.parse("2026-06-01T00:00:00Z")))
         whenever(scheduleService.markDeparted(memberId, scheduleId)).thenReturn(updated)
+        whenever(scheduleDepartureStatusService.attachDepartureParticipants(memberId, updated)).thenReturn(updated)
 
         val result = scheduleUseCase.markDeparted(memberId, scheduleId)
 
+        verify(scheduleDepartureStatusService).markDeparted(memberId, scheduleId)
         verify(scheduleService).markDeparted(memberId, scheduleId)
         verify(schedulePushJobService).cancelByScheduleId(scheduleId)
         verify(schedulePushJobService, never()).registerFromScheduleDto(eq(memberId), org.mockito.kotlin.any())
         assertEquals(false, result.notificationEnabled)
+    }
+
+    @Test
+    fun `공유받은 사용자의 출발 처리는 참가자 상태만 기록하고 오너 push job은 취소하지 않는다`() {
+        val ownerMemberId = 1L
+        val sharedMemberId = 2L
+        val scheduleId = 10L
+        val detail = scheduleDto(notificationEnabled = true).copy(id = scheduleId, ownerMemberId = ownerMemberId)
+        val decorated = detail.copy(myDepartedAt = "2026-06-01T00:00:00Z")
+        whenever(scheduleService.getScheduleDetail(sharedMemberId, scheduleId)).thenReturn(detail)
+        whenever(scheduleDepartureStatusService.markDeparted(sharedMemberId, scheduleId))
+            .thenReturn(ScheduleDepartureStatus(scheduleId = scheduleId, memberId = sharedMemberId, departedAt = Instant.parse("2026-06-01T00:00:00Z")))
+        whenever(scheduleDepartureStatusService.attachDepartureParticipants(sharedMemberId, detail)).thenReturn(decorated)
+
+        val result = scheduleUseCase.markDeparted(sharedMemberId, scheduleId)
+
+        verify(scheduleDepartureStatusService).markDeparted(sharedMemberId, scheduleId)
+        verify(scheduleService, never()).markDeparted(sharedMemberId, scheduleId)
+        verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
+        assertEquals("2026-06-01T00:00:00Z", result.myDepartedAt)
     }
 
     @Test
