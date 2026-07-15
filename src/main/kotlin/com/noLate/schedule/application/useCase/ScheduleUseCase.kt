@@ -1,10 +1,12 @@
 package com.noLate.schedule.application.useCase
 
 import com.noLate.schedule.application.service.ScheduleService
+import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Component
 import java.time.Clock
@@ -18,6 +20,7 @@ class ScheduleUseCase(
     private val scheduleService: ScheduleService,
     private val schedulePushJobService : SchedulePushJobService,
     private val scheduleHybridParserService: ScheduleHybridParserService,
+    private val scheduleDepartureStatusService: ScheduleDepartureStatusService,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
@@ -31,7 +34,24 @@ class ScheduleUseCase(
         referenceDate: String?,
         defaultDurationMinutes: Int?,
     ): ScheduleParseDto {
+        // 기존 호출자와 테스트가 사용하던 3개 인자 경로는 그대로 보존한다. 신규 API 요청만
+        // 아래의 입력 타입 포함 오버로드를 사용하므로, 일반 텍스트 분석의 동작에는 영향이 없다.
         return scheduleHybridParserService.parse(text, referenceDate, defaultDurationMinutes)
+    }
+
+    /**
+     * 입력 채널을 보존한 일정 분석 경로다.
+     *
+     * Controller에서 받은 enum을 문자열로 다시 변환하지 않고 그대로 넘겨, FE와 BE 사이의
+     * VOICE_TRANSCRIPT 계약이 컴파일 시점에도 검증되도록 한다.
+     */
+    fun parseScheduleText(
+        text: String?,
+        inputType: ScheduleParseInputType,
+        referenceDate: String?,
+        defaultDurationMinutes: Int?,
+    ): ScheduleParseDto {
+        return scheduleHybridParserService.parse(text, inputType, referenceDate, defaultDurationMinutes)
     }
 
     /**
@@ -98,9 +118,19 @@ class ScheduleUseCase(
      */
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
-        val updated = scheduleService.markDeparted(memberId, scheduleId)
-        schedulePushJobService.cancelByScheduleId(scheduleId)
-        return updated
+        val detail = scheduleService.getScheduleDetail(memberId, scheduleId)
+
+        scheduleDepartureStatusService.markDeparted(memberId, scheduleId)
+
+        val updated = if (detail.ownerMemberId == memberId) {
+            scheduleService.markDeparted(memberId, scheduleId).also {
+                schedulePushJobService.cancelByScheduleId(scheduleId)
+            }
+        } else {
+            scheduleService.getScheduleDetail(memberId, scheduleId)
+        }
+
+        return scheduleDepartureStatusService.attachDepartureParticipants(memberId, updated)
     }
 
     /**
@@ -116,7 +146,10 @@ class ScheduleUseCase(
      * 일정 편집 화면 진입 시 최신 저장 상태를 가져온다.
      */
     fun getScheduleDetail(memberId: Long, scheduleId: Long): ScheduleDto {
-        return scheduleService.getScheduleDetail(memberId, scheduleId)
+        return scheduleDepartureStatusService.attachDepartureParticipants(
+            currentMemberId = memberId,
+            scheduleDto = scheduleService.getScheduleDetail(memberId, scheduleId),
+        )
     }
 
     /**

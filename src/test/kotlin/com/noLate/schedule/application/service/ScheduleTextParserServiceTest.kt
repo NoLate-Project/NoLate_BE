@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.schedule.domain.ScheduleOriginSource
+import com.noLate.schedule.domain.ScheduleParseInputType
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -346,6 +347,107 @@ class ScheduleTextParserServiceTest {
     }
 
     @Test
+    fun `parses repeated chevrons produced by rotated handwriting OCR`() {
+        // 첨부된 실제 손글씨 사진을 원래 방향으로 Vision OCR에 넣으면 화살표가 `>>`로
+        // 추출된다. OCR 전용 입력에서도 이 표기를 이동 방향으로 유지하는지 검증한다.
+        val result = parser.parse(
+            text = "금분을 토요일 오후7시\n강남역 >> 내방역",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-11", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("강남역", result.origin?.name)
+        assertEquals("내방역", result.destination?.name)
+        assertFalse(result.originRequired)
+    }
+
+    @Test
+    fun `parses single chevron produced after OCR image downsampling`() {
+        val result = parser.parse(
+            text = "금분을 토요일 오후 7시\n강남역 > 내방역",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("19:00", result.time)
+        assertEquals("강남역", result.origin?.name)
+        assertEquals("내방역", result.destination?.name)
+    }
+
+    @Test
+    fun `parses standalone three misrecognized from handwriting arrow`() {
+        // 사진을 90도 보정하면 같은 화살표가 숫자 3으로 오인될 수 있다. 단독 3만 경로
+        // 구분자로 취급하고 앞의 `7시` 숫자는 시간으로 남기는 회귀 테스트다.
+        val result = parser.parse(
+            text = "금분일 토요일 오후 7시 강남역 3 내방역",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-11", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("강남역", result.origin?.name)
+        assertEquals("내방역", result.destination?.name)
+        assertFalse(result.originRequired)
+    }
+
+    @Test
+    fun `does not treat time digit three as an OCR route separator`() {
+        val result = parser.parse(
+            text = "토요일 오후 3시 강남역 회의",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("15:00", result.time)
+        assertNull(result.origin)
+        assertTrue(result.originRequired)
+    }
+
+    @Test
+    fun `warns when OCR reads crossed out and replacement weekdays together`() {
+        val result = parser.parse(
+            text = "금요일 토요일 오후 7시 강남역 >> 내방역",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertTrue(result.warnings.any { "서로 다른 요일" in it })
+    }
+
+    @Test
+    fun `warns when OCR contains multiple dates or times`() {
+        val result = parser.parse(
+            text = "7월 18일 7월 19일 토요일 오후 7시 오후 8시 강남역 >> 내방역",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertTrue(result.warnings.any { "서로 다른 날짜" in it })
+        assertTrue(result.warnings.any { "서로 다른 시간" in it })
+    }
+
+    @Test
+    fun `warns when OCR date and weekday disagree`() {
+        val result = parser.parse(
+            text = "7월 19일 토요일 오후 7시 강남역 >> 내방역",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertTrue(result.warnings.any { "날짜와 요일이 일치하지 않아" in it })
+    }
+
+    @Test
     fun `parses Korean route expression without spaces`() {
         val result = parser.parse(
             text = "금요일 19:00 강남역에서 판교 네이버까지",
@@ -358,6 +460,25 @@ class ScheduleTextParserServiceTest {
         assertEquals("2026-07-03T10:00:00Z", result.startAt)
         assertEquals("강남역", result.origin?.name)
         assertEquals("판교 네이버", result.destination?.name)
+        assertFalse(result.originRequired)
+    }
+
+    @Test
+    fun `parses one shot voice route and removes command suffix`() {
+        // 실제 STT 문장처럼 이동 경로 뒤에 명령형 표현이 붙어도 출발지와 도착지에는
+        // 장소 이름만 남아야 한다. 이 테스트는 음성 입력의 날짜·시간·경로를 한 번에 검증한다.
+        val result = parser.parse(
+            text = "수요일 저녁 7시 강남역에서 판교 네이버까지 일정 추가해줘",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-15", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("강남역", result.origin?.name)
+        assertEquals("판교 네이버", result.destination?.name)
+        assertEquals("판교 네이버 19:00", result.title)
         assertFalse(result.originRequired)
     }
 

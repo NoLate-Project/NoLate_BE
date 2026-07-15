@@ -13,4 +13,14 @@ interface ScheduleCategoryShareRepository : JpaRepository<ScheduleCategoryShare,
         categoryId: Long,
         status: ScheduleShareStatus,
     ): List<ScheduleCategoryShare>
+
+    fun findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
+        targetMemberId: Long,
+        status: ScheduleShareStatus,
+    ): List<ScheduleCategoryShare>
+
+    fun findAllByOwnerMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
+        ownerMemberId: Long,
+        status: ScheduleShareStatus,
+    ): List<ScheduleCategoryShare>
 }

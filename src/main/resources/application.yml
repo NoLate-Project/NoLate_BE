@@ -3,7 +3,13 @@ spring:
     name: noLate
 
   config:
-    import: optional:file:/config/env.properties
+    # 공용 로컬값 다음에 프로젝트 루트의 Git 제외 파일을 읽는다.
+    # Docker/운영 환경은 마운트된 /config/env.properties가 마지막에 같은 키를 덮어쓴다.
+    # 비밀 파일을 resources 밖에 두어 로컬 빌드 산출물에도 인증키가 포함되지 않게 한다.
+    import:
+      - optional:file:./src/main/resources/env.properties
+      - optional:file:./env.local.properties
+      - optional:file:/config/env.properties
 
   sql:
     init:
@@ -70,6 +76,12 @@ schedule:
       api-key: ${GROQ_API_KEY:}
       model: ${GROQ_MODEL:openai/gpt-oss-20b}
 
+routing:
+  tmap:
+    enabled: ${TMAP_ENABLED:false}
+    app-key: ${TMAP_APP_KEY:}
+    base-url: ${TMAP_BASE_URL:https://apis.openapi.sk.com}
+
 transit:
   seoul:
     api-key: ${SEOUL_OPENAPI_KEY:}
@@ -77,6 +89,11 @@ transit:
     bus-api-key: ${SEOUL_BUS_API_KEY:}
     subway-base-url: ${SEOUL_SUBWAY_BASE_URL:http://swopenAPI.seoul.go.kr/api/subway}
     bus-base-url: ${SEOUL_BUS_BASE_URL:http://ws.bus.go.kr/api/rest}
+  tago:
+    api-key: ${TAGO_API_KEY:}
+    bus-api-key: ${TAGO_BUS_API_KEY:${TAGO_API_KEY:}}
+    base-url: ${TAGO_BASE_URL:https://apis.data.go.kr/1613000}
+    city-codes: ${TAGO_BUS_CITY_CODES:}
 
 firebase:
   enabled: ${FIREBASE_ENABLED:false}

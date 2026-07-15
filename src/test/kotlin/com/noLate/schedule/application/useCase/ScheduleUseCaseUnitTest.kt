@@ -1,11 +1,14 @@
 package com.noLate.schedule.application.useCase
 
 import com.noLate.schedule.application.service.ScheduleHybridParserService
+import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleService
+import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleParseDto
+import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.ScheduleTravelMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -34,6 +37,9 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var schedulePushJobService: SchedulePushJobService
 
+    @Mock
+    lateinit var scheduleDepartureStatusService: ScheduleDepartureStatusService
+
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
 
     private lateinit var scheduleUseCase: ScheduleUseCase
@@ -44,6 +50,7 @@ class ScheduleUseCaseUnitTest {
             scheduleService = scheduleService,
             schedulePushJobService = schedulePushJobService,
             scheduleHybridParserService = scheduleHybridParserService,
+            scheduleDepartureStatusService = scheduleDepartureStatusService,
             clock = clock,
         )
     }
@@ -57,6 +64,37 @@ class ScheduleUseCaseUnitTest {
         val result = scheduleUseCase.parseScheduleText("내일 점심 약속", "2026-01-01", 60)
 
         verify(scheduleHybridParserService, times(1)).parse("내일 점심 약속", "2026-01-01", 60)
+        assertEquals(parsed, result)
+    }
+
+    @Test
+    fun `음성 입력 타입을 유실하지 않고 일정 파서로 넘긴다`() {
+        // enum이 Controller에서만 역직렬화되고 중간 계층에서 버려지면 음성 전용 무AI 정책을
+        // 적용할 수 없다. UseCase가 VOICE_TRANSCRIPT를 그대로 전달하는지 별도로 고정한다.
+        val text = "수요일 저녁 7시 강남역에서 판교 네이버까지"
+        val parsed = ScheduleParseDto(title = "판교 네이버 19:00", date = "2026-07-15", time = "19:00")
+        whenever(
+            scheduleHybridParserService.parse(
+                text,
+                ScheduleParseInputType.VOICE_TRANSCRIPT,
+                "2026-07-11",
+                60,
+            )
+        ).thenReturn(parsed)
+
+        val result = scheduleUseCase.parseScheduleText(
+            text = text,
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-11",
+            defaultDurationMinutes = 60,
+        )
+
+        verify(scheduleHybridParserService).parse(
+            text,
+            ScheduleParseInputType.VOICE_TRANSCRIPT,
+            "2026-07-11",
+            60,
+        )
         assertEquals(parsed, result)
     }
 
@@ -155,15 +193,41 @@ class ScheduleUseCaseUnitTest {
     fun `출발 처리는 일정 알림을 끄고 남아 있는 push job을 취소한다`() {
         val memberId = 1L
         val scheduleId = 10L
-        val updated = scheduleDto(notificationEnabled = false).copy(id = scheduleId)
+        val before = scheduleDto(notificationEnabled = true).copy(id = scheduleId, ownerMemberId = memberId)
+        val updated = scheduleDto(notificationEnabled = false).copy(id = scheduleId, ownerMemberId = memberId)
+        whenever(scheduleService.getScheduleDetail(memberId, scheduleId)).thenReturn(before)
+        whenever(scheduleDepartureStatusService.markDeparted(memberId, scheduleId))
+            .thenReturn(ScheduleDepartureStatus(scheduleId = scheduleId, memberId = memberId, departedAt = Instant.parse("2026-06-01T00:00:00Z")))
         whenever(scheduleService.markDeparted(memberId, scheduleId)).thenReturn(updated)
+        whenever(scheduleDepartureStatusService.attachDepartureParticipants(memberId, updated)).thenReturn(updated)
 
         val result = scheduleUseCase.markDeparted(memberId, scheduleId)
 
+        verify(scheduleDepartureStatusService).markDeparted(memberId, scheduleId)
         verify(scheduleService).markDeparted(memberId, scheduleId)
         verify(schedulePushJobService).cancelByScheduleId(scheduleId)
         verify(schedulePushJobService, never()).registerFromScheduleDto(eq(memberId), org.mockito.kotlin.any())
         assertEquals(false, result.notificationEnabled)
+    }
+
+    @Test
+    fun `공유받은 사용자의 출발 처리는 참가자 상태만 기록하고 오너 push job은 취소하지 않는다`() {
+        val ownerMemberId = 1L
+        val sharedMemberId = 2L
+        val scheduleId = 10L
+        val detail = scheduleDto(notificationEnabled = true).copy(id = scheduleId, ownerMemberId = ownerMemberId)
+        val decorated = detail.copy(myDepartedAt = "2026-06-01T00:00:00Z")
+        whenever(scheduleService.getScheduleDetail(sharedMemberId, scheduleId)).thenReturn(detail)
+        whenever(scheduleDepartureStatusService.markDeparted(sharedMemberId, scheduleId))
+            .thenReturn(ScheduleDepartureStatus(scheduleId = scheduleId, memberId = sharedMemberId, departedAt = Instant.parse("2026-06-01T00:00:00Z")))
+        whenever(scheduleDepartureStatusService.attachDepartureParticipants(sharedMemberId, detail)).thenReturn(decorated)
+
+        val result = scheduleUseCase.markDeparted(sharedMemberId, scheduleId)
+
+        verify(scheduleDepartureStatusService).markDeparted(sharedMemberId, scheduleId)
+        verify(scheduleService, never()).markDeparted(sharedMemberId, scheduleId)
+        verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
+        assertEquals("2026-06-01T00:00:00Z", result.myDepartedAt)
     }
 
     @Test

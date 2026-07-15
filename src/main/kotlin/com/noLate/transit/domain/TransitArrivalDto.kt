@@ -14,4 +14,12 @@ data class TransitArrivalDto(
     val expectedAt: String? = null,
     val lastTrain: Boolean = false,
     val realtime: Boolean = true,
+    val arrivalStatus: TransitArrivalStatus = TransitArrivalStatus.UNKNOWN,
+    val arrivalStatusLabel: String = arrivalStatus.displayLabel,
+    val observedAt: String? = null,
+    val sourceUpdatedAt: String? = null,
+    val remainingStops: Int? = null,
+    val vehicleType: String? = null,
+    val lowFloor: Boolean? = null,
+    val express: Boolean? = null,
 )

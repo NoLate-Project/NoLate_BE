@@ -1,6 +1,6 @@
 # NoLate Project Roadmap
 
-Last verified: 2026-06-26 KST
+Last verified: 2026-07-15 KST (Schedule Sharing status)
 
 이 문서는 NoLate 문서의 상위 인덱스다. 세부 구현, 검증 절차, 테스트 목록은 분야별 문서에서 관리하고, 이 파일에는 현재 제품 상태와 우선순위만 둔다.
 
@@ -17,6 +17,8 @@ MVP 1차 완료 조건:
 - `departNow=true` 출발 완료 액션이 운영 BE까지 성공하고 PushJob을 취소한다.
 - 일정 변경, 교통 변경, 기기 변경 상황에서 중복 발송이나 잘못된 사용자 발송이 없다.
 
+병행 트랙인 일정 공유는 BE/FE 기능 연결과 시뮬레이터 시나리오 검증까지 완료했다. 운영 반영 전에는 DB migration, 권한별 쓰기 차단, 실기기 공유 push, 공개 handle/친구 검색을 순서대로 마무리한다.
+
 ## Area Index
 
 | Area | Source Of Truth | Status | Next Focus |
@@ -25,6 +27,7 @@ MVP 1차 완료 조건:
 | Schedule / Push Implementation | [`schedule/schedule-push-implementation-guide.md`](schedule/schedule-push-implementation-guide.md) | 구현/검증 가이드 | 최신 남은 작업과 실행 절차 유지 |
 | Push Scenario Runner | [`schedule/push-scenario-runner.md`](schedule/push-scenario-runner.md) | 수동 E2E 도구 완료 | 실제 일정 기반 Runner 결과 기록 |
 | Quick Schedule | [`schedule/quick-schedule-creation-roadmap.md`](schedule/quick-schedule-creation-roadmap.md) | 자연어 일정 생성 기반 완료, 확장 설계 진행 | 입력 채널 확장, OCR/share |
+| Schedule Sharing | [`schedule/schedule-sharing-roadmap.md`](schedule/schedule-sharing-roadmap.md) | 앱 ID/이메일·링크 공유, 통합 공유함, FE 수락/상세, 공유 push, 참가자별 출발 상태 구현 | 운영 migration, 권한 집행, 실기기 push, handle/친구 검색 |
 | Notification / FCM / App Push | [`notification/notification-fcm-app-push-roadmap.md`](notification/notification-fcm-app-push-roadmap.md) | payload 라우팅, 상세 이동 규칙, depart-now action 구현 완료 | 실기기 클릭/액션 검증 |
 | FE App / Route UX | [`frontend/fe-app-route-ux-roadmap.md`](frontend/fe-app-route-ux-roadmap.md) | 로그인, 일정, 경로, 알림 UX 기반 완료 | 실기기 UX 검증, 오류/빈 상태 정리 |
 | MVP Acceptance | [`quality/mvp-acceptance-checklist.md`](quality/mvp-acceptance-checklist.md) | 남은 BE/FE 검증 항목 정리 | 체크리스트 실행 결과 기록 |

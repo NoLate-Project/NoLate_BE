@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
+import org.springframework.test.context.event.ApplicationEvents
+import org.springframework.test.context.event.RecordApplicationEvents
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -29,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 @DataJpaTest
 @Import(ScheduleShareService::class)
+@RecordApplicationEvents
 @TestPropertySource(
     properties = [
         "spring.datasource.url=jdbc:h2:mem:schedule-share;MODE=MySQL;DB_CLOSE_DELAY=-1",
@@ -46,6 +49,9 @@ class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
 ) {
 
+    @Autowired
+    private lateinit var applicationEvents: ApplicationEvents
+
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun `concurrent schedule sharing leaves exactly one active share`() {
@@ -55,7 +61,8 @@ class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(
             service.shareSchedule(
                 ownerMemberId = fixture.ownerId,
                 scheduleId = fixture.scheduleId,
-                targetEmail = fixture.targetEmail,
+                targetEmail = null,
+                targetAppId = fixture.targetId,
                 permission = ScheduleSharePermission.VIEWER,
             )
         }
@@ -71,6 +78,7 @@ class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(
             )
         assertEquals(1, activeShares.size)
         assertEquals(fixture.targetId, activeShares.single().targetMemberId)
+        assertEquals(1L, applicationEvents.stream(ScheduleShareGrantedEvent::class.java).count())
     }
 
     @Test
@@ -98,6 +106,7 @@ class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(
             )
         assertEquals(1, activeShares.size)
         assertEquals(fixture.targetId, activeShares.single().targetMemberId)
+        assertEquals(1L, applicationEvents.stream(ScheduleShareGrantedEvent::class.java).count())
     }
 
     private fun runConcurrentShareCalls(
