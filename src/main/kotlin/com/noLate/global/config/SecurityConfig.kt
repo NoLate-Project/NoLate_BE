@@ -5,6 +5,7 @@ import com.noLate.global.security.JwtTokenProvider
 
 import com.noLate.member.application.service.MemberService
 import jakarta.servlet.DispatcherType
+import jakarta.servlet.http.HttpServletResponse
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
@@ -84,6 +85,18 @@ class SecurityConfig(
 
             .sessionManagement {
                 it.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            }
+
+            // 인증이 없거나 만료된 JWT는 401로 통일해야 앱의 refresh-token 재시도가 동작한다.
+            .exceptionHandling { exceptions ->
+                exceptions.authenticationEntryPoint { _, response, _ ->
+                    response.status = HttpServletResponse.SC_UNAUTHORIZED
+                    response.contentType = "application/json"
+                    response.characterEncoding = Charsets.UTF_8.name()
+                    response.writer.write(
+                        """{"success":false,"errorMessage":"인증이 필요합니다."}"""
+                    )
+                }
             }
 
             .authorizeHttpRequests { auth ->
