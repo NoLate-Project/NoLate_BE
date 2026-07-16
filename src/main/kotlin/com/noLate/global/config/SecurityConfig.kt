@@ -110,6 +110,8 @@ class SecurityConfig(
 
                     .requestMatchers(
                         "/api/member/auth/**",
+                        "/api/legal/**",
+                        "/legal/**",
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
                         "/swagger-ui.html",

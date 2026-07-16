@@ -130,7 +130,7 @@ tasks.register('groqIntegrationTest', Test) {
 //                    driver = "com.mysql.cj.jdbc.Driver"
 //                    url = "jdbc:mysql://localhost:3306/late_project"
 //                    user = "late_user"
-//                    password = "late1234"
+//                    password = "change-me"
 //                }
 //
 //                generator {
