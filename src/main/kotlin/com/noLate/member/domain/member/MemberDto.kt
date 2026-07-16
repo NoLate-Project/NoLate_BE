@@ -27,15 +27,20 @@ class MemberDto(
     /**
      * 로그인 응답에서만 사용하는 클라이언트 라우팅 힌트다.
      *
-     * SNS 로그인은 "없으면 자동 가입" 흐름이기 때문에 FE가 응답만 보고
-     * 신규 가입인지 기존 로그인인지 알 수 없다. 가입 직후 캘린더 큐레이션은
-     * 신규 사용자에게만 보여야 하므로, DB 모델과 분리된 DTO 플래그로 전달한다.
+     * SNS 로그인은 "없으면 자동 가입" 흐름이므로 응답에서 신규 생성 여부를 알려주는 힌트다.
+     * 큐레이션 라우팅에는 영속 필드인 curationCompleted를 사용하고, 이 값은 분석·안내용으로만 둔다.
      */
-    var isNewMember: Boolean = false
+    var isNewMember: Boolean = false,
+
+    /**
+     * 캘린더 큐레이션을 끝냈거나 사용자가 명시적으로 건너뛴 상태다.
+     * 신규 여부와 달리 DB에 영속되므로 재로그인과 기기 변경 후에도 같은 흐름을 보장한다.
+     */
+    var curationCompleted: Boolean = false,
 
 ) {
     // JPA가 사용할 기본 생성자
-    protected constructor() : this(null, "", "", "", null, "" ,"" , "", false)
+    protected constructor() : this(null, "", "", "", null, "" ,"" , "", false, false)
 
     fun toEntity() : Member =
         Member(
@@ -45,6 +50,7 @@ class MemberDto(
             email = this.email,
             loginType = this.loginType,
             snsId = this.snsId,
+            curationCompleted = this.curationCompleted,
         )
 
 
@@ -57,6 +63,7 @@ class MemberDto(
                 email = member.email,
                 loginType = member.loginType,
                 snsId = member.snsId,
+                curationCompleted = member.curationCompleted,
             )
         }
     }

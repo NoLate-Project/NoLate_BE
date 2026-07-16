@@ -35,10 +35,16 @@ class Member (
     )
     var subscriptionPlan: SubscriptionPlan = SubscriptionPlan.FREE,
 
+    @Column(
+        name = "curation_completed",
+        nullable = false,
+        columnDefinition = "boolean default false",
+    )
+    var curationCompleted: Boolean = false,
 
 ) : BaseEntity() {
     // JPA가 사용할 기본 생성자
-    protected constructor() : this(null, "", "" , "", null, "", SubscriptionPlan.FREE)
+    protected constructor() : this(null, "", "" , "", null, "", SubscriptionPlan.FREE, false)
 
     fun toDto(): MemberDto =
         MemberDto(
@@ -47,7 +53,8 @@ class Member (
             password = this.password,
             email = this.email,
             loginType = this.loginType,
-            snsId = this.snsId
+            snsId = this.snsId,
+            curationCompleted = this.curationCompleted,
         )
 }
 

@@ -18,6 +18,9 @@ enum class ErrorCode(
     INVALID_CREDENTIALS("A003", "이메일 또는 비밀번호가 일치하지 않습니다."),
     DUPLICATE_EMAIL("A002", "이미 가입된 이메일입니다."),
     DUPLICATE_MEMBER("A003", "이미 COMMON 방식으로 가입된 이메일입니다."),
+    SNS_SIGNUP_REQUIRED("M004", "SNS 신규 가입 동의가 필요합니다."),
+    CONSENT_REQUIRED("M005", "회원가입 필수 동의가 필요합니다."),
+    CONSENT_VERSION_MISMATCH("M006", "최신 약관 확인이 필요합니다."),
 
     // Token 영역
     INVALID_TOKEN("T001", "잘못된 토큰 값입니다."),

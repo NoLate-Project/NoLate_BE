@@ -5,12 +5,15 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.JwtTokenProvider
 import com.noLate.member.application.service.MemberProfileService
+import com.noLate.member.application.service.MemberConsentService
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
 import com.noLate.member.application.service.MemberValidator
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.domain.member.MemberDto
+import com.noLate.member.domain.consent.MemberConsentSource
+import com.noLate.member.domain.consent.SignupConsentCommand
 import com.noLate.member.domain.memberSetting.MemberSettingDto
 import com.noLate.member.domain.profile.MemberProfileDto
 import org.springframework.security.crypto.password.PasswordEncoder
@@ -26,6 +29,7 @@ class MemberUseCase(
     private val passwordEncoder: PasswordEncoder,
     private val memberValidator: MemberValidator,
     private val refreshTokenService: RefreshTokenService,
+    private val memberConsentService: MemberConsentService,
 ) {
 
     /**
@@ -34,9 +38,13 @@ class MemberUseCase(
      * 2) 비밀번호 암호화
      * 3) 회원 저장 (COMMON 타입으로)
      * 4) 기본 설정(MemberSetting) 생성
-     */
+    */
     @Transactional
-    fun signUp(memberDto: MemberDto): MemberDto {
+    fun signUp(memberDto: MemberDto, consents: SignupConsentCommand): MemberDto {
+        // 계정을 만들기 전에 동의 여부와 문서 버전을 검증한다. 이후 저장 실패도 같은
+        // 트랜잭션에서 롤백되어 회원과 동의 이력이 서로 다른 상태로 남지 않는다.
+        memberConsentService.validateRequiredSignupConsents(consents)
+
         // 1) COMMON 회원가입 검증 (이메일, 비번, 중복 등)
         memberValidator.validateCommonSignUp(memberDto)
 
@@ -59,19 +67,25 @@ class MemberUseCase(
 
         memberProfileService.createDefaultProfile(requireNotNull(savedMemberDto.id))
 
+        memberConsentService.recordRequiredSignupConsents(
+            memberId = requireNotNull(savedMemberDto.id),
+            consents = consents,
+            source = MemberConsentSource.COMMON_SIGNUP,
+        )
+
         return savedMemberDto
     }
 
     /**
      *   로그인 (COMMON + SNS)
      * - COMMON : 이메일/비번 검증 후 토큰 발급
-     * - SNS    : snsId 기준으로 찾고 없으면 자동 가입 후 토큰 발급
+     * - SNS    : 기존 회원만 로그인. 신규 회원은 별도 동의 가입 API를 사용
      * - 공통 : accessToken + refreshToken 발급 및 refreshToken 저장
      */
     @Transactional
     fun login(requestDto: MemberDto): MemberDto {
 
-        // 1) 로그인 타입에 따라 회원 조회/생성
+        // 로그인 타입에 따라 기존 회원을 확인한다. 신규 생성은 동의가 포함된 가입 API에서만 한다.
         val memberDto: MemberDto = when (requestDto.loginType) {
             LoginType.COMMON -> {
                 // 이메일/비밀번호 검증 + 회원 조회까지 Validator가 처리하고 DTO 반환
@@ -81,41 +95,66 @@ class MemberUseCase(
             else -> {
                 // SNS 로그인
                 val snsId = memberValidator.requireSnsId(requestDto)
-
-                var found = memberService.findByLoginTypeAndSnsId(requestDto.loginType, snsId)
-                var isNewSnsMember = false
-
-                // 없으면 자동 가입 + 기본 설정 생성
-                if (found == null) {
-                    isNewSnsMember = true
-                    val name = requestDto.name ?: requestDto.email ?: "사용자"
-                    val email = requestDto.email?.takeIf { it.isNotBlank() }
-                        ?: createSyntheticSnsEmail(requestDto.loginType, snsId)
-
-                    found = memberService.addMember(
-                        Member().apply {
-                            this.snsId = snsId
-                            this.name = name
-                            this.loginType = requestDto.loginType
-                            this.email = email
-                        }
-                    )
-
-                    memberSettingService.createDefaultSetting(
-                        MemberSettingDto().apply { memberId = requireNotNull(found.id) }
-                    )
-                    memberProfileService.createDefaultProfile(requireNotNull(found.id))
-                }
-
-                found.apply {
-                    // FE는 이 값으로 신규 SNS 사용자를 캘린더 큐레이션으로 보낸다.
-                    // 기존 SNS 사용자는 기존처럼 바로 일정 화면으로 이동한다.
-                    this.isNewMember = isNewSnsMember
-                }
+                memberService.findByLoginTypeAndSnsId(requestDto.loginType, snsId)
+                    ?.apply { this.isNewMember = false }
+                    ?: throw BusinessException(ErrorCode.SNS_SIGNUP_REQUIRED)
             }
-        } ?: throw IllegalStateException("로그인 과정에서 memberDto가 null입니다.")
+        }
 
-        // 2) 토큰 발급에 필요한 정보 추출
+        return issueTokens(memberDto)
+    }
+
+    @Transactional(readOnly = true)
+    fun isSnsMemberRegistered(loginType: LoginType, snsId: String): Boolean {
+        if (loginType == LoginType.COMMON || snsId.isBlank()) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "SNS 로그인 정보가 올바르지 않습니다.")
+        }
+        return memberService.findByLoginTypeAndSnsId(loginType, snsId) != null
+    }
+
+    @Transactional
+    fun signUpSns(requestDto: MemberDto, consents: SignupConsentCommand): MemberDto {
+        memberConsentService.validateRequiredSignupConsents(consents)
+
+        val loginType = requestDto.loginType
+        if (loginType == null || loginType == LoginType.COMMON) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "SNS 로그인 유형이 필요합니다.")
+        }
+
+        val snsId = memberValidator.requireSnsId(requestDto)
+        if (memberService.findByLoginTypeAndSnsId(loginType, snsId) != null) {
+            throw BusinessException(ErrorCode.DUPLICATE_MEMBER, "이미 가입된 SNS 계정입니다.")
+        }
+
+        val name = requestDto.name ?: requestDto.email ?: "사용자"
+        val email = requestDto.email?.takeIf { it.isNotBlank() }
+            ?: createSyntheticSnsEmail(loginType, snsId)
+        val saved = memberService.addMember(
+            Member().apply {
+                this.snsId = snsId
+                this.name = name
+                this.loginType = loginType
+                this.email = email
+            }
+        ).apply {
+            this.isNewMember = true
+        }
+        val memberId = requireNotNull(saved.id)
+
+        memberSettingService.createDefaultSetting(
+            MemberSettingDto().apply { this.memberId = memberId }
+        )
+        memberProfileService.createDefaultProfile(memberId)
+        memberConsentService.recordRequiredSignupConsents(
+            memberId = memberId,
+            consents = consents,
+            source = MemberConsentSource.SNS_SIGNUP,
+        )
+
+        return issueTokens(saved)
+    }
+
+    private fun issueTokens(memberDto: MemberDto): MemberDto {
         val memberId = requireNotNull(memberDto.id) { "member.id가 없습니다." }
         val memberName = requireNotNull(memberDto.name) { "member.name이 없습니다." }
 
@@ -127,7 +166,6 @@ class MemberUseCase(
         val refreshExpiry = jwtTokenProvider.getRefreshTokenExpiryLocalDateTime()
         refreshTokenService.saveNewToken(memberId, refreshToken, refreshExpiry)
 
-        // 5) 토큰 세팅해서 반환
         return memberDto.apply {
             this.accessToken = accessToken
             this.refreshToken = refreshToken
@@ -189,6 +227,30 @@ class MemberUseCase(
     @Transactional
     fun refresh(refreshToken: String): MemberDto {
         return reissueTokens(refreshToken)
+    }
+
+    @Transactional(readOnly = true)
+    fun getCurationStatus(memberId: Long): Boolean {
+        return memberService.getFindMemberId(memberId)
+            .orElseThrow {
+                BusinessException(ErrorCode.MEMBER_NOT_FOUND, "회원 정보를 찾을 수 없습니다.")
+            }
+            .curationCompleted
+    }
+
+    @Transactional
+    fun completeCuration(memberId: Long): Boolean {
+        val member = memberService.getFindMemberId(memberId)
+            .orElseThrow {
+                BusinessException(ErrorCode.MEMBER_NOT_FOUND, "회원 정보를 찾을 수 없습니다.")
+            }
+
+        // 완료 API는 재시도될 수 있다. 이미 완료된 회원은 불필요한 UPDATE 없이 성공으로 응답한다.
+        if (!member.curationCompleted) {
+            member.curationCompleted = true
+            memberService.updateMember(member)
+        }
+        return true
     }
 
     /**

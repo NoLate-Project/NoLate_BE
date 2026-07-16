@@ -251,3 +251,16 @@ CREATE TABLE IF NOT EXISTS recent_route_places (
     INDEX idx_recent_route_places_member_provider (member_id, deleted, provider, provider_place_id),
     INDEX idx_recent_route_places_member_coords (member_id, deleted, lat, lng)
 ) COMMENT='User recent route search places';
+
+CREATE TABLE IF NOT EXISTS member_consents (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Consent audit primary key',
+    member_id BIGINT NOT NULL COMMENT 'Member who accepted the document',
+    consent_type VARCHAR(40) NOT NULL COMMENT 'Accepted consent document type',
+    document_version VARCHAR(40) NOT NULL COMMENT 'Accepted document version',
+    agreed_at DATETIME(6) NOT NULL COMMENT 'Acceptance datetime',
+    withdrawn_at DATETIME(6) NULL COMMENT 'Withdrawal datetime when applicable',
+    source VARCHAR(30) NOT NULL COMMENT 'Signup channel that collected consent',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_member_consents_member_type_version (member_id, consent_type, document_version),
+    INDEX idx_member_consents_member_agreed_at (member_id, agreed_at)
+) COMMENT='Versioned member signup consent audit';

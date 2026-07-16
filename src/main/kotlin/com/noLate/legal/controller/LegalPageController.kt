@@ -11,11 +11,19 @@ import org.springframework.web.bind.annotation.RestController
 @RequestMapping("/legal")
 class LegalPageController {
 
+    @GetMapping("/terms-of-service", produces = [MediaType.TEXT_HTML_VALUE])
+    fun getTermsOfServicePage(): String =
+        renderLegalDocumentHtml(LegalDocuments.termsOfService)
+
+    @GetMapping("/privacy-collection-consent", produces = [MediaType.TEXT_HTML_VALUE])
+    fun getPrivacyCollectionConsentPage(): String =
+        renderLegalDocumentHtml(LegalDocuments.privacyCollectionConsent)
+
     @GetMapping("/privacy-policy", produces = [MediaType.TEXT_HTML_VALUE])
     fun getPrivacyPolicyPage(): String =
-        renderPrivacyPolicyHtml(LegalDocuments.privacyPolicy)
+        renderLegalDocumentHtml(LegalDocuments.privacyPolicy)
 
-    private fun renderPrivacyPolicyHtml(document: LegalDocumentDto): String {
+    private fun renderLegalDocumentHtml(document: LegalDocumentDto): String {
         val sections = document.sections.joinToString("\n") { section ->
             val paragraphs = section.body.joinToString("\n") { "<li>${it.escapeHtml()}</li>" }
             """
@@ -108,7 +116,7 @@ class LegalPageController {
                 <h1>${document.title.escapeHtml()}</h1>
                 <p class="summary">${document.summary.escapeHtml()}</p>
                 $sections
-                <footer>개인정보 관련 문의: privacy@nolate.jinuk.dev</footer>
+                <footer>NoLate 정책 문의: privacy@nolate.jinuk.dev</footer>
               </main>
             </body>
             </html>

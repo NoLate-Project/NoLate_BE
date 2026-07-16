@@ -6,6 +6,7 @@ import com.noLate.auth.domain.RefreshToken
 import com.noLate.global.error.BusinessException
 import com.noLate.global.security.JwtTokenProvider
 import com.noLate.member.application.service.MemberProfileService
+import com.noLate.member.application.service.MemberConsentService
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
 import com.noLate.member.application.service.MemberValidator
@@ -13,6 +14,8 @@ import com.noLate.member.application.useCase.MemberUseCase
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.domain.member.MemberDto
+import com.noLate.member.domain.consent.MemberConsentSource
+import com.noLate.member.domain.consent.SignupConsentCommand
 import com.noLate.member.domain.memberSetting.MemberSetting
 import com.noLate.member.domain.memberSetting.MemberSettingDto
 import com.noLate.member.domain.memberSetting.ThemeType
@@ -53,6 +56,16 @@ class MemberUseCaseUnitTest {
     @Mock
     lateinit var refreshTokenService: RefreshTokenService
 
+    @Mock
+    lateinit var memberConsentService: MemberConsentService
+
+    private val signupConsents = SignupConsentCommand(
+        termsVersion = "2026.07.16",
+        privacyCollectionVersion = "2026.07.16",
+        termsAgreed = true,
+        privacyCollectionAgreed = true,
+    )
+
     private lateinit var memberUseCase: MemberUseCase
 
     @BeforeEach
@@ -64,7 +77,8 @@ class MemberUseCaseUnitTest {
             jwtTokenProvider = jwtTokenProvider,
             passwordEncoder = passwordEncoder,
             memberValidator = memberValidator,
-            refreshTokenService = refreshTokenService
+            refreshTokenService = refreshTokenService,
+            memberConsentService = memberConsentService,
         )
     }
 
@@ -96,7 +110,7 @@ class MemberUseCaseUnitTest {
             .thenReturn(savedDto)
 
         // when
-        val result = memberUseCase.signUp(requestDto)
+        val result = memberUseCase.signUp(requestDto, signupConsents)
 
         // then
         verify(memberValidator, times(1)).validateCommonSignUp(requestDto)
@@ -110,6 +124,12 @@ class MemberUseCaseUnitTest {
         // refreshTokenService는 회원가입에선 사용 안 되고, 기본 프로필은 생성한다
         verifyNoInteractions(refreshTokenService)
         verify(memberProfileService, times(1)).createDefaultProfile(1L)
+        verify(memberConsentService).validateRequiredSignupConsents(signupConsents)
+        verify(memberConsentService).recordRequiredSignupConsents(
+            memberId = 1L,
+            consents = signupConsents,
+            source = MemberConsentSource.COMMON_SIGNUP,
+        )
 
         assertEquals(1L, result.id)
         assertEquals("user@test.com", result.email)
@@ -173,7 +193,7 @@ class MemberUseCaseUnitTest {
     }
 
     @Test
-    fun `SNS 로그인 시 기존 회원이 없으면 새로 생성하고 설정 생성 후 토큰을 발급하고 refreshToken을 저장한다`() {
+    fun `SNS 로그인은 기존 회원에게만 토큰을 발급하고 가입 데이터를 만들지 않는다`() {
         // given
         val snsLoginRequest = MemberDto(
             id = null,
@@ -187,9 +207,6 @@ class MemberUseCaseUnitTest {
         whenever(memberValidator.requireSnsId(snsLoginRequest))
             .thenReturn("kakao-123")
 
-        whenever(memberService.findByLoginTypeAndSnsId(LoginType.KAKAO, "kakao-123"))
-            .thenReturn(null)
-
         val savedSnsDto = MemberDto(
             id = 10L,
             email = "sns@test.com",
@@ -199,7 +216,7 @@ class MemberUseCaseUnitTest {
             snsId = "kakao-123"
         )
 
-        whenever(memberService.addMember(any<Member>()))
+        whenever(memberService.findByLoginTypeAndSnsId(LoginType.KAKAO, "kakao-123"))
             .thenReturn(savedSnsDto)
 
         whenever(jwtTokenProvider.createAccessToken(10L, "SNS유저"))
@@ -218,13 +235,8 @@ class MemberUseCaseUnitTest {
             .requireSnsId(snsLoginRequest)
         verify(memberService, times(1))
             .findByLoginTypeAndSnsId(LoginType.KAKAO, "kakao-123")
-        verify(memberService, times(1))
-            .addMember(any<Member>())
-        verify(memberSettingService, times(1))
-            .createDefaultSetting(check<MemberSettingDto> {
-                assertEquals(10L, it.memberId)
-            })
-        verify(memberProfileService, times(1)).createDefaultProfile(10L)
+        verify(memberService, never()).addMember(any<Member>())
+        verifyNoInteractions(memberSettingService, memberProfileService, memberConsentService)
         verify(jwtTokenProvider, times(1))
             .createAccessToken(10L, "SNS유저")
         verify(jwtTokenProvider, times(1))
@@ -237,10 +249,11 @@ class MemberUseCaseUnitTest {
         assertEquals("SNS유저", result.name)
         assertEquals("access-token-sns", result.accessToken)
         assertEquals("refresh-token-sns", result.refreshToken)
+        assertFalse(result.isNewMember)
     }
 
     @Test
-    fun `SNS 첫 로그인에서 이메일이 없으면 내부 대체 이메일로 저장하고 기본 프로필을 생성한다`() {
+    fun `SNS 신규 가입은 이메일이 없으면 대체 이메일과 동의 이력을 저장한다`() {
         // given
         val snsLoginRequest = MemberDto(
             id = null,
@@ -279,7 +292,7 @@ class MemberUseCaseUnitTest {
             .thenReturn(expiry)
 
         // when
-        val result = memberUseCase.login(snsLoginRequest)
+        val result = memberUseCase.signUpSns(snsLoginRequest, signupConsents)
 
         // then
         verify(memberService, times(1)).addMember(check<Member> {
@@ -292,12 +305,39 @@ class MemberUseCaseUnitTest {
                 assertEquals(11L, it.memberId)
             })
         verify(memberProfileService, times(1)).createDefaultProfile(11L)
+        verify(memberConsentService).validateRequiredSignupConsents(signupConsents)
+        verify(memberConsentService).recordRequiredSignupConsents(
+            memberId = 11L,
+            consents = signupConsents,
+            source = MemberConsentSource.SNS_SIGNUP,
+        )
         verify(refreshTokenService, times(1))
             .saveNewToken(eq(11L), eq("refresh-token-no-email"), eq(expiry))
 
         assertEquals("naver_naver_without-email@social.local", result.email)
         assertEquals("access-token-no-email", result.accessToken)
         assertEquals("refresh-token-no-email", result.refreshToken)
+        assertTrue(result.isNewMember)
+    }
+
+    @Test
+    fun `가입되지 않은 SNS 계정은 로그인에서 회원을 자동 생성하지 않는다`() {
+        val request = MemberDto(
+            loginType = LoginType.APPLE,
+            snsId = "new-apple-user",
+            name = "Apple 사용자",
+        )
+        whenever(memberValidator.requireSnsId(request)).thenReturn("new-apple-user")
+        whenever(memberService.findByLoginTypeAndSnsId(LoginType.APPLE, "new-apple-user"))
+            .thenReturn(null)
+
+        val exception = assertThrows<BusinessException> {
+            memberUseCase.login(request)
+        }
+
+        assertEquals(com.noLate.global.error.ErrorCode.SNS_SIGNUP_REQUIRED, exception.errorCode)
+        verify(memberService, never()).addMember(any<Member>())
+        verifyNoInteractions(memberSettingService, memberProfileService, memberConsentService)
     }
 
     @Test
@@ -327,7 +367,8 @@ class MemberUseCaseUnitTest {
             password = "encoded",
             name = "테스트유저",
             loginType = LoginType.COMMON,
-            snsId = null
+            snsId = null,
+            curationCompleted = true,
         )
         whenever(memberService.getFindMemberId(memberId))
             .thenReturn(Optional.of(member))
@@ -353,6 +394,7 @@ class MemberUseCaseUnitTest {
         assertEquals(memberId, result.id)
         assertEquals("new-access", result.accessToken)
         assertEquals("new-refresh", result.refreshToken)
+        assertTrue(result.curationCompleted)
     }
 
     @Test
@@ -617,5 +659,39 @@ class MemberUseCaseUnitTest {
 
         assertEquals("새닉", result.nickname)
         assertEquals("저는 수정된 유저입니다.", result.intro)
+    }
+
+    @Test
+    fun `getCurationStatus는 DB 회원의 영속 완료 상태를 반환한다`() {
+        val member = Member(id = 50L, curationCompleted = true)
+        whenever(memberService.getFindMemberId(50L)).thenReturn(Optional.of(member))
+
+        val result = memberUseCase.getCurationStatus(50L)
+
+        assertTrue(result)
+    }
+
+    @Test
+    fun `completeCuration은 미완료 회원을 완료로 저장한다`() {
+        val member = Member(id = 51L, curationCompleted = false)
+        whenever(memberService.getFindMemberId(51L)).thenReturn(Optional.of(member))
+        whenever(memberService.updateMember(member)).thenReturn(member.toDto())
+
+        val result = memberUseCase.completeCuration(51L)
+
+        assertTrue(result)
+        assertTrue(member.curationCompleted)
+        verify(memberService).updateMember(member)
+    }
+
+    @Test
+    fun `completeCuration은 이미 완료된 회원을 다시 저장하지 않는다`() {
+        val member = Member(id = 52L, curationCompleted = true)
+        whenever(memberService.getFindMemberId(52L)).thenReturn(Optional.of(member))
+
+        val result = memberUseCase.completeCuration(52L)
+
+        assertTrue(result)
+        verify(memberService, never()).updateMember(any())
     }
 }
