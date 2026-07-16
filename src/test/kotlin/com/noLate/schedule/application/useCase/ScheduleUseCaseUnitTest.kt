@@ -1,5 +1,7 @@
 package com.noLate.schedule.application.useCase
 
+import com.noLate.favorite.application.service.FavoritePlaceService
+import com.noLate.favorite.domain.FavoritePlaceDto
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.SchedulePushJobService
@@ -7,8 +9,10 @@ import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleOriginSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
+import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.ScheduleTravelMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -40,6 +44,9 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var scheduleDepartureStatusService: ScheduleDepartureStatusService
 
+    @Mock
+    lateinit var favoritePlaceService: FavoritePlaceService
+
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
 
     private lateinit var scheduleUseCase: ScheduleUseCase
@@ -51,6 +58,7 @@ class ScheduleUseCaseUnitTest {
             schedulePushJobService = schedulePushJobService,
             scheduleHybridParserService = scheduleHybridParserService,
             scheduleDepartureStatusService = scheduleDepartureStatusService,
+            favoritePlaceService = favoritePlaceService,
             clock = clock,
         )
     }
@@ -96,6 +104,90 @@ class ScheduleUseCaseUnitTest {
             60,
         )
         assertEquals(parsed, result)
+    }
+
+    @Test
+    fun `출발지가 없으면 회원 계정의 기본 주소를 사용한다`() {
+        // 파서 결과에는 사용자가 실제로 말하거나 적은 출발지만 들어간다. 회원별 기본값은
+        // 인증된 memberId를 아는 UseCase에서 보완해 다른 회원의 장소가 섞이지 않게 한다.
+        val parsed = ScheduleParseDto(
+            title = "강남 용용선생 08:00",
+            date = "2026-07-18",
+            time = "08:00",
+            destination = SchedulePlaceDto(name = "강남 용용선생"),
+            missingFields = listOf("origin"),
+        )
+        whenever(
+            scheduleHybridParserService.parse(
+                "토요일 8시 강남 용용선생",
+                ScheduleParseInputType.VOICE_TRANSCRIPT,
+                "2026-07-16",
+                60,
+            ),
+        ).thenReturn(parsed)
+        whenever(favoritePlaceService.getDefaultOrigin(7L)).thenReturn(
+            FavoritePlaceDto(
+                id = 12L,
+                label = "집",
+                placeName = "우리 집",
+                address = "서울특별시 강남구 테헤란로 1",
+                lat = 37.5,
+                lng = 127.0,
+                defaultOrigin = true,
+                sortOrder = 0,
+            ),
+        )
+
+        val result = scheduleUseCase.parseScheduleText(
+            memberId = 7L,
+            text = "토요일 8시 강남 용용선생",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("우리 집", result.origin?.name)
+        assertEquals("서울특별시 강남구 테헤란로 1", result.origin?.address)
+        assertEquals(37.5, result.origin?.lat)
+        assertEquals(127.0, result.origin?.lng)
+        assertEquals(ScheduleOriginSource.FAVORITE_DEFAULT, result.originSource)
+        assertEquals(false, result.originRequired)
+        assertEquals(false, "origin" in result.missingFields)
+    }
+
+    @Test
+    fun `원문에서 찾은 출발지는 계정 기본 주소로 덮어쓰지 않는다`() {
+        // 사용자가 직접 말한 출발지는 가장 강한 의도다. 기본 출발지 조회 자체를 생략하는지
+        // 검증해 불필요한 DB 조회와 사용자 입력 덮어쓰기를 동시에 방지한다.
+        val parsed = ScheduleParseDto(
+            title = "판교 네이버 19:00",
+            date = "2026-07-18",
+            time = "19:00",
+            origin = SchedulePlaceDto(name = "강남역"),
+            originSource = ScheduleOriginSource.TEXT,
+            originRequired = false,
+            destination = SchedulePlaceDto(name = "판교 네이버"),
+        )
+        whenever(
+            scheduleHybridParserService.parse(
+                "토요일 저녁 7시 강남역에서 판교 네이버까지",
+                ScheduleParseInputType.VOICE_TRANSCRIPT,
+                "2026-07-16",
+                60,
+            ),
+        ).thenReturn(parsed)
+
+        val result = scheduleUseCase.parseScheduleText(
+            memberId = 7L,
+            text = "토요일 저녁 7시 강남역에서 판교 네이버까지",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("강남역", result.origin?.name)
+        assertEquals(ScheduleOriginSource.TEXT, result.originSource)
+        verify(favoritePlaceService, never()).getDefaultOrigin(7L)
     }
 
     @Test

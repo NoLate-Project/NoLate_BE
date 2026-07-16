@@ -483,6 +483,50 @@ class ScheduleTextParserServiceTest {
     }
 
     @Test
+    fun `parses plain multi word destination from voice transcript`() {
+        // 실제 STT는 "장소" 라벨이나 "까지" 조사를 붙이지 않고 날짜, 시간, 상호만 반환할 수 있다.
+        // 일정 문맥을 제거한 뒤 남은 두 단어 상호 전체가 목적지로 유지되는지 검증한다.
+        val result = parser.parse(
+            text = "토요일 8시 강남 용용선생",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-18", result.date)
+        assertEquals("08:00", result.time)
+        assertEquals("강남 용용선생", result.destination?.name)
+        assertEquals("강남 용용선생 08:00", result.title)
+    }
+
+    @Test
+    fun `parses plain multi word destination from OCR lines`() {
+        // OCR이 요일·시간과 상호를 서로 다른 줄로 분리해도 장소 줄을 독립 후보로 읽어야 한다.
+        val result = parser.parse(
+            text = "토요일 8시\n강남 용용선생",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-18", result.date)
+        assertEquals("강남 용용선생", result.destination?.name)
+    }
+
+    @Test
+    fun `does not treat person and purpose phrase as natural destination`() {
+        val result = parser.parse(
+            text = "토요일 8시 친구와 저녁",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertNull(result.destination)
+        assertTrue("destination" in result.missingFields)
+    }
+
+    @Test
     fun `does not treat rename arrow without date or time context as route`() {
         val result = parser.parse(
             text = "행사 날짜: 2026-06-13\n행사 시간: 14:30\n장소: 수원 더케이 웨딩컨벤션\n더시그너스 웨딩홀 -> 이름변경",

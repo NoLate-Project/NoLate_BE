@@ -42,8 +42,9 @@ class ScheduleController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: ParseScheduleTextRequest,
     ): ApiResponse<ScheduleParseDto> {
-        requireMemberId(principal)
+        val memberId = requireMemberId(principal)
         val result = scheduleUseCase.parseScheduleText(
+            memberId = memberId,
             text = request.text,
             // 구버전 FE가 inputType을 보내지 않아도 기존 TEXT 동작을 유지한다.
             // 값이 있으면 음성/OCR 정규화 정책이 적용되도록 서비스 계층까지 전달한다.

@@ -63,6 +63,28 @@ class ScheduleTextParserService {
         "고객미팅",
         "약속",
     )
+    private val mediaNaturalDestinationTypes = setOf(
+        ScheduleParseInputType.IMAGE_OCR,
+        ScheduleParseInputType.VOICE_TRANSCRIPT,
+    )
+    private val naturalDestinationPurposeTokens = setOf(
+        "회의",
+        "미팅",
+        "약속",
+        "운동",
+        "점심",
+        "저녁",
+        "식사",
+        "회식",
+        "술",
+        "술먹기",
+        "공부",
+        "스터디",
+        "진료",
+        "예약",
+        "방문",
+        "생일",
+    )
 
     /**
      * 원문을 정규화한 뒤 날짜, 시간, 장소, 메모 후보를 순서대로 추출한다.
@@ -126,6 +148,7 @@ class ScheduleTextParserService {
             ?: compactFields?.destinationName?.let { SchedulePlaceDto(name = it) }
             ?: dotAssignmentFields?.destinationName?.let { SchedulePlaceDto(name = it) }
             ?: routeExpressionFields?.destinationName?.let { SchedulePlaceDto(name = it) }
+            ?: chooseNaturalDestination(lines, inputType)
         val title = buildTitle(destination, selectedTime)
         val notes = buildNotes(
             customerName = customerName,
@@ -667,6 +690,105 @@ class ScheduleTextParserService {
             koreanTimePattern,
             colonTimePattern,
         )
+
+    /**
+     * 라벨이나 이동 화살표가 없는 미디어 입력에서 마지막 장소 문구를 목적지로 보완한다.
+     *
+     * STT와 OCR은 `토요일 8시 강남 용용선생`처럼 날짜·시간 뒤에 장소만 붙은 결과를 자주
+     * 만든다. 앞 단계는 라벨 또는 `A -> B`처럼 구조가 명확한 입력만 처리하므로, 여기서는
+     * 날짜·요일·시간·명령어를 제거한 뒤 남은 짧은 구절만 후보로 사용한다. 일반 TEXT까지
+     * 이 규칙을 적용하면 메모 문장을 장소로 오인할 수 있어 사진과 음성 입력으로 한정한다.
+     */
+    private fun chooseNaturalDestination(
+        lines: List<String>,
+        inputType: ScheduleParseInputType,
+    ): SchedulePlaceDto? {
+        if (inputType !in mediaNaturalDestinationTypes) return null
+
+        lines.forEach { line ->
+            val cleaned = removeMediaScheduleContext(line)
+            if (cleaned.isBlank()) return@forEach
+
+            // `강남 용용선생에서`, `병원으로`처럼 장소 조사가 있으면 조사 앞부분을 우선한다.
+            // 조사는 장소 경계를 강하게 알려주므로 한 단어 장소도 허용하되 일정 목적어는 거른다.
+            val particleCandidate = Regex("""^(.{1,40}?)(?:에서|으로|로)(?:\s|$)""")
+                .find(cleaned)
+                ?.groupValues
+                ?.get(1)
+                ?.let(::cleanNaturalDestination)
+                ?.takeIf(::isSafeNaturalDestinationPhrase)
+            if (particleCandidate != null) {
+                return SchedulePlaceDto(name = particleCandidate)
+            }
+
+            val plainCandidate = cleanNaturalDestination(cleaned)
+                ?.takeIf(::isLikelyPlainNaturalDestination)
+            if (plainCandidate != null) {
+                return SchedulePlaceDto(name = plainCandidate)
+            }
+        }
+        return null
+    }
+
+    /**
+     * 자연어 장소 후보를 만들기 전에 일정 문맥만 제거한다.
+     *
+     * 날짜 정규식은 형식마다 별도로 유지해 `7월 18일`, `2026-07-18`, `20260718` 모두
+     * 동일하게 제거한다. 장소 문자열 자체는 검색 화면에서 다시 확인해야 하므로 맞춤법을
+     * 보정하거나 단어 순서를 바꾸지 않는다.
+     */
+    private fun removeMediaScheduleContext(line: String): String =
+        line
+            .replace(Regex("""NoLate\s+(?:손글씨|이미지)\s+OCR\s+QA\s*#?\d*"""), " ")
+            .replace(fullDatePattern, " ")
+            .replace(compactDatePattern, " ")
+            .replace(koreanDatePattern, " ")
+            .replace(shortDatePattern, " ")
+            .replace(Regex("""(?:오늘|내일|모레|글피)"""), " ")
+            .replace(weekdayTokenPattern, " ")
+            .replace(koreanTimePattern, " ")
+            .replace(colonTimePattern, " ")
+            .replace(
+                Regex("""\s*(?:일정\s*)?(?:추가|등록|저장|잡아)\s*(?:해줘|해 줘|해주세요|해 주세요)?[.!?。]*$"""),
+                " ",
+            )
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+    private fun cleanNaturalDestination(value: String): String? =
+        value
+            .replace(Regex("""^(?:장소|도착지)\s*[:：]?\s*"""), "")
+            .trim(' ', ',', '.', '/', '-', '·', ':', '：')
+            .replace(Regex("""\s+"""), " ")
+            .takeIf { it.length in 1..40 && it.any { char -> char.isLetterOrDigit() } }
+
+    /**
+     * 사람과 할 일을 나타내는 구절을 장소로 저장하지 않기 위한 최소 안전장치다.
+     * `친구와 저녁`, `민수랑 미팅`은 장소가 아니지만 `강남 용용선생`처럼 두 단어로 된
+     * 상호는 유효하다. 한 단어 후보는 역·병원·카페 등 장소성이 드러나는 접미사가 있을 때만
+     * 허용해 일반 명사를 목적지로 채우는 오탐을 줄인다.
+     */
+    private fun isLikelyPlainNaturalDestination(value: String): Boolean {
+        if (!isSafeNaturalDestinationPhrase(value)) return false
+        val tokens = value.split(Regex("""\s+""")).filter { it.isNotBlank() }
+        if (tokens.size !in 1..5) return false
+        if (tokens.size >= 2) return true
+
+        return value.matches(
+            Regex(""".*(?:역|점|관|원|센터|카페|식당|학교|회사|병원|치과|의원|미용실|공원|호텔|웨딩홀|스튜디오|교회|성당|공항|터미널|마트|백화점|선생)$"""),
+        )
+    }
+
+    private fun isSafeNaturalDestinationPhrase(value: String): Boolean {
+        val normalizedTokens = value
+            .split(Regex("""\s+"""))
+            .map { it.trim(' ', ',', '.', '/', '-', '·') }
+            .filter { it.isNotBlank() }
+        if (normalizedTokens.isEmpty()) return false
+        if (normalizedTokens.any { it in naturalDestinationPurposeTokens }) return false
+        if (normalizedTokens.any { it.endsWith("와") || it.endsWith("과") || it.endsWith("랑") }) return false
+        return true
+    }
 
     /**
      * "20260530/1030.업체.(m)작가.장소.예약자.m" 형식만 엄격하게 해석한다.
