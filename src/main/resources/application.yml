@@ -16,14 +16,16 @@ spring:
       mode: always
 
   datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MY_SQL_END_POINT}:${MY_SQL_PORT:3306}/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
+    driver-class-name: com.p6spy.engine.spy.P6SpyDriver
+    url: jdbc:p6spy:mysql://${MY_SQL_END_POINT}:${MY_SQL_PORT:3306}/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
     #useSSL=false&serverTimezone=Asia/Seoul
     username: ${MY_SQL_DB_USERNAME}
     password: ${MY_SQL_DB_PASSWORD}
 
   jpa:
-    show-sql: true
+    # 주기적으로 실행되는 스케줄 워커의 정상 쿼리는 출력하지 않는다.
+    # SQL 실행 실패 시에는 Hibernate 예외 스택에 실패한 SQL이 포함된다.
+    show-sql: false
     properties:
       hibernate:
         format_sql: true
@@ -42,7 +44,11 @@ spring:
 
 logging:
   level:
-    p6spy: info
+    # SQL 출력은 P6Spy 에러 리스너 한 곳으로 모아 중복 로그를 피한다.
+    org.hibernate.SQL: "OFF"
+    org.hibernate.orm.jdbc.bind: "OFF"
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: "OFF"
+    p6spy: "OFF"
 
 jwt:
   secret-key: ${JWT_SECRET_KEY}
