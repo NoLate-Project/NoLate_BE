@@ -5,12 +5,19 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategorySettingDto
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.domain.ScheduleShareResourceType
+import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleShareStatus
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service
 
 @Service
 class ScheduleCategoryService(
     private val categoryRepository: ScheduleCategoryRepository,
+    private val categoryShareRepository: ScheduleCategoryShareRepository? = null,
+    private val invitationRepository: ScheduleShareInvitationRepository? = null,
 ) {
     private val defaultCategories = listOf(
         DefaultScheduleCategory("업무", "#f44336", "briefcase-outline"),
@@ -30,9 +37,35 @@ class ScheduleCategoryService(
     @Transactional
     fun getCategories(memberId: Long): List<ScheduleCategorySettingDto> {
         ensureDefaultCategories(memberId)
-        return categoryRepository.findVisibleCategories(memberId)
+        val visibleCategories = categoryRepository.findVisibleCategories(memberId)
+        val hasReceivedCategory = visibleCategories.any { it.memberId != memberId }
+        val permissionByCategoryId = if (hasReceivedCategory) {
+            categoryShareRepository
+                ?.findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
+                    targetMemberId = memberId,
+                    status = ScheduleShareStatus.ACTIVE,
+                )
+                ?.associate { it.categoryId to it.permission }
+                .orEmpty()
+        } else {
+            emptyMap()
+        }
+
+        return visibleCategories
             .map { category ->
-                category.toDto().copy(shared = category.memberId != memberId)
+                val shared = category.memberId != memberId
+                category.toDto().copy(
+                    shared = shared,
+                    // The visibility query proves access. If a legacy service
+                    // instance has no share repository, fall back to the least
+                    // privileged label rather than falsely claiming edit access.
+                    sharePermission = if (shared) {
+                        category.id?.let(permissionByCategoryId::get)
+                            ?: ScheduleSharePermission.VIEWER
+                    } else {
+                        null
+                    },
+                )
             }
     }
 
@@ -78,6 +111,16 @@ class ScheduleCategoryService(
     @Transactional
     fun deleteCategory(memberId: Long, categoryId: Long) {
         val entity = findCategory(memberId, categoryId)
+        categoryShareRepository
+            ?.findAllByCategoryIdAndDeletedFalse(categoryId)
+            ?.forEach { it.revoke() }
+        invitationRepository
+            ?.findAllByOwnerMemberIdAndResourceTypeAndResourceIdAndDeletedFalseOrderByIdDesc(
+                ownerMemberId = memberId,
+                resourceType = ScheduleShareResourceType.CATEGORY,
+                resourceId = categoryId,
+            )
+            ?.forEach { it.revoke() }
         entity.softDelete()
         categoryRepository.save(entity)
     }

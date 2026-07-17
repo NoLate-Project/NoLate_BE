@@ -21,3 +21,6 @@ class InvalidPushTokenException(
     val token: String,
     cause: Throwable? = null,
 ) : RuntimeException("유효하지 않은 푸시 토큰입니다.", cause)
+
+class PushProviderUnavailableException :
+    RuntimeException("푸시 공급자가 설정되지 않았습니다.")

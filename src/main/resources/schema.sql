@@ -2,12 +2,14 @@ CREATE TABLE IF NOT EXISTS schedules (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule primary key',
     member_id BIGINT NOT NULL COMMENT 'Owner member id',
     category_id BIGINT NULL COMMENT 'Current schedule category id for share permission lookup',
+    external_source_key VARCHAR(64) NULL COMMENT 'Member-scoped external calendar occurrence idempotency key',
     title VARCHAR(120) NOT NULL COMMENT 'Schedule title',
     start_at DATETIME(6) NOT NULL COMMENT 'Schedule start time',
     end_at DATETIME(6) NOT NULL COMMENT 'Schedule end time',
     has_end_time BOOLEAN NOT NULL DEFAULT TRUE COMMENT 'End time input flag',
     all_day BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'All-day schedule flag',
     notes TEXT NULL COMMENT 'Schedule memo',
+    route_setup_required BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Whether route setup is still required after quick share',
     created_at DATETIME(6) NULL COMMENT 'BaseAt created time',
     updated_at DATETIME(6) NULL COMMENT 'BaseAt updated time',
     deleted_at DATETIME(6) NULL COMMENT 'Soft delete time',
@@ -16,7 +18,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     update_dt DATETIME(6) NULL COMMENT 'BaseEntity updated time',
     PRIMARY KEY (id),
     INDEX idx_schedules_member_deleted_start (member_id, deleted, start_at),
-    INDEX idx_schedules_category_deleted_start (category_id, deleted, start_at)
+    INDEX idx_schedules_category_deleted_start (category_id, deleted, start_at),
+    UNIQUE KEY uk_schedules_member_external_source (member_id, external_source_key)
 ) COMMENT='Schedule core table';
 
 CREATE TABLE IF NOT EXISTS schedule_category_snapshots (
@@ -251,3 +254,16 @@ CREATE TABLE IF NOT EXISTS recent_route_places (
     INDEX idx_recent_route_places_member_provider (member_id, deleted, provider, provider_place_id),
     INDEX idx_recent_route_places_member_coords (member_id, deleted, lat, lng)
 ) COMMENT='User recent route search places';
+
+CREATE TABLE IF NOT EXISTS member_consents (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Consent audit primary key',
+    member_id BIGINT NOT NULL COMMENT 'Member who accepted the document',
+    consent_type VARCHAR(40) NOT NULL COMMENT 'Accepted consent document type',
+    document_version VARCHAR(40) NOT NULL COMMENT 'Accepted document version',
+    agreed_at DATETIME(6) NOT NULL COMMENT 'Acceptance datetime',
+    withdrawn_at DATETIME(6) NULL COMMENT 'Withdrawal datetime when applicable',
+    source VARCHAR(30) NOT NULL COMMENT 'Signup channel that collected consent',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_member_consents_member_type_version (member_id, consent_type, document_version),
+    INDEX idx_member_consents_member_agreed_at (member_id, agreed_at)
+) COMMENT='Versioned member signup consent audit';

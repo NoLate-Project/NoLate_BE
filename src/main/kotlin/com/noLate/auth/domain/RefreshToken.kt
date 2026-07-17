@@ -14,10 +14,10 @@ class RefreshToken (
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     var id : Long ?= null,
 
-    @Column(nullable = false)
+    @Column(nullable = false, unique = true)
     var memberId : Long ?= null,
 
-    @Column(nullable = false)
+    @Column(nullable = false, unique = true, length = 1024)
     var token : String ?= "",
 
     @Column(nullable = false)

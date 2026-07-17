@@ -9,6 +9,7 @@ import java.time.Instant
 
 
 interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
+    fun deleteAllByMemberId(memberId: Long)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     fun findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
         status: SchedulePushJobStatus,

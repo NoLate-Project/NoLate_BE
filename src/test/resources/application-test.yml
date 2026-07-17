@@ -1,0 +1,49 @@
+spring:
+  config:
+    import: ""
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:nolate-test;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: never
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+
+schedule:
+  push:
+    enabled: false
+    fixed-delay-ms: 86400000
+  ai:
+    groq:
+      enabled: false
+  traffic:
+    tmap:
+      enabled: false
+routing:
+  tmap:
+    enabled: false
+firebase:
+  enabled: false
+
+jwt:
+  secret-key: test-only-secret-key-that-is-at-least-thirty-two-bytes
+  issuer: nolate-test
+  access-token-validity-in-seconds: 3600
+  refresh-token-validity-in-seconds: 7200
+
+auth:
+  social:
+    kakao:
+      app-id: test-app
+    apple:
+      audiences: com.nolate.test

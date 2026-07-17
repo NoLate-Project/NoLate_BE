@@ -5,6 +5,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.member.application.useCase.MemberUseCase
+import com.noLate.member.domain.consent.SignupConsentCommand
 import com.noLate.member.domain.member.MemberDto
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.profile.MemberProfileDto
@@ -29,7 +30,7 @@ class MemberController(
             name = request.name,
             loginType = LoginType.COMMON
         )
-        val result = memberUseCase.signUp(memberDto)
+        val result = memberUseCase.signUp(memberDto, request.consents.toCommand())
         return ApiResponse.success(result)
     }
 
@@ -48,13 +49,36 @@ class MemberController(
     @Operation(summary = "SNS 로그인")
     @PostMapping("/auth/sns-login")
     fun snsLogin(@RequestBody request: SnsLoginRequest): ApiResponse<MemberDto> {
-        val memberDto = MemberDto(
-            email = request.email,
-            name = request.name,
+        val result = memberUseCase.loginSns(
             loginType = request.loginType,
-            snsId = request.snsId
+            providerToken = request.providerToken,
+            nonce = request.nonce,
         )
-        val result = memberUseCase.login(memberDto)
+        return ApiResponse.success(result)
+    }
+
+    @Operation(summary = "SNS 가입 여부 확인")
+    @PostMapping("/auth/sns-registration")
+    fun getSnsRegistrationStatus(
+        @RequestBody request: SnsRegistrationRequest,
+    ): ApiResponse<SnsRegistrationStatusResponse> {
+        val registered = memberUseCase.isSnsMemberRegistered(
+            loginType = request.loginType,
+            providerToken = request.providerToken,
+            nonce = request.nonce,
+        )
+        return ApiResponse.success(SnsRegistrationStatusResponse(registered = registered))
+    }
+
+    @Operation(summary = "SNS 신규 회원가입")
+    @PostMapping("/auth/sns-sign-up")
+    fun snsSignUp(@RequestBody request: SnsSignUpRequest): ApiResponse<MemberDto> {
+        val result = memberUseCase.signUpSns(
+            loginType = request.loginType,
+            providerToken = request.providerToken,
+            nonce = request.nonce,
+            consents = request.consents.toCommand(),
+        )
         return ApiResponse.success(result)
     }
 
@@ -77,6 +101,24 @@ class MemberController(
     fun logout(@RequestBody request: TokenLoginRequest): ApiResponse<Unit> {
         memberUseCase.logout(request.refreshToken)
         return ApiResponse.success(Unit)
+    }
+
+    @Operation(summary = "큐레이션 완료 상태 조회")
+    @GetMapping("/curation")
+    fun getCurationStatus(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+    ): ApiResponse<CurationStatusResponse> {
+        val completed = memberUseCase.getCurationStatus(requireMemberId(principal))
+        return ApiResponse.success(CurationStatusResponse(curationCompleted = completed))
+    }
+
+    @Operation(summary = "큐레이션 완료 처리")
+    @PatchMapping("/curation/complete")
+    fun completeCuration(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+    ): ApiResponse<CurationStatusResponse> {
+        val completed = memberUseCase.completeCuration(requireMemberId(principal))
+        return ApiResponse.success(CurationStatusResponse(curationCompleted = completed))
     }
 
     @Operation(summary = "내 프로필 조회")
@@ -141,7 +183,8 @@ class MemberController(
 data class SignUpRequest(
     val email: String,
     val password: String,
-    val name: String
+    val name: String,
+    val consents: SignupConsentRequest,
 )
 
 data class LoginRequest(
@@ -149,16 +192,55 @@ data class LoginRequest(
     val password: String
 )
 
-// 카카오/구글 SDK에서 검증 완료된 값들을 보내준다고 가정
+// 카카오/네이버는 access token, Apple은 identity token을 providerToken으로 보낸다.
+// authorizationCode는 향후 server-side code exchange를 위한 호환 필드이며 현재 인증 판단에는
+// 사용하지 않는다. Apple nonce를 사용한 클라이언트는 nonce도 반드시 함께 보낸다.
 data class SnsLoginRequest(
-    val loginType: LoginType, // KAKAO / GOOGLE / ...
-    val snsId: String,
-    val email: String?,
-    val name: String
+    val loginType: LoginType,
+    val providerToken: String,
+    val authorizationCode: String? = null,
+    val nonce: String? = null,
 )
+
+data class SnsRegistrationRequest(
+    val loginType: LoginType,
+    val providerToken: String,
+    val authorizationCode: String? = null,
+    val nonce: String? = null,
+)
+
+data class SnsRegistrationStatusResponse(
+    val registered: Boolean,
+)
+
+data class SnsSignUpRequest(
+    val loginType: LoginType,
+    val providerToken: String,
+    val authorizationCode: String? = null,
+    val nonce: String? = null,
+    val consents: SignupConsentRequest,
+)
+
+data class SignupConsentRequest(
+    val termsVersion: String,
+    val privacyCollectionVersion: String,
+    val termsAgreed: Boolean,
+    val privacyCollectionAgreed: Boolean,
+) {
+    fun toCommand() = SignupConsentCommand(
+        termsVersion = termsVersion,
+        privacyCollectionVersion = privacyCollectionVersion,
+        termsAgreed = termsAgreed,
+        privacyCollectionAgreed = privacyCollectionAgreed,
+    )
+}
 
 data class TokenLoginRequest(
     val refreshToken: String
+)
+
+data class CurationStatusResponse(
+    val curationCompleted: Boolean,
 )
 
 data class UpdateProfileRequest(

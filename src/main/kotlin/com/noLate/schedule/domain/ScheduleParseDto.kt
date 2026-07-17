@@ -7,7 +7,7 @@ enum class ScheduleOriginSource {
     /** 사용자가 입력한 원문에서 출발지를 찾았다. */
     TEXT,
 
-    /** 사용자의 기본 즐겨찾기 장소를 출발지로 사용했다. */
+    /** 사용자가 계정에 저장한 기본 주소(기본 출발지)를 사용했다. */
     FAVORITE_DEFAULT,
 
     /** 출발지를 찾지 못해 사용자가 직접 선택해야 한다. */
@@ -48,6 +48,12 @@ data class ScheduleParseDto(
     /** 일정 생성 payload에 바로 쓸 수 있는 UTC ISO 시각이다. */
     val startAt: String? = null,
     val endAt: String? = null,
+
+    /**
+     * [endAt]이 원문의 명시적인 종료 시각(예: `3시부터 5시까지`)에서 온 값인지 나타낸다.
+     * false면 [endAt]은 미리보기에 필요한 기본 지속 시간으로 계산된 값이다.
+     */
+    val hasExplicitEndTime: Boolean = false,
 
     /** 원문에서 추출한 출발지와 출발지 결정 상태다. */
     val origin: SchedulePlaceDto? = null,

@@ -11,6 +11,18 @@ import java.time.Instant
 import java.time.LocalDateTime
 
 interface ScheduleRepository : JpaRepository<Schedule, Long> {
+    fun findAllByMemberId(memberId: Long): List<Schedule>
+    fun findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(
+        memberId: Long,
+        externalSourceKey: String,
+    ): Schedule?
+    fun findAllByMemberIdAndTitleAndStartAtAndEndAtAndDeletedFalseOrderByIdAsc(
+        memberId: Long,
+        title: String,
+        startAt: Instant,
+        endAt: Instant,
+    ): List<Schedule>
+
     @Query(
         value = """
         select s.*

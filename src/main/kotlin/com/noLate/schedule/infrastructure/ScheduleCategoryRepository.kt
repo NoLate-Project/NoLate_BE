@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 
 interface ScheduleCategoryRepository : JpaRepository<ScheduleCategory, Long> {
+    fun findAllByMemberId(memberId: Long): List<ScheduleCategory>
     fun findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId: Long): List<ScheduleCategory>
 
     fun findByIdAndMemberIdAndDeletedFalse(id: Long, memberId: Long): ScheduleCategory?

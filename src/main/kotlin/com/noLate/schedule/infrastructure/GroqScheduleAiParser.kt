@@ -10,6 +10,7 @@ import org.springframework.http.MediaType
 import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import org.springframework.web.client.RestClientResponseException
 import java.net.http.HttpClient
 import java.time.Duration
 
@@ -28,6 +29,12 @@ class GroqScheduleAiParser(
     private val apiKey: String,
     @Value("\${schedule.ai.groq.model:openai/gpt-oss-20b}")
     private val model: String,
+    @Value("\${schedule.ai.groq.base-url:https://api.groq.com/openai/v1}")
+    private val baseUrl: String = "https://api.groq.com/openai/v1",
+    @Value("\${schedule.ai.groq.max-attempts:2}")
+    private val maxAttempts: Int = 2,
+    @Value("\${schedule.ai.groq.max-backoff-ms:12000}")
+    private val maxBackoffMs: Long = 12_000,
 ) : ScheduleAiParser {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -40,7 +47,7 @@ class GroqScheduleAiParser(
             setReadTimeout(Duration.ofSeconds(8))
         }
         RestClient.builder()
-            .baseUrl("https://api.groq.com/openai/v1")
+            .baseUrl(baseUrl)
             .requestFactory(requestFactory)
             .build()
     }
@@ -58,14 +65,7 @@ class GroqScheduleAiParser(
 
         // 외부 API 장애가 일정 등록 전체를 막지 않도록 호출과 역직렬화 오류를 폴백으로 감싼다.
         return runCatching {
-            val response = restClient.post()
-                .uri("/chat/completions")
-                .contentType(MediaType.APPLICATION_JSON)
-                .header("Authorization", "Bearer $apiKey")
-                .body(buildRequest(text, referenceDate))
-                .retrieve()
-                .body(String::class.java)
-                ?: error("Groq response body is empty.")
+            val response = requestCompletion(text, referenceDate)
             val root = objectMapper.readTree(response)
             val content = root.path("choices").path(0).path("message").path("content").asText()
             if (content.isBlank()) error("Groq response content is empty.")
@@ -78,9 +78,79 @@ class GroqScheduleAiParser(
             log.warn("Groq schedule parsing failed: {}", error.message)
             ScheduleAiParseOutcome(
                 attempted = true,
-                warning = "AI 분석에 실패해 규칙 분석 결과만 반환했습니다.",
+                warning = if (isRateLimitError(error)) {
+                    "AI 요청이 잠시 몰려 분석을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+                } else {
+                    "AI 분석에 실패해 규칙 분석 결과만 반환했습니다."
+                },
             )
         }
+    }
+
+    /**
+     * Groq의 현재 등급은 분당 토큰 한도를 적용한다. 짧은 시간에 요청이 몰려 429가 오면
+     * 응답 헤더 또는 오류 본문의 `Please try again in N seconds` 값을 우선 사용해 한 번만
+     * 재시도한다. 무한 재시도는 API 스레드와 사용자 화면을 오래 붙잡을 수 있으므로 설정값도
+     * 최대 3회로 제한하고, 대기 시간 역시 상한을 둔다.
+     */
+    private fun requestCompletion(text: String, referenceDate: String): String {
+        val attempts = maxAttempts.coerceIn(1, 3)
+        var lastError: Throwable? = null
+        for (attempt in 1..attempts) {
+            try {
+                return restClient.post()
+                    .uri("/chat/completions")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer $apiKey")
+                    .body(buildRequest(text, referenceDate))
+                    .retrieve()
+                    .body(String::class.java)
+                    ?: error("Groq response body is empty.")
+            } catch (error: Throwable) {
+                lastError = error
+                if (!isRateLimitError(error) || attempt == attempts) throw error
+
+                val delayMillis = retryDelayMillis(error, attempt)
+                log.info(
+                    "Groq rate limit reached. Retrying schedule analysis in {} ms ({}/{}).",
+                    delayMillis,
+                    attempt + 1,
+                    attempts,
+                )
+                try {
+                    Thread.sleep(delayMillis)
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw interrupted
+                }
+            }
+        }
+        throw lastError ?: IllegalStateException("Groq request failed without an exception.")
+    }
+
+    private fun isRateLimitError(error: Throwable): Boolean =
+        error is RestClientResponseException && error.statusCode.value() == 429
+
+    private fun retryDelayMillis(error: Throwable, attempt: Int): Long {
+        val responseError = error as? RestClientResponseException
+        val headerSeconds = responseError
+            ?.responseHeaders
+            ?.getFirst("Retry-After")
+            ?.trim()
+            ?.toDoubleOrNull()
+        val bodySeconds = responseError
+            ?.responseBodyAsString
+            ?.let { Regex("""Please try again in\s+([\d.]+)s""").find(it) }
+            ?.groupValues
+            ?.get(1)
+            ?.toDoubleOrNull()
+        val providerDelayMillis = (headerSeconds ?: bodySeconds)?.let { seconds ->
+            // 공급자가 안내한 시점과 실제 토큰 창 갱신 사이의 오차를 흡수하는 작은 여유를 더한다.
+            (seconds * 1_000).toLong() + 250L
+        }
+        val fallbackDelayMillis = 1_000L * (1L shl (attempt - 1))
+        return (providerDelayMillis ?: fallbackDelayMillis)
+            .coerceIn(250L, maxBackoffMs.coerceAtLeast(250L))
     }
 
     /**
@@ -103,6 +173,17 @@ class GroqScheduleAiParser(
                         Resolve relative weekdays from the reference date.
                         In Korean route memo expressions, "A -> B", "A → B", "A에서 B까지", and "A 출발 B 도착" mean origin A and destination B.
                         A district or neighborhood such as 강남 may be a destination.
+                        When no origin is written and exactly one explicit place is present, use that place as destination.
+                        Korean event-purpose phrases such as 술약속, 회의, 미팅, 저녁약속, 운동, and 스터디 belong in summary, not destination.
+                        Event-purpose phrases may appear before or after the place. Word order does not change the destination.
+                        Preserve the complete written venue phrase. For example, in "강남 용용선생", destinationName is "강남 용용선생", not only "강남".
+                        A single event place followed by "에서" is destination, not origin, unless the text also has an explicit route, departure, or another destination.
+                        In self-correction phrases such as "금요일 아니 토요일" or "7시 말고 8시", discard the value before the correction and use the value after it.
+                        When AM/PM is omitted but the purpose clearly implies evening, such as 술약속, 회식, 저녁약속, or 한잔, interpret hours 1 through 11 as PM.
+                        If multiple dates or times conflict without a correction cue, keep confidence below 0.65 rather than silently choosing one.
+                        Example: "금요일 7시 술약속 신촌역" means destinationName "신촌역" and summary "술약속".
+                        Example: "금요일 7시 강남역 술약속" means destinationName "강남역" and summary "술약속".
+                        Give an explicitly written station or place destinationConfidence of at least 0.9.
                         summary must exclude date, time, origin, and destination.
                         Confidence values must be between 0 and 1.
                     """.trimIndent(),

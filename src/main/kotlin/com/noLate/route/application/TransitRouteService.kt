@@ -33,6 +33,7 @@ class TransitRouteService(
         val request = rawRequest.validated()
         val cacheKey = request.cacheKey()
         val now = clock.millis()
+        cache.entries.removeIf { it.value.expiresAtMillis <= now }
         cache[cacheKey]?.takeIf { it.expiresAtMillis > now }?.let {
             return it.response.deepCopy()
         }
@@ -77,15 +78,14 @@ class TransitRouteService(
 
         if (selected != null) {
             val response = attachRoutingDiagnostics(selected, evaluations)
+            if (cache.size >= MAX_CACHE_ENTRIES && !cache.containsKey(cacheKey)) {
+                cache.clear()
+            }
             cache[cacheKey] = CacheEntry(now + CACHE_TTL_MILLIS, response.deepCopy())
-            log.info(
-                "transit route provider selected provider={} fallbackUsed={} start=({}, {}) end=({}, {})",
+            log.debug(
+                "transit route provider selected provider={} fallbackUsed={}",
                 selected.providerId,
                 selected.providerIndex > 0,
-                request.startY,
-                request.startX,
-                request.endY,
-                request.endX,
             )
             return response
         }
@@ -154,6 +154,7 @@ class TransitRouteService(
 
     private companion object {
         const val CACHE_TTL_MILLIS = 45_000L
+        const val MAX_CACHE_ENTRIES = 1_000
         const val ROUTING_DIAGNOSTICS_FIELD = "_noLateRouting"
     }
 }

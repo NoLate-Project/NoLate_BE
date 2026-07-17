@@ -10,6 +10,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service
+import kotlin.math.abs
 
 @Service
 class FavoritePlaceService(
@@ -17,6 +18,7 @@ class FavoritePlaceService(
     private val placeRepository: FavoritePlaceRepository,
 ) {
     private val defaultCategoryColor = "#5A96FF"
+    private val samePlaceCoordinateTolerance = 0.000001
 
     @Transactional
     fun getCategories(memberId: Long): List<FavoritePlaceCategoryDto> {
@@ -89,6 +91,83 @@ class FavoritePlaceService(
 
         return placeRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId)
             .map { it.toDto(categoriesById[it.categoryId]) }
+    }
+
+    @Transactional
+    fun getDefaultOrigin(memberId: Long): FavoritePlaceDto? {
+        val entity = placeRepository
+            .findFirstByMemberIdAndDeletedFalseAndDefaultOriginTrueOrderByIdAsc(memberId)
+            ?: return null
+        val category = entity.categoryId?.let { findCategory(memberId, it) }
+        return entity.toDto(category)
+    }
+
+    @Transactional
+    fun saveDefaultOrigin(
+        memberId: Long,
+        label: String?,
+        placeName: String?,
+        address: String?,
+        lat: Double?,
+        lng: Double?,
+        provider: String?,
+        providerPlaceId: String?,
+    ): FavoritePlaceDto {
+        val normalizedLat = normalizeLat(lat)
+        val normalizedLng = normalizeLng(lng)
+        val normalizedPlaceName = normalizeOptionalText(placeName, maxLength = 255)
+        val normalizedAddress = normalizeOptionalText(address, maxLength = 500)
+        val normalizedLabel = normalizeOptionalText(label, maxLength = 120)
+            ?: normalizedPlaceName
+            ?: normalizedAddress
+            ?: "기본 출발지"
+        val normalizedProvider = normalizeOptionalText(provider, maxLength = 30)?.uppercase()
+        val normalizedProviderPlaceId = normalizeOptionalText(providerPlaceId, maxLength = 128)
+        val existing = findMatchingPlace(
+            memberId = memberId,
+            lat = normalizedLat,
+            lng = normalizedLng,
+            provider = normalizedProvider,
+            providerPlaceId = normalizedProviderPlaceId,
+        )
+
+        if (existing == null) {
+            return createPlace(
+                memberId = memberId,
+                categoryId = null,
+                label = normalizedLabel,
+                placeName = normalizedPlaceName,
+                address = normalizedAddress,
+                lat = normalizedLat,
+                lng = normalizedLng,
+                provider = normalizedProvider,
+                providerPlaceId = normalizedProviderPlaceId,
+                defaultOrigin = true,
+                sortOrder = null,
+            )
+        }
+
+        val categoryId = existing.categoryId
+        placeRepository.clearDefaultOrigin(memberId)
+        existing.update(
+            categoryId = categoryId,
+            label = normalizedLabel,
+            placeName = normalizedPlaceName,
+            address = normalizedAddress,
+            lat = normalizedLat,
+            lng = normalizedLng,
+            provider = normalizedProvider,
+            providerPlaceId = normalizedProviderPlaceId,
+            defaultOrigin = true,
+            sortOrder = existing.sortOrder,
+        )
+        val category = categoryId?.let { findCategory(memberId, it) }
+        return placeRepository.save(existing).toDto(category)
+    }
+
+    @Transactional
+    fun clearDefaultOrigin(memberId: Long) {
+        placeRepository.clearDefaultOrigin(memberId)
     }
 
     @Transactional
@@ -228,6 +307,28 @@ class FavoritePlaceService(
 
     private fun nextPlaceSortOrder(memberId: Long): Int {
         return placeRepository.findMaxSortOrder(memberId) + 1
+    }
+
+    private fun findMatchingPlace(
+        memberId: Long,
+        lat: Double,
+        lng: Double,
+        provider: String?,
+        providerPlaceId: String?,
+    ): FavoritePlace? {
+        val places = placeRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId)
+        val providerMatch = if (provider != null && providerPlaceId != null) {
+            places.firstOrNull {
+                it.provider.equals(provider, ignoreCase = true) && it.providerPlaceId == providerPlaceId
+            }
+        } else {
+            null
+        }
+
+        return providerMatch ?: places.firstOrNull {
+            abs(it.lat - lat) <= samePlaceCoordinateTolerance &&
+                abs(it.lng - lng) <= samePlaceCoordinateTolerance
+        }
     }
 
     private fun normalizeRequiredText(value: String?, field: String, maxLength: Int): String {

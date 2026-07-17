@@ -6,6 +6,8 @@ import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.MemberDto
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Component
+import com.noLate.member.domain.member.ValidationMessage
+import java.util.Locale
 
 @Component
 class MemberValidator(
@@ -24,15 +26,18 @@ class MemberValidator(
             throw BusinessException(ErrorCode.INVALID_INPUT, "회원가입은 COMMON 타입만 지원합니다.")
         }
 
-        val email = dto.email
+        val email = normalizeEmail(dto.email)
             ?: throw BusinessException(ErrorCode.INVALID_INPUT, "COMMON 회원가입에는 email이 필요합니다.")
+        dto.email = email
         val password = dto.password
             ?: throw BusinessException(ErrorCode.INVALID_INPUT, "COMMON 회원가입에는 password가 필요합니다.")
+        validatePassword(password)
+        validateName(dto.name)
 
-        val exists = memberService.findByEmailAndLoginType(email, LoginType.COMMON)
+        val exists = memberService.findByEmail(email)
 
         if (exists != null) {
-            throw BusinessException(ErrorCode.DUPLICATE_MEMBER, "이미 COMMON 방식으로 가입된 이메일입니다.")
+            throw BusinessException(ErrorCode.ACCOUNT_LINK_REQUIRED)
         }
     }
 
@@ -44,8 +49,9 @@ class MemberValidator(
      * -> 통과하면 Member 엔티티 리턴
      */
     fun validateAndGetMemberForCommonLogin(dto: MemberDto): MemberDto {
-        val email = dto.email
+        val email = normalizeEmail(dto.email)
             ?: throw BusinessException(ErrorCode.INVALID_INPUT, "COMMON 로그인에는 email이 필요합니다.")
+        dto.email = email
         val rawPassword = dto.password
             ?: throw BusinessException(ErrorCode.INVALID_INPUT, "COMMON 로그인에는 password가 필요합니다.")
 
@@ -63,9 +69,28 @@ class MemberValidator(
         return found
     }
 
-    /**
-     * SNS 로그인 입력값 검증 + snsId만 꺼내서 리턴
-     */
-    fun requireSnsId(dto: MemberDto): String =
-        dto.snsId ?: throw BusinessException(ErrorCode.INVALID_INPUT, "SNS 로그인에는 snsId가 필요합니다.")
+    fun validatePassword(password: String) {
+        if (!Regex(ValidationMessage.PASSWORD_PATTERN).matches(password)) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, ValidationMessage.PASSWORD)
+        }
+    }
+
+    fun validateName(name: String?) {
+        val normalized = name?.trim()
+        if (normalized.isNullOrBlank() || normalized.length > 50 || normalized.any(Char::isISOControl)) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "이름은 1~50자로 입력해 주세요.")
+        }
+    }
+
+    private fun normalizeEmail(value: String?): String? {
+        val normalized = value?.trim()?.lowercase(Locale.ROOT)?.takeIf(String::isNotBlank) ?: return null
+        if (normalized.length > 254 || !EMAIL_PATTERN.matches(normalized)) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, ValidationMessage.EMAIL)
+        }
+        return normalized
+    }
+
+    private companion object {
+        val EMAIL_PATTERN = Regex("^[A-Za-z0-9.!#\\$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
+    }
 }

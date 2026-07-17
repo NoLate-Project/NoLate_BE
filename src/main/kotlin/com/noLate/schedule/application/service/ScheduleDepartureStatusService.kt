@@ -8,6 +8,7 @@ import com.noLate.schedule.domain.ScheduleDepartureParticipantRole
 import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
@@ -82,6 +83,13 @@ class ScheduleDepartureStatusService(
             .findAllByScheduleIdAndDeletedFalse(scheduleId)
             .associateBy { it.memberId }
 
+        val canManageParticipants = currentMemberId == ownerMemberId ||
+            scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, currentMemberId)
+                ?.let { !it.deleted && it.status == ScheduleShareStatus.ACTIVE && it.permission == ScheduleSharePermission.EDITOR } == true ||
+            (categoryId != null && categoryShareRepository
+                .findByCategoryIdAndTargetMemberId(categoryId, currentMemberId)
+                ?.let { !it.deleted && it.status == ScheduleShareStatus.ACTIVE && it.permission == ScheduleSharePermission.EDITOR } == true)
+
         val participants = participantRoles.map { (memberId, role) ->
             val statusDepartedAt = statusesByMemberId[memberId]?.departedAt?.toString()
             val departedAt = statusDepartedAt
@@ -89,7 +97,11 @@ class ScheduleDepartureStatusService(
 
             ScheduleDepartureParticipantDto(
                 memberId = memberId,
-                email = memberRepository.findByIdAndDeletedFalse(memberId)?.email,
+                email = if (canManageParticipants || memberId == currentMemberId) {
+                    memberRepository.findByIdAndDeletedFalse(memberId)?.email
+                } else {
+                    null
+                },
                 role = role,
                 departed = departedAt != null,
                 departedAt = departedAt,

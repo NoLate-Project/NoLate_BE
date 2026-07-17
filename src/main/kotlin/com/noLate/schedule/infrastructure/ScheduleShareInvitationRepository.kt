@@ -10,6 +10,14 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 
 interface ScheduleShareInvitationRepository : JpaRepository<ScheduleShareInvitation, Long> {
+    fun deleteAllByOwnerMemberId(ownerMemberId: Long)
+
+    fun findByIdAndOwnerMemberIdAndResourceTypeAndResourceIdAndDeletedFalse(
+        id: Long,
+        ownerMemberId: Long,
+        resourceType: ScheduleShareResourceType,
+        resourceId: Long,
+    ): ScheduleShareInvitation?
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query(
         """

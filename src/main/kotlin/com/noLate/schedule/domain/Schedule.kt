@@ -13,11 +13,20 @@ import jakarta.persistence.Id
 import jakarta.persistence.Lob
 import jakarta.persistence.OneToOne
 import jakarta.persistence.Table
+import jakarta.persistence.UniqueConstraint
 import org.hibernate.annotations.Comment
 import java.time.Instant
 
 @Entity
-@Table(name = "schedules")
+@Table(
+    name = "schedules",
+    uniqueConstraints = [
+        UniqueConstraint(
+            name = "uk_schedules_member_external_source",
+            columnNames = ["member_id", "external_source_key"],
+        ),
+    ],
+)
 @Comment("일정 핵심 정보를 저장하는 테이블")
 class Schedule(
     @Id
@@ -32,6 +41,10 @@ class Schedule(
     @Column(name = "category_id")
     @Comment("현재 연결된 일정 카테고리 id. 표시 안정성은 별도 스냅샷이 담당한다.")
     var categoryId: Long? = null,
+
+    @Column(name = "external_source_key", length = 64)
+    @Comment("회원별 외부 캘린더 발생 건의 SHA-256 멱등 키")
+    var externalSourceKey: String? = null,
 
     @Column(nullable = false, length = 120)
     @Comment("일정 제목")
@@ -61,6 +74,14 @@ class Schedule(
     @Column(columnDefinition = "TEXT")
     @Comment("일정 메모")
     var notes: String? = null,
+
+    @Column(
+        name = "route_setup_required",
+        nullable = false,
+        columnDefinition = "boolean default false",
+    )
+    @Comment("공유로 빠르게 저장되어 이동 경로 후속 설정이 필요한지 여부")
+    var routeSetupRequired: Boolean = false,
 
     @OneToOne(
         mappedBy = "schedule",
@@ -206,6 +227,7 @@ class Schedule(
                 color = category?.color,
             ),
             notes = notes,
+            routeSetupRequired = routeSetupRequired,
             route = parseRoute(objectMapper, routeInfo?.routeJson),
             notificationEnabled = routeInfo?.notificationEnabled ?: false,
             notificationLeadMinutes = routeInfo?.notificationLeadMinutes,

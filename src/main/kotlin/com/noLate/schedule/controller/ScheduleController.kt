@@ -8,6 +8,9 @@ import com.noLate.global.security.MemberPrincipal
 import com.noLate.schedule.application.useCase.ScheduleUseCase
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleImportProvider
+import com.noLate.schedule.domain.ScheduleImportResultDto
+import com.noLate.schedule.domain.ScheduleImportSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
@@ -42,8 +45,9 @@ class ScheduleController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: ParseScheduleTextRequest,
     ): ApiResponse<ScheduleParseDto> {
-        requireMemberId(principal)
+        val memberId = requireMemberId(principal)
         val result = scheduleUseCase.parseScheduleText(
+            memberId = memberId,
             text = request.text,
             // 구버전 FE가 inputType을 보내지 않아도 기존 TEXT 동작을 유지한다.
             // 값이 있으면 음성/OCR 정규화 정책이 적용되도록 서비스 계층까지 전달한다.
@@ -65,6 +69,24 @@ class ScheduleController(
         @RequestBody request: AddScheduleRequest,
     ): ApiResponse<ScheduleDto> {
         val result = scheduleUseCase.addSchedule(requireMemberId(principal), request.toDto())
+        return ApiResponse.success(result)
+    }
+
+    /**
+     * 외부 캘린더 일정 저장.
+     * 같은 회원이 같은 원본 발생 건을 다시 보내면 기존 일정과 created=false를 반환한다.
+     */
+    @Operation(summary = "외부 캘린더 일정 가져오기")
+    @PostMapping("/import")
+    fun importSchedule(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @RequestBody request: ImportCalendarScheduleRequest,
+    ): ApiResponse<ScheduleImportResultDto> {
+        val result = scheduleUseCase.importSchedule(
+            memberId = requireMemberId(principal),
+            scheduleDto = request.schedule.toDto(),
+            source = request.source.toDomain(),
+        )
         return ApiResponse.success(result)
     }
 
@@ -262,6 +284,7 @@ data class AddScheduleRequest(
     val locationName: String? = null,
     val category: ScheduleCategoryDto,
     val notes: String? = null,
+    val routeSetupRequired: Boolean? = null,
     val route: JsonNode? = null,
     val notificationEnabled: Boolean? = null,
     val notificationLeadMinutes: Int? = null,
@@ -282,11 +305,31 @@ data class AddScheduleRequest(
             locationName = locationName,
             category = category,
             notes = notes,
+            routeSetupRequired = routeSetupRequired,
             route = route,
             notificationEnabled = notificationEnabled,
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
         )
+}
+
+data class ImportCalendarScheduleRequest(
+    val schedule: AddScheduleRequest,
+    val source: CalendarImportSourceRequest,
+)
+
+data class CalendarImportSourceRequest(
+    val provider: ScheduleImportProvider,
+    val calendarId: String,
+    val eventId: String,
+    val occurrenceStartAt: String,
+) {
+    fun toDomain(): ScheduleImportSource = ScheduleImportSource(
+        provider = provider,
+        calendarId = calendarId,
+        eventId = eventId,
+        occurrenceStartAt = occurrenceStartAt,
+    )
 }
 
 data class UpdateScheduleRequest(
@@ -303,6 +346,7 @@ data class UpdateScheduleRequest(
     val locationName: String? = null,
     val category: ScheduleCategoryDto,
     val notes: String? = null,
+    val routeSetupRequired: Boolean? = null,
     val route: JsonNode? = null,
     val notificationEnabled: Boolean? = null,
     val notificationLeadMinutes: Int? = null,
@@ -323,6 +367,7 @@ data class UpdateScheduleRequest(
             locationName = locationName,
             category = category,
             notes = notes,
+            routeSetupRequired = routeSetupRequired,
             route = route,
             notificationEnabled = notificationEnabled,
             notificationLeadMinutes = notificationLeadMinutes,

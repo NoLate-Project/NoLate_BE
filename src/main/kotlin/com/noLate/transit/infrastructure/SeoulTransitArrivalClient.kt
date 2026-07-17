@@ -8,6 +8,7 @@ import com.noLate.transit.domain.seoulSubwayArrivalStatus
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import com.noLate.global.config.externalHttpRequestFactory
 import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
 import java.time.Instant
@@ -29,10 +30,12 @@ class SeoulTransitArrivalClient(
 ) {
     private val subwayClient = RestClient.builder()
         .baseUrl(subwayBaseUrl)
+        .requestFactory(externalHttpRequestFactory())
         .build()
 
     private val busClient = RestClient.builder()
         .baseUrl(busBaseUrl)
+        .requestFactory(externalHttpRequestFactory())
         .build()
     private val stationArsCache = ConcurrentHashMap<String, List<String>>()
 
@@ -115,8 +118,11 @@ class SeoulTransitArrivalClient(
             .take(limit)
     }
 
-    private fun resolveSeoulBusArsIds(apiKey: String, stationName: String): List<String> =
-        stationArsCache.getOrPut(stationName) {
+    private fun resolveSeoulBusArsIds(apiKey: String, stationName: String): List<String> {
+        if (stationArsCache.size >= MAX_STATION_CACHE_ENTRIES && !stationArsCache.containsKey(stationName)) {
+            stationArsCache.clear()
+        }
+        return stationArsCache.getOrPut(stationName) {
             val response = busClient.get()
                 .uri { uriBuilder ->
                     uriBuilder
@@ -135,6 +141,7 @@ class SeoulTransitArrivalClient(
                 .distinct()
                 .take(MAX_ARS_CANDIDATES)
         }
+    }
 
     private fun requestSubwayArrivals(
         apiKey: String,
@@ -400,6 +407,7 @@ class SeoulTransitArrivalClient(
     private fun Int.toWaitMinutes(): Int = ceil(this / 60.0).toInt().coerceAtLeast(0)
 
     private companion object {
+        const val MAX_STATION_CACHE_ENTRIES = 500
         const val MAX_ARS_CANDIDATES = 8
         const val SEOUL_LOW_FLOOR_BUS_CODE = "1"
         val SEOUL_TIMESTAMP_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")

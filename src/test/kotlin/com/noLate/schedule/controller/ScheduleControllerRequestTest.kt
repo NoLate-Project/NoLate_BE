@@ -3,6 +3,7 @@ package com.noLate.schedule.controller
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.noLate.schedule.domain.ScheduleParseInputType
+import com.noLate.schedule.domain.ScheduleImportProvider
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
@@ -30,5 +31,51 @@ class ScheduleControllerRequestTest {
         assertEquals(ScheduleParseInputType.VOICE_TRANSCRIPT, request.inputType)
         assertEquals("2026-07-10", request.referenceDate)
         assertEquals(60, request.defaultDurationMinutes)
+    }
+
+    @Test
+    fun `deserializes quick share route setup marker`() {
+        val json = """
+            {
+              "title": "금요일 저녁 약속",
+              "startAt": "2026-07-17T10:00:00Z",
+              "category": { "id": "1", "title": "일정", "color": "#246BFE" },
+              "notes": "공유한 원문",
+              "routeSetupRequired": true,
+              "notificationEnabled": false
+            }
+        """.trimIndent()
+
+        val request = objectMapper.readValue<AddScheduleRequest>(json)
+
+        assertEquals(true, request.routeSetupRequired)
+        assertEquals(true, request.toDto().routeSetupRequired)
+    }
+
+    @Test
+    fun `deserializes calendar import source identity`() {
+        val json = """
+            {
+              "schedule": {
+                "title": "Google 회의",
+                "startAt": "2026-07-17T10:00:00Z",
+                "endAt": "2026-07-17T11:00:00Z",
+                "category": { "id": "1", "title": "일정", "color": "#246BFE" }
+              },
+              "source": {
+                "provider": "GOOGLE",
+                "calendarId": "google:primary",
+                "eventId": "event-10",
+                "occurrenceStartAt": "2026-07-17T10:00:00Z"
+              }
+            }
+        """.trimIndent()
+
+        val request = objectMapper.readValue<ImportCalendarScheduleRequest>(json)
+
+        assertEquals("Google 회의", request.schedule.title)
+        assertEquals(ScheduleImportProvider.GOOGLE, request.source.provider)
+        assertEquals("event-10", request.source.eventId)
+        assertEquals("2026-07-17T10:00:00Z", request.source.occurrenceStartAt)
     }
 }

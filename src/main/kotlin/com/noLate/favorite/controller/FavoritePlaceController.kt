@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
@@ -105,6 +106,42 @@ class FavoritePlaceController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
     ): ApiResponse<List<FavoritePlaceDto>> {
         return ApiResponse.success(favoritePlaceService.getPlaces(requireMemberId(principal)))
+    }
+
+    @Operation(summary = "기본 출발지 조회")
+    @GetMapping("/default-origin")
+    fun getDefaultOrigin(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+    ): ApiResponse<FavoritePlaceDto?> {
+        return ApiResponse.success(favoritePlaceService.getDefaultOrigin(requireMemberId(principal)))
+    }
+
+    @Operation(summary = "기본 출발지 저장")
+    @PutMapping("/default-origin")
+    fun saveDefaultOrigin(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @RequestBody request: SaveDefaultOriginRequest,
+    ): ApiResponse<FavoritePlaceDto> {
+        val result = favoritePlaceService.saveDefaultOrigin(
+            memberId = requireMemberId(principal),
+            label = request.label,
+            placeName = request.placeName,
+            address = request.address,
+            lat = request.lat,
+            lng = request.lng,
+            provider = request.provider,
+            providerPlaceId = request.providerPlaceId,
+        )
+        return ApiResponse.success(result)
+    }
+
+    @Operation(summary = "기본 출발지 해제")
+    @DeleteMapping("/default-origin")
+    fun clearDefaultOrigin(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+    ): ApiResponse<Unit> {
+        favoritePlaceService.clearDefaultOrigin(requireMemberId(principal))
+        return ApiResponse.success(Unit)
     }
 
     @Operation(summary = "즐겨찾기 장소 생성")
@@ -213,6 +250,16 @@ data class CreateFavoritePlaceRequest(
     val providerPlaceId: String? = null,
     val defaultOrigin: Boolean? = null,
     val sortOrder: Int? = null,
+)
+
+data class SaveDefaultOriginRequest(
+    val label: String? = null,
+    val placeName: String? = null,
+    val address: String? = null,
+    val lat: Double,
+    val lng: Double,
+    val provider: String? = null,
+    val providerPlaceId: String? = null,
 )
 
 data class UpdateFavoritePlaceRequest(

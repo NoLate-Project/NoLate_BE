@@ -5,6 +5,9 @@ import com.noLate.schedule.domain.ScheduleShareStatus
 import org.springframework.data.jpa.repository.JpaRepository
 
 interface ScheduleCategoryShareRepository : JpaRepository<ScheduleCategoryShare, Long> {
+    fun deleteAllByOwnerMemberIdOrTargetMemberId(ownerMemberId: Long, targetMemberId: Long)
+
+    fun findAllByCategoryIdAndDeletedFalse(categoryId: Long): List<ScheduleCategoryShare>
     fun findByCategoryIdAndTargetMemberId(categoryId: Long, targetMemberId: Long): ScheduleCategoryShare?
 
     fun findByIdAndCategoryIdAndDeletedFalse(id: Long, categoryId: Long): ScheduleCategoryShare?

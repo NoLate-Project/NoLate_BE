@@ -7,7 +7,10 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 
 interface FavoritePlaceRepository : JpaRepository<FavoritePlace, Long> {
+    fun findAllByMemberId(memberId: Long): List<FavoritePlace>
     fun findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId: Long): List<FavoritePlace>
+
+    fun findFirstByMemberIdAndDeletedFalseAndDefaultOriginTrueOrderByIdAsc(memberId: Long): FavoritePlace?
 
     fun findByIdAndMemberIdAndDeletedFalse(id: Long, memberId: Long): FavoritePlace?
 
@@ -22,7 +25,7 @@ interface FavoritePlaceRepository : JpaRepository<FavoritePlace, Long> {
     )
     fun findMaxSortOrder(@Param("memberId") memberId: Long): Int
 
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(
         value = """
         update favorite_places p

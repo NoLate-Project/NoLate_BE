@@ -1,6 +1,7 @@
 package com.noLate.route.quickshare
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.noLate.route.infrastructure.tmapTransitSecondsToMinutes
 import com.noLate.schedule.domain.ScheduleTravelMode
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -12,6 +13,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.ceil
+import com.noLate.global.config.externalHttpRequestFactory
 
 @Component
 @ConditionalOnProperty(prefix = "routing.tmap", name = ["enabled"], havingValue = "true")
@@ -22,6 +24,7 @@ class TmapQuickShareRouteProvider(
     private val restClient = RestClient.builder()
         .baseUrl(baseUrl)
         .defaultHeader("appKey", appKey)
+        .requestFactory(externalHttpRequestFactory())
         .build()
 
     override fun searchPlaces(query: String): List<QuickSharePlace> {
@@ -146,9 +149,9 @@ class TmapQuickShareRouteProvider(
         val itineraries = response.path("metaData").path("plan").path("itineraries")
         if (!itineraries.isArray) return emptyList()
         return itineraries.mapIndexedNotNull { index, itinerary ->
-            val rawTime = itinerary.path("totalTime").takeIf { it.isNumber }?.asDouble()
+            val totalTimeSeconds = itinerary.path("totalTime").takeIf { it.isNumber }?.asDouble()
                 ?: return@mapIndexedNotNull null
-            val minutes = if (rawTime > 1000) ceil(rawTime / 60.0).toInt() else ceil(rawTime).toInt()
+            val minutes = tmapTransitSecondsToMinutes(totalTimeSeconds)
             val transfers = itinerary.path("transferCount").takeIf { it.isNumber }?.asInt()
             QuickShareRouteOption(
                 id = "transit-$index-$minutes-${transfers ?: 0}",
@@ -164,4 +167,3 @@ class TmapQuickShareRouteProvider(
         }.sortedBy { it.minutes }
     }
 }
-

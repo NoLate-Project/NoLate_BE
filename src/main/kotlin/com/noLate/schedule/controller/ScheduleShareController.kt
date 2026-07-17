@@ -11,6 +11,7 @@ import com.noLate.schedule.domain.ScheduleShareInvitationAcceptDto
 import com.noLate.schedule.domain.ScheduleShareInvitationDto
 import com.noLate.schedule.domain.ScheduleShareOutboxDto
 import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleShareResourceType
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -156,6 +157,22 @@ class ScheduleShareController(
             )
         )
     }
+
+    @Operation(summary = "일정 공유 초대 링크 폐기")
+    @DeleteMapping("/invitations/{invitationId}")
+    fun revokeScheduleInvitation(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @PathVariable scheduleId: Long,
+        @PathVariable invitationId: Long,
+    ): ApiResponse<Unit> {
+        scheduleShareService.revokeInvitation(
+            ownerMemberId = requireShareMemberId(principal),
+            resourceType = ScheduleShareResourceType.SCHEDULE,
+            resourceId = scheduleId,
+            invitationId = invitationId,
+        )
+        return ApiResponse.success(Unit)
+    }
 }
 
 @RestController
@@ -259,6 +276,22 @@ class ScheduleCategoryShareController(
                 maxAcceptCount = request.maxAcceptCount,
             )
         )
+    }
+
+    @Operation(summary = "일정 카테고리 공유 초대 링크 폐기")
+    @DeleteMapping("/invitations/{invitationId}")
+    fun revokeCategoryInvitation(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @PathVariable categoryId: Long,
+        @PathVariable invitationId: Long,
+    ): ApiResponse<Unit> {
+        scheduleShareService.revokeInvitation(
+            ownerMemberId = requireShareMemberId(principal),
+            resourceType = ScheduleShareResourceType.CATEGORY,
+            resourceId = categoryId,
+            invitationId = invitationId,
+        )
+        return ApiResponse.success(Unit)
     }
 }
 

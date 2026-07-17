@@ -44,9 +44,18 @@ http/http-client.private.env.json
 
 # 로컬 외부 API 인증키. application.yml이 읽지만 Git과 빌드 산출물에는 포함하지 않는다.
 /env.local.properties
+.env
+.env.*
+!.env.example
 
 # Firebase Admin service-account private keys
 **/*firebase-adminsdk*.json
+**/*firebase-admin*.json
+**/*service-account*.json
+**/*serviceAccount*.json
+*.jks
+*.keystore
+*.p8
 
 # Local debug logs
 spy.log

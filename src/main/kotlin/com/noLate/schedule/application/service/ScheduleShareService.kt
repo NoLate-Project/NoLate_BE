@@ -443,6 +443,24 @@ class ScheduleShareService(
             .map { it.toDto(effectiveAt = effectiveAt) }
     }
 
+    @Transactional
+    fun revokeInvitation(
+        ownerMemberId: Long,
+        resourceType: ScheduleShareResourceType,
+        resourceId: Long,
+        invitationId: Long,
+    ) {
+        val invitation = invitationRepository
+            .findByIdAndOwnerMemberIdAndResourceTypeAndResourceIdAndDeletedFalse(
+                id = invitationId,
+                ownerMemberId = ownerMemberId,
+                resourceType = resourceType,
+                resourceId = resourceId,
+            ) ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
+        invitation.revoke()
+        invitationRepository.saveAndFlush(invitation)
+    }
+
     /**
      * 초대 링크 수락.
      *

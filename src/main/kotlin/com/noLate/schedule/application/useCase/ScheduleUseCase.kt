@@ -1,12 +1,17 @@
 package com.noLate.schedule.application.useCase
 
+import com.noLate.favorite.application.service.FavoritePlaceService
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleImportResultDto
+import com.noLate.schedule.domain.ScheduleImportSource
+import com.noLate.schedule.domain.ScheduleOriginSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
+import com.noLate.schedule.domain.SchedulePlaceDto
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Component
 import java.time.Clock
@@ -21,6 +26,7 @@ class ScheduleUseCase(
     private val schedulePushJobService : SchedulePushJobService,
     private val scheduleHybridParserService: ScheduleHybridParserService,
     private val scheduleDepartureStatusService: ScheduleDepartureStatusService,
+    private val favoritePlaceService: FavoritePlaceService,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
@@ -55,6 +61,43 @@ class ScheduleUseCase(
     }
 
     /**
+     * 로그인 회원의 설정까지 반영하는 HTTP 요청용 일정 분석 경로다.
+     *
+     * 규칙 파서가 원문에서 출발지를 찾았다면 그 값을 최우선으로 유지한다. 출발지가 없을 때만
+     * 계정에 저장된 기본 주소(기본 출발지)를 조회해 채운다. 현재 기본 주소는 저장 구조상
+     * favorite_places 테이블의 is_default_origin=true 레코드이지만, 일반 즐겨찾기 첫 항목을
+     * 임의로 선택하지는 않는다. 기본 주소도 없는 회원은 기존처럼 REQUIRED 상태를 반환한다.
+     */
+    fun parseScheduleText(
+        memberId: Long,
+        text: String?,
+        inputType: ScheduleParseInputType,
+        referenceDate: String?,
+        defaultDurationMinutes: Int?,
+    ): ScheduleParseDto {
+        val parsed = scheduleHybridParserService.parse(
+            text,
+            inputType,
+            referenceDate,
+            defaultDurationMinutes,
+        )
+        if (parsed.origin != null) return parsed
+
+        val defaultOrigin = favoritePlaceService.getDefaultOrigin(memberId) ?: return parsed
+        return parsed.copy(
+            origin = SchedulePlaceDto(
+                name = defaultOrigin.placeName?.takeIf { it.isNotBlank() } ?: defaultOrigin.label,
+                address = defaultOrigin.address,
+                lat = defaultOrigin.lat,
+                lng = defaultOrigin.lng,
+            ),
+            originSource = ScheduleOriginSource.FAVORITE_DEFAULT,
+            originRequired = false,
+            missingFields = parsed.missingFields.filterNot { it == "origin" },
+        )
+    }
+
+    /**
      * 일정관리 앱의 기본 생성 유스케이스.
      * 일정 본문과 함께 출발지/도착지/선택 경로까지 하나의 일정으로 저장한다.
      */
@@ -69,6 +112,23 @@ class ScheduleUseCase(
         }
 
         return addSchedule;
+    }
+
+    /**
+     * 외부 캘린더 가져오기 전용 생성 경로다.
+     * 이미 저장된 원본에는 PushJob을 다시 등록하거나 구독 quota를 다시 소비하지 않는다.
+     */
+    @Transactional
+    fun importSchedule(
+        memberId: Long,
+        scheduleDto: ScheduleDto,
+        source: ScheduleImportSource,
+    ): ScheduleImportResultDto {
+        val result = scheduleService.importSchedule(memberId, scheduleDto, source)
+        if (result.created && canCreatePushJob(result.schedule)) {
+            schedulePushJobService.registerFromScheduleDto(memberId, result.schedule)
+        }
+        return result
     }
 
     /**

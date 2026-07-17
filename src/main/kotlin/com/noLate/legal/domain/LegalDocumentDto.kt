@@ -15,5 +15,12 @@ data class LegalDocumentSectionDto(
 )
 
 enum class LegalDocumentType {
+    TERMS_OF_SERVICE,
+    PRIVACY_COLLECTION_CONSENT,
     PRIVACY_POLICY,
 }
+
+data class SignupConsentPolicyDto(
+    val terms: LegalDocumentDto,
+    val privacyCollection: LegalDocumentDto,
+)
