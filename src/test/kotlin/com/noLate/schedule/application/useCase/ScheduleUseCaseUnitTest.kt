@@ -9,6 +9,9 @@ import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleImportProvider
+import com.noLate.schedule.domain.ScheduleImportResultDto
+import com.noLate.schedule.domain.ScheduleImportSource
 import com.noLate.schedule.domain.ScheduleOriginSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
@@ -204,6 +207,31 @@ class ScheduleUseCaseUnitTest {
         verify(schedulePushJobService, times(1)).registerFromScheduleDto(memberId, saved)
         verify(schedulePushJobService, never()).cancelByScheduleId(10L)
         assertEquals(10L, result.id)
+    }
+
+    @Test
+    fun `이미 가져온 외부 일정에는 출발 알림 작업을 다시 만들지 않는다`() {
+        val memberId = 1L
+        val request = scheduleDto(notificationEnabled = true)
+        val saved = request.copy(id = 10L)
+        val source = ScheduleImportSource(
+            provider = ScheduleImportProvider.APPLE_DEVICE,
+            calendarId = "calendar-1",
+            eventId = "event-1",
+            occurrenceStartAt = request.startAt,
+        )
+        whenever(scheduleService.importSchedule(memberId, request, source))
+            .thenReturn(
+                ScheduleImportResultDto(schedule = saved, created = true),
+                ScheduleImportResultDto(schedule = saved, created = false),
+            )
+
+        val first = scheduleUseCase.importSchedule(memberId, request, source)
+        val repeated = scheduleUseCase.importSchedule(memberId, request, source)
+
+        assertEquals(true, first.created)
+        assertEquals(false, repeated.created)
+        verify(schedulePushJobService, times(1)).registerFromScheduleDto(memberId, saved)
     }
 
     @Test

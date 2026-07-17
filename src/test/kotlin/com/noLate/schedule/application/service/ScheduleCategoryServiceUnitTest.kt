@@ -2,7 +2,11 @@ package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.schedule.domain.ScheduleCategory
+import com.noLate.schedule.domain.ScheduleCategoryShare
+import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -15,6 +19,7 @@ import org.mockito.Mockito.lenient
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
 import org.mockito.kotlin.check
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
@@ -45,6 +50,46 @@ class ScheduleCategoryServiceUnitTest {
         assertEquals(listOf("#f44336", "#2196f3", "#4caf50"), result.map { it.color })
         assertEquals(listOf(0, 1, 2), result.map { it.sortOrder })
         verify(categoryRepository, times(3)).save(any<ScheduleCategory>())
+    }
+
+    @Test
+    fun `getCategories includes the active permission for a received category`() {
+        val memberId = 7L
+        val shareRepository = mock<ScheduleCategoryShareRepository>()
+        val permissionAwareService = ScheduleCategoryService(
+            categoryRepository = categoryRepository,
+            categoryShareRepository = shareRepository,
+        )
+        val owned = ScheduleCategory(id = 1L, memberId = memberId, title = "내 일정")
+        val received = ScheduleCategory(id = 2L, memberId = 99L, title = "팀 일정")
+        whenever(categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId))
+            .thenReturn(listOf(owned))
+        whenever(categoryRepository.findVisibleCategories(memberId))
+            .thenReturn(listOf(owned, received))
+        whenever(
+            shareRepository.findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
+                memberId,
+                ScheduleShareStatus.ACTIVE,
+            )
+        ).thenReturn(
+            listOf(
+                ScheduleCategoryShare(
+                    id = 10L,
+                    categoryId = 2L,
+                    ownerMemberId = 99L,
+                    targetMemberId = memberId,
+                    permission = ScheduleSharePermission.EDITOR,
+                    status = ScheduleShareStatus.ACTIVE,
+                )
+            )
+        )
+
+        val result = permissionAwareService.getCategories(memberId)
+
+        assertEquals(false, result.first { it.id == "1" }.shared)
+        assertEquals(null, result.first { it.id == "1" }.sharePermission)
+        assertEquals(true, result.first { it.id == "2" }.shared)
+        assertEquals(ScheduleSharePermission.EDITOR, result.first { it.id == "2" }.sharePermission)
     }
 
     @Test

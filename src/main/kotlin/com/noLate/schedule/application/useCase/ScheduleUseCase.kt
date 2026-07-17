@@ -6,6 +6,8 @@ import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleImportResultDto
+import com.noLate.schedule.domain.ScheduleImportSource
 import com.noLate.schedule.domain.ScheduleOriginSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
@@ -110,6 +112,23 @@ class ScheduleUseCase(
         }
 
         return addSchedule;
+    }
+
+    /**
+     * 외부 캘린더 가져오기 전용 생성 경로다.
+     * 이미 저장된 원본에는 PushJob을 다시 등록하거나 구독 quota를 다시 소비하지 않는다.
+     */
+    @Transactional
+    fun importSchedule(
+        memberId: Long,
+        scheduleDto: ScheduleDto,
+        source: ScheduleImportSource,
+    ): ScheduleImportResultDto {
+        val result = scheduleService.importSchedule(memberId, scheduleDto, source)
+        if (result.created && canCreatePushJob(result.schedule)) {
+            schedulePushJobService.registerFromScheduleDto(memberId, result.schedule)
+        }
+        return result
     }
 
     /**

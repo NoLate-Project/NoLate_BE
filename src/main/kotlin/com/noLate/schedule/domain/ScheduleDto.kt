@@ -11,6 +11,12 @@ data class ScheduleCategoryDto(
     val id: String? = null,
     val title: String? = null,
     val color: String? = null,
+    /**
+     * Optional visibility metadata. Older clients can ignore these fields and
+     * older request payloads remain valid because both default to null.
+     */
+    val shared: Boolean? = null,
+    val sharePermission: ScheduleSharePermission? = null,
 )
 
 data class SchedulePlaceDto(
@@ -36,6 +42,8 @@ data class ScheduleDepartureParticipantDto(
 data class ScheduleDto(
     val id: Long? = null,
     val ownerMemberId: Long? = null,
+    /** Effective permission for the member receiving this response. */
+    val sharePermission: ScheduleSharePermission? = null,
     val title: String,
     val startAt: String,
     val endAt: String? = null,
@@ -52,6 +60,7 @@ data class ScheduleDto(
     val locationName: String? = null,
     val category: ScheduleCategoryDto,
     val notes: String? = null,
+    val routeSetupRequired: Boolean? = null,
     val route: JsonNode? = null,
     val notificationEnabled: Boolean? = null,
     val notificationLeadMinutes: Int? = null,
@@ -83,6 +92,7 @@ data class ScheduleDto(
             hasEndTime = parsedHasEndTime,
             allDay = allDay ?: false,
             notes = notes?.takeIf { it.isNotBlank() },
+            routeSetupRequired = routeSetupRequired ?: false,
         )
 
         schedule.updateCategorySnapshot(
@@ -160,6 +170,7 @@ data class ScheduleDto(
                     color = category?.color,
                 ),
                 notes = schedule.notes,
+                routeSetupRequired = schedule.routeSetupRequired,
                 route = parseRoute(objectMapper, routeInfo?.routeJson),
                 notificationEnabled = routeInfo?.notificationEnabled ?: false,
                 notificationLeadMinutes = routeInfo?.notificationLeadMinutes,

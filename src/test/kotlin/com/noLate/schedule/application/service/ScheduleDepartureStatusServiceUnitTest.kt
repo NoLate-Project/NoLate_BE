@@ -113,7 +113,7 @@ class ScheduleDepartureStatusServiceUnitTest {
     }
 
     @Test
-    fun `attachDepartureParticipants merges owner direct shares category shares and departure statuses`() {
+    fun `viewer sees departure states but not other participants email addresses`() {
         val dto = scheduleDto(
             scheduleId = 10L,
             ownerMemberId = 1L,
@@ -134,16 +134,16 @@ class ScheduleDepartureStatusServiceUnitTest {
         ).thenReturn(listOf(categoryShare(targetMemberId = 3L)))
         whenever(departureStatusRepository.findAllByScheduleIdAndDeletedFalse(10L))
             .thenReturn(listOf(ScheduleDepartureStatus(scheduleId = 10L, memberId = 2L, departedAt = now)))
-        whenever(memberRepository.findByIdAndDeletedFalse(1L)).thenReturn(member(1L, "owner@nolate.test"))
         whenever(memberRepository.findByIdAndDeletedFalse(2L)).thenReturn(member(2L, "target2@nolate.test"))
-        whenever(memberRepository.findByIdAndDeletedFalse(3L)).thenReturn(member(3L, "target3@nolate.test"))
 
         val result = service.attachDepartureParticipants(currentMemberId = 2L, scheduleDto = dto)
 
         assertEquals(now.toString(), result.myDepartedAt)
         assertEquals(3, result.departureParticipants.size)
         assertEquals(ScheduleDepartureParticipantRole.OWNER, result.departureParticipants[0].role)
-        assertEquals("owner@nolate.test", result.departureParticipants[0].email)
+        assertEquals(null, result.departureParticipants[0].email)
+        assertEquals("target2@nolate.test", result.departureParticipants[1].email)
+        assertEquals(null, result.departureParticipants[2].email)
         assertTrue(result.departureParticipants[0].departed)
         assertTrue(result.departureParticipants[1].departed)
         assertFalse(result.departureParticipants[2].departed)
