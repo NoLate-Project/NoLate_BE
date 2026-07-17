@@ -4,12 +4,9 @@ spring:
       mode: never
   jpa:
     hibernate:
-      ddl-auto: validate
+      # Flyway 없이 엔티티 정의를 기준으로 운영 스키마를 동기화한다.
+      ddl-auto: update
     open-in-view: false
-  flyway:
-    enabled: true
-    baseline-on-migrate: true
-    baseline-version: 20260716
 
 # 운영 API 계약과 내부 모델을 공개하지 않는다. 개발/테스트 프로필의 Swagger는 유지한다.
 springdoc:
