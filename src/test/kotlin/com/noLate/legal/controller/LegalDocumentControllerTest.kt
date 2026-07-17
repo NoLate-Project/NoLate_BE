@@ -8,6 +8,17 @@ import org.junit.jupiter.api.Test
 class LegalDocumentControllerTest {
 
     @Test
+    fun `homepage identifies NoLate and explains Google Calendar data use`() {
+        val html = HomePageController().getHomePage()
+
+        assertTrue(html.contains("<title>NoLate"))
+        assertTrue(html.contains("NoLate, 늦지 않는 하루를 위한 일정 관리"))
+        assertTrue(html.contains("Google Calendar 데이터 사용 안내"))
+        assertTrue(html.contains("href=\"/legal/privacy-policy\""))
+        assertTrue(html.contains("로그인").not())
+    }
+
+    @Test
     fun `signup consent policy exposes versioned terms and privacy collection documents`() {
         val response = LegalDocumentController().getSignupConsents()
         val policy = requireNotNull(response.data)

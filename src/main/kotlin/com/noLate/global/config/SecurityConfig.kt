@@ -109,6 +109,7 @@ class SecurityConfig(
                     ).permitAll()
 
                     .requestMatchers(
+                        "/",
                         "/api/member/auth/**",
                         "/api/legal/**",
                         "/legal/**",
