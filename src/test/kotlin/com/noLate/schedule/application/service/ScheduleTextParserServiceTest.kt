@@ -160,6 +160,63 @@ class ScheduleTextParserServiceTest {
     }
 
     @Test
+    fun `marks an explicit time range and preserves its real end time`() {
+        val result = parser.parse(
+            text = "금요일 오후 3시부터 5시까지 강남역 회의",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17T06:00:00Z", result.startAt)
+        assertEquals("2026-07-17T08:00:00Z", result.endAt)
+        assertTrue(result.hasExplicitEndTime)
+        assertFalse(result.warnings.any { "서로 다른 시간" in it })
+    }
+
+    @Test
+    fun `keeps a generated default end distinguishable from an explicit end`() {
+        val result = parser.parse(
+            text = "금요일 오후 3시 강남역 회의",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17T06:00:00Z", result.startAt)
+        assertEquals("2026-07-17T07:00:00Z", result.endAt)
+        assertFalse(result.hasExplicitEndTime)
+    }
+
+    @Test
+    fun `resolves an omitted end meridiem to the closest future time`() {
+        val result = parser.parse(
+            text = "금요일 오후 11시부터 1시까지 강남역 회의",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17T14:00:00Z", result.startAt)
+        assertEquals("2026-07-17T16:00:00Z", result.endAt)
+        assertTrue(result.hasExplicitEndTime)
+    }
+
+    @Test
+    fun `parses a labeled end time as explicit`() {
+        val result = parser.parse(
+            text = "행사 날짜: 2026-07-17\n시작 시간: 오후 3시\n종료 시간: 오후 5시\n장소: 강남역",
+            inputType = ScheduleParseInputType.TEXT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17T06:00:00Z", result.startAt)
+        assertEquals("2026-07-17T08:00:00Z", result.endAt)
+        assertTrue(result.hasExplicitEndTime)
+    }
+
+    @Test
     fun `parses compact unlabeled reservation message`() {
         val result = parser.parse(
             text = "홍길동 20260630/14:30 인천빌라드컨벤션 예물O 화동O",
@@ -307,6 +364,194 @@ class ScheduleTextParserServiceTest {
         assertEquals("2026-06-12", result.date)
         assertEquals("19:00", result.time)
         assertEquals("2026-06-12T10:00:00Z", result.startAt)
+    }
+
+    @Test
+    fun `parses shared drinking plan into evening destination and useful title`() {
+        val result = parser.parse(
+            text = "금요일 7시 강남역 술약속",
+            inputType = ScheduleParseInputType.SHARE_TEXT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("2026-07-17T10:00:00Z", result.startAt)
+        assertEquals("강남역", result.destination?.name)
+        assertEquals("강남역 술약속", result.title)
+        assertNull(result.origin)
+        assertTrue(result.originRequired)
+        assertTrue(result.warnings.any { "오후 7시로 추정" in it })
+        assertFalse("destination" in result.missingFields)
+    }
+
+    @Test
+    fun `parses pasted drinking plan from quick conversation input`() {
+        // 빠른 일정의 텍스트 모드는 FE에서 TEXT가 아니라 CONVERSATION으로 전달된다.
+        // 공유 입력 테스트만 있으면 실제 붙여넣기 화면에서 장소가 다시 누락될 수 있다.
+        val result = parser.parse(
+            text = "금요일 7시 강남역 술약속",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("강남역", result.destination?.name)
+        assertEquals("강남역 술약속", result.title)
+        assertFalse("destination" in result.missingFields)
+    }
+
+    @Test
+    fun `parses destination when purpose precedes place in pasted input`() {
+        val result = parser.parse(
+            text = "금요일 7시 술약속 신촌역",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("신촌역", result.destination?.name)
+        assertEquals("신촌역 술약속", result.title)
+        assertFalse("destination" in result.missingFields)
+    }
+
+    @Test
+    fun `parses shared sentence when time precedes weekday and purpose precedes place`() {
+        // 공유 확장은 빠른 일정 입력창과 같은 파서를 쓰지만 inputType은 SHARE_TEXT다.
+        // 실제 공유 어순을 고정해 제목이 시각만 남거나 목적지가 다시 비는 회귀를 막는다.
+        val result = parser.parse(
+            text = "7시 금요일 술약속 신촌역",
+            inputType = ScheduleParseInputType.SHARE_TEXT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("신촌역", result.destination?.name)
+        assertEquals("신촌역 술약속", result.title)
+        assertFalse("destination" in result.missingFields)
+    }
+
+    @Test
+    fun `parses schedule words even when quick input has no spaces`() {
+        val result = parser.parse(
+            text = "금요일7시술약속신촌역",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("신촌역", result.destination?.name)
+        assertEquals("신촌역 술약속", result.title)
+    }
+
+    @Test
+    fun `removes purpose particle before extracting destination`() {
+        val result = parser.parse(
+            text = "금요일 7시 술약속은 신촌역에서",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("신촌역", result.destination?.name)
+        assertEquals("신촌역 술약속", result.title)
+    }
+
+    @Test
+    fun `normalizes voice fillers and Korean hour words`() {
+        val result = parser.parse(
+            text = "금요일 저녁 일곱 시 어 그 신촌역에서 술 약속 잡아줘",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("신촌역", result.destination?.name)
+        assertFalse("destination" in result.missingFields)
+    }
+
+    @Test
+    fun `uses corrected weekday and time after 아니`() {
+        val result = parser.parse(
+            text = "금요일 아니 토요일 7시 아니 8시 신촌역 술약속",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-18", result.date)
+        assertEquals("20:00", result.time)
+        assertEquals("신촌역", result.destination?.name)
+        assertTrue(result.warnings.any { "정정 표현" in it && "확인이 필요" in it })
+    }
+
+    @Test
+    fun `marks conflicting weekday and time candidates for review`() {
+        val result = parser.parse(
+            text = "금요일 7시 토요일 8시 신촌역",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertTrue(result.warnings.any { "서로 다른 요일" in it })
+        assertTrue(result.warnings.any { "서로 다른 시간" in it })
+        assertEquals("신촌역", result.destination?.name)
+    }
+
+    @Test
+    fun `parses relative date without spaces`() {
+        val result = parser.parse(
+            text = "모레저녁7시 강남역",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-18", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("강남역", result.destination?.name)
+    }
+
+    @Test
+    fun `keeps complete venue after abbreviated weekday`() {
+        val result = parser.parse(
+            text = "토욜 여덟시 강남 용용선생",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-18", result.date)
+        assertEquals("08:00", result.time)
+        assertEquals("강남 용용선생", result.destination?.name)
+        assertTrue(result.warnings.any { "오전·오후가 없어" in it && "확인이 필요" in it })
+    }
+
+    @Test
+    fun `parses tomorrow destination while leaving unspecified time empty`() {
+        val result = parser.parse(
+            text = "내일 퇴근하고 강남역에서 저녁 약속",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17", result.date)
+        assertNull(result.time)
+        assertEquals("강남역", result.destination?.name)
+        assertTrue("time" in result.missingFields)
     }
 
     @Test

@@ -56,4 +56,45 @@ class GroqScheduleParserIntegrationTest {
         assertNotNull(result.notes)
         assertTrue(result.warnings.isEmpty(), "Groq 호출 경고: ${result.warnings}")
     }
+
+    @Test
+    fun `Groq가 일정 목적어 앞뒤의 역 이름을 도착지로 구분한다`() {
+        val apiKey = System.getenv("GROQ_API_KEY").orEmpty()
+        assumeTrue(
+            apiKey.isNotBlank(),
+            "실제 Groq 테스트를 실행하려면 GROQ_API_KEY 환경 변수가 필요합니다.",
+        )
+        val model = System.getenv("GROQ_MODEL")
+            ?.takeIf { it.isNotBlank() }
+            ?: "openai/gpt-oss-20b"
+        val aiParser = GroqScheduleAiParser(
+            objectMapper = jacksonObjectMapper(),
+            enabled = true,
+            apiKey = apiKey,
+            model = model,
+        )
+        val parser = ScheduleHybridParserService(
+            ruleParser = ScheduleTextParserService(),
+            aiParser = aiParser,
+        )
+
+        // TEXT는 의도적으로 빠른 입력 전용 자연어 규칙을 적용하지 않는다. 따라서 이 테스트는
+        // 같은 문장을 Groq 폴백으로 보내 프롬프트 자체가 어순을 이해하는지 검증한다.
+        val result = parser.parse(
+            text = "금요일 7시 술약속 신촌역",
+            inputType = com.noLate.schedule.domain.ScheduleParseInputType.TEXT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("2026-07-17", result.date)
+        assertEquals("19:00", result.time)
+        assertEquals("신촌역", result.destination?.name)
+        assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
+        assertTrue(result.aiAttempted)
+        assertTrue(
+            result.warnings.none { "AI 분석" in it },
+            "Groq 호출 경고: ${result.warnings}",
+        )
+    }
 }

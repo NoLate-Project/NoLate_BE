@@ -49,6 +49,12 @@ data class ScheduleParseDto(
     val startAt: String? = null,
     val endAt: String? = null,
 
+    /**
+     * [endAt]이 원문의 명시적인 종료 시각(예: `3시부터 5시까지`)에서 온 값인지 나타낸다.
+     * false면 [endAt]은 미리보기에 필요한 기본 지속 시간으로 계산된 값이다.
+     */
+    val hasExplicitEndTime: Boolean = false,
+
     /** 원문에서 추출한 출발지와 출발지 결정 상태다. */
     val origin: SchedulePlaceDto? = null,
     val originSource: ScheduleOriginSource = ScheduleOriginSource.REQUIRED,

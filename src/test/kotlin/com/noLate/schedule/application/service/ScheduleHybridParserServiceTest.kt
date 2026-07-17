@@ -41,6 +41,200 @@ class ScheduleHybridParserServiceTest {
     }
 
     @Test
+    fun `does not need AI for a natural shared drinking plan`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(destinationName = "잘못된 장소", destinationConfidence = 1.0),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "금요일 7시 강남역 술약속",
+            inputType = ScheduleParseInputType.SHARE_TEXT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(0, aiParser.calls)
+        assertEquals("강남역 술약속", result.title)
+        assertEquals("19:00", result.time)
+        assertEquals("강남역", result.destination?.name)
+        assertEquals(ScheduleParseSource.RULE, result.parseSource)
+        assertTrue(result.needsReview)
+    }
+
+    @Test
+    fun `does not call AI when purpose precedes place in a pasted quick plan`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(destinationName = "잘못된 장소", destinationConfidence = 1.0),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "금요일 7시 술약속 신촌역",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(0, aiParser.calls)
+        assertEquals("신촌역", result.destination?.name)
+        assertEquals("신촌역 술약속", result.title)
+        assertEquals(ScheduleParseSource.RULE, result.parseSource)
+    }
+
+    @Test
+    fun `keeps explicit end evidence when AI only fills a missing destination`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(
+                    destinationName = "강남역",
+                    destinationConfidence = 0.99,
+                ),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "금요일 오후 3시부터 5시까지 회의",
+            inputType = ScheduleParseInputType.TEXT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(1, aiParser.calls)
+        assertEquals("2026-07-17T06:00:00Z", result.startAt)
+        assertEquals("2026-07-17T08:00:00Z", result.endAt)
+        assertTrue(result.hasExplicitEndTime)
+        assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
+    }
+
+    @Test
+    fun `keeps corrected quick input in review even when every field exists`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(date = "2026-07-17", dateConfidence = 1.0),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "금요일 아니 토요일 7시 아니 8시 신촌역 술약속",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(0, aiParser.calls)
+        assertEquals("2026-07-18", result.date)
+        assertEquals("20:00", result.time)
+        assertEquals("신촌역", result.destination?.name)
+        assertTrue(result.needsReview)
+    }
+
+    @Test
+    fun `lets confident AI override canceled date and time in unnormalized input`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(
+                    date = "2026-07-18",
+                    dateConfidence = 0.99,
+                    // 모델이 정정된 시각의 시(hour)는 찾았지만 술약속의 오후 문맥을 놓친 상황도
+                    // 애플리케이션 병합 단계에서 20:00으로 일관되게 보정해야 한다.
+                    time = "08:00",
+                    timeConfidence = 0.99,
+                    destinationName = "신촌역",
+                    destinationConfidence = 0.99,
+                ),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        // 범용 TEXT에는 빠른 입력 정규화를 적용하지 않는다. 이 경로에서도 `아니` 앞의 첫 후보를
+        // 규칙 우선 정책이 고정하지 않고, Groq가 찾은 정정 이후 값을 반영해야 한다.
+        val result = service.parse(
+            text = "금요일 아니 토요일 7시 아니 8시 신촌역 술약속",
+            inputType = ScheduleParseInputType.TEXT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(1, aiParser.calls)
+        assertEquals("2026-07-18", result.date)
+        assertEquals("20:00", result.time)
+        assertEquals("신촌역", result.destination?.name)
+        assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
+        assertTrue(result.needsReview)
+    }
+
+    @Test
+    fun `moves AI only location from origin to destination without route evidence`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(
+                    originName = "신촌역",
+                    originConfidence = 0.95,
+                    summary = "친구와 만남",
+                    summaryConfidence = 0.9,
+                ),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "2026-07-17 오후 7시 친구와 만남",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(1, aiParser.calls)
+        assertNull(result.origin)
+        assertEquals("신촌역", result.destination?.name)
+        assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
+    }
+
+    @Test
+    fun `requires review when AI fills an hour without meridiem`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(
+                    date = "2026-07-18",
+                    dateConfidence = 0.98,
+                    time = "08:00",
+                    timeConfidence = 0.9,
+                    destinationName = "강남 용용선생",
+                    destinationConfidence = 0.98,
+                ),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "토욜 여덟시 강남 용용선생",
+            inputType = ScheduleParseInputType.TEXT,
+            referenceDate = "2026-07-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(1, aiParser.calls)
+        assertEquals("08:00", result.time)
+        assertEquals("강남 용용선생", result.destination?.name)
+        assertTrue(result.needsReview)
+        assertTrue(result.warnings.any { "오전·오후가 없어 AI가" in it })
+    }
+
+    @Test
     fun `requires review without AI when complete OCR fields contain conflicting weekdays`() {
         val aiParser = RecordingAiParser(
             ScheduleAiParseOutcome(
@@ -123,7 +317,8 @@ class ScheduleHybridParserServiceTest {
         assertEquals("판교 네이버", result.destination?.name)
         assertEquals("판교 네이버 07:00", result.title)
         assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
-        assertFalse(result.needsReview)
+        assertTrue(result.needsReview)
+        assertTrue(result.warnings.any { "오전·오후가 없어" in it })
         assertFalse("origin" in result.missingFields)
     }
 
