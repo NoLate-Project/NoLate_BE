@@ -17,7 +17,8 @@ class RefreshToken (
     @Column(nullable = false, unique = true)
     var memberId : Long ?= null,
 
-    @Column(nullable = false, unique = true, length = 1024)
+    // utf8mb4 환경에서 MySQL의 UNIQUE 인덱스 한도(3072 bytes)를 넘지 않도록 768자로 제한한다.
+    @Column(nullable = false, unique = true, length = 768)
     var token : String ?= "",
 
     @Column(nullable = false)
