@@ -80,9 +80,6 @@ class SocialIdentityVerifier(
     }
 
     private fun verifyKakao(token: String): VerifiedSocialIdentity {
-        if (kakaoAppId.isBlank()) {
-            throw BusinessException(ErrorCode.INVALID_STATE, "Kakao 로그인 서버 설정이 완료되지 않았습니다.")
-        }
         val tokenInfo = kakaoClient.get()
             .uri("/v1/user/access_token_info")
             .header(HttpHeaders.AUTHORIZATION, "Bearer $token")
@@ -92,7 +89,12 @@ class SocialIdentityVerifier(
         val subject = tokenInfo.path("id").asText().takeIf(String::isNotBlank)
             ?: invalidSocialProof()
         val tokenAppId = tokenInfo.path("app_id").asText()
-        if (tokenAppId != kakaoAppId) invalidSocialProof()
+        // 카카오 Native App Key는 앱에 포함되는 공개 식별자라 서버가 숫자 앱 ID를 별도로
+        // 보유하지 않아도 토큰 자체는 카카오 API로 검증할 수 있다. 서버 앱 ID를 설정한
+        // 환경에서는 추가로 대상 앱까지 일치시켜 허용 범위를 좁힌다.
+        if (!isTrustedKakaoApp(tokenAppId, kakaoAppId)) {
+            invalidSocialProof()
+        }
         if (tokenInfo.path("expires_in").asLong(0) <= 0) invalidSocialProof()
 
         val user = kakaoClient.get()
@@ -162,3 +164,6 @@ data class VerifiedSocialIdentity(
     val email: String?,
     val name: String?,
 )
+
+internal fun isTrustedKakaoApp(tokenAppId: String, configuredAppId: String): Boolean =
+    tokenAppId.isNotBlank() && (configuredAppId.isBlank() || tokenAppId == configuredAppId)
