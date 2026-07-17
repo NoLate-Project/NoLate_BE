@@ -15,8 +15,12 @@ class HomePageController {
         <head>
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <meta name="description" content="NoLate는 일정과 이동 시간을 함께 관리해 제시간에 출발하도록 돕는 일정 관리 앱입니다." />
-          <title>NoLate | 늦지 않도록 돕는 일정 관리</title>
+          <meta name="application-name" content="NoLate" />
+          <meta name="description" content="NoLate is a mobile schedule and departure assistant that helps users manage appointments, routes, and departure times so they can arrive on time." />
+          <meta property="og:site_name" content="NoLate" />
+          <meta property="og:title" content="NoLate" />
+          <meta property="og:description" content="NoLate helps users manage schedules, travel routes, and departure times so they can arrive on time." />
+          <title>NoLate</title>
           <style>
             :root {
               color-scheme: light dark;
@@ -75,6 +79,7 @@ class HomePageController {
               font-size: 18px;
               font-weight: 600;
             }
+            .lead + .lead { margin-top: 12px; font-size: 16px; }
             .grid {
               display: grid;
               grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -127,31 +132,43 @@ class HomePageController {
           </header>
           <main>
             <section class="hero">
-              <div class="eyebrow">SCHEDULE &amp; DEPARTURE ASSISTANT</div>
-              <h1>NoLate, 늦지 않는 하루를 위한 일정 관리</h1>
-              <p class="lead">
+              <div class="eyebrow">APP NAME / 앱 이름: NoLate</div>
+              <h1>NoLate</h1>
+              <h2>App Purpose / 앱의 목적</h2>
+              <p class="lead" lang="en">
+                NoLate is a mobile schedule and departure assistant that helps users manage appointments,
+                travel routes, and departure times so they can leave at the right time and arrive on time.
+                Users can create schedules, selectively import calendar events, review travel routes,
+                receive departure reminders, and share only the schedules they choose.
+              </p>
+              <p class="lead" lang="ko">
                 NoLate는 일정, 장소, 이동 시간을 한곳에서 관리하고 적절한 출발 시점을 알려 주는 모바일 앱입니다.
                 사용자는 일정을 직접 만들거나 캘린더에서 선택해 가져오고, 경로를 확인하고, 필요한 일정만 다른 사람과 공유할 수 있습니다.
               </p>
             </section>
 
-            <section class="grid" aria-label="NoLate 주요 기능">
+            <section class="grid" aria-label="NoLate Main Features / 주요 기능">
               <article class="card">
-                <h2>일정과 출발 알림</h2>
-                <p>일정 시간과 목적지까지의 이동 시간을 바탕으로 출발 준비와 출발 시점을 확인할 수 있습니다.</p>
+                <h2>Schedules &amp; Departure Reminders</h2>
+                <p>일정 시간과 목적지까지의 이동 시간을 바탕으로 출발 준비와 출발 시점을 알려 줍니다.</p>
               </article>
               <article class="card">
-                <h2>경로 확인</h2>
+                <h2>Travel Route Guidance</h2>
                 <p>등록한 장소를 기준으로 대중교통과 이동 경로를 비교해 일정에 맞는 이동 계획을 세울 수 있습니다.</p>
               </article>
               <article class="card">
-                <h2>선택적 캘린더 가져오기</h2>
+                <h2>Selective Calendar Import</h2>
                 <p>사용자가 선택한 외부 캘린더 일정을 NoLate 일정으로 가져와 한곳에서 관리할 수 있습니다.</p>
               </article>
             </section>
 
             <section class="data-use" aria-labelledby="google-data-title">
-              <h2 id="google-data-title">Google Calendar 데이터 사용 안내</h2>
+              <h2 id="google-data-title">How NoLate Uses Google Calendar Data</h2>
+              <p lang="en">
+                NoLate requests read-only access to calendar lists and upcoming events only after the user
+                consents to connect Google Calendar. This data is used solely to show import candidates and
+                let the user select which events to manage in NoLate.
+              </p>
               <p>
                 NoLate는 사용자가 Google Calendar 연동에 동의한 경우에만 캘린더 목록과 다가오는 일정을 읽기 전용으로 조회합니다.
                 이 정보는 가져올 일정 후보를 보여 주고, 사용자가 선택한 일정을 NoLate에서 관리하도록 제공하는 데 사용됩니다.
@@ -164,7 +181,7 @@ class HomePageController {
               </ul>
               <p>
                 수집 항목, 이용 목적, 보유 기간, 제3자 제공 및 삭제 방법의 자세한 내용은
-                <a href="/legal/privacy-policy"><strong>NoLate 개인정보처리방침</strong></a>에서 확인할 수 있습니다.
+                <a href="/legal/privacy-policy"><strong>NoLate Privacy Policy / 개인정보처리방침</strong></a>에서 확인할 수 있습니다.
               </p>
             </section>
           </main>
