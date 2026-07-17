@@ -39,11 +39,12 @@ spring:
 
 logging:
   level:
-    # SQL 출력은 P6Spy 에러 리스너 한 곳으로 모아 중복 로그를 피한다.
+    # SQL 출력은 P6Spy 리스너 한 곳으로 모아 중복 로그를 피한다.
     org.hibernate.SQL: "OFF"
     org.hibernate.orm.jdbc.bind: "OFF"
     # IDE 의존성 동기화 전에 P6Spy가 아직 없다면 Hibernate 오류 로그가 fallback이 된다.
     org.hibernate.engine.jdbc.spi.SqlExceptionHelper: error
+    com.noLate.global.logging.P6SpySqlErrorEventListener: info
     p6spy: "OFF"
 
 jwt:

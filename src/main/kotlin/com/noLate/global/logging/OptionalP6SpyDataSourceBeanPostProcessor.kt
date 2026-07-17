@@ -29,7 +29,7 @@ class OptionalP6SpyDataSourceBeanPostProcessor : BeanPostProcessor {
             .getConstructor(DataSource::class.java)
             .newInstance(bean) as DataSource
 
-        log.info("P6Spy error-only SQL logging enabled. dataSourceBean={}", beanName)
+        log.info("P6Spy SQL logging enabled. dataSourceBean={}", beanName)
 
         return Proxy.newProxyInstance(
             javaClass.classLoader,
