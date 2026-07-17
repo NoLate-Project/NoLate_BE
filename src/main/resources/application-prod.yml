@@ -19,9 +19,10 @@ schedule:
   push:
     enabled: true
 
-# 운영에서는 아래 공급자가 빠지면 성공처럼 처리하지 않고 startup/요청 단계에서 명시적으로 실패한다.
+# 외부 경로 공급자는 키를 명시한 운영 환경에서만 활성화한다.
+# 키가 없는 배포도 앱 전체를 중단하지 않고, 경로 요청에서 공급자 미설정으로 응답한다.
 routing:
   tmap:
-    enabled: ${TMAP_ENABLED:true}
+    enabled: ${TMAP_ENABLED:false}
 firebase:
   enabled: ${FIREBASE_ENABLED:true}
