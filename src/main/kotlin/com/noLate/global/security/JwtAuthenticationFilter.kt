@@ -42,12 +42,13 @@ class JwtAuthenticationFilter(
         filterChain: FilterChain
     ) {
 
-        log.info("JwtAuthenticationFilter - {} {}", request.method, request.requestURI)
+        // URI에는 공유 invitation bearer token이 포함될 수 있으므로 요청 경로를 기록하지 않는다.
+        log.debug("JwtAuthenticationFilter invoked")
 
         // 1) 이미 SecurityContext에 인증 정보가 있는 경우
         val existingAuth = SecurityContextHolder.getContext().authentication
         if (existingAuth != null) {
-            log.info(
+            log.debug(
                 "JwtAuthenticationFilter - existing authentication found: principal={}, authorities={}",
                 existingAuth.principal,
                 existingAuth.authorities
@@ -59,29 +60,28 @@ class JwtAuthenticationFilter(
         // 2) 요청 헤더에서 JWT 토큰 추출 (Authorization / jwt-token)
         val token = resolveToken(request)
         if (token == null) {
-            log.warn("JwtAuthenticationFilter - no JWT token found in request headers")
+            log.debug("JwtAuthenticationFilter - no JWT token found")
             filterChain.doFilter(request, response)
             return
         }
 
         // 3) 토큰 유효성 검증
         val valid = jwtTokenProvider.validateToken(token)
-        log.info("JwtAuthenticationFilter - validateToken(token) = {}", valid)
+        log.debug("JwtAuthenticationFilter - token valid={}", valid)
 
-        if (valid) {
+        if (valid && runCatching { jwtTokenProvider.isAccessToken(token) }.getOrDefault(false)) {
             try {
                 // 3-1) 토큰에서 memberId 추출
                 val memberId = jwtTokenProvider.getMemberIdFromToken(token)
-                log.info("JwtAuthenticationFilter - memberId from token = {}", memberId)
+                log.debug("JwtAuthenticationFilter - token subject resolved")
 
                 // 3-2) DB에서 회원 정보 조회
-                val principal = memberService.getPrincipalById(memberId)
+                val principal = memberService.getPrincipalById(
+                    memberId,
+                    jwtTokenProvider.getIssuedAt(token),
+                )
                 if (principal != null) {
-                    log.info(
-                        "JwtAuthenticationFilter - member loaded. id={}, email={}",
-                        principal.id,
-                        principal.email
-                    )
+                    log.debug("JwtAuthenticationFilter - active member loaded")
 
                     // 3-3) Principal 생성
                     // 3-4) Authentication 생성
@@ -96,21 +96,16 @@ class JwtAuthenticationFilter(
 
                     // 3-6) SecurityContext에 저장
                     SecurityContextHolder.getContext().authentication = auth
-                    log.info(
-                        "JwtAuthenticationFilter - authentication set in SecurityContext. principalId={}",
-                        principal.id
-                    )
+                    log.debug("JwtAuthenticationFilter - authentication set")
                 } else {
-                    log.warn(
-                        "JwtAuthenticationFilter - member not found for memberId={}",
-                        memberId
-                    )
+                    log.warn("JwtAuthenticationFilter - token subject is no longer active")
                 }
             } catch (ex: Exception) {
-                log.error("JwtAuthenticationFilter - error while setting authentication", ex)
+                log.warn("JwtAuthenticationFilter - authentication could not be established")
+                log.debug("JWT authentication details", ex)
             }
         } else {
-            log.warn("JwtAuthenticationFilter - token is not valid")
+            log.debug("JwtAuthenticationFilter - token rejected")
         }
 
         // 4) 나머지 필터 체인 계속 진행
@@ -126,8 +121,6 @@ class JwtAuthenticationFilter(
      * 3. SSE/EventSource용 query parameter (?token=xxx)
      */
     private fun resolveToken(request: HttpServletRequest): String? {
-        log.info("resolveToken - {} {}", request.method, request.requestURI)
-
         // 1) Authorization 헤더
         val bearer = request.getHeader("Authorization")
 
@@ -153,7 +146,7 @@ class JwtAuthenticationFilter(
             return queryToken
         }
 
-        log.warn("resolveToken - no JWT token found in header or query parameter")
+        log.debug("resolveToken - no JWT token found")
         return null
     }
 

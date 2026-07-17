@@ -2,25 +2,25 @@ spring:
   application:
     name: noLate
 
-  config:
     # 공용 로컬값 다음에 프로젝트 루트의 Git 제외 파일을 읽는다.
     # Docker/운영 환경은 마운트된 /config/env.properties가 마지막에 같은 키를 덮어쓴다.
     # 비밀 파일을 resources 밖에 두어 로컬 빌드 산출물에도 인증키가 포함되지 않게 한다.
-    import:
-      - optional:file:./src/main/resources/env.properties
-      - optional:file:./env.local.properties
-      - optional:file:/config/env.properties
 
   sql:
     init:
       mode: always
 
   datasource:
-    driver-class-name: com.p6spy.engine.spy.P6SpyDriver
-    url: jdbc:p6spy:mysql://${MY_SQL_END_POINT}:${MY_SQL_PORT:3306}/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MY_SQL_END_POINT}:${MY_SQL_PORT:3306}/${MY_SQL_DB_NAME}?serverTimezone=Asia/Seoul
     #useSSL=false&serverTimezone=Asia/Seoul
     username: ${MY_SQL_DB_USERNAME}
     password: ${MY_SQL_DB_PASSWORD}
+
+  # 기존 데이터를 사용하는 개발 DB에는 운영 마이그레이션을 자동 적용하지 않는다.
+  # prod 프로필은 application-prod.yml에서 Flyway를 다시 활성화한다.
+  flyway:
+    enabled: false
 
   jpa:
     # 주기적으로 실행되는 스케줄 워커의 정상 쿼리는 출력하지 않는다.
@@ -47,7 +47,8 @@ logging:
     # SQL 출력은 P6Spy 에러 리스너 한 곳으로 모아 중복 로그를 피한다.
     org.hibernate.SQL: "OFF"
     org.hibernate.orm.jdbc.bind: "OFF"
-    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: "OFF"
+    # IDE 의존성 동기화 전에 P6Spy가 아직 없다면 Hibernate 오류 로그가 fallback이 된다.
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: error
     p6spy: "OFF"
 
 jwt:
@@ -63,6 +64,7 @@ server:
 
 schedule:
   push:
+    enabled: ${SCHEDULE_PUSH_ENABLED:true}
     fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}
     retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:5}
     # 푸시 공급자의 일시 장애가 지속될 때 무한 재시도를 막는 작업 단위 한도다.
@@ -81,6 +83,10 @@ schedule:
       enabled: ${GROQ_ENABLED:false}
       api-key: ${GROQ_API_KEY:}
       model: ${GROQ_MODEL:openai/gpt-oss-20b}
+      base-url: ${GROQ_BASE_URL:https://api.groq.com/openai/v1}
+      # 분당 토큰 제한(429)은 공급자가 안내한 대기 시간 뒤 한 번만 재시도한다.
+      max-attempts: ${GROQ_MAX_ATTEMPTS:2}
+      max-backoff-ms: ${GROQ_MAX_BACKOFF_MS:12000}
 
 routing:
   tmap:
@@ -105,3 +111,20 @@ firebase:
   enabled: ${FIREBASE_ENABLED:false}
   credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
   project-id: ${FIREBASE_PROJECT_ID:}
+
+auth:
+  social:
+    kakao:
+      app-id: ${SNS_KAKAO_APP_ID:}
+    apple:
+      audiences: ${SNS_APPLE_AUDIENCES:}
+
+---
+# 테스트 profile에서는 저장소/로컬/운영 비밀 파일 자체를 import하지 않는다.
+spring:
+  config:
+    activate:
+      on-profile: "!test"
+    import:
+      - optional:file:./env.local.properties
+      - optional:file:/config/env.properties

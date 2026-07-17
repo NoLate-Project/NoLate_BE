@@ -1,0 +1,30 @@
+spring:
+  sql:
+    init:
+      mode: never
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 20260716
+
+# 운영 API 계약과 내부 모델을 공개하지 않는다. 개발/테스트 프로필의 Swagger는 유지한다.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+schedule:
+  push:
+    enabled: true
+
+# 운영에서는 아래 공급자가 빠지면 성공처럼 처리하지 않고 startup/요청 단계에서 명시적으로 실패한다.
+routing:
+  tmap:
+    enabled: ${TMAP_ENABLED:true}
+firebase:
+  enabled: ${FIREBASE_ENABLED:true}

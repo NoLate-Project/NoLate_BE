@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import com.noLate.global.config.externalHttpRequestFactory
 
 @Component
 @ConditionalOnProperty(prefix = "routing.tmap", name = ["enabled"], havingValue = "true")
@@ -18,6 +19,7 @@ class TmapTransitRouteClient(
     private val restClient = RestClient.builder()
         .baseUrl(baseUrl)
         .defaultHeader("appKey", appKey)
+        .requestFactory(externalHttpRequestFactory())
         .build()
 
     override fun providerId(): String = "tmap"

@@ -1,6 +1,7 @@
 package com.noLate.schedule.infrastructure
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.noLate.route.infrastructure.tmapTransitSecondsToMinutes
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.domain.ScheduleTravelMode
@@ -9,6 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import com.noLate.global.config.externalHttpRequestFactory
 import kotlin.math.ceil
 
 @Component
@@ -20,6 +22,7 @@ class TmapTrafficClient(
     private val restClient = RestClient.builder()
         .baseUrl(baseUrl)
         .defaultHeader("appKey", appKey)
+        .requestFactory(externalHttpRequestFactory())
         .build()
 
     override fun getTravelMinutes(request: TrafficRequest): Int {
@@ -90,7 +93,7 @@ class TmapTrafficClient(
             .body(JsonNode::class.java)
             ?: error("Tmap 대중교통 응답이 비어 있습니다.")
 
-        val totalTime = response.path("metaData")
+        val totalTimeSeconds = response.path("metaData")
             .path("plan")
             .path("itineraries")
             .firstOrNull()
@@ -99,10 +102,6 @@ class TmapTrafficClient(
             ?.asDouble()
             ?: error("Tmap 대중교통 응답에 totalTime이 없습니다.")
 
-        return if (totalTime > 1000) {
-            ceil(totalTime / 60.0).toInt().coerceAtLeast(1)
-        } else {
-            ceil(totalTime).toInt().coerceAtLeast(1)
-        }
+        return tmapTransitSecondsToMinutes(totalTimeSeconds)
     }
 }

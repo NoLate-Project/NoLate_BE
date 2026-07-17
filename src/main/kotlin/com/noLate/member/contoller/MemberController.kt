@@ -49,13 +49,11 @@ class MemberController(
     @Operation(summary = "SNS 로그인")
     @PostMapping("/auth/sns-login")
     fun snsLogin(@RequestBody request: SnsLoginRequest): ApiResponse<MemberDto> {
-        val memberDto = MemberDto(
-            email = request.email,
-            name = request.name,
+        val result = memberUseCase.loginSns(
             loginType = request.loginType,
-            snsId = request.snsId
+            providerToken = request.providerToken,
+            nonce = request.nonce,
         )
-        val result = memberUseCase.login(memberDto)
         return ApiResponse.success(result)
     }
 
@@ -64,7 +62,11 @@ class MemberController(
     fun getSnsRegistrationStatus(
         @RequestBody request: SnsRegistrationRequest,
     ): ApiResponse<SnsRegistrationStatusResponse> {
-        val registered = memberUseCase.isSnsMemberRegistered(request.loginType, request.snsId)
+        val registered = memberUseCase.isSnsMemberRegistered(
+            loginType = request.loginType,
+            providerToken = request.providerToken,
+            nonce = request.nonce,
+        )
         return ApiResponse.success(SnsRegistrationStatusResponse(registered = registered))
     }
 
@@ -72,12 +74,9 @@ class MemberController(
     @PostMapping("/auth/sns-sign-up")
     fun snsSignUp(@RequestBody request: SnsSignUpRequest): ApiResponse<MemberDto> {
         val result = memberUseCase.signUpSns(
-            requestDto = MemberDto(
-                email = request.email,
-                name = request.name,
-                loginType = request.loginType,
-                snsId = request.snsId,
-            ),
+            loginType = request.loginType,
+            providerToken = request.providerToken,
+            nonce = request.nonce,
             consents = request.consents.toCommand(),
         )
         return ApiResponse.success(result)
@@ -193,17 +192,21 @@ data class LoginRequest(
     val password: String
 )
 
-// 카카오/구글 SDK에서 검증 완료된 값들을 보내준다고 가정
+// 카카오/네이버는 access token, Apple은 identity token을 providerToken으로 보낸다.
+// authorizationCode는 향후 server-side code exchange를 위한 호환 필드이며 현재 인증 판단에는
+// 사용하지 않는다. Apple nonce를 사용한 클라이언트는 nonce도 반드시 함께 보낸다.
 data class SnsLoginRequest(
-    val loginType: LoginType, // KAKAO / GOOGLE / ...
-    val snsId: String,
-    val email: String?,
-    val name: String
+    val loginType: LoginType,
+    val providerToken: String,
+    val authorizationCode: String? = null,
+    val nonce: String? = null,
 )
 
 data class SnsRegistrationRequest(
     val loginType: LoginType,
-    val snsId: String,
+    val providerToken: String,
+    val authorizationCode: String? = null,
+    val nonce: String? = null,
 )
 
 data class SnsRegistrationStatusResponse(
@@ -212,9 +215,9 @@ data class SnsRegistrationStatusResponse(
 
 data class SnsSignUpRequest(
     val loginType: LoginType,
-    val snsId: String,
-    val email: String?,
-    val name: String,
+    val providerToken: String,
+    val authorizationCode: String? = null,
+    val nonce: String? = null,
     val consents: SignupConsentRequest,
 )
 

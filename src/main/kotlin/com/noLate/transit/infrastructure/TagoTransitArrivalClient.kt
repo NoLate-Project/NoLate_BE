@@ -6,6 +6,7 @@ import com.noLate.transit.domain.estimatedTransitArrivalStatus
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import com.noLate.global.config.externalHttpRequestFactory
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
@@ -19,6 +20,7 @@ class TagoTransitArrivalClient(
 ) {
     private val client = RestClient.builder()
         .baseUrl(baseUrl)
+        .requestFactory(externalHttpRequestFactory())
         .build()
 
     private val configuredCityCodes = cityCodeCandidatesValue
@@ -86,6 +88,9 @@ class TagoTransitArrivalClient(
 
         val cityCodes = cityCode?.let(::listOf) ?: cityCodeCandidates()
         val cacheKey = listOf(nodeNo ?: "", normalizedStationName ?: "", cityCodes.joinToString(",")).joinToString("|")
+        if (stationCache.size >= MAX_STATION_CACHE_ENTRIES && !stationCache.containsKey(cacheKey)) {
+            stationCache.clear()
+        }
         return stationCache.getOrPut(cacheKey) {
             val byNodeNo = if (nodeNo == null) emptyList() else cityCodes
                 .asSequence()
@@ -276,6 +281,7 @@ class TagoTransitArrivalClient(
     }
 
     private companion object {
+        const val MAX_STATION_CACHE_ENTRIES = 500
         const val MAX_STATION_CANDIDATES = 6
 
         val DEFAULT_CITY_CODES = listOf(

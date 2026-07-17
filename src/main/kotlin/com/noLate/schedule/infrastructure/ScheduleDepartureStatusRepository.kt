@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 
 interface ScheduleDepartureStatusRepository : JpaRepository<ScheduleDepartureStatus, Long> {
+    fun deleteAllByMemberId(memberId: Long)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query(
         """

@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
 
 interface RecentRoutePlaceRepository : JpaRepository<RecentRoutePlace, Long> {
+    fun findAllByMemberId(memberId: Long): List<RecentRoutePlace>
     fun findByMemberIdAndDeletedFalseOrderByLastUsedAtDescIdDesc(
         memberId: Long,
         pageable: Pageable,

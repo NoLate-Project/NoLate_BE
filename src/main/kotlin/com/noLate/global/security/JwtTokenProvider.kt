@@ -18,7 +18,10 @@ class JwtTokenProvider(
     private val accessTokenValidityInSeconds: Long,
 
     @Value("\${jwt.refresh-token-validity-in-seconds}")
-    private val refreshTokenValidityInSeconds: Long
+    private val refreshTokenValidityInSeconds: Long,
+
+    @Value("\${jwt.issuer:nolate}")
+    private val issuer: String = "nolate",
 ) {
 
     private val key = Keys.hmacShaKeyFor(secret.toByteArray(StandardCharsets.UTF_8))
@@ -28,7 +31,9 @@ class JwtTokenProvider(
         val expiry = now + accessTokenValidityInSeconds * 1000
 
         return Jwts.builder()
+            .setId(UUID.randomUUID().toString())
             .setSubject(memberId.toString())
+            .setIssuer(issuer)
             .claim(CLAIM_NAME, memberName)
             .claim(CLAIM_TYPE, TOKEN_TYPE_ACCESS)
             .setIssuedAt(Date(now))
@@ -42,7 +47,9 @@ class JwtTokenProvider(
         val expiry = now + refreshTokenValidityInSeconds * 1000
 
         return Jwts.builder()
+            .setId(UUID.randomUUID().toString())
             .setSubject(memberId.toString())
+            .setIssuer(issuer)
             .claim(CLAIM_NAME, memberName)
             .claim(CLAIM_TYPE, TOKEN_TYPE_REFRESH)
             .setIssuedAt(Date(now))
@@ -55,13 +62,7 @@ class JwtTokenProvider(
         return try {
             parseClaims(token)
             true
-        } catch (ex: SecurityException) {
-            false
-        } catch (ex: MalformedJwtException) {
-            false
-        } catch (ex: ExpiredJwtException) {
-            false
-        } catch (ex: UnsupportedJwtException) {
+        } catch (ex: JwtException) {
             false
         } catch (ex: IllegalArgumentException) {
             false
@@ -84,9 +85,16 @@ class JwtTokenProvider(
         return type == TOKEN_TYPE_REFRESH
     }
 
+    fun isAccessToken(token: String): Boolean =
+        (parseClaims(token)[CLAIM_TYPE] as? String) == TOKEN_TYPE_ACCESS
+
+    fun getIssuedAt(token: String): java.time.Instant =
+        parseClaims(token).issuedAt.toInstant()
+
     private fun parseClaims(token: String): Claims {
         return Jwts.parserBuilder()
             .setSigningKey(key)
+            .requireIssuer(issuer)
             .build()
             .parseClaimsJws(token)
             .body

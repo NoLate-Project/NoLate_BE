@@ -1,5 +1,6 @@
 package com.noLate.member.domain.member
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.Pattern
 
@@ -10,7 +11,8 @@ class MemberDto(
 
     val name: String? = "",
 
-    @param:Pattern(regexp = "^[a-zA-Z0-9!@#$%^&*]{8,16}$", message = ValidationMessage.PASSWORD)
+    @get:JsonIgnore
+    @param:Pattern(regexp = ValidationMessage.PASSWORD_PATTERN, message = ValidationMessage.PASSWORD)
     var password: String? = "",
 
     @param:Email(message = ValidationMessage.EMAIL)
@@ -18,7 +20,7 @@ class MemberDto(
 
     val loginType: LoginType? = LoginType.COMMON,
 
-    val snsId: String ?= "",
+    val snsId: String ?= null,
 
     var accessToken : String ?= "",
 
@@ -40,7 +42,7 @@ class MemberDto(
 
 ) {
     // JPA가 사용할 기본 생성자
-    protected constructor() : this(null, "", "", "", null, "" ,"" , "", false, false)
+    protected constructor() : this(null, "", "", "", null, null ,"" , "", false, false)
 
     fun toEntity() : Member =
         Member(

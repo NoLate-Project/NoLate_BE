@@ -10,10 +10,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: prod
       SPRING_CONFIG_IMPORT: optional:file:/config/env.properties
-      LOGGING_FILE_NAME: /logs/app.log
     volumes:
-      - ./src/main/resources/env.properties:/config/env.properties:ro
-      - /mnt/toshiba1t/config/firebase.json:/config/firebase.json:ro
-      - ./logs:/logs
+      - ${NOLATE_ENV_FILE:-./env.local.properties}:/config/env.properties:ro
+      - ${NOLATE_FIREBASE_CREDENTIALS_FILE:?Set NOLATE_FIREBASE_CREDENTIALS_FILE}:/config/firebase.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

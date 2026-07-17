@@ -8,6 +8,7 @@ import com.noLate.global.security.MemberPrincipal
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service
 import java.util.Optional
+import java.time.Instant
 
 @Service
 class MemberService(
@@ -37,17 +38,30 @@ class MemberService(
 
     @Transactional
     fun getFindMemberId(id: Long) : Optional<Member> {
-       return memberRepository.findById(id)
+       return Optional.ofNullable(memberRepository.findByIdAndDeletedFalse(id))
     }
 
     @Transactional
     fun getPrincipalById(id: Long): MemberPrincipal? {
-       val member = memberRepository.findById(id).orElse(null) ?: return null
+       return getPrincipalById(id, Instant.MAX)
+    }
+
+    @Transactional
+    fun getPrincipalById(id: Long, tokenIssuedAt: Instant): MemberPrincipal? {
+       val member = memberRepository.findByIdAndDeletedFalse(id) ?: return null
+       if (member.tokensValidAfter?.let { !tokenIssuedAt.isAfter(it) } == true) return null
        return MemberPrincipal(
            id = requireNotNull(member.id),
            email = member.email ?: "",
            name = member.name ?: ""
        )
+    }
+
+    @Transactional
+    fun invalidateSessions(memberId: Long) {
+        val member = memberRepository.findByIdAndDeletedFalse(memberId) ?: return
+        member.tokensValidAfter = Instant.now()
+        memberRepository.save(member)
     }
 
     @Transactional
@@ -59,6 +73,10 @@ class MemberService(
     fun findByEmailAndLoginType(email: String, common: LoginType) : MemberDto?{
        return memberRepository.findByEmailAndLoginTypeAndDeletedFalse(email, common)?.toDto()
     }
+
+    @Transactional
+    fun findByEmail(email: String): MemberDto? =
+        memberRepository.findByEmailAndDeletedFalse(email)?.toDto()
 
     @Transactional
     fun findByLoginTypeAndSnsId(loginType: LoginType?, snsId: String) : MemberDto? {

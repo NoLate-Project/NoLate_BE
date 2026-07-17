@@ -9,6 +9,9 @@ import com.noLate.member.application.service.MemberConsentService
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
 import com.noLate.member.application.service.MemberValidator
+import com.noLate.member.application.service.SocialIdentityVerifier
+import com.noLate.member.application.service.VerifiedSocialIdentity
+import com.noLate.member.application.service.AccountCleanupService
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.domain.member.MemberDto
@@ -19,6 +22,7 @@ import com.noLate.member.domain.profile.MemberProfileDto
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
+import java.util.Locale
 
 @Component
 class MemberUseCase(
@@ -30,6 +34,8 @@ class MemberUseCase(
     private val memberValidator: MemberValidator,
     private val refreshTokenService: RefreshTokenService,
     private val memberConsentService: MemberConsentService,
+    private val socialIdentityVerifier: SocialIdentityVerifier? = null,
+    private val accountCleanupService: AccountCleanupService? = null,
 ) {
 
     /**
@@ -55,6 +61,7 @@ class MemberUseCase(
         val entity = memberDto.toEntity().apply {
             this.password = encodedPassword
             this.loginType = LoginType.COMMON
+            this.name = memberDto.name?.trim()
         }
 
         // 4) 회원 저장 (Service는 DTO 반환)
@@ -84,73 +91,100 @@ class MemberUseCase(
      */
     @Transactional
     fun login(requestDto: MemberDto): MemberDto {
-
-        // 로그인 타입에 따라 기존 회원을 확인한다. 신규 생성은 동의가 포함된 가입 API에서만 한다.
-        val memberDto: MemberDto = when (requestDto.loginType) {
-            LoginType.COMMON -> {
-                // 이메일/비밀번호 검증 + 회원 조회까지 Validator가 처리하고 DTO 반환
-                memberValidator.validateAndGetMemberForCommonLogin(requestDto)
-            }
-
-            else -> {
-                // SNS 로그인
-                val snsId = memberValidator.requireSnsId(requestDto)
-                memberService.findByLoginTypeAndSnsId(requestDto.loginType, snsId)
-                    ?.apply { this.isNewMember = false }
-                    ?: throw BusinessException(ErrorCode.SNS_SIGNUP_REQUIRED)
-            }
+        if (requestDto.loginType != LoginType.COMMON) {
+            throw BusinessException(
+                ErrorCode.INVALID_CREDENTIALS,
+                "SNS 로그인은 공급자 인증 토큰이 필요합니다.",
+            )
         }
+        return issueTokens(memberValidator.validateAndGetMemberForCommonLogin(requestDto))
+    }
 
-        return issueTokens(memberDto)
+    /** 공개 SNS 인증 경로. 클라이언트가 보낸 snsId/profile은 사용하지 않는다. */
+    @Transactional
+    fun loginSns(
+        loginType: LoginType,
+        providerToken: String?,
+        nonce: String? = null,
+    ): MemberDto {
+        val identity = verifySocialIdentity(loginType, providerToken, nonce)
+        val member = memberService.findByLoginTypeAndSnsId(loginType, identity.subject)
+            ?.apply { isNewMember = false }
+            ?: throw BusinessException(ErrorCode.SNS_SIGNUP_REQUIRED)
+        return issueTokens(member)
     }
 
     @Transactional(readOnly = true)
-    fun isSnsMemberRegistered(loginType: LoginType, snsId: String): Boolean {
-        if (loginType == LoginType.COMMON || snsId.isBlank()) {
-            throw BusinessException(ErrorCode.INVALID_INPUT, "SNS 로그인 정보가 올바르지 않습니다.")
-        }
-        return memberService.findByLoginTypeAndSnsId(loginType, snsId) != null
+    fun isSnsMemberRegistered(
+        loginType: LoginType,
+        providerToken: String?,
+        nonce: String? = null,
+    ): Boolean {
+        val identity = verifySocialIdentity(loginType, providerToken, nonce)
+        return memberService.findByLoginTypeAndSnsId(loginType, identity.subject) != null
     }
 
     @Transactional
-    fun signUpSns(requestDto: MemberDto, consents: SignupConsentCommand): MemberDto {
-        memberConsentService.validateRequiredSignupConsents(consents)
+    fun signUpSns(
+        loginType: LoginType,
+        providerToken: String?,
+        nonce: String?,
+        consents: SignupConsentCommand,
+    ): MemberDto {
+        val identity = verifySocialIdentity(loginType, providerToken, nonce)
+        return signUpVerifiedSns(loginType, identity, consents)
+    }
 
-        val loginType = requestDto.loginType
-        if (loginType == null || loginType == LoginType.COMMON) {
+    private fun verifySocialIdentity(
+        loginType: LoginType,
+        providerToken: String?,
+        nonce: String?,
+    ): VerifiedSocialIdentity = requireNotNull(socialIdentityVerifier) {
+        "SocialIdentityVerifier bean is required."
+    }.verify(loginType, providerToken, nonce)
+
+    private fun signUpVerifiedSns(
+        loginType: LoginType,
+        identity: VerifiedSocialIdentity,
+        consents: SignupConsentCommand,
+    ): MemberDto {
+        memberConsentService.validateRequiredSignupConsents(consents)
+        if (loginType == LoginType.COMMON) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "SNS 로그인 유형이 필요합니다.")
         }
-
-        val snsId = memberValidator.requireSnsId(requestDto)
-        if (memberService.findByLoginTypeAndSnsId(loginType, snsId) != null) {
+        if (memberService.findByLoginTypeAndSnsId(loginType, identity.subject) != null) {
             throw BusinessException(ErrorCode.DUPLICATE_MEMBER, "이미 가입된 SNS 계정입니다.")
         }
 
-        val name = requestDto.name ?: requestDto.email ?: "사용자"
-        val email = requestDto.email?.takeIf { it.isNotBlank() }
-            ?: createSyntheticSnsEmail(loginType, snsId)
+        // 이메일 주소의 local/domain 표기는 공급자마다 대소문자가 달라질 수 있다.
+        // COMMON 가입과 같은 정규형으로 비교·저장해야 동일 이메일 계정이 DB의
+        // case-sensitive unique constraint를 우회하지 않는다.
+        val verifiedEmail = identity.email
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?.takeIf(String::isNotBlank)
+        val name = identity.name ?: verifiedEmail ?: "사용자"
+        val email = verifiedEmail ?: createSyntheticSnsEmail(loginType, identity.subject)
+        if (verifiedEmail != null && memberService.findByEmail(email) != null) {
+            throw BusinessException(ErrorCode.ACCOUNT_LINK_REQUIRED)
+        }
         val saved = memberService.addMember(
             Member().apply {
-                this.snsId = snsId
+                snsId = identity.subject
                 this.name = name
                 this.loginType = loginType
                 this.email = email
+                password = ""
             }
-        ).apply {
-            this.isNewMember = true
-        }
+        ).apply { isNewMember = true }
         val memberId = requireNotNull(saved.id)
-
-        memberSettingService.createDefaultSetting(
-            MemberSettingDto().apply { this.memberId = memberId }
-        )
+        memberSettingService.createDefaultSetting(MemberSettingDto().apply { this.memberId = memberId })
         memberProfileService.createDefaultProfile(memberId)
         memberConsentService.recordRequiredSignupConsents(
             memberId = memberId,
             consents = consents,
             source = MemberConsentSource.SNS_SIGNUP,
         )
-
         return issueTokens(saved)
     }
 
@@ -198,7 +232,9 @@ class MemberUseCase(
     @Transactional
     fun logout(refreshToken: String) {
         // 1) 토큰이 유효하지 않더라도(DB에는 남아있을 수 있으므로) revoke는 시도
-        if (!jwtTokenProvider.validateToken(refreshToken)) {
+        if (!jwtTokenProvider.validateToken(refreshToken) ||
+            !runCatching { jwtTokenProvider.isRefreshToken(refreshToken) }.getOrDefault(false)
+        ) {
             // 이미 만료되었더라도 DB의 토큰은 폐기
             refreshTokenService.revokeToken(refreshToken)
             return
@@ -213,8 +249,14 @@ class MemberUseCase(
             throw BusinessException(ErrorCode.INVALID_TOKEN, "토큰 소유자가 일치하지 않습니다.")
         }
 
-        // 4) 폐기
-        refreshTokenService.revokeToken(refreshToken)
+        // 4) 모든 세션과 기기 토큰을 제거하고 기존 access token도 즉시 무효화한다.
+        memberService.invalidateSessions(memberIdFromToken)
+        if (accountCleanupService != null) {
+            accountCleanupService.logoutAll(memberIdFromToken)
+        } else {
+            // 단위 테스트 호환 fallback. 운영에서는 AccountCleanupService bean이 항상 주입된다.
+            refreshTokenService.deleteAllByMemberId(memberIdFromToken)
+        }
     }
 
     /**
@@ -266,17 +308,13 @@ class MemberUseCase(
      */
     private fun reissueTokens(refreshToken: String): MemberDto {
         // 1) JWT 자체 유효성 검사 (서명 + 만료)
-        if (!jwtTokenProvider.validateToken(refreshToken)) {
+        if (!jwtTokenProvider.validateToken(refreshToken) ||
+            !runCatching { jwtTokenProvider.isRefreshToken(refreshToken) }.getOrDefault(false)
+        ) {
             throw BusinessException(ErrorCode.INVALID_TOKEN, "유효하지 않은 리프레시 토큰입니다.")
         }
 
-        // 2) DB 상태 검사 (존재, revoked, 만료)
-        val stored = refreshTokenService.validateAndGet(refreshToken)
-
         val memberIdFromToken = jwtTokenProvider.getMemberIdFromToken(refreshToken)
-        if (stored.memberId != memberIdFromToken) {
-            throw BusinessException(ErrorCode.INVALID_TOKEN, "리프레시 토큰의 회원 정보가 일치하지 않습니다.")
-        }
 
         // 3) 회원 조회 (Optional<Member> 라고 가정)
         val memberOpt = memberService.getFindMemberId(memberIdFromToken)
@@ -295,9 +333,13 @@ class MemberUseCase(
         val newRefreshToken = jwtTokenProvider.createRefreshToken(memberIdFromToken, memberName)
         val newRefreshExpiry = jwtTokenProvider.getRefreshTokenExpiryLocalDateTime()
 
-        // 5) 기존 refreshToken 폐기 + 새 refreshToken 저장
-        refreshTokenService.revokeToken(refreshToken)
-        refreshTokenService.saveNewToken(memberIdFromToken, newRefreshToken, newRefreshExpiry)
+        // 5) row lock으로 기존 refreshToken을 단 한 번만 소비하고 새 token으로 회전
+        refreshTokenService.consumeAndRotate(
+            refreshToken = refreshToken,
+            expectedMemberId = memberIdFromToken,
+            newToken = newRefreshToken,
+            newExpiresAt = newRefreshExpiry,
+        )
 
         // 6) 유저 정보 + 새 토큰 세트 반환
         return member.toDto().apply {
@@ -335,9 +377,7 @@ class MemberUseCase(
         }
 
         // 4) 새 비밀번호 검증 (간단 버전 – 필요하면 Validator로 분리)
-        if (newPassword.length < 8) {
-            throw BusinessException(ErrorCode.INVALID_INPUT, "새 비밀번호는 8자리 이상이어야 합니다.")
-        }
+        memberValidator.validatePassword(newPassword)
 
         // 5) 새 비밀번호 저장
         val newEncoded = passwordEncoder.encode(newPassword)
@@ -369,20 +409,23 @@ class MemberUseCase(
 
         val id = requireNotNull(member.id) { "member.id 가 없습니다." }
 
-        // 3) RefreshToken은 어차피 수명 짧고, 보안상 확실히 제거하는 게 좋아서 hard delete 유지
-        refreshTokenService.deleteAllByMemberId(memberId)
-
-        // 4) MemberSetting soft delete
-        val byMemberId = memberSettingService.getByMemberId(memberId)
-        memberSettingService.softDelete(byMemberId.toEntity())
-
-        // 5) Member soft delete
-        memberService.softDelete(member)
+        memberService.invalidateSessions(id)
+        if (accountCleanupService != null) {
+            accountCleanupService.withdraw(member)
+            memberService.updateMember(member)
+        } else {
+            refreshTokenService.deleteAllByMemberId(memberId)
+            val byMemberId = memberSettingService.getByMemberId(memberId)
+            memberSettingService.softDelete(byMemberId.toEntity())
+            memberService.softDelete(member)
+        }
     }
 
 
 
-    @Transactional(readOnly = true)
+    // Legacy members may not have a profile row yet, so this read path can create
+    // the default profile and must not run in a read-only transaction.
+    @Transactional
     fun getMyProfile(memberId: Long): MemberProfileDto {
         // 회원 존재 여부 먼저 확인해도 좋음
         val exists = memberService.getFindMemberId(memberId)

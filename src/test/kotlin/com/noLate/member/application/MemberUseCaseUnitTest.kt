@@ -10,6 +10,8 @@ import com.noLate.member.application.service.MemberConsentService
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
 import com.noLate.member.application.service.MemberValidator
+import com.noLate.member.application.service.SocialIdentityVerifier
+import com.noLate.member.application.service.VerifiedSocialIdentity
 import com.noLate.member.application.useCase.MemberUseCase
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
@@ -59,6 +61,9 @@ class MemberUseCaseUnitTest {
     @Mock
     lateinit var memberConsentService: MemberConsentService
 
+    @Mock
+    lateinit var socialIdentityVerifier: SocialIdentityVerifier
+
     private val signupConsents = SignupConsentCommand(
         termsVersion = "2026.07.16",
         privacyCollectionVersion = "2026.07.16",
@@ -79,6 +84,7 @@ class MemberUseCaseUnitTest {
             memberValidator = memberValidator,
             refreshTokenService = refreshTokenService,
             memberConsentService = memberConsentService,
+            socialIdentityVerifier = socialIdentityVerifier,
         )
     }
 
@@ -204,8 +210,8 @@ class MemberUseCaseUnitTest {
             snsId = "kakao-123"
         )
 
-        whenever(memberValidator.requireSnsId(snsLoginRequest))
-            .thenReturn("kakao-123")
+        whenever(socialIdentityVerifier.verify(LoginType.KAKAO, "provider-token", null))
+            .thenReturn(VerifiedSocialIdentity("kakao-123", "sns@test.com", "SNS유저"))
 
         val savedSnsDto = MemberDto(
             id = 10L,
@@ -228,11 +234,10 @@ class MemberUseCaseUnitTest {
             .thenReturn(expiry)
 
         // when
-        val result = memberUseCase.login(snsLoginRequest)
+        val result = memberUseCase.loginSns(LoginType.KAKAO, "provider-token")
 
         // then
-        verify(memberValidator, times(1))
-            .requireSnsId(snsLoginRequest)
+        verify(socialIdentityVerifier).verify(LoginType.KAKAO, "provider-token", null)
         verify(memberService, times(1))
             .findByLoginTypeAndSnsId(LoginType.KAKAO, "kakao-123")
         verify(memberService, never()).addMember(any<Member>())
@@ -264,8 +269,8 @@ class MemberUseCaseUnitTest {
             snsId = "naver/without-email"
         )
 
-        whenever(memberValidator.requireSnsId(snsLoginRequest))
-            .thenReturn("naver/without-email")
+        whenever(socialIdentityVerifier.verify(LoginType.NAVER, "provider-token", null))
+            .thenReturn(VerifiedSocialIdentity("naver/without-email", null, "이메일없는SNS유저"))
 
         whenever(memberService.findByLoginTypeAndSnsId(LoginType.NAVER, "naver/without-email"))
             .thenReturn(null)
@@ -292,7 +297,12 @@ class MemberUseCaseUnitTest {
             .thenReturn(expiry)
 
         // when
-        val result = memberUseCase.signUpSns(snsLoginRequest, signupConsents)
+        val result = memberUseCase.signUpSns(
+            LoginType.NAVER,
+            "provider-token",
+            null,
+            signupConsents,
+        )
 
         // then
         verify(memberService, times(1)).addMember(check<Member> {
@@ -322,22 +332,36 @@ class MemberUseCaseUnitTest {
 
     @Test
     fun `가입되지 않은 SNS 계정은 로그인에서 회원을 자동 생성하지 않는다`() {
-        val request = MemberDto(
-            loginType = LoginType.APPLE,
-            snsId = "new-apple-user",
-            name = "Apple 사용자",
-        )
-        whenever(memberValidator.requireSnsId(request)).thenReturn("new-apple-user")
+        whenever(socialIdentityVerifier.verify(LoginType.APPLE, "provider-token", null))
+            .thenReturn(VerifiedSocialIdentity("new-apple-user", null, "Apple 사용자"))
         whenever(memberService.findByLoginTypeAndSnsId(LoginType.APPLE, "new-apple-user"))
             .thenReturn(null)
 
         val exception = assertThrows<BusinessException> {
-            memberUseCase.login(request)
+            memberUseCase.loginSns(LoginType.APPLE, "provider-token")
         }
 
         assertEquals(com.noLate.global.error.ErrorCode.SNS_SIGNUP_REQUIRED, exception.errorCode)
         verify(memberService, never()).addMember(any<Member>())
         verifyNoInteractions(memberSettingService, memberProfileService, memberConsentService)
+    }
+
+    @Test
+    fun `verified SNS signup rejects an email already owned by another login provider`() {
+        whenever(socialIdentityVerifier.verify(LoginType.NAVER, "provider-token", null))
+            .thenReturn(VerifiedSocialIdentity("naver-new", " Same@Test.COM ", "사용자"))
+        whenever(memberService.findByLoginTypeAndSnsId(LoginType.NAVER, "naver-new"))
+            .thenReturn(null)
+        whenever(memberService.findByEmail("same@test.com"))
+            .thenReturn(MemberDto(id = 1L, email = "same@test.com", loginType = LoginType.COMMON))
+
+        val exception = assertThrows<BusinessException> {
+            memberUseCase.signUpSns(LoginType.NAVER, "provider-token", null, signupConsents)
+        }
+
+        assertEquals(com.noLate.global.error.ErrorCode.ACCOUNT_LINK_REQUIRED, exception.errorCode)
+        verify(memberService).findByEmail("same@test.com")
+        verify(memberService, never()).addMember(any<Member>())
     }
 
     @Test
@@ -348,6 +372,7 @@ class MemberUseCaseUnitTest {
 
         whenever(jwtTokenProvider.validateToken(oldRefreshToken))
             .thenReturn(true)
+        whenever(jwtTokenProvider.isRefreshToken(oldRefreshToken)).thenReturn(true)
         whenever(jwtTokenProvider.getMemberIdFromToken(oldRefreshToken))
             .thenReturn(memberId)
 
@@ -358,8 +383,6 @@ class MemberUseCaseUnitTest {
             expiresAt = LocalDateTime.now().plusDays(1),
             revoked = false
         )
-        whenever(refreshTokenService.validateAndGet(oldRefreshToken))
-            .thenReturn(stored)
 
         val member = Member(
             id = memberId,
@@ -386,10 +409,8 @@ class MemberUseCaseUnitTest {
 
         // then
         verify(jwtTokenProvider, times(1)).validateToken(oldRefreshToken)
-        verify(refreshTokenService, times(1)).validateAndGet(oldRefreshToken)
-        verify(refreshTokenService, times(1)).revokeToken(oldRefreshToken)
         verify(refreshTokenService, times(1))
-            .saveNewToken(eq(memberId), eq("new-refresh"), eq(newExpiry))
+            .consumeAndRotate(eq(oldRefreshToken), eq(memberId), eq("new-refresh"), eq(newExpiry))
 
         assertEquals(memberId, result.id)
         assertEquals("new-access", result.accessToken)
@@ -405,6 +426,7 @@ class MemberUseCaseUnitTest {
 
         whenever(jwtTokenProvider.validateToken(oldRefreshToken))
             .thenReturn(true)
+        whenever(jwtTokenProvider.isRefreshToken(oldRefreshToken)).thenReturn(true)
         whenever(jwtTokenProvider.getMemberIdFromToken(oldRefreshToken))
             .thenReturn(memberId)
 
@@ -415,8 +437,6 @@ class MemberUseCaseUnitTest {
             expiresAt = LocalDateTime.now().plusDays(1),
             revoked = false
         )
-        whenever(refreshTokenService.validateAndGet(oldRefreshToken))
-            .thenReturn(stored)
 
         val member = Member(
             id = memberId,
@@ -442,10 +462,8 @@ class MemberUseCaseUnitTest {
 
         // then
         verify(jwtTokenProvider, times(1)).validateToken(oldRefreshToken)
-        verify(refreshTokenService, times(1)).validateAndGet(oldRefreshToken)
-        verify(refreshTokenService, times(1)).revokeToken(oldRefreshToken)
         verify(refreshTokenService, times(1))
-            .saveNewToken(eq(memberId), eq("new-refresh-2"), eq(newExpiry))
+            .consumeAndRotate(eq(oldRefreshToken), eq(memberId), eq("new-refresh-2"), eq(newExpiry))
 
         assertEquals(memberId, result.id)
         assertEquals("new-access-2", result.accessToken)
@@ -460,6 +478,7 @@ class MemberUseCaseUnitTest {
 
         whenever(jwtTokenProvider.validateToken(refreshToken))
             .thenReturn(true)
+        whenever(jwtTokenProvider.isRefreshToken(refreshToken)).thenReturn(true)
         whenever(jwtTokenProvider.getMemberIdFromToken(refreshToken))
             .thenReturn(memberId)
 
@@ -479,8 +498,8 @@ class MemberUseCaseUnitTest {
         // then
         verify(refreshTokenService, times(1))
             .validateAndGet(refreshToken)
-        verify(refreshTokenService, times(1))
-            .revokeToken(refreshToken)
+        verify(memberService).invalidateSessions(memberId)
+        verify(refreshTokenService).deleteAllByMemberId(memberId)
     }
 
     @Test

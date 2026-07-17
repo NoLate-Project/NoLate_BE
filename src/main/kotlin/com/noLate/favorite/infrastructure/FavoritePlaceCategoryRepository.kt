@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 
 interface FavoritePlaceCategoryRepository : JpaRepository<FavoritePlaceCategory, Long> {
+    fun findAllByMemberId(memberId: Long): List<FavoritePlaceCategory>
     fun findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId: Long): List<FavoritePlaceCategory>
 
     fun findByIdAndMemberIdAndDeletedFalse(id: Long, memberId: Long): FavoritePlaceCategory?

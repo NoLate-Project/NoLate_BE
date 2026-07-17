@@ -9,4 +9,6 @@ interface MemberSettingRepository : JpaRepository<MemberSetting, Long> {
 
     fun getByMemberId(memberId: Long): MemberSetting
 
+    fun deleteAllByMemberId(memberId: Long)
+
 }

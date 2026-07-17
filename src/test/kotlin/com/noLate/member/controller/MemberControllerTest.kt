@@ -21,6 +21,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.mockito.kotlin.isNull
 
 @ExtendWith(MockitoExtension::class)
 class MemberControllerTest {
@@ -66,39 +67,43 @@ class MemberControllerTest {
     @Test
     fun `sns registration status does not create an account`() {
         val controller = controller()
-        whenever(memberUseCase.isSnsMemberRegistered(LoginType.KAKAO, "kakao-1"))
+        whenever(memberUseCase.isSnsMemberRegistered(LoginType.KAKAO, "provider-token", null))
             .thenReturn(false)
 
         val response = controller.getSnsRegistrationStatus(
-            SnsRegistrationRequest(LoginType.KAKAO, "kakao-1")
+            SnsRegistrationRequest(LoginType.KAKAO, "provider-token")
         )
 
         assertEquals(false, response.data?.registered)
-        verify(memberUseCase).isSnsMemberRegistered(LoginType.KAKAO, "kakao-1")
+        verify(memberUseCase).isSnsMemberRegistered(LoginType.KAKAO, "provider-token", null)
     }
 
     @Test
     fun `sns signup passes profile and the same required consent`() {
         val controller = controller()
         val saved = MemberDto(id = 4L, loginType = LoginType.NAVER, snsId = "naver-1")
-        whenever(memberUseCase.signUpSns(any(), any())).thenReturn(saved)
+        whenever(
+            memberUseCase.signUpSns(
+                eq(LoginType.NAVER),
+                eq("provider-token"),
+                isNull(),
+                any(),
+            )
+        ).thenReturn(saved)
 
         val response = controller.snsSignUp(
             SnsSignUpRequest(
                 loginType = LoginType.NAVER,
-                snsId = "naver-1",
-                email = "naver@test.com",
-                name = "Naver User",
+                providerToken = "provider-token",
                 consents = consentRequest,
             )
         )
 
         assertSame(saved, response.data)
         verify(memberUseCase).signUpSns(
-            requestDto = check {
-                assertEquals(LoginType.NAVER, it.loginType)
-                assertEquals("naver-1", it.snsId)
-            },
+            loginType = eq(LoginType.NAVER),
+            providerToken = eq("provider-token"),
+            nonce = eq(null),
             consents = eq(consentRequest.toCommand()),
         )
     }

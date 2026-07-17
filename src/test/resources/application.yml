@@ -1,0 +1,83 @@
+spring:
+  application:
+    name: noLate-test
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:nolate-test;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: never
+  jpa:
+    open-in-view: false
+    show-sql: false
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc:
+          time_zone: Asia/Seoul
+  jooq:
+    sql-dialect: h2
+  task:
+    scheduling:
+      enabled: false
+
+jwt:
+  secret-key: test-only-secret-key-that-is-at-least-32-bytes
+  issuer: nolate-test
+  access-token-validity-in-seconds: 300
+  refresh-token-validity-in-seconds: 600
+
+schedule:
+  push:
+    fixed-delay-ms: 86400000
+    retry-delay-minutes: 5
+    max-retry-count: 1
+    departure-alert-lead-minutes: 15
+    departure-reminder-interval-minutes: 5
+    departure-snooze-minutes: 5
+  traffic:
+    tmap:
+      enabled: false
+      app-key: ""
+      base-url: https://example.invalid
+  ai:
+    groq:
+      enabled: false
+      api-key: ""
+      model: test
+      base-url: https://example.invalid
+      max-attempts: 1
+      max-backoff-ms: 1
+
+routing:
+  tmap:
+    enabled: false
+    app-key: ""
+    base-url: https://example.invalid
+
+transit:
+  seoul:
+    api-key: ""
+    subway-api-key: ""
+    bus-api-key: ""
+    subway-base-url: https://example.invalid
+    bus-base-url: https://example.invalid
+  tago:
+    api-key: ""
+    bus-api-key: ""
+    base-url: https://example.invalid
+    city-codes: ""
+
+firebase:
+  enabled: false
+  credentials-path: ""
+  project-id: nolate-test
+
+logging:
+  level:
+    root: warn
+    p6spy: "OFF"

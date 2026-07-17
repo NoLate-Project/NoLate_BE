@@ -3,5 +3,13 @@
 build
 logs
 .env
-
-src/main/resources/env.properties
+.env.*
+env.local.properties
+**/env.properties
+**/*firebase-adminsdk*.json
+**/*firebase-admin*.json
+**/*service-account*.json
+**/*serviceAccount*.json
+**/*.jks
+**/*.keystore
+**/*.p8
