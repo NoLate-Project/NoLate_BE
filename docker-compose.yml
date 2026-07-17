@@ -10,6 +10,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: prod
       SPRING_CONFIG_IMPORT: optional:file:/config/env.properties
+      # 서비스 계정 파일은 아래 volume으로 항상 마운트하므로, 환경 파일의 기본값과 무관하게
+      # 운영 푸시 클라이언트가 해당 파일을 사용하도록 명시한다.
+      FIREBASE_ENABLED: "true"
+      FIREBASE_CREDENTIALS_PATH: /config/firebase.json
     volumes:
       - ${NOLATE_ENV_FILE:-./env.local.properties}:/config/env.properties:ro
       - ${NOLATE_FIREBASE_CREDENTIALS_FILE:?Set NOLATE_FIREBASE_CREDENTIALS_FILE}:/config/firebase.json:ro
