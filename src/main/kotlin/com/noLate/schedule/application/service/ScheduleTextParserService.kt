@@ -106,6 +106,45 @@ class ScheduleTextParserService {
         "예약",
         "방문",
         "생일",
+        "데이트",
+        "출국",
+        "입국",
+        "출근",
+        "퇴근",
+        "모임",
+        "러닝",
+        "상담",
+        "검진",
+        "관람",
+        "병문안",
+        "면접",
+        "수업",
+        "마중",
+        "청소",
+        "등산",
+        "공연",
+        "전시회",
+        "피크닉",
+        "가족식사",
+        "고객미팅",
+        "탑승",
+        "출발",
+        "산책",
+        "쇼핑",
+        "등원",
+        "하원",
+        "수령",
+        "제출",
+        "집들이",
+        "생일파티",
+        "결혼식",
+        "장례식",
+        "돌잔치",
+        "컨퍼런스",
+        "전입신고",
+        "차량검사",
+        "일출",
+        "예매",
     )
     private val eveningContextTokens = setOf(
         "저녁",
@@ -117,17 +156,111 @@ class ScheduleTextParserService {
         "데이트",
         "퇴근후",
         "한잔",
+        // 프로야구의 `6시 30분 경기`는 대표적인 저녁 일정이며, 추론 경고를 함께 반환한다.
+        "야구관람",
     )
+    /**
+     * 장소 뒤에 붙는 일정 목적 표현이다.
+     *
+     * 긴 표현을 먼저 두어 `고객미팅`을 단순 `미팅`으로 잘라 `고객`을 장소에 남기지 않는다.
+     * `\s*`를 사용한 항목은 Speech/OCR의 띄어쓰기 차이를 같은 표현으로 처리한다.
+     */
+    private val naturalPurposePatternFragment = listOf(
+        "생일파티",
+        "건강\\s*검진",
+        "농구\\s*경기\\s*관람",
+        "점심\\s*식사",
+        "가족\\s*모임",
+        "등산\\s*모임",
+        "대출\\s*상담",
+        "여권\\s*수령",
+        "서류\\s*제출",
+        "주간\\s*회의",
+        "전시\\s*예매",
+        "커트\\s*예약",
+        "[Kk][Tt][Xx]\\s*탑승",
+        "[가-힣]{1,8}(?:도|시|군|구)\\s*여행\\s*출발",
+        "여행\\s*출발",
+        "프로젝트\\s*회의",
+        "고객\\s*미팅",
+        "야구\\s*관람",
+        "영화\\s*관람",
+        "전시\\s*관람",
+        "면접\\s*준비",
+        "영어\\s*수업",
+        "온라인\\s*수업",
+        "가족\\s*식사",
+        "저녁\\s*약속",
+        "술\\s*약속",
+        "술자리",
+        "술먹기",
+        "한잔",
+        "회식",
+        "데이트",
+        "약속",
+        "미팅",
+        "회의",
+        "운동",
+        "스터디",
+        "공부",
+        "진료",
+        "예약",
+        "방문",
+        "생일",
+        "출국",
+        "입국",
+        "출근",
+        "퇴근",
+        "점심",
+        "저녁",
+        "식사",
+        "모임",
+        "러닝",
+        "상담",
+        "검진",
+        "관람",
+        "병문안",
+        "면접",
+        "수업",
+        "마중",
+        "청소",
+        "등산",
+        "공연",
+        "전시회",
+        "피크닉",
+        "만나기",
+        "탑승",
+        "출발",
+        "산책",
+        "쇼핑",
+        "등원",
+        "하원",
+        "수령",
+        "제출",
+        "집들이",
+        "결혼식",
+        "장례식",
+        "돌잔치",
+        "컨퍼런스",
+        "전입신고",
+        "차량검사",
+        "일출",
+        "예매",
+    ).joinToString("|")
     private val shareTitlePurposePattern = Regex(
-        """(술\s*약속|술자리|한잔|저녁\s*약속|회식|데이트|약속|미팅|회의|운동|스터디|공부|진료|예약|방문|생일)(?:은|는)?$""",
+        // 손글씨 문장형 `데이트 한다`, 메모형 `회의 예정`도 핵심 목적어만 group 1에 남긴다.
+        """($naturalPurposePatternFragment)(?:\s*(?:한다|하기|하기로|예정))?(?:은|는)?$""",
     )
     private val leadingTitlePurposePattern = Regex(
-        """^(술\s*약속|술자리|한잔|저녁\s*약속|회식|데이트|약속|미팅|회의|운동|스터디|공부|진료|예약|방문|생일)(?:은|는)?(?:\s+|(?=[가-힣A-Za-z0-9])|$)""",
+        """^($naturalPurposePatternFragment)(?:\s*(?:한다|하기|하기로|예정))?(?:은|는)?(?:\s+|(?=[가-힣A-Za-z0-9])|$)""",
     )
-    private val naturalPurposeInputTypes = setOf(
-        ScheduleParseInputType.SHARE_TEXT,
-        ScheduleParseInputType.CONVERSATION,
-    )
+    // 목적어는 입력 장치와 무관하게 제목에 보존해야 한다. 이전에는 음성/OCR이 제외되어
+    // `석촌호수에서 진욱이랑 데이트`가 `석촌호수 18:30`으로 제목화되는 문제가 있었다.
+    private val naturalPurposeInputTypes = naturalDestinationInputTypes
+    // 손글씨 `오빠랑`은 Vision에서 `오바람`으로 읽히기도 한다. 이름 뒤 관계 호칭이라는
+    // 강한 문맥에서만 이 오인식을 허용해 실제 장소나 사람 이름 `오바람`은 건드리지 않는다.
+    private val relationshipCompanionTokenFragment =
+        """(?:(?:오빠|언니|누나|형|동생|친구|엄마|아빠|부모님|가족)(?:이랑|랑|와|과)|오바람)"""
 
     /**
      * 원문을 정규화한 뒤 날짜, 시간, 장소, 메모 후보를 순서대로 추출한다.
@@ -214,6 +347,7 @@ class ScheduleTextParserService {
             assignments = extractAssignments(normalized),
             company = dotAssignmentFields?.company,
             position = dotAssignmentFields?.position,
+            companion = chooseNaturalCompanion(lines, inputType),
         )
 
         if (inputType == ScheduleParseInputType.IMAGE_OCR) {
@@ -411,7 +545,9 @@ class ScheduleTextParserService {
      * 뒤의 후보를 남겨, 자유 문장의 다른 내용을 과도하게 삭제하지 않도록 범위를 제한한다.
      */
     private fun normalizeNaturalLanguage(value: String): String {
-        var normalized = value
+        // Speech의 formattedString은 같은 발화도 `8월 17일` 또는 `팔월 십칠일`로 돌려줄 수
+        // 있다. 날짜·분 단위의 한자어 수사를 먼저 숫자로 바꿔 아래 정규식이 한 경로로 처리한다.
+        var normalized = normalizeSpokenKoreanNumbers(value)
             .replace("담주", "다음주")
             .replace(Regex("""([일월화수목금토])욜"""), "$1요일")
             .replace(
@@ -444,12 +580,28 @@ class ScheduleTextParserService {
             "${koreanHours.getValue(match.groupValues[1])}시"
         }
         normalized = normalized
-            .replace(Regex("""(\d{1,2})\s*시\s*반"""), "$1시 30분")
+            // STT/OCR에서 `분`이 모양과 발음이 가까운 `붐`으로 한 글자 흔들리는 사례를 복구한다.
+            .replace(Regex("""(\d{1,2})\s*붐"""), "$1분")
+            // `1시 반`만 30분으로 바꾸고 `1시 반려견이랑`의 첫 글자 `반`은 분 표현으로 먹지 않는다.
+            .replace(
+                Regex("""(\d{1,2})\s*시\s*반(?=\s|$|에(?:\s|$)|[,.;:!?，。])"""),
+                "$1시 30분",
+            )
             .replace(Regex("""(^|\s)한\s+(?=\d{1,2}\s*시)"""), "$1")
             .replace(Regex("""(\d{1,2}\s*시(?:\s*\d{1,2}\s*분)?)\s*쯤"""), "$1")
             .replace(Regex("""(\d{1,2})\s*ㅅㅣ"""), "$1시")
             .replace(Regex("""([일월화수목금토]요일)(?=\d)"""), "$1 ")
+            // `8월17일6시30분...`처럼 완전히 붙은 결과에서 날짜와 시각의 경계를 복구한다.
+            .replace(
+                Regex("""(\d{1,2}\s*월\s*\d{1,2}\s*일)(?=(?:오전|오후|저녁|밤|낮|새벽|아침)?\d{1,2}\s*(?:시|:))"""),
+                "$1 ",
+            )
             .replace(Regex("""(\d{1,2}\s*시(?:\s*\d{1,2}\s*분)?)(?=[가-힣])"""), "$1 ")
+            // `석촌호수에서진욱이랑...`처럼 장소 조사와 동행인이 붙어도 조사 뒤를 경계로 만든다.
+            .replace(
+                Regex("""(에서|으로|로)(?=[가-힣A-Za-z0-9]{1,12}(?:이랑|랑|와|과))"""),
+                "$1 ",
+            )
 
         val weekdayExpression = """(?:(?:이번|다음)\s*주?\s*)?[일월화수목금토]요일"""
         val timeExpression =
@@ -468,6 +620,74 @@ class ScheduleTextParserService {
             normalized = corrected
         }
         return normalized.replace(Regex("""[ \t]+"""), " ").trim()
+    }
+
+    /**
+     * 음성 인식이 숫자로 서식화하지 않은 한국어 날짜와 분 표현을 숫자로 정규화한다.
+     *
+     * 월은 1~12, 일은 1~31, 분은 1~59 범위만 허용한다. 범위를 벗어나거나 문맥이 맞지 않는
+     * 일반 단어는 그대로 두어, 장소명 안의 한글 음절을 숫자로 바꾸는 부작용을 막는다.
+     */
+    private fun normalizeSpokenKoreanNumbers(value: String): String {
+        var normalized = value
+
+        val monthPattern = Regex(
+            // `17일 월요일`의 마지막 `일 월`을 1월로 합치지 않도록 월 뒤의 요일 문맥은 제외한다.
+            """(?<![가-힣])((?:십\s*[일이]?|[일이삼사오육유칠팔구]))\s*월(?!\s*요일)""",
+        )
+        normalized = monthPattern.replace(normalized) { match ->
+            val month = parseSinoKoreanNumber(match.groupValues[1])
+            if (month in 1..12) "${month}월" else match.value
+        }
+
+        val dayPattern = Regex(
+            """(?<![가-힣])((?:[이삼]?\s*십(?:\s*[일이삼사오육칠팔구])?|[일이삼사오육칠팔구]))\s*일(?!\s*요일)""",
+        )
+        normalized = dayPattern.replace(normalized) { match ->
+            val day = parseSinoKoreanNumber(match.groupValues[1])
+            if (day in 1..31) "${day}일" else match.value
+        }
+
+        val minutePattern = Regex(
+            """(?<![가-힣])((?:[이삼사오]?\s*십(?:\s*[일이삼사오육칠팔구])?|[일이삼사오육칠팔구]))\s*분""",
+        )
+        normalized = minutePattern.replace(normalized) { match ->
+            val minute = parseSinoKoreanNumber(match.groupValues[1])
+            if (minute in 1..59) "${minute}분" else match.value
+        }
+        return normalized
+    }
+
+    /** `십칠`, `삼십`, `유`처럼 일정 문맥에서 쓰이는 1~2자리 한자어 수사를 정수로 바꾼다. */
+    private fun parseSinoKoreanNumber(value: String): Int? {
+        val compact = value.replace(Regex("""\s+"""), "")
+        val digitValues = mapOf(
+            '일' to 1,
+            '이' to 2,
+            '삼' to 3,
+            '사' to 4,
+            '오' to 5,
+            '육' to 6,
+            // 6월은 발음상 `유월`로 전사될 수 있어 월 정규화에서만 같은 숫자로 취급한다.
+            '유' to 6,
+            '칠' to 7,
+            '팔' to 8,
+            '구' to 9,
+        )
+        val tenIndex = compact.indexOf('십')
+        if (tenIndex < 0) return compact.singleOrNull()?.let(digitValues::get)
+
+        val tens = compact.substring(0, tenIndex)
+            .singleOrNull()
+            ?.let(digitValues::get)
+            ?: 1
+        val onesText = compact.substring(tenIndex + 1)
+        val ones = when {
+            onesText.isBlank() -> 0
+            onesText.length == 1 -> digitValues[onesText.single()] ?: return null
+            else -> return null
+        }
+        return tens * 10 + ones
     }
 
     /**
@@ -631,10 +851,18 @@ class ScheduleTextParserService {
             .firstOrNull()
             ?: return null
 
-        if (candidate.first.year == null && explicitYear == null) {
-            warnings += "연도가 없어 ${referenceDate.year}년으로 추정했습니다."
+        val hasInferredYear = candidate.first.year == null && explicitYear == null
+        // 빠른 일정은 앞으로 만들 약속을 다룬다. 7월에 입력한 `1월 1일`을 이미 지난
+        // 당해 연도로 저장하지 않고, 연도가 생략된 월/일 후보가 기준일보다 이르면 다음 해로 넘긴다.
+        val selectedDate = if (hasInferredYear && candidate.second.isBefore(referenceDate)) {
+            candidate.second.plusYears(1)
+        } else {
+            candidate.second
         }
-        return SelectedDate(candidate.second, candidate.first.lineIndex)
+        if (hasInferredYear) {
+            warnings += "연도가 없어 ${selectedDate.year}년으로 추정했습니다."
+        }
+        return SelectedDate(selectedDate, candidate.first.lineIndex)
     }
 
     /** `오늘`, `내일`, `모레`, `글피`는 기준 날짜와의 일수 차이가 명확하므로 AI 없이 계산한다. */
@@ -951,10 +1179,12 @@ class ScheduleTextParserService {
         assignments: List<Assignment>,
         company: String?,
         position: String?,
+        companion: String?,
     ): String? {
         val rows = buildList {
             customerName?.let { add("예약자: $it") }
             eventType?.let { add("촬영 종류: $it") }
+            companion?.let { add("동행: $it") }
             if (assignments.isNotEmpty()) {
                 add("작가 배정: ${assignments.joinToString(" ") { "(${it.role})${it.name}" }}")
             }
@@ -1124,12 +1354,26 @@ class ScheduleTextParserService {
         lines.forEach { line ->
             val cleaned = stripNaturalSpeechFillers(removeMediaScheduleContext(line))
             if (cleaned.isBlank()) return@forEach
-            val placePhrase = removeBoundaryNaturalPurpose(cleaned)
+            // 동행인이 문장 앞에 오면 `진욱이랑 석촌호수에서 데이트` 전체를 장소로 볼 수 있다.
+            // 사람 조사 구절을 먼저 떼고 목적어를 제거하면 장소 조사 규칙을 순서와 무관하게 적용할 수 있다.
+            val withoutLeadingCompanion = stripLeadingNaturalCompanion(cleaned)
+            val purpose = extractBoundaryNaturalPurpose(
+                withoutLeadingCompanion.trim(' ', ',', '.', '!', '?', '，', '。'),
+            )
+            val withoutPurpose = keepCorrectedNaturalPlaceSegment(
+                removeBoundaryNaturalPurpose(withoutLeadingCompanion),
+            )
+            val placePhrase = if (purpose != null) {
+                stripTrailingNaturalParticipant(withoutPurpose)
+            } else {
+                withoutPurpose
+            }
             if (placePhrase.isBlank()) return@forEach
 
             // `강남 용용선생에서`, `병원으로`처럼 장소 조사가 있으면 조사 앞부분을 우선한다.
             // 조사는 장소 경계를 강하게 알려주므로 한 단어 장소도 허용하되 일정 목적어는 거른다.
-            val particleCandidate = Regex("""^(.{1,40}?)(?:에서|으로|로)(?:\s|$)""")
+            // Speech가 조사 뒤에 쉼표를 넣는 `석촌호수에서, 진욱이랑`도 같은 경계로 인정한다.
+            val particleCandidate = Regex("""^(.{1,40}?)(?:에서|으로|로)(?=\s|$|[,.;:!?，。])""")
                 .find(placePhrase)
                 ?.groupValues
                 ?.get(1)
@@ -1140,7 +1384,16 @@ class ScheduleTextParserService {
             }
 
             val plainCandidate = cleanNaturalDestination(placePhrase)
-                ?.takeIf(::isLikelyPlainNaturalDestination)
+                ?.takeIf { candidate ->
+                    // `치과 검진`, `집 청소`, `Zoom 프로젝트 회의`처럼 목적 표현의 경계가
+                    // 확인되면 그 앞의 한 단어도 장소로 볼 근거가 충분하다. 목적 표현이 없는
+                    // 자유 문장은 기존의 보수적인 장소 접미사 검사를 그대로 사용한다.
+                    if (purpose != null) {
+                        isSafeNaturalDestinationPhrase(candidate)
+                    } else {
+                        isLikelyPlainNaturalDestination(candidate)
+                    }
+                }
             if (plainCandidate != null) {
                 return SchedulePlaceDto(name = plainCandidate)
             }
@@ -1163,6 +1416,91 @@ class ScheduleTextParserService {
         }
         return stripped
     }
+
+    /**
+     * 장소보다 앞에 나온 `진욱이랑`, `친구와` 같은 동행 구절만 제거한다.
+     *
+     * `강남역과 신촌역`처럼 장소 접미사가 있는 단어는 제거하지 않는다. 사람 이름 뒤에 목적어가
+     * 붙여 전사된 `진욱이랑데이트`도 처리해 완전 붙여쓰기 입력이 장소 추출을 막지 않게 한다.
+     */
+    private fun stripLeadingNaturalCompanion(value: String): String {
+        var stripped = value.trim()
+        val leadingEscortCompanion = Regex(
+            """^([가-힣]{1,12})\s+(?:모시고|데리고)(?=\s|[,.;:!?，。]|$)""",
+        )
+        val leadingRelationshipCompanion = Regex(
+            """^([가-힣]{1,12})\s+($relationshipCompanionTokenFragment)(?=\s|[,.;:!?，。]|$)""",
+        )
+        val leadingSimpleCompanion = Regex(
+            // 이름 부분을 reluctant로 잡아 `진욱이` + `랑`보다 `진욱` + `이랑`을 먼저 선택한다.
+            """^([가-힣]{1,12}?)(?:이랑|랑|와|과)(?=\s|[,.;:!?，。]|데이트|약속|미팅|회의|식사|술|$)""",
+        )
+        repeat(2) {
+            // `진욱이 오빠랑` 같은 이름+호칭 구조를 한 토큰 조사형보다 먼저 소비한다.
+            val match = leadingEscortCompanion.find(stripped)
+                ?: leadingRelationshipCompanion.find(stripped)
+                ?: leadingSimpleCompanion.find(stripped)
+                ?: return@repeat
+            val subject = match.groupValues[1]
+            // `치과`는 정규식상 `치` + 조사 `과`처럼 보일 수 있다. 조사 분해 전의 전체
+            // 토큰도 장소인지 확인해 실제 한 단어 장소를 동행인으로 제거하지 않는다.
+            val matchedToken = match.value.trim(' ', ',', '.', ';', ':', '!', '?', '，', '。')
+            if (looksLikePlaceToken(subject) || looksLikePlaceToken(matchedToken)) return stripped
+            stripped = stripped.substring(match.range.last + 1)
+                .trimStart(' ', ',', '.', ';', ':', '!', '?', '，', '。')
+        }
+        return stripped
+    }
+
+    /** 자연어에서 동행 정보가 사라지지 않도록 메모용 이름/관계 표현을 추출한다. */
+    private fun chooseNaturalCompanion(
+        lines: List<String>,
+        inputType: ScheduleParseInputType,
+    ): String? {
+        if (inputType !in naturalLanguageInputTypes) return null
+        val escortCompanionPattern = Regex(
+            """(?:^|[\s,.;:!?，。])([가-힣]{1,12})\s+(?:모시고|데리고)(?=\s|[,.;:!?，。]|$)""",
+        )
+        val relationshipCompanionPattern = Regex(
+            """(?:^|[\s,.;:!?，。])([가-힣]{1,12})\s+($relationshipCompanionTokenFragment)(?=\s|[,.;:!?，。]|$)""",
+        )
+        val simpleCompanionPattern = Regex(
+            """(?:^|[\s,.;:!?，。])([가-힣]{1,12}?)(?:이랑|랑|와|과)(?=\s|[,.;:!?，。]|데이트|약속|미팅|회의|식사|술|$)""",
+        )
+        lines.forEach { line ->
+            escortCompanionPattern.find(line)?.groupValues?.get(1)?.let { name ->
+                if (!looksLikePlaceToken(name)) return name
+            }
+            relationshipCompanionPattern.find(line)?.let { match ->
+                val name = match.groupValues[1]
+                if (!looksLikePlaceToken(name)) {
+                    return "$name ${normalizeRelationshipCompanion(match.groupValues[2])}"
+                }
+            }
+            simpleCompanionPattern.find(line)?.let { match ->
+                val name = match.groupValues[1]
+                val matchedToken = match.value.trim(' ', ',', '.', ';', ':', '!', '?', '，', '。')
+                if (!looksLikePlaceToken(name) && !looksLikePlaceToken(matchedToken)) return name
+            }
+        }
+        return null
+    }
+
+    /** 관계 조사와 OCR 오인식은 메모에서 읽기 쉬운 기본 호칭으로 정리한다. */
+    private fun normalizeRelationshipCompanion(value: String): String {
+        if (value == "오바람") return "오빠"
+        return value
+            .removeSuffix("이랑")
+            .removeSuffix("랑")
+            .removeSuffix("와")
+            .removeSuffix("과")
+    }
+
+    /** 동행 조사 앞 토큰이 역·병원·회사 같은 장소라면 사람으로 잘라내지 않는다. */
+    private fun looksLikePlaceToken(value: String): Boolean =
+        value == "집" || value.matches(
+            Regex(""".*(?:역|점|관|원|센터|카페|식당|학교|회사|병원|치과|의원|미용실|헬스장|공원|호수|호텔|웨딩홀|스튜디오|교회|성당|공항|터미널|마트|백화점)$"""),
+        )
 
     /** 공유하거나 빠른 입력창에 붙여넣은 문장은 일정 목적어를 사람이 읽기 좋은 제목에 보존한다. */
     private fun chooseSharedTextPurpose(
@@ -1193,6 +1531,46 @@ class ScheduleTextParserService {
         leadingTitlePurposePattern.find(value)?.groupValues?.get(1)
             ?: shareTitlePurposePattern.find(value)?.groupValues?.get(1)
 
+    /** `강남역 아니 신논현역`, `병원 말고 회사`에서는 마지막 정정 후보만 장소로 사용한다. */
+    private fun keepCorrectedNaturalPlaceSegment(value: String): String {
+        val marker = correctionMarkerPattern.findAll(value).lastOrNull() ?: return value.trim()
+        val corrected = value.substring(marker.range.last + 1).trim()
+        return corrected.ifBlank { value.trim() }
+    }
+
+    /**
+     * 목적어 바로 앞에 있는 사람·관계 문맥은 장소가 아니다.
+     *
+     * 예를 들어 `아산병원 엄마 병문안`에서 `병문안`을 제거한 뒤 남는 `엄마`를 한 번 더
+     * 제거한다. 일반 상호는 건드리지 않도록 조사형 토큰과 제한된 관계 명사만 대상으로 한다.
+     */
+    private fun stripTrailingNaturalParticipant(value: String): String {
+        val tokens = value.trim().split(Regex("""\s+""")).filter { it.isNotBlank() }
+        if (tokens.size < 2) return value.trim()
+
+        val trailingToken = tokens.last().trim(' ', ',', '.', '!', '?', '，', '。')
+        val relationshipTokens = setOf(
+            "엄마",
+            "아빠",
+            "부모님",
+            "가족",
+            "친구",
+            "동료",
+            "팀원",
+            "팀",
+            "아이",
+            "아기",
+        )
+        val isParticipant = trailingToken in relationshipTokens ||
+            trailingToken.endsWith("이랑") ||
+            trailingToken.endsWith("랑") ||
+            trailingToken.endsWith("와") ||
+            trailingToken.endsWith("과")
+        if (!isParticipant || looksLikePlaceToken(trailingToken)) return value.trim()
+
+        return tokens.dropLast(1).joinToString(" ").trim()
+    }
+
     /**
      * 자연어 장소 후보를 만들기 전에 일정 문맥만 제거한다.
      *
@@ -1210,9 +1588,16 @@ class ScheduleTextParserService {
             .replace(dayOnlyPattern, " ")
             .replace(relativeDatePattern, " ")
             .replace(weekdayTokenPattern, " ")
+            .replace(Regex("""(?:이번\s*달|다음\s*달)"""), " ")
             .replace(koreanTimePattern, " ")
             .replace(colonTimePattern, " ")
-            .replace(Regex("""(?:^|\s)(?:저녁|아침|점심|밤|새벽|낮)(?=\s|$)"""), " ")
+            // `점심`, `저녁`은 시간대이면서 일정 목적일 수 있어 여기서 지우지 않는다.
+            // `코엑스 점심`은 뒤 단계가 점심을 목적어로 분리해야 코엑스를 한 단어 장소로 확정할 수 있다.
+            .replace(Regex("""(?:^|\s)(?:아침|밤|새벽|낮|정오|자정)(?=\s|$)"""), " ")
+            // `6시에`에서 시간 정규식이 6시를 소비한 뒤 남는 조사는 장소 앞뒤를 오염시키지 않는다.
+            .replace(Regex("""(?:^|\s)(?:에|에는)(?=\s|$)"""), " ")
+            // 시간 범위와 종료 라벨은 시각 정규식이 숫자를 소비한 뒤 독립 토큰으로 남는다.
+            .replace(Regex("""(?:^|\s)(?:부터|까지|종료)(?=\s|$)"""), " ")
             .replace(
                 Regex("""\s*(?:일정\s*)?(?:추가|등록|저장|잡아)\s*(?:해줘|해 줘|해주세요|해 주세요)?[.!?。]*$"""),
                 " ",
@@ -1223,6 +1608,8 @@ class ScheduleTextParserService {
     private fun cleanNaturalDestination(value: String): String? =
         value
             .replace(Regex("""^(?:장소|도착지)\s*[:：]?\s*"""), "")
+            // 시간 표현의 조사만 남은 `6시 30분에 석촌호수`는 `에 석촌호수`로 정리된다.
+            .replace(Regex("""^(?:에|에는)\s+"""), "")
             .trim(' ', ',', '.', '/', '-', '·', ':', '：')
             .replace(Regex("""\s+"""), " ")
             .takeIf { it.length in 1..40 && it.any { char -> char.isLetterOrDigit() } }
@@ -1240,7 +1627,7 @@ class ScheduleTextParserService {
         if (tokens.size >= 2) return true
 
         return value.matches(
-            Regex(""".*(?:역|점|관|원|센터|카페|식당|학교|회사|병원|치과|의원|미용실|공원|호텔|웨딩홀|스튜디오|교회|성당|공항|터미널|마트|백화점|선생)$"""),
+            Regex(""".*(?:역|점|관|원|센터|카페|식당|학교|회사|병원|치과|의원|미용실|공원|호수|호텔|웨딩홀|스튜디오|교회|성당|공항|터미널|마트|백화점|선생)$"""),
         )
     }
 
@@ -1251,7 +1638,13 @@ class ScheduleTextParserService {
             .filter { it.isNotBlank() }
         if (normalizedTokens.isEmpty()) return false
         if (normalizedTokens.any { it in naturalDestinationPurposeTokens }) return false
-        if (normalizedTokens.any { it.endsWith("와") || it.endsWith("과") || it.endsWith("랑") }) return false
+        if (
+            normalizedTokens.any {
+                (it.endsWith("와") || it.endsWith("과") || it.endsWith("랑")) && !looksLikePlaceToken(it)
+            }
+        ) {
+            return false
+        }
         return true
     }
 
