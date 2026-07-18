@@ -110,6 +110,7 @@ class SecurityConfig(
 
                     .requestMatchers(
                         "/",
+                        "/robots.txt",
                         "/api/member/auth/**",
                         "/api/legal/**",
                         "/legal/**",

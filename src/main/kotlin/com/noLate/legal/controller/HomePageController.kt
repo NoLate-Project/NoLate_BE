@@ -7,6 +7,13 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 class HomePageController {
 
+    @GetMapping("/robots.txt", produces = [MediaType.TEXT_PLAIN_VALUE])
+    fun getRobotsTxt(): String =
+        """
+        User-agent: *
+        Allow: /
+        """.trimIndent()
+
     @GetMapping("/", produces = [MediaType.TEXT_HTML_VALUE])
     fun getHomePage(): String =
         """

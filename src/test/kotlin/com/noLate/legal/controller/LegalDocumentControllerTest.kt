@@ -8,6 +8,14 @@ import org.junit.jupiter.api.Test
 class LegalDocumentControllerTest {
 
     @Test
+    fun `robots txt explicitly allows public homepage crawling`() {
+        val robots = HomePageController().getRobotsTxt()
+
+        assertTrue(robots.contains("User-agent: *"))
+        assertTrue(robots.contains("Allow: /"))
+    }
+
+    @Test
     fun `homepage identifies NoLate and explains Google Calendar data use`() {
         val html = HomePageController().getHomePage()
 
