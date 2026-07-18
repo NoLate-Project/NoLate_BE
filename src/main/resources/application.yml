@@ -19,7 +19,7 @@ spring:
 
   jpa:
     # 주기적으로 실행되는 스케줄 워커의 정상 쿼리는 출력하지 않는다.
-    # SQL 실행 실패 시에는 Hibernate 예외 스택에 실패한 SQL이 포함된다.
+    # 그 외 쿼리는 P6Spy 리스너가 바인딩 값을 포함해 출력하며, 실패 SQL은 항상 출력한다.
     show-sql: false
     properties:
       hibernate:
