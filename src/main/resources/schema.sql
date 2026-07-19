@@ -152,6 +152,39 @@ CREATE TABLE IF NOT EXISTS schedule_routes (
         ON DELETE CASCADE
 ) COMMENT='Travel and route detail for each schedule';
 
+CREATE TABLE IF NOT EXISTS schedule_travel_plans (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Personal travel plan primary key',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    schedule_id BIGINT NOT NULL COMMENT 'Shared schedule id',
+    member_id BIGINT NOT NULL COMMENT 'Travel plan owner member id',
+    travel_minutes INT NULL COMMENT 'Estimated travel minutes',
+    depart_at DATETIME(6) NULL COMMENT 'Member-specific departure time',
+    travel_mode VARCHAR(20) NULL COMMENT 'Member-specific travel mode',
+    origin_name VARCHAR(255) NULL COMMENT 'Personal origin name',
+    origin_address VARCHAR(500) NULL COMMENT 'Personal origin address',
+    origin_lat DOUBLE NULL COMMENT 'Personal origin latitude',
+    origin_lng DOUBLE NULL COMMENT 'Personal origin longitude',
+    route_json LONGTEXT NULL COMMENT 'Member-selected route detail JSON',
+    notification_enabled BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Member-specific departure notification flag',
+    notification_lead_minutes INT NULL COMMENT 'Member-specific monitoring lead minutes',
+    notification_interval_minutes INT NULL COMMENT 'Member-specific ETA refresh interval',
+    schedule_fingerprint VARCHAR(64) NOT NULL COMMENT 'Schedule time and destination fingerprint at save time',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_travel_plans_schedule_member (schedule_id, member_id),
+    INDEX idx_schedule_travel_plans_schedule (schedule_id),
+    INDEX idx_schedule_travel_plans_member (member_id),
+    INDEX idx_schedule_travel_plans_member_depart_at (member_id, depart_at),
+    CONSTRAINT fk_schedule_travel_plans_schedule
+        FOREIGN KEY (schedule_id) REFERENCES schedules (id)
+        ON DELETE CASCADE
+) COMMENT='Per-member travel plans for shared schedules';
+
 CREATE TABLE IF NOT EXISTS schedule_push_job (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Push job primary key',
     version BIGINT NULL COMMENT 'Optimistic lock version',
@@ -181,7 +214,7 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     create_dt DATETIME(6) NULL,
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_schedule_push_job_schedule_id (schedule_id),
+    UNIQUE KEY uk_schedule_push_job_schedule_member (schedule_id, member_id),
     INDEX idx_schedule_push_job_status_next_check_at (status, next_check_at),
     INDEX idx_schedule_push_job_member_id (member_id),
     INDEX idx_schedule_push_job_schedule_id (schedule_id)

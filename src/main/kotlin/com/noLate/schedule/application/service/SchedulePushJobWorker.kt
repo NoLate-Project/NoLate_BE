@@ -10,8 +10,11 @@ import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
+import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import jakarta.transaction.Transactional
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -38,6 +41,7 @@ class SchedulePushJobWorker(
     @Value("\${schedule.push.departure-alert-lead-minutes:15}") private val departureAlertLeadMinutes: Int,
     @Value("\${schedule.push.departure-reminder-interval-minutes:5}") private val departureReminderIntervalMinutes: Int,
     @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
+    private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "schedule-push-${UUID.randomUUID()}"
@@ -107,8 +111,7 @@ class SchedulePushJobWorker(
                     job.cancel()
                     return
                 }
-            val route = schedule.route
-                ?.takeIf { it.notificationEnabled }
+            val route = resolveRouteSource(schedule, job.memberId)
                 ?: run {
                     job.cancel()
                     return
@@ -249,6 +252,45 @@ class SchedulePushJobWorker(
         }
     }
 
+    /**
+     * 새 개인 계획이 있으면 그것을 우선 사용한다. 마이그레이션 전 일정은 오너에게만 기존
+     * ScheduleRoute fallback을 허용하며, 공유 사용자가 오너 경로로 알림을 받는 일은 막는다.
+     */
+    private fun resolveRouteSource(schedule: com.noLate.schedule.domain.Schedule, memberId: Long): PushRouteSource? {
+        val personal = travelPlanRepository
+            ?.findByScheduleIdAndMemberIdAndDeletedFalse(requireNotNull(schedule.id), memberId)
+        if (personal != null) {
+            // 업데이트 유스케이스의 즉시 취소와 별개인 최종 방어선이다. 배포 중이거나 작업이
+            // 이미 선점된 경우에도 이전 목적지/시각으로 알림을 보내지 않는다.
+            if (!personal.notificationEnabled || !ScheduleTravelPlanFingerprint.matches(personal, schedule)) {
+                return null
+            }
+            val destination = schedule.route ?: return null
+            return PushRouteSource(
+                travelMinutes = personal.travelMinutes,
+                travelMode = personal.travelMode,
+                originLat = personal.originLat,
+                originLng = personal.originLng,
+                destinationLat = destination.destinationLat,
+                destinationLng = destination.destinationLng,
+                routeJson = personal.routeJson,
+            )
+        }
+
+        val legacy = schedule.route
+            ?.takeIf { schedule.memberId == memberId && it.notificationEnabled }
+            ?: return null
+        return PushRouteSource(
+            travelMinutes = legacy.travelMinutes,
+            travelMode = legacy.travelMode,
+            originLat = legacy.originLat,
+            originLng = legacy.originLng,
+            destinationLat = legacy.destinationLat,
+            destinationLng = legacy.destinationLng,
+            routeJson = legacy.routeJson,
+        )
+    }
+
     private fun parseSelectedRouteTravelMinutes(routeJson: String?): Int? {
         if (routeJson.isNullOrBlank()) return null
 
@@ -330,3 +372,13 @@ class SchedulePushJobWorker(
         )
     }
 }
+
+private data class PushRouteSource(
+    val travelMinutes: Int?,
+    val travelMode: ScheduleTravelMode?,
+    val originLat: Double?,
+    val originLng: Double?,
+    val destinationLat: Double?,
+    val destinationLng: Double?,
+    val routeJson: String?,
+)

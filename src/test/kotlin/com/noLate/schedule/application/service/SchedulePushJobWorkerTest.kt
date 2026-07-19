@@ -12,8 +12,11 @@ import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.ScheduleTravelPlan
+import com.noLate.schedule.domain.ScheduleTravelPlanUpsertCommand
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -65,6 +68,9 @@ class SchedulePushJobWorkerTest {
     @Mock
     lateinit var notificationUseCase: NotificationUseCase
 
+    @Mock
+    lateinit var travelPlanRepository: ScheduleTravelPlanRepository
+
     @Test
     fun `알림 시각 전에는 ETA만 조회하고 사용자 푸시 없이 다음 체크를 예약한다`() {
         val schedule = schedule()
@@ -104,6 +110,51 @@ class SchedulePushJobWorkerTest {
             testNow.plus(notificationIntervalMinutes.toLong(), ChronoUnit.MINUTES),
             job.nextCheckAt,
         )
+    }
+
+    @Test
+    fun `공통 일정 조건과 맞지 않는 개인 계획의 push job은 교통 조회 전에 취소한다`() {
+        val schedule = schedule(memberId = 1L)
+        val job = SchedulePushJob.create(
+            memberId = 2L,
+            scheduleId = requireNotNull(schedule.id),
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        val stalePlan = ScheduleTravelPlan(scheduleId = 10L, memberId = 2L).apply {
+            replace(
+                command = ScheduleTravelPlanUpsertCommand(
+                    travelMinutes = 30,
+                    travelMode = ScheduleTravelMode.CAR,
+                    originLat = 37.3,
+                    originLng = 127.3,
+                    routeJson = "{}",
+                    notificationEnabled = true,
+                ),
+                scheduleFingerprint = "stale-fingerprint",
+                departAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+                routeJson = "{}",
+                notificationLeadMinutes = 60,
+                notificationIntervalMinutes = 20,
+            )
+        }
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
+        whenever(travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
+            .thenReturn(stalePlan)
+
+        worker().runDueJobs(testNow)
+
+        assertEquals(SchedulePushJobStatus.CANCELED, job.status)
+        verify(trafficClient, never()).getTravelMinutes(any())
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any())
     }
 
     @Test
@@ -684,6 +735,7 @@ class SchedulePushJobWorkerTest {
         departureAlertLeadMinutes = departureAlertLeadMinutes,
         departureReminderIntervalMinutes = departureReminderIntervalMinutes,
         processingTimeoutMinutes = 10,
+        travelPlanRepository = travelPlanRepository,
     )
 
     /**

@@ -22,7 +22,7 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
         lockedAt: Instant,
     ): List<SchedulePushJob>
 
-    fun findByScheduleId(scheduleId: Long): SchedulePushJob?
+    fun findAllByScheduleId(scheduleId: Long): List<SchedulePushJob>
 
     fun findByScheduleIdAndMemberId(scheduleId: Long, memberId: Long): SchedulePushJob?
 }

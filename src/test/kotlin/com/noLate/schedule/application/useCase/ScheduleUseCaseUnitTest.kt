@@ -6,6 +6,7 @@ import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleService
+import com.noLate.schedule.application.service.ScheduleTravelPlanService
 import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
@@ -50,6 +51,9 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var favoritePlaceService: FavoritePlaceService
 
+    @Mock
+    lateinit var scheduleTravelPlanService: ScheduleTravelPlanService
+
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
 
     private lateinit var scheduleUseCase: ScheduleUseCase
@@ -63,6 +67,7 @@ class ScheduleUseCaseUnitTest {
             scheduleDepartureStatusService = scheduleDepartureStatusService,
             favoritePlaceService = favoritePlaceService,
             clock = clock,
+            scheduleTravelPlanService = scheduleTravelPlanService,
         )
     }
 
@@ -265,7 +270,7 @@ class ScheduleUseCaseUnitTest {
         val result = scheduleUseCase.updateSchedule(memberId, scheduleId, request)
 
         verify(scheduleService, times(1)).updateSchedule(memberId, scheduleId, request)
-        verify(schedulePushJobService, times(1)).cancelByScheduleId(scheduleId)
+        verify(schedulePushJobService, times(1)).cancelByScheduleIdAndMemberId(scheduleId, memberId)
         verify(schedulePushJobService, never()).registerFromScheduleDto(eq(memberId), org.mockito.kotlin.any())
         assertEquals("수정된 회의", result.title)
     }
@@ -289,6 +294,23 @@ class ScheduleUseCaseUnitTest {
     }
 
     @Test
+    fun `일정 조건 변경으로 오래된 참여자 계획이 되면 해당 회원 push job만 취소한다`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val request = scheduleDto(notificationEnabled = true)
+        val updated = request.copy(id = scheduleId)
+        whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
+        whenever(scheduleTravelPlanService.findStaleNotificationMemberIds(scheduleId))
+            .thenReturn(setOf(2L, 3L))
+
+        scheduleUseCase.updateSchedule(memberId, scheduleId, request)
+
+        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, 2L)
+        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, 3L)
+        verify(schedulePushJobService).registerFromScheduleDto(memberId, updated)
+    }
+
+    @Test
     fun `일정을 과거 시간으로 옮기면 저장은 허용하고 남아 있던 출발 알림은 취소한다`() {
         // 사용자가 일정 기록을 과거로 정정하는 것은 허용한다.
         // 다만 기존 PushJob이 계속 살아 있으면 뒤늦은 알림이 나갈 수 있으므로 반드시 취소한다.
@@ -306,7 +328,7 @@ class ScheduleUseCaseUnitTest {
 
         assertEquals(scheduleId, result.id)
         verify(schedulePushJobService, never()).registerFromScheduleDto(memberId, updated)
-        verify(schedulePushJobService).cancelByScheduleId(scheduleId)
+        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, memberId)
     }
 
     @Test
@@ -325,7 +347,7 @@ class ScheduleUseCaseUnitTest {
 
         verify(scheduleDepartureStatusService).markDeparted(memberId, scheduleId)
         verify(scheduleService).markDeparted(memberId, scheduleId)
-        verify(schedulePushJobService).cancelByScheduleId(scheduleId)
+        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, memberId)
         verify(schedulePushJobService, never()).registerFromScheduleDto(eq(memberId), org.mockito.kotlin.any())
         assertEquals(false, result.notificationEnabled)
     }
@@ -346,6 +368,7 @@ class ScheduleUseCaseUnitTest {
 
         verify(scheduleDepartureStatusService).markDeparted(sharedMemberId, scheduleId)
         verify(scheduleService, never()).markDeparted(sharedMemberId, scheduleId)
+        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, sharedMemberId)
         verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
         assertEquals("2026-06-01T00:00:00Z", result.myDepartedAt)
     }

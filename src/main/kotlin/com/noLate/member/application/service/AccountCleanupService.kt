@@ -17,6 +17,7 @@ import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
+import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
@@ -29,6 +30,7 @@ class AccountCleanupService(
     private val pushHistoryRepository: PushSendHistoryRepository,
     private val pushJobRepository: SchedulePushJobRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
+    private val travelPlanRepository: ScheduleTravelPlanRepository,
     private val scheduleShareRepository: ScheduleShareRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val invitationRepository: ScheduleShareInvitationRepository,
@@ -56,6 +58,7 @@ class AccountCleanupService(
         pushHistoryRepository.deleteAllByMemberId(memberId)
         pushJobRepository.deleteAllByMemberId(memberId)
         departureStatusRepository.deleteAllByMemberId(memberId)
+        travelPlanRepository.deleteAllByMemberId(memberId)
         scheduleShareRepository.deleteAllByOwnerMemberIdOrTargetMemberId(memberId, memberId)
         categoryShareRepository.deleteAllByOwnerMemberIdOrTargetMemberId(memberId, memberId)
         invitationRepository.deleteAllByOwnerMemberId(memberId)

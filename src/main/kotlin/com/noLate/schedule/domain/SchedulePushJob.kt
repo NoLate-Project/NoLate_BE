@@ -20,8 +20,8 @@ import java.time.Instant
     name = "schedule_push_job",
     uniqueConstraints = [
         UniqueConstraint(
-            name = "uk_schedule_push_job_schedule_id",
-            columnNames = ["schedule_id"],
+            name = "uk_schedule_push_job_schedule_member",
+            columnNames = ["schedule_id", "member_id"],
         )
     ],
     indexes = [
