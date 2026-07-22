@@ -62,9 +62,17 @@ class ScheduleDepartureStatus(
     var version: Long = 0L,
 ) : BaseEntity() {
 
-    fun keepFirstDeparture(now: Instant) {
-        if (departedAt == null) {
-            departedAt = now
-        }
+    /**
+     * 최초 출발 시각만 기록하고 이번 호출이 실제 상태 전환이었는지 반환한다.
+     *
+     * 서비스가 이 반환값으로 푸시 이벤트 발행 여부를 결정한다. 일정 row 비관적 락 안에서
+     * 호출되므로 같은 참가자의 동시 요청 중 정확히 한 요청만 true를 받고, 나머지는 저장된
+     * 최초 시각을 유지한 채 false를 받는다.
+     */
+    fun keepFirstDeparture(now: Instant): Boolean {
+        if (departedAt != null) return false
+
+        departedAt = now
+        return true
     }
 }

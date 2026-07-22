@@ -543,7 +543,7 @@ class ScheduleTravelPlanService(
 
     private fun hasPersonalRoute(dto: ScheduleDto): Boolean =
         dto.origin != null || dto.route != null || dto.travelMinutes != null ||
-            dto.travelMode != null || dto.notificationEnabled == true
+            dto.notificationEnabled == true
 }
 
 private data class NormalizedNotification(

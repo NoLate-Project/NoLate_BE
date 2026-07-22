@@ -163,6 +163,33 @@ class ScheduleTravelPlanServiceUnitTest {
     }
 
     @Test
+    fun `travel mode alone retires mirrored owner travel plan`() {
+        val schedule = scheduleEntity()
+        val mirrored = travelPlan(memberId = 1L, originName = "오너 집")
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(mirrored)
+        val modeOnlyDto = schedule.toDto(jacksonObjectMapper()).copy(
+            travelMinutes = null,
+            departAt = null,
+            travelMode = ScheduleTravelMode.CAR,
+            origin = null,
+            route = null,
+            notificationEnabled = false,
+            notificationLeadMinutes = null,
+            notificationIntervalMinutes = null,
+        )
+
+        val result = service.syncOwnerTravelPlan(
+            memberId = 1L,
+            scheduleDto = modeOnlyDto,
+        )
+
+        assertNull(result)
+        assertTrue(mirrored.deleted)
+        verify(travelPlanRepository, never()).saveAndFlush(any<ScheduleTravelPlan>())
+    }
+
+    @Test
     fun `editor can read another participants full saved travel plan`() {
         val schedule = scheduleEntity()
         val targetPlan = travelPlan(memberId = 2L, originName = "참여자 집")

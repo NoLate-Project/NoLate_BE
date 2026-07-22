@@ -417,8 +417,7 @@ class ScheduleService(
 
     private fun hasConfiguredRoute(scheduleDto: ScheduleDto): Boolean =
         scheduleDto.route != null ||
-            scheduleDto.travelMinutes != null ||
-            scheduleDto.travelMode != null
+            scheduleDto.travelMinutes != null
 
     private fun normalizeRouteSetupDto(
         scheduleDto: ScheduleDto,

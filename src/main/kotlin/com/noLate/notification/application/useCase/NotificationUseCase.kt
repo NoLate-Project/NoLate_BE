@@ -3,6 +3,7 @@ package com.noLate.notification.application.useCase
 import com.noLate.notification.application.PushClient
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.domain.PushSendStatus
 import org.slf4j.LoggerFactory
@@ -13,6 +14,7 @@ class NotificationUseCase(
     private val notificationTokenService: NotificationTokenService,
     private val pushClient: PushClient,
     private val pushSendHistoryService: PushSendHistoryService,
+    private val appNotificationService: AppNotificationService,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -23,8 +25,22 @@ class NotificationUseCase(
         memberId: Long,
         title: String,
         body: String,
-        data: Map<String, String> = emptyMap()
+        data: Map<String, String> = emptyMap(),
+        inboxDeduplicationKey: String? = null,
+        persistInInbox: Boolean = true,
     ): NotificationSendResult {
+        // 사용자 알림은 기기 토큰과 무관한 논리 이벤트다. FCM 조회보다 먼저 한 번 저장하면
+        // 토큰이 없거나 모든 기기 발송이 실패해도 앱 안에서 나중에 확인할 수 있다.
+        if (persistInInbox) {
+            appNotificationService.record(
+                memberId = memberId,
+                title = title,
+                body = body,
+                data = data,
+                deduplicationKey = inboxDeduplicationKey,
+            )
+        }
+
         val tokens = notificationTokenService.getTokensByMember(memberId)
         var sentCount = 0
         var failedCount = 0
@@ -103,10 +119,19 @@ class NotificationUseCase(
         memberIds: List<Long>,
         title: String,
         body: String,
-        data: Map<String, String> = emptyMap()
+        data: Map<String, String> = emptyMap(),
+        inboxDeduplicationKey: String? = null,
+        persistInInbox: Boolean = true,
     ): NotificationSendResult {
         return memberIds.map { memberId ->
-            sendToMember(memberId, title, body, data)
+            sendToMember(
+                memberId = memberId,
+                title = title,
+                body = body,
+                data = data,
+                inboxDeduplicationKey = inboxDeduplicationKey,
+                persistInInbox = persistInInbox,
+            )
         }.fold(NotificationSendResult()) { total, result -> total + result }
     }
 }

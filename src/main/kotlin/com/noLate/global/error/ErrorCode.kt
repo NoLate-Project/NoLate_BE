@@ -26,6 +26,9 @@ enum class ErrorCode(
     // Token 영역
     INVALID_TOKEN("T001", "잘못된 토큰 값입니다."),
 
+    // Notification 영역
+    NOTIFICATION_NOT_FOUND("N001", "알림이 존재하지 않습니다."),
+
     // Schedule 영역
     SCHEDULE_NOT_FOUND("S001", "일정이 존재하지 않습니다."),
     SUBSCRIPTION_LIMIT_EXCEEDED("S002", "요금제 사용 한도를 초과했습니다."),

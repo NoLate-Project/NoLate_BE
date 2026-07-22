@@ -14,6 +14,7 @@ import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import jakarta.transaction.Transactional
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import java.time.Clock
 import java.time.Instant
@@ -25,6 +26,7 @@ class ScheduleDepartureStatusService(
     private val scheduleShareRepository: ScheduleShareRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val memberRepository: MemberRepository,
+    private val eventPublisher: ApplicationEventPublisher,
     private val clock: Clock = Clock.systemUTC(),
 ) {
 
@@ -41,7 +43,7 @@ class ScheduleDepartureStatusService(
         scheduleRepository.findScheduleDetail(scheduleId = scheduleId, memberId = memberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
-        scheduleRepository.findActiveForDepartureUpdate(scheduleId)
+        val schedule = scheduleRepository.findActiveForDepartureUpdate(scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
         val status = departureStatusRepository.findActiveForUpdate(
@@ -52,8 +54,71 @@ class ScheduleDepartureStatusService(
             memberId = memberId,
         )
 
-        status.keepFirstDeparture(Instant.now(clock))
-        return departureStatusRepository.saveAndFlush(status)
+        val firstDeparture = status.keepFirstDeparture(Instant.now(clock))
+        val saved = departureStatusRepository.saveAndFlush(status)
+
+        if (firstDeparture) {
+            publishParticipantDeparted(schedule, memberId)
+        }
+
+        return saved
+    }
+
+    /**
+     * 첫 출발 전환을 다른 활성 참가자에게 알리는 커밋 후 이벤트를 만든다.
+     *
+     * 개별 일정 공유와 카테고리 공유가 겹칠 수 있으므로 LinkedHashSet으로 중복을 제거한다.
+     * 출발한 본인은 수신 목록에서 제외한다. 이벤트에는 엔티티 대신 푸시에 필요한 불변값만
+     * 넣어 AFTER_COMMIT 리스너가 영속성 컨텍스트 밖에서도 안전하게 처리할 수 있게 한다.
+     */
+    private fun publishParticipantDeparted(schedule: com.noLate.schedule.domain.Schedule, departedMemberId: Long) {
+        val scheduleId = requireNotNull(schedule.id)
+        val recipientMemberIds = linkedSetOf(schedule.memberId)
+
+        scheduleShareRepository
+            .findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(
+                scheduleId,
+                ScheduleShareStatus.ACTIVE,
+            )
+            .forEach { recipientMemberIds.add(it.targetMemberId) }
+
+        val resolvedCategoryId = schedule.categoryId
+            ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+
+        resolvedCategoryId
+            ?.let { sharedCategoryId ->
+                categoryShareRepository
+                    .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
+                        sharedCategoryId,
+                        ScheduleShareStatus.ACTIVE,
+                    )
+            }
+            .orEmpty()
+            .forEach { recipientMemberIds.add(it.targetMemberId) }
+
+        recipientMemberIds.remove(departedMemberId)
+
+        val departedMember = memberRepository.findByIdAndDeletedFalse(departedMemberId)
+        val departedMemberLabel = departedMember
+            ?.name
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: departedMember
+                ?.email
+                ?.substringBefore("@")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            ?: "참여자"
+
+        eventPublisher.publishEvent(
+            ScheduleParticipantDepartedEvent(
+                scheduleId = scheduleId,
+                scheduleTitle = schedule.title,
+                departedMemberId = departedMemberId,
+                departedMemberLabel = departedMemberLabel,
+                recipientMemberIds = recipientMemberIds.toList(),
+            )
+        )
     }
 
     @Transactional

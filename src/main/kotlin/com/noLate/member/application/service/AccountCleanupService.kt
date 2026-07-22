@@ -8,6 +8,7 @@ import com.noLate.member.infrastructure.MemberConsentRepository
 import com.noLate.member.infrastructure.MemberProfileRepository
 import com.noLate.member.infrastructure.MemberSettingRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
+import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.routehistory.infrastructure.RecentRoutePlaceRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
@@ -28,6 +29,7 @@ class AccountCleanupService(
     private val refreshTokenService: RefreshTokenService,
     private val deviceTokenRepository: NotificationDeviceTokenRepository,
     private val pushHistoryRepository: PushSendHistoryRepository,
+    private val appNotificationRepository: AppNotificationRepository,
     private val pushJobRepository: SchedulePushJobRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
@@ -56,6 +58,7 @@ class AccountCleanupService(
 
         // 참조 테이블부터 정리한 후 소유 리소스를 제거한다.
         pushHistoryRepository.deleteAllByMemberId(memberId)
+        appNotificationRepository.deleteAllByMemberId(memberId)
         pushJobRepository.deleteAllByMemberId(memberId)
         departureStatusRepository.deleteAllByMemberId(memberId)
         travelPlanRepository.deleteAllByMemberId(memberId)

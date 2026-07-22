@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import org.springframework.transaction.event.TransactionPhase
 import org.springframework.transaction.event.TransactionalEventListener
+import java.util.UUID
 
 /**
  * 공유 트랜잭션이 확정된 뒤 수신자에게 전달할 최소 정보만 담는다.
@@ -19,6 +20,8 @@ data class ScheduleShareGrantedEvent(
     val resourceType: ScheduleShareResourceType,
     val resourceId: Long,
     val resourceTitle: String,
+    /** 같은 커밋 후 이벤트가 재호출돼도 알림함에는 한 건만 남기기 위한 논리 이벤트 ID다. */
+    val notificationEventId: String = UUID.randomUUID().toString(),
 )
 
 @Component
@@ -41,6 +44,7 @@ class ScheduleSharePushNotificationListener(
                 title = notification.title,
                 body = notification.body,
                 data = notification.data,
+                inboxDeduplicationKey = "share-granted:${event.notificationEventId}",
             )
 
             log.info(

@@ -185,6 +185,9 @@ class SchedulePushJobWorker(
                             (reminderDecision == DepartureReminderDecision.DEPART_NOW).toString(),
                         "trafficChangeMinutes" to (message.trafficChangeMinutes?.toString() ?: "0"),
                     ),
+                    // push 실패 재시도 중에는 checkCount가 증가하지 않는다. 같은 회차는 한 알림으로
+                    // 합치되, 다음 ETA 확인 회차는 별도 알림이 되도록 job과 checkCount를 함께 사용한다.
+                    inboxDeduplicationKey = schedulePushInboxDeduplicationKey(job),
                 )
                 log.info(
                     "Schedule push sent. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, sent={}, failed={}",
@@ -250,6 +253,13 @@ class SchedulePushJobWorker(
                 reason = exception.message?.take(500) ?: exception.javaClass.simpleName,
             )
         }
+    }
+
+    private fun schedulePushInboxDeduplicationKey(job: SchedulePushJob): String {
+        // 운영 worker가 조회한 엔티티에는 항상 id가 있다. 단위 테스트에서 사용하는 저장 전
+        // 엔티티도 결정적인 키를 갖게 해 테스트가 재시도 의미를 그대로 검증할 수 있도록 한다.
+        val jobIdentity = job.id?.toString() ?: "unsaved-${job.memberId}-${job.scheduleId}"
+        return "schedule-push-job:$jobIdentity:${job.checkCount}"
     }
 
     /**

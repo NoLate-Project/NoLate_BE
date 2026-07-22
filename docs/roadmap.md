@@ -1,6 +1,6 @@
 # NoLate Project Roadmap
 
-Last verified: 2026-07-15 KST (Schedule Sharing status)
+Last verified: 2026-07-22 KST (Participant departure push and owner nudge)
 
 이 문서는 NoLate 문서의 상위 인덱스다. 세부 구현, 검증 절차, 테스트 목록은 분야별 문서에서 관리하고, 이 파일에는 현재 제품 상태와 우선순위만 둔다.
 
@@ -27,8 +27,8 @@ MVP 1차 완료 조건:
 | Schedule / Push Implementation | [`schedule/schedule-push-implementation-guide.md`](schedule/schedule-push-implementation-guide.md) | 구현/검증 가이드 | 최신 남은 작업과 실행 절차 유지 |
 | Push Scenario Runner | [`schedule/push-scenario-runner.md`](schedule/push-scenario-runner.md) | 수동 E2E 도구 완료 | 실제 일정 기반 Runner 결과 기록 |
 | Quick Schedule | [`schedule/quick-schedule-creation-roadmap.md`](schedule/quick-schedule-creation-roadmap.md) | 자연어 일정 생성 기반 완료, 확장 설계 진행 | 입력 채널 확장, OCR/share |
-| Schedule Sharing | [`schedule/schedule-sharing-roadmap.md`](schedule/schedule-sharing-roadmap.md) | 앱 ID/이메일·링크 공유, 통합 공유함, FE 수락/상세, 공유 push, 참가자별 출발 상태 구현 | 운영 migration, 권한 집행, 실기기 push, handle/친구 검색 |
-| Notification / FCM / App Push | [`notification/notification-fcm-app-push-roadmap.md`](notification/notification-fcm-app-push-roadmap.md) | payload 라우팅, 상세 이동 규칙, depart-now action 구현 완료 | 실기기 클릭/액션 검증 |
+| Schedule Sharing | [`schedule/schedule-sharing-roadmap.md`](schedule/schedule-sharing-roadmap.md) | 앱 ID/이메일·링크 공유, 통합 공유함, 참가자별 이동/출발 상태, 첫 출발 자동 push, 오너 지정 push 구현 | 운영 migration, 권한 집행, 실기기 push, handle/친구 검색 |
+| Notification / FCM / App Push | [`notification/notification-fcm-app-push-roadmap.md`](notification/notification-fcm-app-push-roadmap.md) | 기존 일정 알림과 공유 참가자 출발/지정 알림 payload, 상세 이동, 발송 이력 구현 | 실기기 수신·클릭·액션 검증 |
 | FE App / Route UX | [`frontend/fe-app-route-ux-roadmap.md`](frontend/fe-app-route-ux-roadmap.md) | 로그인, 일정, 경로, 알림 UX 기반 완료 | 실기기 UX 검증, 오류/빈 상태 정리 |
 | MVP Acceptance | [`quality/mvp-acceptance-checklist.md`](quality/mvp-acceptance-checklist.md) | 남은 BE/FE 검증 항목 정리 | 체크리스트 실행 결과 기록 |
 | Quality / Ops | [`quality/quality-ops-developer-tools-roadmap.md`](quality/quality-ops-developer-tools-roadmap.md) | BE/FE 테스트 일부, TestFlight 업로드 경로 확인 | CI, 환경변수, 관측성, 운영 배포 절차 |
@@ -57,6 +57,7 @@ MVP 1차 완료 조건:
 6. 서버 다중 인스턴스 또는 재시도 상황의 중복 발송 방지 검증
 7. 실제 Tmap ETA 변화 시나리오 검증
 8. CI에 BE test, FE test, FE typecheck 추가
+9. 공유 참가자 첫 출발 자동 push와 오너 지정 출발 확인 push를 실기기 2대에서 수신·클릭 검증
 
 ## Verification Commands
 

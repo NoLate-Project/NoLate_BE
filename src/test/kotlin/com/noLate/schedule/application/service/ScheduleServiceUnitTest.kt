@@ -269,6 +269,31 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `travel mode alone does not clear quick share setup marker`() {
+        val modeOnlyDto = scheduleDto().copy(
+            travelMinutes = null,
+            departAt = null,
+            travelMode = ScheduleTravelMode.CAR,
+            origin = null,
+            destination = null,
+            locationName = null,
+            routeSetupRequired = true,
+            route = null,
+        )
+        whenever(scheduleRepository.save(any<Schedule>()))
+            .thenAnswer { invocation ->
+                invocation.getArgument<Schedule>(0).apply { id = 10L }
+            }
+
+        val result = scheduleService.addSchedule(1L, modeOnlyDto)
+
+        verify(scheduleRepository).save(check {
+            assertEquals(true, it.routeSetupRequired)
+        })
+        assertEquals(true, result.routeSetupRequired)
+    }
+
+    @Test
     fun `deleteSchedule changes deleted flag instead of hard deleting`() {
         // given
         val memberId = 1L
