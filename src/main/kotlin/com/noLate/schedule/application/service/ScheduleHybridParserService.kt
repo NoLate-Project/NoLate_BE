@@ -25,6 +25,7 @@ class ScheduleHybridParserService(
 ) {
     private val seoulZone = ZoneId.of("Asia/Seoul")
     private val aiConfidenceThreshold = 0.65
+    private val mediaRecognitionReviewThreshold = 0.78
 
     /**
      * 저장하지 않고 분석 결과만 반환한다.
@@ -47,9 +48,24 @@ class ScheduleHybridParserService(
         inputType: ScheduleParseInputType,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
+        recognitionConfidence: Double? = null,
     ): ScheduleParseDto {
         val ruleResult = ruleParser.parse(text, inputType, referenceDate, defaultDurationMinutes)
-        if (isRuleResultConfident(ruleResult)) {
+        val normalizedRecognitionConfidence = recognitionConfidence
+            ?.takeIf { it.isFinite() }
+            ?.coerceIn(0.0, 1.0)
+        val mediaRecognitionNeedsReview = inputType in setOf(
+            ScheduleParseInputType.IMAGE_OCR,
+            ScheduleParseInputType.VOICE_TRANSCRIPT,
+        ) && normalizedRecognitionConfidence != null &&
+            normalizedRecognitionConfidence < mediaRecognitionReviewThreshold
+        val mediaRecognitionWarning = if (mediaRecognitionNeedsReview) {
+            "사진·음성 인식 신뢰도가 낮아 원문 확인이 필요합니다."
+        } else {
+            null
+        }
+
+        if (isRuleResultConfident(ruleResult) && !mediaRecognitionNeedsReview) {
             return ruleResult.copy(
                 parseSource = ScheduleParseSource.RULE,
                 aiAttempted = false,
@@ -57,13 +73,6 @@ class ScheduleHybridParserService(
                 needsReview = hasBlockingReviewWarning(ruleResult.warnings) ||
                     hasInferredMeridiemWarning(ruleResult.warnings),
             )
-        }
-
-        // 음성은 iOS STT가 이미 텍스트로 변환한 뒤 한 번만 서버로 전달된다. 제품 요구사항상
-        // 사용자와 후속 대화를 하지 않고 AI에도 전송하지 않으므로, 규칙 결과의 누락 필드를
-        // 그대로 미리보기 화면에 알려 사용자가 저장 전에 직접 보완하도록 한다.
-        if (inputType == ScheduleParseInputType.VOICE_TRANSCRIPT) {
-            return ruleOnlyVoiceResult(ruleResult)
         }
 
         // 외부 서비스에는 연락처와 이메일을 제거한 텍스트만 전달한다.
@@ -92,7 +101,12 @@ class ScheduleHybridParserService(
         )
         val warnings = (
             merged.warnings +
-                listOfNotNull(outcome.warning, lowConfidenceWarning, ambiguousAiMeridiemWarning)
+                listOfNotNull(
+                    outcome.warning,
+                    lowConfidenceWarning,
+                    ambiguousAiMeridiemWarning,
+                    mediaRecognitionWarning,
+                )
             ).distinct()
 
         // 날짜, 시간, 목적지 중 하나라도 없거나 OCR 후보가 충돌하면 저장 전 사용자 확인을 요구한다.
@@ -105,20 +119,9 @@ class ScheduleHybridParserService(
             aiAttempted = outcome.attempted,
             needsReview = missingFields.any { it in setOf("date", "time", "destination") } ||
                 hasBlockingReviewWarning(warnings) ||
-                hasInferredMeridiemWarning(warnings),
+                hasInferredMeridiemWarning(warnings) ||
+                mediaRecognitionNeedsReview,
             warnings = warnings,
-            missingFields = missingFields,
-        )
-    }
-
-    private fun ruleOnlyVoiceResult(result: ScheduleParseDto): ScheduleParseDto {
-        val missingFields = calculateMissingFields(result)
-        return result.copy(
-            parseSource = ScheduleParseSource.RULE_FALLBACK,
-            aiAttempted = false,
-            needsReview = missingFields.any { it in setOf("date", "time", "destination") } ||
-                hasBlockingReviewWarning(result.warnings) ||
-                hasInferredMeridiemWarning(result.warnings),
             missingFields = missingFields,
         )
     }

@@ -58,8 +58,15 @@ class ScheduleUseCase(
         inputType: ScheduleParseInputType,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
+        recognitionConfidence: Double? = null,
     ): ScheduleParseDto {
-        return scheduleHybridParserService.parse(text, inputType, referenceDate, defaultDurationMinutes)
+        return scheduleHybridParserService.parse(
+            text,
+            inputType,
+            referenceDate,
+            defaultDurationMinutes,
+            recognitionConfidence,
+        )
     }
 
     /**
@@ -76,12 +83,14 @@ class ScheduleUseCase(
         inputType: ScheduleParseInputType,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
+        recognitionConfidence: Double? = null,
     ): ScheduleParseDto {
         val parsed = scheduleHybridParserService.parse(
             text,
             inputType,
             referenceDate,
             defaultDurationMinutes,
+            recognitionConfidence,
         )
         if (parsed.origin != null) return parsed
 
