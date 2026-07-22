@@ -28,6 +28,7 @@ class ScheduleDepartureStatusService(
     private val memberRepository: MemberRepository,
     private val eventPublisher: ApplicationEventPublisher,
     private val clock: Clock = Clock.systemUTC(),
+    private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
 ) {
 
     /**
@@ -40,8 +41,13 @@ class ScheduleDepartureStatusService(
      */
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDepartureStatus {
-        scheduleRepository.findScheduleDetail(scheduleId = scheduleId, memberId = memberId)
+        val visibleSchedule = scheduleRepository.findScheduleDetail(scheduleId = scheduleId, memberId = memberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        scheduleAccessPolicy?.resolve(memberId, visibleSchedule)?.let { access ->
+            if (!access.travelEnabled) {
+                throw BusinessException(ErrorCode.FORBIDDEN, "이 일정은 이동 기능을 공유하지 않습니다.")
+            }
+        }
 
         val schedule = scheduleRepository.findActiveForDepartureUpdate(scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
@@ -73,28 +79,10 @@ class ScheduleDepartureStatusService(
      */
     private fun publishParticipantDeparted(schedule: com.noLate.schedule.domain.Schedule, departedMemberId: Long) {
         val scheduleId = requireNotNull(schedule.id)
-        val recipientMemberIds = linkedSetOf(schedule.memberId)
-
-        scheduleShareRepository
-            .findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(
-                scheduleId,
-                ScheduleShareStatus.ACTIVE,
-            )
-            .forEach { recipientMemberIds.add(it.targetMemberId) }
-
-        val resolvedCategoryId = schedule.categoryId
-            ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
-
-        resolvedCategoryId
-            ?.let { sharedCategoryId ->
-                categoryShareRepository
-                    .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
-                        sharedCategoryId,
-                        ScheduleShareStatus.ACTIVE,
-                    )
-            }
-            .orEmpty()
-            .forEach { recipientMemberIds.add(it.targetMemberId) }
+        val recipientMemberIds = scheduleAccessPolicy
+            ?.travelMemberIds(schedule)
+            ?.toCollection(linkedSetOf())
+            ?: legacyParticipantIds(schedule)
 
         recipientMemberIds.remove(departedMemberId)
 
@@ -127,33 +115,44 @@ class ScheduleDepartureStatusService(
         val ownerMemberId = scheduleDto.ownerMemberId ?: return scheduleDto
         val categoryId = scheduleDto.category.id?.toLongOrNull()
 
+        val schedule = scheduleRepository.findScheduleDetail(scheduleId, currentMemberId)
+        val access = schedule?.let { scheduleAccessPolicy?.resolve(currentMemberId, it) }
+        if (access?.travelEnabled == false) {
+            return scheduleDto.copy(myDepartedAt = null, departureParticipants = emptyList())
+        }
+
         val participantRoles = linkedMapOf<Long, ScheduleDepartureParticipantRole>()
-        participantRoles[ownerMemberId] = ScheduleDepartureParticipantRole.OWNER
-
-        scheduleShareRepository
-            .findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(scheduleId, ScheduleShareStatus.ACTIVE)
-            .forEach { share ->
-                participantRoles.putIfAbsent(share.targetMemberId, ScheduleDepartureParticipantRole.SHARED)
+        val participantIds = if (schedule != null && scheduleAccessPolicy != null) {
+            scheduleAccessPolicy.travelMemberIds(schedule)
+        } else {
+            legacyParticipantIds(scheduleId, ownerMemberId, categoryId).toList()
+        }
+        participantIds.forEach { participantMemberId ->
+            participantRoles[participantMemberId] = if (participantMemberId == ownerMemberId) {
+                ScheduleDepartureParticipantRole.OWNER
+            } else {
+                ScheduleDepartureParticipantRole.SHARED
             }
-
-        if (categoryId != null) {
-            categoryShareRepository
-                .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(categoryId, ScheduleShareStatus.ACTIVE)
-                .forEach { share ->
-                    participantRoles.putIfAbsent(share.targetMemberId, ScheduleDepartureParticipantRole.SHARED)
-                }
         }
 
         val statusesByMemberId = departureStatusRepository
             .findAllByScheduleIdAndDeletedFalse(scheduleId)
             .associateBy { it.memberId }
 
-        val canManageParticipants = currentMemberId == ownerMemberId ||
-            scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, currentMemberId)
-                ?.let { !it.deleted && it.status == ScheduleShareStatus.ACTIVE && it.permission == ScheduleSharePermission.EDITOR } == true ||
-            (categoryId != null && categoryShareRepository
-                .findByCategoryIdAndTargetMemberId(categoryId, currentMemberId)
-                ?.let { !it.deleted && it.status == ScheduleShareStatus.ACTIVE && it.permission == ScheduleSharePermission.EDITOR } == true)
+        val canManageParticipants = access?.canViewAllTravelPlans ?: (
+            currentMemberId == ownerMemberId ||
+                scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, currentMemberId)
+                    ?.let {
+                        !it.deleted && it.status == ScheduleShareStatus.ACTIVE &&
+                            it.permission == ScheduleSharePermission.EDITOR
+                    } == true ||
+                (categoryId != null && categoryShareRepository
+                    .findByCategoryIdAndTargetMemberId(categoryId, currentMemberId)
+                    ?.let {
+                        !it.deleted && it.status == ScheduleShareStatus.ACTIVE &&
+                            it.permission == ScheduleSharePermission.EDITOR
+                    } == true)
+            )
 
         val participants = participantRoles.map { (memberId, role) ->
             val statusDepartedAt = statusesByMemberId[memberId]?.departedAt?.toString()
@@ -181,5 +180,38 @@ class ScheduleDepartureStatusService(
             myDepartedAt = myDepartedAt,
             departureParticipants = participants,
         )
+    }
+
+    private fun legacyParticipantIds(schedule: com.noLate.schedule.domain.Schedule): LinkedHashSet<Long> =
+        legacyParticipantIds(
+            scheduleId = requireNotNull(schedule.id),
+            ownerMemberId = schedule.memberId,
+            categoryId = schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull(),
+        )
+
+    /**
+     * 직접 생성한 과거 단위 테스트와 점진 배포 중인 legacy wiring만을 위한 호환 계산이다.
+     * 운영 Spring bean에는 [ScheduleAccessPolicy]가 주입되어 캘린더와 content mode까지 포함한
+     * 중앙 계산을 사용한다.
+     */
+    private fun legacyParticipantIds(
+        scheduleId: Long,
+        ownerMemberId: Long,
+        categoryId: Long?,
+    ): LinkedHashSet<Long> {
+        val memberIds = linkedSetOf(ownerMemberId)
+        scheduleShareRepository
+            .findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(scheduleId, ScheduleShareStatus.ACTIVE)
+            .forEach { memberIds.add(it.targetMemberId) }
+        categoryId
+            ?.let {
+                categoryShareRepository.findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
+                    it,
+                    ScheduleShareStatus.ACTIVE,
+                )
+            }
+            .orEmpty()
+            .forEach { memberIds.add(it.targetMemberId) }
+        return memberIds
     }
 }

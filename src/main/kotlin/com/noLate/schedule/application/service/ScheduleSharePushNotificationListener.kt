@@ -90,6 +90,16 @@ class ScheduleSharePushNotificationListener(
                     "categoryId" to event.resourceId.toString(),
                 ),
             )
+
+            ScheduleShareResourceType.CALENDAR -> SharePushNotification(
+                title = "새 공유 캘린더",
+                body = "'${event.resourceTitle}' 캘린더가 공유됐어요.",
+                data = mapOf(
+                    "type" to "CALENDAR_SHARE_RECEIVED",
+                    "resourceType" to event.resourceType.name,
+                    "calendarId" to event.resourceId.toString(),
+                ),
+            )
         }
     }
 }

@@ -7,6 +7,7 @@ import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleShare
+import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleShareInvitation
 import com.noLate.schedule.domain.ScheduleShareInvitationStatus
 import com.noLate.schedule.domain.ScheduleSharePermission
@@ -58,6 +59,9 @@ class ScheduleShareServiceUnitTest {
     @Mock
     lateinit var eventPublisher: ApplicationEventPublisher
 
+    @Mock
+    lateinit var travelAccessCleanupService: ScheduleTravelAccessCleanupService
+
     private val clock = Clock.fixed(Instant.parse("2026-07-15T00:00:00Z"), ZoneOffset.UTC)
     private lateinit var service: ScheduleShareService
 
@@ -72,6 +76,7 @@ class ScheduleShareServiceUnitTest {
             memberRepository = memberRepository,
             eventPublisher = eventPublisher,
             clock = clock,
+            travelAccessCleanupService = travelAccessCleanupService,
         )
     }
 
@@ -103,6 +108,7 @@ class ScheduleShareServiceUnitTest {
             assertEquals(ownerId, it.ownerMemberId)
             assertEquals(2L, it.targetMemberId)
             assertEquals(ScheduleSharePermission.VIEWER, it.permission)
+            assertEquals(ScheduleShareContentMode.SCHEDULE_AND_TRAVEL, it.contentMode)
             assertEquals(ScheduleShareStatus.ACTIVE, it.status)
         })
         assertEquals("100", result.id)
@@ -184,6 +190,36 @@ class ScheduleShareServiceUnitTest {
 
         assertEquals(ScheduleSharePermission.EDITOR, existing.permission)
         verify(eventPublisher, never()).publishEvent(any())
+    }
+
+    @Test
+    fun `shareSchedule can narrow an active grant to schedule only`() {
+        val target = member(id = 2L, email = "friend@example.com")
+        val existing = ScheduleShare(
+            id = 30L,
+            scheduleId = 10L,
+            ownerMemberId = 1L,
+            targetMemberId = 2L,
+            permission = ScheduleSharePermission.VIEWER,
+            contentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+        )
+        whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, 1L))
+            .thenReturn(schedule(id = 10L, ownerId = 1L))
+        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com")).thenReturn(target)
+        whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(existing)
+        whenever(scheduleShareRepository.saveAndFlush(existing)).thenReturn(existing)
+
+        val result = service.shareSchedule(
+            ownerMemberId = 1L,
+            scheduleId = 10L,
+            targetEmail = "friend@example.com",
+            permission = ScheduleSharePermission.VIEWER,
+            contentMode = ScheduleShareContentMode.SCHEDULE_ONLY,
+        )
+
+        assertEquals(ScheduleShareContentMode.SCHEDULE_ONLY, existing.contentMode)
+        assertEquals(ScheduleShareContentMode.SCHEDULE_ONLY, result.contentMode)
+        verify(travelAccessCleanupService).cancelRevokedForSchedule(10L, listOf(2L))
     }
 
     @Test

@@ -113,6 +113,8 @@ class ScheduleShareInvitationServiceUnitTest {
             expiresAt = Instant.parse("2026-07-12T00:00:00Z"),
             maxAcceptCount = 1,
         )
+        whenever(invitationRepository.findByTokenHashAndDeletedFalse(invitation.tokenHash))
+            .thenReturn(invitation)
         whenever(invitationRepository.findActiveByTokenHashForUpdate(invitation.tokenHash))
             .thenReturn(invitation)
         whenever(memberRepository.findByIdAndDeletedFalse(2L))
@@ -154,6 +156,8 @@ class ScheduleShareInvitationServiceUnitTest {
             expiresAt = Instant.parse("2026-07-10T00:00:00Z"),
             maxAcceptCount = 1,
         )
+        whenever(invitationRepository.findByTokenHashAndDeletedFalse(invitation.tokenHash))
+            .thenReturn(invitation)
         whenever(invitationRepository.findActiveByTokenHashForUpdate(invitation.tokenHash))
             .thenReturn(invitation)
         whenever(memberRepository.findByIdAndDeletedFalse(2L))

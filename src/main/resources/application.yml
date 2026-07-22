@@ -59,6 +59,12 @@ server:
   port: 5522
 
 schedule:
+  route-setup-reminder:
+    enabled: ${SCHEDULE_ROUTE_SETUP_REMINDER_ENABLED:true}
+    fixed-delay-ms: ${SCHEDULE_ROUTE_SETUP_REMINDER_FIXED_DELAY_MS:300000}
+    batch-size: ${SCHEDULE_ROUTE_SETUP_REMINDER_BATCH_SIZE:50}
+    max-attempts: ${SCHEDULE_ROUTE_SETUP_REMINDER_MAX_ATTEMPTS:3}
+    retry-delay-seconds: ${SCHEDULE_ROUTE_SETUP_REMINDER_RETRY_DELAY_SECONDS:300}
   push:
     enabled: ${SCHEDULE_PUSH_ENABLED:true}
     fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}

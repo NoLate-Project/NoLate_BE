@@ -24,5 +24,11 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
 
     fun findAllByScheduleId(scheduleId: Long): List<SchedulePushJob>
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    fun findAllByScheduleIdInAndMemberIdIn(
+        scheduleIds: Collection<Long>,
+        memberIds: Collection<Long>,
+    ): List<SchedulePushJob>
+
     fun findByScheduleIdAndMemberId(scheduleId: Long, memberId: Long): SchedulePushJob?
 }

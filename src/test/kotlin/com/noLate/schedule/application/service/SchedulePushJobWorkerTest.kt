@@ -71,6 +71,43 @@ class SchedulePushJobWorkerTest {
     @Mock
     lateinit var travelPlanRepository: ScheduleTravelPlanRepository
 
+    @Mock
+    lateinit var scheduleAccessPolicy: ScheduleAccessPolicy
+
+    @Test
+    fun `worker cancels a shared member job when travel permission was reduced`() {
+        val schedule = schedule(memberId = 1L)
+        val job = SchedulePushJob.create(
+            memberId = 2L,
+            scheduleId = requireNotNull(schedule.id),
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
+        whenever(scheduleAccessPolicy.resolve(2L, schedule)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = false,
+                travelEnabled = false,
+                canViewAllTravelPlans = false,
+            )
+        )
+
+        worker(accessPolicy = scheduleAccessPolicy).runDueJobs(testNow)
+
+        assertEquals(SchedulePushJobStatus.CANCELED, job.status)
+        verify(trafficClient, never()).getTravelMinutes(any())
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+    }
+
     @Test
     fun `알림 시각 전에는 ETA만 조회하고 사용자 푸시 없이 다음 체크를 예약한다`() {
         val schedule = schedule()
@@ -736,7 +773,7 @@ class SchedulePushJobWorkerTest {
         })
     }
 
-    private fun worker() = SchedulePushJobWorker(
+    private fun worker(accessPolicy: ScheduleAccessPolicy? = null) = SchedulePushJobWorker(
         pushJobRepository = pushJobRepository,
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -752,6 +789,7 @@ class SchedulePushJobWorkerTest {
         departureReminderIntervalMinutes = departureReminderIntervalMinutes,
         processingTimeoutMinutes = 10,
         travelPlanRepository = travelPlanRepository,
+        scheduleAccessPolicy = accessPolicy,
     )
 
     /**

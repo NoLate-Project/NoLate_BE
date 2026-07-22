@@ -6,6 +6,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.schedule.application.service.ScheduleShareService
 import com.noLate.schedule.domain.ScheduleShareDto
+import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleShareInboxDto
 import com.noLate.schedule.domain.ScheduleShareInvitationAcceptDto
 import com.noLate.schedule.domain.ScheduleShareInvitationDto
@@ -89,6 +90,7 @@ class ScheduleShareController(
                 targetEmail = request.targetEmail,
                 targetAppId = request.targetAppId,
                 permission = request.permission ?: ScheduleSharePermission.VIEWER,
+                contentMode = request.contentMode ?: ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
             )
         )
     }
@@ -107,6 +109,7 @@ class ScheduleShareController(
                 scheduleId = scheduleId,
                 shareId = shareId,
                 permission = request.permission,
+                contentMode = request.contentMode,
             )
         )
     }
@@ -152,6 +155,7 @@ class ScheduleShareController(
                 ownerMemberId = requireShareMemberId(principal),
                 scheduleId = scheduleId,
                 permission = request.permission ?: ScheduleSharePermission.VIEWER,
+                contentMode = request.contentMode ?: ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
                 ttlHours = request.ttlHours,
                 maxAcceptCount = request.maxAcceptCount,
             )
@@ -324,14 +328,17 @@ data class CreateShareRequest(
     val targetEmail: String? = null,
     val targetAppId: Long? = null,
     val permission: ScheduleSharePermission? = ScheduleSharePermission.VIEWER,
+    val contentMode: ScheduleShareContentMode? = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
 )
 
 data class UpdateShareRequest(
     val permission: ScheduleSharePermission,
+    val contentMode: ScheduleShareContentMode? = null,
 )
 
 data class CreateShareInvitationRequest(
     val permission: ScheduleSharePermission? = ScheduleSharePermission.VIEWER,
+    val contentMode: ScheduleShareContentMode? = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
     val ttlHours: Long? = null,
     val maxAcceptCount: Int? = null,
 )

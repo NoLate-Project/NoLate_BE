@@ -42,6 +42,7 @@ class SchedulePushJobWorker(
     @Value("\${schedule.push.departure-reminder-interval-minutes:5}") private val departureReminderIntervalMinutes: Int,
     @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
+    private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "schedule-push-${UUID.randomUUID()}"
@@ -111,6 +112,15 @@ class SchedulePushJobWorker(
                     job.cancel()
                     return
                 }
+            // 공유 범위 축소와 이미 선점된 worker가 경합해도 발송 직전 유효 이동 권한을 다시
+            // 확인한다. 일정 조회 권한만 남은 사용자는 기존 개인 계획이 있어도 알림을 받지 않는다.
+            if (
+                job.memberId != schedule.memberId &&
+                scheduleAccessPolicy?.resolve(job.memberId, schedule)?.travelEnabled == false
+            ) {
+                job.cancel()
+                return
+            }
             val route = resolveRouteSource(schedule, job.memberId)
                 ?: run {
                     job.cancel()

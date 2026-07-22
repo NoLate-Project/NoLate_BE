@@ -14,6 +14,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException
 import org.springframework.web.bind.MissingServletRequestParameterException
 import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.ConcurrencyFailureException
 
 @RestControllerAdvice
 class GlobalExceptionHandler {
@@ -33,7 +34,9 @@ class GlobalExceptionHandler {
             ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND,
             ErrorCode.SCHEDULE_SHARE_NOT_FOUND,
             ErrorCode.SCHEDULE_CATEGORY_SHARE_NOT_FOUND,
-            ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND -> HttpStatus.NOT_FOUND
+            ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND,
+            ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND,
+            ErrorCode.SCHEDULE_CALENDAR_MEMBER_NOT_FOUND -> HttpStatus.NOT_FOUND
             ErrorCode.MEMBER_DUPLICATE_EMAIL,
             ErrorCode.DUPLICATE_EMAIL,
             ErrorCode.DUPLICATE_MEMBER -> HttpStatus.CONFLICT
@@ -91,6 +94,19 @@ class GlobalExceptionHandler {
             ApiResponse.failure(
                 "이미 사용 중인 계정 또는 데이터입니다.",
                 ErrorCode.DUPLICATE_MEMBER.code,
+            )
+        )
+    }
+
+    @ExceptionHandler(ConcurrencyFailureException::class)
+    fun handleException(ex: ConcurrencyFailureException): ResponseEntity<ApiResponse<Nothing>> {
+        // @Version 충돌, deadlock victim, lock timeout은 서버 내부 오류가 아니다. 클라이언트가
+        // 최신 상태를 다시 읽고 명시적으로 재시도할 수 있도록 하나의 409 계약으로 정규화한다.
+        log.warn("Concurrent database modification rejected: {}", ex.javaClass.simpleName)
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(
+            ApiResponse.failure(
+                ErrorCode.CONCURRENT_MODIFICATION.message,
+                ErrorCode.CONCURRENT_MODIFICATION.code,
             )
         )
     }

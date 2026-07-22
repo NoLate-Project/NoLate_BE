@@ -47,6 +47,9 @@ class ScheduleDepartureNotificationServiceUnitTest {
     @Mock
     lateinit var notificationUseCase: NotificationUseCase
 
+    @Mock
+    lateinit var scheduleAccessPolicy: ScheduleAccessPolicy
+
     private fun service() = ScheduleDepartureNotificationService(
         scheduleRepository = scheduleRepository,
         scheduleShareRepository = scheduleShareRepository,
@@ -107,6 +110,52 @@ class ScheduleDepartureNotificationServiceUnitTest {
 
         assertEquals(0, result.requestedCount)
         verify(notificationUseCase).sendToMember(eq(3L), any(), any(), any(), anyOrNull(), eq(true))
+    }
+
+    @Test
+    fun `calendar travel member is a valid nudge target without a direct share row`() {
+        val schedule = schedule(ownerMemberId = 1L)
+        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L, 4L))
+        whenever(departureStatusRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 4L))
+            .thenReturn(null)
+        whenever(notificationUseCase.sendToMember(eq(4L), any(), any(), any(), anyOrNull(), eq(true)))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+        val service = ScheduleDepartureNotificationService(
+            scheduleRepository = scheduleRepository,
+            scheduleShareRepository = scheduleShareRepository,
+            categoryShareRepository = categoryShareRepository,
+            departureStatusRepository = departureStatusRepository,
+            notificationUseCase = notificationUseCase,
+            scheduleAccessPolicy = scheduleAccessPolicy,
+        )
+
+        val result = service.sendDepartureNudge(1L, 10L, 4L)
+
+        assertEquals(1, result.sentCount)
+        verifyNoInteractions(scheduleShareRepository, categoryShareRepository)
+    }
+
+    @Test
+    fun `calendar schedule only member is not a valid nudge target`() {
+        val schedule = schedule(ownerMemberId = 1L)
+        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L))
+        val service = ScheduleDepartureNotificationService(
+            scheduleRepository = scheduleRepository,
+            scheduleShareRepository = scheduleShareRepository,
+            categoryShareRepository = categoryShareRepository,
+            departureStatusRepository = departureStatusRepository,
+            notificationUseCase = notificationUseCase,
+            scheduleAccessPolicy = scheduleAccessPolicy,
+        )
+
+        val error = assertThrows(BusinessException::class.java) {
+            service.sendDepartureNudge(1L, 10L, 4L)
+        }
+
+        assertEquals(ErrorCode.SCHEDULE_SHARE_NOT_FOUND, error.errorCode)
+        verifyNoInteractions(notificationUseCase)
     }
 
     @Test

@@ -273,6 +273,9 @@ data class ParseScheduleTextRequest(
 )
 
 data class AddScheduleRequest(
+    val calendarId: Long? = null,
+    val scheduleType: com.noLate.schedule.domain.ScheduleType? = null,
+    val calendarContentModeOverride: com.noLate.schedule.domain.ScheduleShareContentMode? = null,
     val title: String,
     val startAt: String,
     val endAt: String? = null,
@@ -294,6 +297,9 @@ data class AddScheduleRequest(
 ) {
     fun toDto(): ScheduleDto =
         ScheduleDto(
+            calendarId = calendarId,
+            scheduleType = scheduleType,
+            calendarContentModeOverride = calendarContentModeOverride,
             title = title,
             startAt = startAt,
             endAt = endAt,
@@ -335,6 +341,9 @@ data class CalendarImportSourceRequest(
 }
 
 data class UpdateScheduleRequest(
+    val calendarId: Long? = null,
+    val scheduleType: com.noLate.schedule.domain.ScheduleType? = null,
+    val calendarContentModeOverride: com.noLate.schedule.domain.ScheduleShareContentMode? = null,
     val title: String,
     val startAt: String,
     val endAt: String? = null,
@@ -356,6 +365,9 @@ data class UpdateScheduleRequest(
 ) {
     fun toDto(): ScheduleDto =
         ScheduleDto(
+            calendarId = calendarId,
+            scheduleType = scheduleType,
+            calendarContentModeOverride = calendarContentModeOverride,
             title = title,
             startAt = startAt,
             endAt = endAt,

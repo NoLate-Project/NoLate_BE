@@ -99,6 +99,44 @@ class ScheduleSharePushNotificationListenerUnitTest {
     }
 
     @Test
+    fun `calendar share event sends a shared calendar payload to the target member`() {
+        val listener = ScheduleSharePushNotificationListener(notificationUseCase)
+        whenever(
+            notificationUseCase.sendToMember(
+                eq(9L),
+                eq("새 공유 캘린더"),
+                eq("'가족 이동' 캘린더가 공유됐어요."),
+                org.mockito.kotlin.any(),
+                eq("share-granted:calendar-event"),
+                eq(true),
+            )
+        ).thenReturn(NotificationSendResult(sentCount = 1))
+
+        listener.onShareGranted(
+            ScheduleShareGrantedEvent(
+                targetMemberId = 9L,
+                resourceType = ScheduleShareResourceType.CALENDAR,
+                resourceId = 77L,
+                resourceTitle = "가족 이동",
+                notificationEventId = "calendar-event",
+            )
+        )
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(9L),
+            title = eq("새 공유 캘린더"),
+            body = eq("'가족 이동' 캘린더가 공유됐어요."),
+            data = check {
+                assertEquals("CALENDAR_SHARE_RECEIVED", it["type"])
+                assertEquals("CALENDAR", it["resourceType"])
+                assertEquals("77", it["calendarId"])
+            },
+            inboxDeduplicationKey = eq("share-granted:calendar-event"),
+            persistInInbox = eq(true),
+        )
+    }
+
+    @Test
     fun `push provider failure after commit does not escape the listener`() {
         val listener = ScheduleSharePushNotificationListener(notificationUseCase)
         whenever(

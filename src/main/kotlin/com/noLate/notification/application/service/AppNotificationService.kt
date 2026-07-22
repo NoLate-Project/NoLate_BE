@@ -19,6 +19,11 @@ data class AppNotificationInboxPage(
     val unreadCount: Long,
 )
 
+data class AppNotificationRecordResult(
+    val notification: AppNotification,
+    val created: Boolean,
+)
+
 /**
  * 사용자 알림함의 기록·조회·읽음 상태 경계를 담당한다.
  *
@@ -40,14 +45,34 @@ class AppNotificationService(
         body: String,
         data: Map<String, String>,
         deduplicationKey: String? = null,
-    ): AppNotification {
+    ): AppNotification = recordWithResult(
+        memberId = memberId,
+        title = title,
+        body = body,
+        data = data,
+        deduplicationKey = deduplicationKey,
+    ).notification
+
+    /**
+     * outbox worker가 이미 기록된 논리 알림의 물리 push를 다시 보내지 않도록 생성 여부까지
+     * 반환한다. 기존 [record] 계약은 그대로 유지해 일반 발송 경로에는 영향을 주지 않는다.
+     */
+    fun recordWithResult(
+        memberId: Long,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+        deduplicationKey: String? = null,
+    ): AppNotificationRecordResult {
         val normalizedKey = deduplicationKey
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?.take(180)
 
         if (normalizedKey != null) {
-            writer.find(memberId, normalizedKey)?.let { return it }
+            writer.find(memberId, normalizedKey)?.let {
+                return AppNotificationRecordResult(it, created = false)
+            }
         }
 
         val notification = AppNotification(
@@ -63,13 +88,14 @@ class AppNotificationService(
         )
 
         return try {
-            writer.insert(notification)
+            AppNotificationRecordResult(writer.insert(notification), created = true)
         } catch (error: DataIntegrityViolationException) {
             // 유니크 충돌은 다른 동시 요청이 먼저 같은 논리 알림을 저장했다는 뜻이다.
             // 실패한 REQUIRES_NEW 트랜잭션이 끝난 뒤 조회해야 rollback-only 상태를 물려받지 않는다.
-            normalizedKey
+            val existing = normalizedKey
                 ?.let { writer.find(memberId, it) }
                 ?: throw error
+            AppNotificationRecordResult(existing, created = false)
         }
     }
 

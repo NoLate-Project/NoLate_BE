@@ -1,5 +1,7 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
@@ -17,6 +19,7 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -53,6 +56,9 @@ class ScheduleDepartureStatusServiceUnitTest {
 
     @Mock
     lateinit var eventPublisher: ApplicationEventPublisher
+
+    @Mock
+    lateinit var scheduleAccessPolicy: ScheduleAccessPolicy
 
     private val now = Instant.parse("2026-07-11T01:20:00Z")
     private val clock = Clock.fixed(now, ZoneOffset.UTC)
@@ -148,6 +154,37 @@ class ScheduleDepartureStatusServiceUnitTest {
             assertEquals(firstDepartedAt, it.departedAt)
         })
         verifyNoInteractions(eventPublisher)
+    }
+
+    @Test
+    fun `schedule only recipient cannot publish a departure state`() {
+        val schedule = scheduleEntity(id = 10L, ownerMemberId = 1L)
+        whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
+        whenever(scheduleAccessPolicy.resolve(2L, schedule)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = false,
+                travelEnabled = false,
+                canViewAllTravelPlans = false,
+            )
+        )
+        val policyBackedService = ScheduleDepartureStatusService(
+            scheduleRepository = scheduleRepository,
+            departureStatusRepository = departureStatusRepository,
+            scheduleShareRepository = scheduleShareRepository,
+            categoryShareRepository = categoryShareRepository,
+            memberRepository = memberRepository,
+            eventPublisher = eventPublisher,
+            clock = clock,
+            scheduleAccessPolicy = scheduleAccessPolicy,
+        )
+
+        val error = assertThrows(BusinessException::class.java) {
+            policyBackedService.markDeparted(memberId = 2L, scheduleId = 10L)
+        }
+
+        assertEquals(ErrorCode.FORBIDDEN, error.errorCode)
+        verifyNoInteractions(departureStatusRepository, eventPublisher)
     }
 
     @Test

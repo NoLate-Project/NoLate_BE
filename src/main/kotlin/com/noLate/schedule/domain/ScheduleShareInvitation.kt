@@ -18,6 +18,7 @@ import java.time.Instant
 enum class ScheduleShareResourceType {
     SCHEDULE,
     CATEGORY,
+    CALENDAR,
 }
 
 enum class ScheduleShareInvitationStatus {
@@ -33,6 +34,7 @@ data class ScheduleShareInvitationDto(
     val resourceId: String,
     val ownerMemberId: Long,
     val permission: ScheduleSharePermission,
+    val contentMode: ScheduleShareContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
     val status: ScheduleShareInvitationStatus,
     val expiresAt: String,
     val maxAcceptCount: Int,
@@ -46,6 +48,7 @@ data class ScheduleShareInvitationDto(
 data class ScheduleShareInvitationAcceptDto(
     val invitation: ScheduleShareInvitationDto,
     val share: ScheduleShareDto,
+    val calendarMembership: ScheduleCalendarMemberDto? = null,
 )
 
 @Entity
@@ -62,7 +65,7 @@ data class ScheduleShareInvitationAcceptDto(
         Index(name = "idx_schedule_share_invitations_status_expires", columnList = "status,expires_at"),
     ],
 )
-@Comment("일정/카테고리 링크 공유 초대")
+@Comment("일정/카테고리/공유 캘린더 링크 초대")
 class ScheduleShareInvitation(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -86,6 +89,11 @@ class ScheduleShareInvitation(
     @Column(nullable = false, length = 30)
     @Comment("수락 시 부여할 공유 권한")
     var permission: ScheduleSharePermission = ScheduleSharePermission.VIEWER,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "content_mode", nullable = false, length = 30)
+    @Comment("수락 시 부여할 일정/이동 공유 범위")
+    var contentMode: ScheduleShareContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
 
     @Column(name = "token_hash", nullable = false, length = 128)
     @Comment("초대 링크 토큰의 SHA-256 해시. 원본 토큰은 저장하지 않는다.")
@@ -162,6 +170,7 @@ class ScheduleShareInvitation(
             resourceId = resourceId.toString(),
             ownerMemberId = ownerMemberId,
             permission = permission,
+            contentMode = contentMode,
             status = effectiveAt?.let(::effectiveStatus) ?: status,
             expiresAt = expiresAt.toString(),
             maxAcceptCount = maxAcceptCount,

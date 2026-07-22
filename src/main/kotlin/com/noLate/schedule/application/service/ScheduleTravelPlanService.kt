@@ -25,6 +25,7 @@ import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import com.noLate.subscription.application.SubscriptionPolicyService
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -39,6 +40,9 @@ class ScheduleTravelPlanService(
     private val memberRepository: MemberRepository,
     private val subscriptionPolicyService: SubscriptionPolicyService,
     private val objectMapper: ObjectMapper,
+    private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
+    private val routeSetupReminderPolicy: RouteSetupReminderPolicy? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
 
@@ -58,6 +62,11 @@ class ScheduleTravelPlanService(
         findVisibleSchedule(memberId, scheduleId)
         val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        scheduleAccessPolicy?.resolve(memberId, schedule)?.let { access ->
+            if (!access.travelEnabled) {
+                throw BusinessException(ErrorCode.FORBIDDEN, "이 일정은 이동 기능을 공유하지 않습니다.")
+            }
+        }
 
         return upsertLocked(
             memberId = memberId,
@@ -144,6 +153,11 @@ class ScheduleTravelPlanService(
         targetMemberId: Long,
     ): ScheduleTravelPlanDto {
         val schedule = findVisibleSchedule(requesterMemberId, scheduleId)
+        scheduleAccessPolicy?.resolve(requesterMemberId, schedule)?.let { access ->
+            if (!access.travelEnabled) {
+                throw BusinessException(ErrorCode.FORBIDDEN, "이 일정은 이동 기능을 공유하지 않습니다.")
+            }
+        }
         val canManage = canViewAllTravelPlans(requesterMemberId, schedule)
         if (requesterMemberId != targetMemberId && !canManage) {
             throw BusinessException(ErrorCode.FORBIDDEN, "다른 참가자의 이동 계획을 볼 권한이 없습니다.")
@@ -170,6 +184,15 @@ class ScheduleTravelPlanService(
     @Transactional
     fun getOverview(requesterMemberId: Long, scheduleId: Long): ScheduleTravelPlanOverviewDto {
         val schedule = findVisibleSchedule(requesterMemberId, scheduleId)
+        scheduleAccessPolicy?.resolve(requesterMemberId, schedule)?.let { access ->
+            if (!access.travelEnabled) {
+                return ScheduleTravelPlanOverviewDto(
+                    canViewAllTravelPlans = false,
+                    myTravelPlan = null,
+                    participants = emptyList(),
+                )
+            }
+        }
         val canManage = canViewAllTravelPlans(requesterMemberId, schedule)
         val participantIds = participantIds(schedule)
         val plansByMemberId = travelPlanRepository.findAllByScheduleIdAndDeletedFalse(scheduleId)
@@ -259,8 +282,27 @@ class ScheduleTravelPlanService(
         schedule: Schedule,
         base: ScheduleDto,
         plan: ScheduleTravelPlan?,
+        access: ScheduleAccessDecision? = null,
     ): ScheduleDto {
-        val canManage = canViewAllTravelPlans(memberId, schedule)
+        val resolvedAccess = access ?: scheduleAccessPolicy?.resolve(memberId, schedule)
+        val canManage = resolvedAccess?.canViewAllTravelPlans ?: canViewAllTravelPlans(memberId, schedule)
+        if (memberId != schedule.memberId && resolvedAccess?.travelEnabled == false) {
+            return base.copy(
+                travelMinutes = null,
+                departAt = null,
+                departedAt = null,
+                travelMode = null,
+                origin = null,
+                routeSetupRequired = false,
+                route = null,
+                notificationEnabled = false,
+                notificationLeadMinutes = null,
+                notificationIntervalMinutes = null,
+                myTravelPlan = null,
+                travelPlanStatus = null,
+                travelPlanParticipants = emptyList(),
+            )
+        }
         if (plan != null) {
             val dto = plan.toDto(schedule, canManage)
             return base.copy(
@@ -269,7 +311,12 @@ class ScheduleTravelPlanService(
                 departedAt = base.departedAt.takeIf { memberId == schedule.memberId },
                 travelMode = dto.travelMode,
                 origin = dto.origin,
-                routeSetupRequired = dto.status != ScheduleTravelPlanStatus.READY,
+                routeSetupRequired = routeSetupReminderPolicy?.requiresSetup(
+                    schedule = schedule,
+                    travelEnabled = resolvedAccess?.travelEnabled ?: true,
+                    plan = plan,
+                    now = Instant.now(clock),
+                ) ?: (dto.status != ScheduleTravelPlanStatus.READY),
                 route = dto.route,
                 notificationEnabled = dto.notificationEnabled,
                 notificationLeadMinutes = dto.notificationLeadMinutes,
@@ -282,6 +329,12 @@ class ScheduleTravelPlanService(
         if (memberId == schedule.memberId) {
             val legacy = schedule.route?.let { legacyOwnerPlanDto(schedule, canManage) }
             return base.copy(
+                routeSetupRequired = routeSetupReminderPolicy?.requiresOwnerSetup(
+                    schedule = schedule,
+                    travelEnabled = true,
+                    ownerPlan = plan,
+                    now = Instant.now(clock),
+                ) ?: base.routeSetupRequired,
                 myTravelPlan = legacy,
                 travelPlanStatus = legacy?.status ?: ScheduleTravelPlanStatus.NOT_CONFIGURED,
             )
@@ -293,7 +346,12 @@ class ScheduleTravelPlanService(
             departedAt = null,
             travelMode = null,
             origin = null,
-            routeSetupRequired = true,
+            routeSetupRequired = routeSetupReminderPolicy?.requiresSetup(
+                schedule = schedule,
+                travelEnabled = resolvedAccess?.travelEnabled ?: true,
+                plan = null,
+                now = Instant.now(clock),
+            ) ?: true,
             route = null,
             notificationEnabled = false,
             notificationLeadMinutes = null,
@@ -419,6 +477,7 @@ class ScheduleTravelPlanService(
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
     private fun canViewAllTravelPlans(memberId: Long, schedule: Schedule): Boolean {
+        scheduleAccessPolicy?.let { return it.resolve(memberId, schedule).canViewAllTravelPlans }
         if (schedule.memberId == memberId) return true
         val scheduleId = requireNotNull(schedule.id)
         val direct = scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, memberId)
@@ -437,6 +496,7 @@ class ScheduleTravelPlanService(
     }
 
     private fun participantIds(schedule: Schedule): List<Long> {
+        scheduleAccessPolicy?.let { return it.travelMemberIds(schedule) }
         val ids = linkedSetOf(schedule.memberId)
         val scheduleId = requireNotNull(schedule.id)
         scheduleShareRepository

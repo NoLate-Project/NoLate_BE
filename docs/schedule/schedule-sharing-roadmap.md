@@ -1,6 +1,6 @@
 # Schedule Sharing Roadmap
 
-Last verified: 2026-07-19 KST
+Last verified: 2026-07-23 KST
 
 이 문서는 NoLate 일정 공유 기능의 현재 구현 상태와 고도화 계획을 정리한다.
 
@@ -10,6 +10,16 @@ Last verified: 2026-07-19 KST
 
 ### Backend
 
+- 1급 공유 캘린더: `schedule_calendars`, `schedule_calendar_members`
+- 공유 캘린더 역할/상태: `OWNER`, `EDITOR`, `VIEWER` 및 `ACTIVE`, `LEFT`, `REMOVED`, `ARCHIVED`
+- 일정에 `calendar_id`, `schedule_type`, 캘린더 공유 범위 override를 추가하고 카테고리와 공유 경계를 분리
+- 개별 일정과 공유 캘린더 모두 `SCHEDULE_ONLY`, `SCHEDULE_AND_TRAVEL` 공유 범위 지원
+- 직접 공유, legacy 카테고리 공유, 캘린더 멤버십을 합산하는 `ScheduleAccessPolicy` 적용
+- 캘린더 생성/설정/멤버/탈퇴/강퇴/소유권 이전/보관 및 직접 공유·링크 초대 API 구현
+- 캘린더 공유 push와 통합 inbox/outbox의 `CALENDAR` 리소스 노출 구현
+- 캘린더 보관 또는 이동 권한 축소 시 기존 출발 PushJob 즉시 취소, worker 발송 직전 중앙 권한 재검사
+- 경로 일정의 72시간 경계와 현재 개인 계획 fingerprint를 계산하는 동적 `routeSetupRequired` 구현
+- `(schedule_id, member_id, schedule_fingerprint)`별 D-3 reminder outbox와 회원별 묶음 앱 알림/push 구현
 - 개별 일정 공유: `schedule_shares`
 - 카테고리 공유: `schedule_category_shares`
 - 링크 초대: `schedule_share_invitations`
@@ -44,6 +54,11 @@ Last verified: 2026-07-19 KST
 
 ### Frontend
 
+- 공유 캘린더 생성, 색상, 기본 공유 범위, 내 경로 알림, 멤버 역할, 강퇴, 소유권 이전, 탈퇴/보관 관리 화면 구현
+- 일정 생성·수정 화면에서 개인 일정 또는 쓰기 가능한 공유 캘린더 저장 위치 선택
+- 공유 시트에서 일정/캘린더의 `일정만`, `일정 + 각자 경로` 선택 및 캘린더 전역 정책 연동
+- 통합 공유함과 초대 수락 화면에서 `CALENDAR` 리소스 조회·해제·이동 지원
+- `CALENDAR_SHARE_RECEIVED`는 통합 공유함, `ROUTE_SETUP_REMINDER`는 일정 상세로 이동
 - 일정 상세와 카테고리 관리 화면에 공유 진입점 구현
 - 앱 ID/이메일 직접 공유와 링크 초대를 segmented share sheet로 통합
 - 링크 복사, OS share sheet, 앱 딥링크 수락 화면 구현
@@ -77,6 +92,20 @@ GET  /api/schedule-categories/{categoryId}/shares
 GET  /api/schedules/{scheduleId}/travel-plans
 GET  /api/schedules/{scheduleId}/travel-plans/{memberId}
 PUT  /api/schedules/{scheduleId}/travel-plans/my
+POST /api/schedule-calendars
+GET  /api/schedule-calendars
+GET  /api/schedule-calendars/{calendarId}
+PATCH /api/schedule-calendars/{calendarId}
+DELETE /api/schedule-calendars/{calendarId}
+GET  /api/schedule-calendars/{calendarId}/members
+POST /api/schedule-calendars/{calendarId}/members
+PATCH /api/schedule-calendars/{calendarId}/members/{memberId}
+DELETE /api/schedule-calendars/{calendarId}/members/{memberId}
+PATCH /api/schedule-calendars/{calendarId}/preferences
+POST /api/schedule-calendars/{calendarId}/ownership
+POST /api/schedule-calendars/{calendarId}/leave
+GET  /api/schedule-calendars/{calendarId}/invitations
+POST /api/schedule-calendars/{calendarId}/invitations
 ```
 
 관련 테스트:
@@ -95,6 +124,14 @@ PUT  /api/schedules/{scheduleId}/travel-plans/my
 - 같은 일정에서 서로 다른 회원 PushJob 저장 및 동일 회원 중복 차단 DB 테스트
 - 일정 변경 후 오래된 개인 계획 PushJob 취소와 worker 이중 차단 테스트
 - 만료 링크 활성 목록 제외 및 수락 거절 테스트
+- 캘린더 생성 시 OWNER 멤버십 원자 생성과 제거 후 동일 row 재활성화 테스트
+- 이메일/앱 ID 동시 직접 공유가 한 캘린더 멤버십으로 수렴하는 테스트
+- 소유권 이전 후 활성 OWNER가 정확히 한 명인지 검증하는 테스트
+- 캘린더 링크 수락, 통합 inbox/outbox, 보관 시 pending 초대 회수 테스트
+- 직접/캘린더/카테고리 grant 합산과 100개 일정 batch 권한 조회 테스트
+- D-3 정확한 72시간 경계, stale plan, 회원별 묶음 발송, 동시 marker 생성 테스트
+- 공유 범위 축소 시 PushJob 즉시 취소와 worker 발송 직전 권한 재검사 테스트
+- Docker 사용 가능 환경에서만 실행되는 MySQL 8 Testcontainers 멤버십/marker 동시성 테스트
 
 2026-07-15 검증 기록:
 
@@ -120,15 +157,54 @@ PUT  /api/schedules/{scheduleId}/travel-plans/my
   - 공유 수신자: 홍대입구역 출발, 자동차 35분 개인 경로와 같은 공통 도착지 표시
 - APNs/FCM 실기기 push 수신과 알림 탭 이동은 아직 별도 acceptance가 필요
 
+2026-07-23 구현/검증 기록:
+
+- BE 공유 캘린더 도메인, 중앙 권한, D-3 reminder outbox, PushJob 권한 축소 방어 구현
+- BE 전체 Gradle test 388개 중 385개 통과, 실패 0개; MySQL Testcontainers 3개는 로컬 Docker daemon 부재로 명시적 skip
+- 일정 생성 응답의 `calendarId`, `scheduleType`, `calendarContentModeOverride` 누락을 수용 테스트에서 발견해 DTO 회귀 테스트와 함께 수정
+- 캘린더 오너의 경로 알림 opt-out을 단건·100건 batch 정책에 반영하고, 타인의 개인 알림 설정은 멤버 권한 API에서 제거
+- 소유권 이전 시 이전 오너의 pending 링크를 회수하고 캘린더 링크 수락·보관 잠금 순서를 통일
+- 낙관적/비관적 잠금 충돌을 `409 / C003`으로 정규화하고 MySQL 수락·보관 경합 테스트 추가
+- D-3 알림함 dedupe 뒤 물리 push 중복은 억제하되, provider 실패 이력이 있는 marker는 재시도하도록 검증
+- FE 공유 캘린더 관리, 일정 폼 연결, 공유함/초대/푸시 이동 및 API 계약 구현
+- FE Jest 131 suites, 885 tests와 TypeScript 검사 통과; ESLint 오류 0건, 기존 포함 warning 163건
+- 운영 반영 SQL: `docs/schedule/migrations/2026-07-23-shared-calendars.sql`
+- 격리 H2 API 수용 테스트 통과
+  - 오너 `test@test.com`과 수신자 3명으로 공유 캘린더 생성
+  - 이메일 `EDITOR`, 앱 ID `VIEWER`, 1회 링크 `VIEWER` 초대와 총 4명 멤버십 확인
+  - 경로 일정과 `SCHEDULE_ONLY` 예외 일정 생성, 네 계정의 개인 이동 계획 저장
+  - 오너 경로 수정 후 수신자 3명의 출발지/수단/소요 시간이 유지되는지 확인
+  - 오너/`EDITOR` 전체 이동 계획 조회, `VIEWER` 본인 계획 전용 조회와 편집 거부 확인
+- 신규 iPhone 17 Pro / iOS 26.5 시뮬레이터 수용 테스트 통과
+  - 오너, `EDITOR`, `VIEWER`에서 동일 캘린더의 역할·4명 멤버·`일정 + 각자 경로` 표시 확인
+  - 동일 일정 상세에서 `EDITOR`는 본인 대중교통 42분, `VIEWER`는 본인 자동차 35분으로 분리 표시 확인
+- staging MySQL migration 실행, Docker 기반 동시성 실행, APNs/FCM 실기기 수신은 아직 완료 전
+
 ## Product Principles
 
 - 링크는 접근 권한 자체가 아니라 권한을 받을 계정으로 이어지는 초대장이다.
 - 로그인하지 않은 익명 사용자는 개인 일정 데이터에 접근하지 못한다.
 - 공유 수락 이후에는 링크가 아니라 계정 기반 공유 row가 권한의 기준이 된다.
-- 카테고리 공유는 공유 캘린더처럼 동작한다.
+- 공유 캘린더는 멤버십과 접근 권한을 소유하고, 카테고리는 색상/분류만 담당한다.
+- 카테고리 공유는 공유 캘린더 전환 기간에만 유지하는 호환 기능이다.
+- 단일 일정과 공유 캘린더 모두 `일정만` 또는 `이동까지 함께`를 선택할 수 있다.
+- `이동까지 함께`는 오너 경로 복사가 아니라 회원별 `myTravelPlan` 사용 권한을 의미한다.
+- 별도 참석 여부를 묻지 않고, 활성 캘린더 멤버는 캘린더의 모든 일정을 공유받는다.
+- 이동 공유된 경로 일정은 시작 72시간 전부터 개인 계획이 없을 때 `경로 미설정`으로 안내한다.
 - 이메일 직접 공유는 보조 수단으로 남길 수 있지만, 기본 UX는 링크 공유와 앱 ID/핸들 기반 공유를 우선한다.
 
 ## Enhancement Roadmap
+
+### 0. Shared Calendar Domain
+
+- 설계 결정 및 잠금 순서 작성 완료: `docs/schedule/shared-calendar-design.md`
+- `schedule_calendars`, `schedule_calendar_members` 도입 완료
+- `schedules.calendar_id`, 일정 타입, 공유 콘텐츠 모드 도입 완료
+- 직접 공유와 캘린더 멤버십을 합산하는 중앙 접근 정책 도입 완료
+- 기존 카테고리 공유를 공유 캘린더로 backfill하고 dual-read 기간 운영
+- 캘린더 소유권 이전, 탈퇴, 강퇴, 보관 상태 구현 완료
+- D-3 경로 미설정 계산과 묶음 알림 outbox 구현 완료
+- MySQL Testcontainers 멤버 추가, reminder marker, 링크 수락·보관 동시성 테스트 추가 완료; Docker 환경에서 실제 통과 확인 필요
 
 ### 1. Link UX and Deep Link
 
@@ -204,6 +280,8 @@ PUT  /api/schedules/{scheduleId}/travel-plans/my
 - 초대 수락 시 소유자에게 알림
 - 공유 일정 변경 시 공유 대상에게 알림할지 정책화
 - 공유받은 일정의 출발 알림 개인별 설정/PushJob 분리 구현 완료
+- 캘린더/직접 공유 범위 축소 시 개인 PushJob 정리 및 worker 최종 권한 방어 구현 완료
+- D-3 경로 미설정 앱 알림 저장, 회원별 push 묶음, 실패 재시도 구현 완료
 - 공유 카테고리 일정의 알림 기본값 정책 설계
 
 ### 7. Frontend Integration
@@ -219,7 +297,8 @@ PUT  /api/schedules/{scheduleId}/travel-plans/my
 - 공유받은 일정 읽기 전용 상세 상태 구현 완료
 - 참가자별 출발 상태와 출발 액션 구현 완료
 - 참가자별 개인 이동 계획 생성/수정과 오너/`EDITOR` 조회 UI 구현 완료
-- 공유 멤버 목록, 권한 변경, 공유 해제 UI
+- 공유 캘린더 관리와 일정 생성/수정 저장 위치 선택 구현 완료
+- 공유 캘린더 멤버 목록, 권한 변경, 공유 해제, 소유권 이전 UI 구현 완료
 - 링크 만료/회수/이미 수락 상태 UX
 
 ### 8. Data Migration and Backfill
@@ -228,6 +307,9 @@ PUT  /api/schedules/{scheduleId}/travel-plans/my
 - `schedule_category_snapshots.category_id`가 숫자가 아닌 값인 경우 처리 정책
 - 운영 DB에 공유 테이블 추가 migration 작성
 - 개인 이동 계획 테이블 및 PushJob 복합 유일키 운영 migration 작성 완료
+- 공유 캘린더/멤버십/일정 공유 범위/D-3 outbox 운영 migration 작성 완료
+- legacy 카테고리 공유를 캘린더와 멤버십으로 backfill하는 idempotent SQL 작성 완료
+- staging에서 `2026-07-23-shared-calendars.sql` 실행 및 검증 query 확인
 - staging에서 `2026-07-19-member-travel-plans.sql` 실행, index/외래키/rollback 절차 검증
 - `schema.sql`와 실제 migration 도구의 책임 분리 검토
 
@@ -240,6 +322,8 @@ PUT  /api/schedules/{scheduleId}/travel-plans/my
 - 다중 수락 링크 동시성 테스트 추가
 - 참가자별 출발 완료 DB 동시성 통합 테스트 추가
 - 참가자별 개인 이동 계획 동시 최초 저장 통합 테스트 완료
+- 캘린더 멤버십, 소유권, 초대 수락, D-3 marker H2 동시성 테스트 완료
+- MySQL 8 Testcontainers 조건부 동시성 suite 추가 완료
 - 오너/공유 대상/권한별 일정 수정·삭제 API 통합 테스트 추가
 - 로컬 `SpringBootTest`가 MySQL env에 의존하지 않도록 test profile 정리
 - CI에서 공유 관련 단위/통합 테스트 고정 실행
@@ -265,11 +349,10 @@ PUT  /api/schedules/{scheduleId}/travel-plans/my
 
 ## Recommended Next Work
 
-1. 운영/staging DB에 개인 이동 계획 migration 적용 및 데이터/인덱스 검증
-2. TestFlight 실기기에서 공유 push의 foreground/background/terminated 수신 및 탭 이동 검증
-3. staging에서 실제 경로 공급자 응답으로 참가자별 경로 저장/재계산/`STALE` 전환 회귀 테스트
-3. TestFlight 실기기에서 참가자별 출발 push 수신 및 상세 이동 acceptance
-4. 권한 정책 함수 분리와 `VIEWER`/`EDITOR` 수정·삭제 차단 API 통합 테스트
-5. 공개 `@handle`, 회원 검색 API, 친구/최근 공유 대상 모델 설계
-6. 초대 회수·재발급 API와 만료 상태 영속화 배치 추가
-7. push outbox/재시도 worker 추가
+1. Docker 환경에서 MySQL Testcontainers 3개 동시성 테스트 실제 통과 확인
+2. staging DB에 `2026-07-23-shared-calendars.sql` 적용 후 backfill 수량, 유일키, FK, query plan 검증
+3. TestFlight 실기기에서 캘린더 공유와 D-3 push의 foreground/background/terminated 수신 및 탭 이동 검증
+4. 직접 초대·링크 수락·역할 변경·일정/개인 경로 분리를 반복 실행하는 모바일 E2E suite 구성
+5. 카테고리 공유 신규 생성을 중단할 FE cutover 버전과 legacy dual-read 종료 조건 확정
+6. 캘린더 일정 100/1,000개, 멤버 10/100명 조합의 조회·D-3 scan query 성능 측정
+7. 공개 `@handle`, 회원 검색 API, 친구/최근 공유 대상 모델 설계

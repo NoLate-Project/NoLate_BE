@@ -46,6 +46,7 @@ data class ScheduleShareDto(
     val targetMemberId: Long,
     val targetEmail: String? = null,
     val permission: ScheduleSharePermission,
+    val contentMode: ScheduleShareContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
     val status: ScheduleShareStatus,
     val createdAt: String? = null,
     val updatedAt: String? = null,
@@ -70,6 +71,7 @@ data class ScheduleSharePendingInvitationDto(
     val ownerMemberId: Long,
     val ownerEmail: String? = null,
     val permission: ScheduleSharePermission,
+    val contentMode: ScheduleShareContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
     val expiresAt: String,
 )
 
@@ -82,6 +84,7 @@ data class ScheduleShareInboxItemDto(
     val ownerMemberId: Long,
     val ownerEmail: String? = null,
     val permission: ScheduleSharePermission,
+    val contentMode: ScheduleShareContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
     val sharedAt: String? = null,
 )
 
@@ -101,6 +104,7 @@ data class ScheduleShareInvitationSummaryDto(
     val title: String,
     val color: String? = null,
     val permission: ScheduleSharePermission,
+    val contentMode: ScheduleShareContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
     val status: ScheduleShareInvitationStatus,
     val expiresAt: String,
     val maxAcceptCount: Int,
@@ -146,6 +150,11 @@ class ScheduleShare(
     var permission: ScheduleSharePermission = ScheduleSharePermission.VIEWER,
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "content_mode", nullable = false, length = 30)
+    @Comment("일정만 공유하거나 사용자별 이동 기능까지 허용")
+    var contentMode: ScheduleShareContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     @Comment("공유 상태")
     var status: ScheduleShareStatus = ScheduleShareStatus.ACTIVE,
@@ -160,8 +169,12 @@ class ScheduleShare(
     var version: Long = 0L,
 ) : BaseEntity() {
 
-    fun activate(permission: ScheduleSharePermission) {
+    fun activate(
+        permission: ScheduleSharePermission,
+        contentMode: ScheduleShareContentMode = this.contentMode,
+    ) {
         this.permission = permission
+        this.contentMode = contentMode
         this.status = ScheduleShareStatus.ACTIVE
     }
 
@@ -177,6 +190,7 @@ class ScheduleShare(
             targetMemberId = targetMemberId,
             targetEmail = targetEmail,
             permission = permission,
+            contentMode = contentMode,
             status = status,
             createdAt = (createDt ?: createdAt)?.toString(),
             updatedAt = (updateDt ?: updatedAt)?.toString(),

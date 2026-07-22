@@ -8,6 +8,7 @@ enum class ErrorCode(
     INTERNAL_SERVER_ERROR("C000", "서버 에러가 발생했습니다."),
     INVALID_INPUT("C001", "요청 값이 올바르지 않습니다."),
     INVALID_STATE("C002" ,"상태가 올바르지 않습니다."),
+    CONCURRENT_MODIFICATION("C003", "다른 요청에서 먼저 변경했습니다. 새로고침 후 다시 시도해 주세요."),
     UNAUTHORIZED("A001", "인증이 필요합니다."),
     FORBIDDEN("A002", "권한이 없습니다."),
 
@@ -38,6 +39,8 @@ enum class ErrorCode(
     SCHEDULE_CATEGORY_SHARE_NOT_FOUND("S006", "일정 카테고리 공유 정보가 존재하지 않습니다."),
     SCHEDULE_SHARE_INVITATION_NOT_FOUND("S007", "일정 공유 초대가 존재하지 않습니다."),
     SCHEDULE_TRAVEL_PLAN_NOT_FOUND("S008", "개인 이동 계획이 존재하지 않습니다."),
+    SCHEDULE_CALENDAR_NOT_FOUND("S009", "공유 캘린더가 존재하지 않습니다."),
+    SCHEDULE_CALENDAR_MEMBER_NOT_FOUND("S010", "공유 캘린더 멤버가 존재하지 않습니다."),
 
     // Favorite Place 영역
     FAVORITE_PLACE_CATEGORY_NOT_FOUND("F001", "즐겨찾기 장소 카테고리가 존재하지 않습니다."),

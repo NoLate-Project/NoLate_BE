@@ -26,6 +26,7 @@ class ScheduleDepartureNotificationService(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
     private val notificationUseCase: NotificationUseCase,
+    private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
 ) {
 
     @Transactional
@@ -43,25 +44,12 @@ class ScheduleDepartureNotificationService(
             throw BusinessException(ErrorCode.INVALID_INPUT, "오너 본인에게 출발 확인 알림을 보낼 수 없습니다.")
         }
 
-        val directShareIsActive = scheduleShareRepository
-            .findByScheduleIdAndTargetMemberId(scheduleId, targetMemberId)
-            ?.let { !it.deleted && it.status == ScheduleShareStatus.ACTIVE }
-            ?: false
+        val isTravelParticipant = scheduleAccessPolicy
+            ?.travelMemberIds(schedule)
+            ?.contains(targetMemberId)
+            ?: isLegacyParticipant(schedule, targetMemberId)
 
-        val resolvedCategoryId = schedule.categoryId
-            ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
-        val categoryShareIsActive = if (directShareIsActive) {
-            false
-        } else {
-            resolvedCategoryId
-                ?.let { sharedCategoryId ->
-                    categoryShareRepository.findByCategoryIdAndTargetMemberId(sharedCategoryId, targetMemberId)
-                }
-                ?.let { !it.deleted && it.status == ScheduleShareStatus.ACTIVE }
-                ?: false
-        }
-
-        if (!directShareIsActive && !categoryShareIsActive) {
+        if (!isTravelParticipant) {
             throw BusinessException(
                 ErrorCode.SCHEDULE_SHARE_NOT_FOUND,
                 "현재 공유된 참가자에게만 출발 확인 알림을 보낼 수 있습니다.",
@@ -85,5 +73,22 @@ class ScheduleDepartureNotificationService(
                 "requestedByMemberId" to ownerMemberId.toString(),
             ),
         )
+    }
+
+    private fun isLegacyParticipant(
+        schedule: com.noLate.schedule.domain.Schedule,
+        targetMemberId: Long,
+    ): Boolean {
+        val directShareIsActive = scheduleShareRepository
+            .findByScheduleIdAndTargetMemberId(requireNotNull(schedule.id), targetMemberId)
+            ?.let { !it.deleted && it.status == ScheduleShareStatus.ACTIVE }
+            ?: false
+        if (directShareIsActive) return true
+
+        val categoryId = schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+        return categoryId
+            ?.let { categoryShareRepository.findByCategoryIdAndTargetMemberId(it, targetMemberId) }
+            ?.let { !it.deleted && it.status == ScheduleShareStatus.ACTIVE }
+            ?: false
     }
 }

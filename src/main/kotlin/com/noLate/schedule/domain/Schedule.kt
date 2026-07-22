@@ -14,6 +14,8 @@ import jakarta.persistence.Lob
 import jakarta.persistence.OneToOne
 import jakarta.persistence.Table
 import jakarta.persistence.UniqueConstraint
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
 import org.hibernate.annotations.Comment
 import java.time.Instant
 
@@ -41,6 +43,20 @@ class Schedule(
     @Column(name = "category_id")
     @Comment("현재 연결된 일정 카테고리 id. 표시 안정성은 별도 스냅샷이 담당한다.")
     var categoryId: Long? = null,
+
+    @Column(name = "calendar_id")
+    @Comment("일정이 속한 공유 캘린더 id. null이면 공유 캘린더 밖의 일정이다.")
+    var calendarId: Long? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "schedule_type", nullable = false, length = 20)
+    @Comment("일반 일정 또는 사용자별 이동 계획을 지원하는 경로 일정")
+    var scheduleType: ScheduleType = ScheduleType.NORMAL,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "calendar_content_mode_override", length = 30)
+    @Comment("공유 캘린더 기본 콘텐츠 모드의 일정별 재정의")
+    var calendarContentModeOverride: ScheduleShareContentMode? = null,
 
     @Column(name = "external_source_key", length = 64)
     @Comment("회원별 외부 캘린더 발생 건의 SHA-256 멱등 키")
@@ -195,6 +211,9 @@ class Schedule(
         return ScheduleDto(
             id = id,
             ownerMemberId = memberId,
+            calendarId = calendarId,
+            scheduleType = scheduleType,
+            calendarContentModeOverride = calendarContentModeOverride,
             title = title,
             startAt = startAt.toString(),
             endAt = endAt.toString(),
