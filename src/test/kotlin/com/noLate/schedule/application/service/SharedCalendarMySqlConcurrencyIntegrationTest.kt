@@ -240,6 +240,9 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
             registry.add("spring.jpa.properties.hibernate.dialect") { "org.hibernate.dialect.MySQLDialect" }
             registry.add("spring.jpa.hibernate.ddl-auto") { "create-drop" }
             registry.add("spring.sql.init.mode") { "never" }
+            // application-test.yml forces H2Dialect globally; override it for the real MySQL
+            // container so Hibernate generates MySQL-compatible DDL (AUTO_INCREMENT, etc.)
+            registry.add("spring.jpa.properties.hibernate.dialect") { "org.hibernate.dialect.MySQLDialect" }
         }
     }
 }
