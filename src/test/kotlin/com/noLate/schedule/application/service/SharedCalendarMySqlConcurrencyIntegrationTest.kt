@@ -237,6 +237,7 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
             registry.add("spring.datasource.username", mysql::getUsername)
             registry.add("spring.datasource.password", mysql::getPassword)
             registry.add("spring.datasource.driver-class-name", mysql::getDriverClassName)
+            registry.add("spring.jpa.properties.hibernate.dialect") { "org.hibernate.dialect.MySQLDialect" }
             registry.add("spring.jpa.hibernate.ddl-auto") { "create-drop" }
             registry.add("spring.sql.init.mode") { "never" }
         }
