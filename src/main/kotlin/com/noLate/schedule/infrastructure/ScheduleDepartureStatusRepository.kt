@@ -24,5 +24,10 @@ interface ScheduleDepartureStatusRepository : JpaRepository<ScheduleDepartureSta
         @Param("memberId") memberId: Long,
     ): ScheduleDepartureStatus?
 
+    fun findByScheduleIdAndMemberIdAndDeletedFalse(
+        scheduleId: Long,
+        memberId: Long,
+    ): ScheduleDepartureStatus?
+
     fun findAllByScheduleIdAndDeletedFalse(scheduleId: Long): List<ScheduleDepartureStatus>
 }

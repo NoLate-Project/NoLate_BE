@@ -37,6 +37,8 @@ class PushScenarioRunner(
                 title = scenario.title,
                 body = scenario.body,
                 data = scenario.data,
+                // 개발 시나리오는 실제 제품 이벤트가 아니므로 사용자 알림함에는 남기지 않는다.
+                persistInInbox = false,
             )
             PushScenarioResult(
                 scenario = scenario.name,

@@ -71,6 +71,43 @@ class SchedulePushJobWorkerTest {
     @Mock
     lateinit var travelPlanRepository: ScheduleTravelPlanRepository
 
+    @Mock
+    lateinit var scheduleAccessPolicy: ScheduleAccessPolicy
+
+    @Test
+    fun `worker cancels a shared member job when travel permission was reduced`() {
+        val schedule = schedule(memberId = 1L)
+        val job = SchedulePushJob.create(
+            memberId = 2L,
+            scheduleId = requireNotNull(schedule.id),
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
+        whenever(scheduleAccessPolicy.resolve(2L, schedule)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = false,
+                travelEnabled = false,
+                canViewAllTravelPlans = false,
+            )
+        )
+
+        worker(accessPolicy = scheduleAccessPolicy).runDueJobs(testNow)
+
+        assertEquals(SchedulePushJobStatus.CANCELED, job.status)
+        verify(trafficClient, never()).getTravelMinutes(any())
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+    }
+
     @Test
     fun `알림 시각 전에는 ETA만 조회하고 사용자 푸시 없이 다음 체크를 예약한다`() {
         val schedule = schedule()
@@ -100,7 +137,7 @@ class SchedulePushJobWorkerTest {
             assertEquals(ScheduleTravelMode.CAR, it.travelMode)
             assertEquals(30, it.fallbackTravelMinutes)
         })
-        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any())
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(travelMinutes, job.lastTravelMinutes)
         assertEquals(testNow, job.lastCheckedAt)
@@ -154,7 +191,7 @@ class SchedulePushJobWorkerTest {
 
         assertEquals(SchedulePushJobStatus.CANCELED, job.status)
         verify(trafficClient, never()).getTravelMinutes(any())
-        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any())
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
     }
 
     @Test
@@ -195,7 +232,7 @@ class SchedulePushJobWorkerTest {
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
         worker().runDueJobs(testNow)
 
-        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any())
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
         assertEquals(
             currentRecommendedDepartureAt.minus(
                 departureAlertLeadMinutes.toLong(),
@@ -242,7 +279,7 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         worker().runDueJobs(testNow)
@@ -257,6 +294,8 @@ class SchedulePushJobWorkerTest {
                 assertEquals("15", it["trafficChangeMinutes"])
                 assertEquals(currentRecommendedDepartureAt.toString(), it["recommendedDepartureAt"])
             },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
         )
         assertEquals(testNow, job.lastPushedAt)
         assertNull(job.lastNotifiedDepartureAt)
@@ -286,7 +325,7 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         worker().runDueJobs(testNow)
@@ -303,6 +342,8 @@ class SchedulePushJobWorkerTest {
                 assertEquals("false", it["departNow"])
                 assertEquals(recommendedDepartureAt.toString(), it["recommendedDepartureAt"])
             },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
         )
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(recommendedDepartureAt, job.lastNotifiedDepartureAt)
@@ -350,7 +391,7 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         worker().runDueJobs(secondReminderAt)
@@ -366,6 +407,8 @@ class SchedulePushJobWorkerTest {
                 assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
                 assertEquals("false", it["departNow"])
             },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
         )
         assertEquals(secondReminderAt, job.lastReminderBoundaryAt)
         assertEquals(
@@ -410,7 +453,7 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         worker().runDueJobs(testNow)
@@ -427,6 +470,8 @@ class SchedulePushJobWorkerTest {
                 assertEquals("5", it["trafficChangeMinutes"])
                 assertEquals(currentRecommendedDepartureAt.toString(), it["recommendedDepartureAt"])
             },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
         )
         assertEquals(currentRecommendedDepartureAt, job.lastNotifiedDepartureAt)
         assertEquals(testNow, job.lastReminderBoundaryAt)
@@ -453,7 +498,7 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         worker().runDueJobs(testNow)
@@ -466,6 +511,8 @@ class SchedulePushJobWorkerTest {
                 assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
                 assertEquals("true", it["departNow"])
             },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
         )
         assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
         assertEquals(testNow, job.lastPushedAt)
@@ -477,7 +524,7 @@ class SchedulePushJobWorkerTest {
         val job = dueDepartureJob(schedule)
 
         stubDueJob(job, schedule, travelMinutes = 60)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 0, failedCount = 1))
 
         worker().runDueJobs(testNow)
@@ -495,7 +542,7 @@ class SchedulePushJobWorkerTest {
         val job = dueDepartureJob(schedule)
 
         stubDueJob(job, schedule, travelMinutes = 60)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult())
 
         worker().runDueJobs(testNow)
@@ -513,7 +560,7 @@ class SchedulePushJobWorkerTest {
         job.retryLater("두 번째 실패", testNow)
 
         stubDueJob(job, schedule, travelMinutes = 60)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, failedCount = 1))
 
         worker().runDueJobs(testNow)
@@ -537,7 +584,7 @@ class SchedulePushJobWorkerTest {
         )
 
         stubDueJob(job, schedule, travelMinutes = 60)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         worker().runDueJobs(testNow)
@@ -550,6 +597,8 @@ class SchedulePushJobWorkerTest {
                 assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
                 assertEquals("true", it["departNow"])
             },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
         )
         assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
     }
@@ -575,7 +624,7 @@ class SchedulePushJobWorkerTest {
 
         worker().runDueJobs(testNow)
 
-        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any())
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
         assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
     }
 
@@ -619,7 +668,7 @@ class SchedulePushJobWorkerTest {
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(firstSchedule)
         whenever(scheduleRepository.findScheduleDetail(20L, 2L)).thenReturn(secondSchedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(45, 50)
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         assertEquals(2, worker().runDueJobs(testNow))
@@ -637,6 +686,8 @@ class SchedulePushJobWorkerTest {
                 assertEquals("10", it["scheduleId"])
                 assertEquals("45", it["travelMinutes"])
             },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
         )
         verify(notificationUseCase).sendToMember(
             memberId = eq(2L),
@@ -647,6 +698,8 @@ class SchedulePushJobWorkerTest {
                 assertEquals("20", it["scheduleId"])
                 assertEquals("50", it["travelMinutes"])
             },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
         )
         assertEquals(45, firstJob.lastTravelMinutes)
         assertEquals(50, secondJob.lastTravelMinutes)
@@ -720,7 +773,7 @@ class SchedulePushJobWorkerTest {
         })
     }
 
-    private fun worker() = SchedulePushJobWorker(
+    private fun worker(accessPolicy: ScheduleAccessPolicy? = null) = SchedulePushJobWorker(
         pushJobRepository = pushJobRepository,
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -736,6 +789,7 @@ class SchedulePushJobWorkerTest {
         departureReminderIntervalMinutes = departureReminderIntervalMinutes,
         processingTimeoutMinutes = 10,
         travelPlanRepository = travelPlanRepository,
+        scheduleAccessPolicy = accessPolicy,
     )
 
     /**

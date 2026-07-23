@@ -4,12 +4,14 @@ import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import jakarta.transaction.Transactional
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
 @Service
 class NotificationTokenService (
     private val notificationRepository: NotificationDeviceTokenRepository,
 ) {
+    private val log = LoggerFactory.getLogger(javaClass)
 
     /**
      * FCM/APNs/Expo 등에서 받은 토큰 등록/갱신
@@ -45,6 +47,7 @@ class NotificationTokenService (
                 existing.token = token
                 existing.platform = platform
                 notificationRepository.save(existing)
+                logRegistration(memberId, deviceId, platform, tokensOwnedByOtherMembers.size, "updated")
                 return
             }
         }
@@ -56,6 +59,26 @@ class NotificationTokenService (
             token = token
         )
         notificationRepository.save(entity)
+        logRegistration(memberId, deviceId, platform, tokensOwnedByOtherMembers.size, "created")
+    }
+
+    private fun logRegistration(
+        memberId: Long,
+        deviceId: String?,
+        platform: PushPlatform,
+        removedOwnershipCount: Int,
+        result: String,
+    ) {
+        // FCM 토큰 자체는 인증 정보이므로 로그에 남기지 않는다. 계정/기기 매핑 여부만으로
+        // 실기기 등록 누락과 계정 전환 시 소유권 이동을 추적할 수 있게 한다.
+        log.info(
+            "Push token registered. memberId={}, deviceIdPresent={}, platform={}, removedOwnershipCount={}, result={}",
+            memberId,
+            !deviceId.isNullOrBlank(),
+            platform,
+            removedOwnershipCount,
+            result,
+        )
     }
 
     /**

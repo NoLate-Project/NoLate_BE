@@ -18,7 +18,13 @@ import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.domain.ScheduleCalendar
+import com.noLate.schedule.domain.ScheduleCalendarMember
+import com.noLate.schedule.domain.ScheduleCalendarRole
+import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.subscription.application.SubscriptionPolicyService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -250,6 +256,73 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `moving schedule locks source and target calendars in ascending id order`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val sourceCalendarId = 9L
+        val targetCalendarId = 3L
+        val calendarRepository = mock<ScheduleCalendarRepository>()
+        val calendarMemberRepository = mock<ScheduleCalendarMemberRepository>()
+        val accessPolicy = mock<ScheduleAccessPolicy>()
+        val securedService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            scheduleAccessPolicy = accessPolicy,
+            calendarRepository = calendarRepository,
+            calendarMemberRepository = calendarMemberRepository,
+        )
+        val existing = scheduleEntity(id = scheduleId, memberId = 99L).apply {
+            calendarId = sourceCalendarId
+        }
+        val targetCalendar = ScheduleCalendar(
+            id = targetCalendarId,
+            ownerMemberId = 99L,
+            title = "대상",
+            defaultContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+        )
+        val sourceCalendar = ScheduleCalendar(
+            id = sourceCalendarId,
+            ownerMemberId = 99L,
+            title = "원본",
+        )
+        val editor = ScheduleCalendarMember(
+            id = 30L,
+            calendarId = targetCalendarId,
+            memberId = memberId,
+            role = ScheduleCalendarRole.EDITOR,
+        )
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)).thenReturn(existing)
+        whenever(accessPolicy.resolve(memberId, existing)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = true,
+                travelEnabled = true,
+                canViewAllTravelPlans = true,
+            )
+        )
+        whenever(calendarRepository.findAllForUpdate(listOf(targetCalendarId, sourceCalendarId)))
+            .thenReturn(listOf(targetCalendar, sourceCalendar))
+        whenever(
+            calendarMemberRepository.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                targetCalendarId,
+                memberId,
+                com.noLate.schedule.domain.ScheduleCalendarMemberStatus.ACTIVE,
+            )
+        ).thenReturn(editor)
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        securedService.updateSchedule(
+            memberId,
+            scheduleId,
+            scheduleDto().copy(calendarId = targetCalendarId),
+        )
+
+        verify(calendarRepository).findAllForUpdate(listOf(targetCalendarId, sourceCalendarId))
+        assertEquals(targetCalendarId, existing.calendarId)
+    }
+
+    @Test
     fun `adding a configured route clears quick share setup marker`() {
         val memberId = 1L
         val scheduleId = 10L
@@ -266,6 +339,31 @@ class ScheduleServiceUnitTest {
 
         assertEquals(false, existing.routeSetupRequired)
         assertEquals(false, result.routeSetupRequired)
+    }
+
+    @Test
+    fun `travel mode alone does not clear quick share setup marker`() {
+        val modeOnlyDto = scheduleDto().copy(
+            travelMinutes = null,
+            departAt = null,
+            travelMode = ScheduleTravelMode.CAR,
+            origin = null,
+            destination = null,
+            locationName = null,
+            routeSetupRequired = true,
+            route = null,
+        )
+        whenever(scheduleRepository.save(any<Schedule>()))
+            .thenAnswer { invocation ->
+                invocation.getArgument<Schedule>(0).apply { id = 10L }
+            }
+
+        val result = scheduleService.addSchedule(1L, modeOnlyDto)
+
+        verify(scheduleRepository).save(check {
+            assertEquals(true, it.routeSetupRequired)
+        })
+        assertEquals(true, result.routeSetupRequired)
     }
 
     @Test

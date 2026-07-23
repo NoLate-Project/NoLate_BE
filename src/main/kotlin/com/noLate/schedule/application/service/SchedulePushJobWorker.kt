@@ -42,6 +42,7 @@ class SchedulePushJobWorker(
     @Value("\${schedule.push.departure-reminder-interval-minutes:5}") private val departureReminderIntervalMinutes: Int,
     @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
+    private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "schedule-push-${UUID.randomUUID()}"
@@ -111,6 +112,15 @@ class SchedulePushJobWorker(
                     job.cancel()
                     return
                 }
+            // 공유 범위 축소와 이미 선점된 worker가 경합해도 발송 직전 유효 이동 권한을 다시
+            // 확인한다. 일정 조회 권한만 남은 사용자는 기존 개인 계획이 있어도 알림을 받지 않는다.
+            if (
+                job.memberId != schedule.memberId &&
+                scheduleAccessPolicy?.resolve(job.memberId, schedule)?.travelEnabled == false
+            ) {
+                job.cancel()
+                return
+            }
             val route = resolveRouteSource(schedule, job.memberId)
                 ?: run {
                     job.cancel()
@@ -185,6 +195,9 @@ class SchedulePushJobWorker(
                             (reminderDecision == DepartureReminderDecision.DEPART_NOW).toString(),
                         "trafficChangeMinutes" to (message.trafficChangeMinutes?.toString() ?: "0"),
                     ),
+                    // push 실패 재시도 중에는 checkCount가 증가하지 않는다. 같은 회차는 한 알림으로
+                    // 합치되, 다음 ETA 확인 회차는 별도 알림이 되도록 job과 checkCount를 함께 사용한다.
+                    inboxDeduplicationKey = schedulePushInboxDeduplicationKey(job),
                 )
                 log.info(
                     "Schedule push sent. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, sent={}, failed={}",
@@ -250,6 +263,13 @@ class SchedulePushJobWorker(
                 reason = exception.message?.take(500) ?: exception.javaClass.simpleName,
             )
         }
+    }
+
+    private fun schedulePushInboxDeduplicationKey(job: SchedulePushJob): String {
+        // 운영 worker가 조회한 엔티티에는 항상 id가 있다. 단위 테스트에서 사용하는 저장 전
+        // 엔티티도 결정적인 키를 갖게 해 테스트가 재시도 의미를 그대로 검증할 수 있도록 한다.
+        val jobIdentity = job.id?.toString() ?: "unsaved-${job.memberId}-${job.scheduleId}"
+        return "schedule-push-job:$jobIdentity:${job.checkCount}"
     }
 
     /**

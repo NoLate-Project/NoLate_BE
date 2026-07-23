@@ -16,18 +16,21 @@ class LegalDocumentControllerTest {
     }
 
     @Test
-    fun `homepage identifies NoLate and explains Google Calendar data use`() {
+    fun `homepage explains service content social login and Google Calendar data use`() {
         val html = HomePageController().getHomePage()
 
-        assertTrue(html.contains("<title>NoLate</title>"))
+        assertTrue(html.contains("<title>NoLate | 서비스 소개</title>"))
         assertTrue(html.contains("content=\"NoLate\""))
-        assertTrue(html.contains("APP NAME / 앱 이름: NoLate"))
-        assertTrue(html.contains("<h1>NoLate</h1>"))
         assertTrue(html.contains("App Purpose / 앱의 목적"))
-        assertTrue(html.contains("NoLate is a mobile schedule and departure assistant"))
+        assertTrue(html.contains("모바일 일정 관리·이동 지원 생산성 서비스"))
+        assertTrue(html.contains("앱에서 제공하는 메뉴와 기능"))
+        assertTrue(html.contains("일정 홈·캘린더"))
+        assertTrue(html.contains("장소·이동 경로"))
+        assertTrue(html.contains("네이버 로그인 적용 방식"))
+        assertTrue(html.contains("예약·상품 매매·중개·결제 기능 없음"))
+        assertTrue(html.contains("https://nolate.jinuk.dev/"))
         assertTrue(html.contains("How NoLate Uses Google Calendar Data"))
         assertTrue(html.contains("href=\"/legal/privacy-policy\""))
-        assertTrue(html.contains("로그인").not())
     }
 
     @Test

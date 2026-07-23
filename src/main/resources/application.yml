@@ -59,6 +59,12 @@ server:
   port: 5522
 
 schedule:
+  route-setup-reminder:
+    enabled: ${SCHEDULE_ROUTE_SETUP_REMINDER_ENABLED:true}
+    fixed-delay-ms: ${SCHEDULE_ROUTE_SETUP_REMINDER_FIXED_DELAY_MS:300000}
+    batch-size: ${SCHEDULE_ROUTE_SETUP_REMINDER_BATCH_SIZE:50}
+    max-attempts: ${SCHEDULE_ROUTE_SETUP_REMINDER_MAX_ATTEMPTS:3}
+    retry-delay-seconds: ${SCHEDULE_ROUTE_SETUP_REMINDER_RETRY_DELAY_SECONDS:300}
   push:
     enabled: ${SCHEDULE_PUSH_ENABLED:true}
     fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}
@@ -89,6 +95,15 @@ routing:
     enabled: ${TMAP_ENABLED:false}
     app-key: ${TMAP_APP_KEY:}
     base-url: ${TMAP_BASE_URL:https://apis.openapi.sk.com}
+
+calendar:
+  kasi:
+    enabled: ${KASI_ENABLED:true}
+    # 특일 정보와 음양력 정보가 같은 공공데이터포털 인증키를 사용한다.
+    # 실제 키는 저장소 밖의 env.local.properties 또는 운영 환경변수에만 둔다.
+    service-key: ${KASI_API_KEY:}
+    base-url: ${KASI_BASE_URL:https://apis.data.go.kr/B090041/openapi/service}
+    cache-ttl-hours: ${KASI_CACHE_TTL_HOURS:168}
 
 transit:
   seoul:

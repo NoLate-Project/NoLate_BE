@@ -1,6 +1,7 @@
 package com.noLate.schedule.infrastructure
 
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleType
 import jakarta.persistence.LockModeType
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
@@ -11,7 +12,27 @@ import java.time.Instant
 import java.time.LocalDateTime
 
 interface ScheduleRepository : JpaRepository<Schedule, Long> {
+
+    fun findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId: Long): List<Schedule>
     fun findAllByMemberId(memberId: Long): List<Schedule>
+
+    @Query(
+        """
+        select distinct s
+        from Schedule s
+        left join fetch s.route
+        where s.deleted = false
+          and s.scheduleType = :scheduleType
+          and s.startAt >= :fromAt
+          and s.startAt <= :toAt
+        order by s.startAt asc, s.id asc
+        """
+    )
+    fun findRouteSetupReminderCandidates(
+        @Param("fromAt") fromAt: Instant,
+        @Param("toAt") toAt: Instant,
+        @Param("scheduleType") scheduleType: ScheduleType = ScheduleType.ROUTE,
+    ): List<Schedule>
     fun findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(
         memberId: Long,
         externalSourceKey: String,
@@ -54,6 +75,17 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
                   )
                 )
             )
+            or exists (
+              select 1
+              from schedule_calendar_members scm
+              join schedule_calendars cal on cal.id = scm.calendar_id
+              where scm.calendar_id = s.calendar_id
+                and scm.member_id = :memberId
+                and scm.status = 'ACTIVE'
+                and scm.deleted = false
+                and cal.status = 'ACTIVE'
+                and cal.deleted = false
+            )
           )
         order by s.start_at asc
         """,
@@ -92,6 +124,17 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
                       and scsnap.category_id = concat('', scs.category_id)
                   )
                 )
+            )
+            or exists (
+              select 1
+              from schedule_calendar_members scm
+              join schedule_calendars cal on cal.id = scm.calendar_id
+              where scm.calendar_id = s.calendar_id
+                and scm.member_id = :memberId
+                and scm.status = 'ACTIVE'
+                and scm.deleted = false
+                and cal.status = 'ACTIVE'
+                and cal.deleted = false
             )
           )
         """,
@@ -134,6 +177,17 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
                       and scsnap.category_id = concat('', scs.category_id)
                   )
                 )
+            )
+            or exists (
+              select 1
+              from schedule_calendar_members scm
+              join schedule_calendars cal on cal.id = scm.calendar_id
+              where scm.calendar_id = s.calendar_id
+                and scm.member_id = :memberId
+                and scm.status = 'ACTIVE'
+                and scm.deleted = false
+                and cal.status = 'ACTIVE'
+                and cal.deleted = false
             )
           )
         order by s.start_at asc
@@ -178,6 +232,17 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
                   )
                 )
             )
+            or exists (
+              select 1
+              from schedule_calendar_members scm
+              join schedule_calendars cal on cal.id = scm.calendar_id
+              where scm.calendar_id = s.calendar_id
+                and scm.member_id = :memberId
+                and scm.status = 'ACTIVE'
+                and scm.deleted = false
+                and cal.status = 'ACTIVE'
+                and cal.deleted = false
+            )
           )
         order by s.start_at asc
         """,
@@ -221,6 +286,17 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
                       and scsnap.category_id = concat('', scs.category_id)
                   )
                 )
+            )
+            or exists (
+              select 1
+              from schedule_calendar_members scm
+              join schedule_calendars cal on cal.id = scm.calendar_id
+              where scm.calendar_id = s.calendar_id
+                and scm.member_id = :memberId
+                and scm.status = 'ACTIVE'
+                and scm.deleted = false
+                and cal.status = 'ACTIVE'
+                and cal.deleted = false
             )
           )
           and (:keyword is null
@@ -276,6 +352,17 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
                       and scsnap.category_id = concat('', scs.category_id)
                   )
                 )
+            )
+            or exists (
+              select 1
+              from schedule_calendar_members scm
+              join schedule_calendars cal on cal.id = scm.calendar_id
+              where scm.calendar_id = s.calendar_id
+                and scm.member_id = :memberId
+                and scm.status = 'ACTIVE'
+                and scm.deleted = false
+                and cal.status = 'ACTIVE'
+                and cal.deleted = false
             )
           )
         order by s.start_at asc

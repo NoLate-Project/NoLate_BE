@@ -1,7 +1,53 @@
+CREATE TABLE IF NOT EXISTS schedule_calendars (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Shared calendar primary key',
+    owner_member_id BIGINT NOT NULL COMMENT 'Current calendar owner member id',
+    legacy_category_id BIGINT NULL COMMENT 'Legacy shared category id used during migration',
+    title VARCHAR(80) NOT NULL COMMENT 'Shared calendar title',
+    color VARCHAR(32) NOT NULL DEFAULT '#2F80FF' COMMENT 'Shared calendar display color',
+    default_content_mode VARCHAR(30) NOT NULL DEFAULT 'SCHEDULE_ONLY' COMMENT 'Default shared content mode',
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'Calendar lifecycle status',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_calendars_legacy_category (legacy_category_id),
+    INDEX idx_schedule_calendars_owner_status (owner_member_id, status, deleted)
+) COMMENT='Shared schedule calendars';
+
+CREATE TABLE IF NOT EXISTS schedule_calendar_members (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Shared calendar membership primary key',
+    calendar_id BIGINT NOT NULL COMMENT 'Shared calendar id',
+    member_id BIGINT NOT NULL COMMENT 'Member id',
+    role VARCHAR(20) NOT NULL COMMENT 'OWNER, EDITOR, or VIEWER',
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'Membership lifecycle status',
+    route_reminder_enabled BOOLEAN NOT NULL DEFAULT TRUE COMMENT 'Missing route reminder preference',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_calendar_members_calendar_member (calendar_id, member_id),
+    INDEX idx_schedule_calendar_members_member_status (member_id, status, deleted),
+    INDEX idx_schedule_calendar_members_calendar_status (calendar_id, status, deleted),
+    CONSTRAINT fk_schedule_calendar_members_calendar
+        FOREIGN KEY (calendar_id) REFERENCES schedule_calendars (id)
+        ON DELETE CASCADE
+) COMMENT='Shared calendar memberships';
+
 CREATE TABLE IF NOT EXISTS schedules (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule primary key',
     member_id BIGINT NOT NULL COMMENT 'Owner member id',
     category_id BIGINT NULL COMMENT 'Current schedule category id for share permission lookup',
+    calendar_id BIGINT NULL COMMENT 'Shared calendar id',
+    schedule_type VARCHAR(20) NOT NULL DEFAULT 'NORMAL' COMMENT 'NORMAL or ROUTE schedule',
+    calendar_content_mode_override VARCHAR(30) NULL COMMENT 'Per-schedule shared content override',
     external_source_key VARCHAR(64) NULL COMMENT 'Member-scoped external calendar occurrence idempotency key',
     title VARCHAR(120) NOT NULL COMMENT 'Schedule title',
     start_at DATETIME(6) NOT NULL COMMENT 'Schedule start time',
@@ -19,7 +65,11 @@ CREATE TABLE IF NOT EXISTS schedules (
     PRIMARY KEY (id),
     INDEX idx_schedules_member_deleted_start (member_id, deleted, start_at),
     INDEX idx_schedules_category_deleted_start (category_id, deleted, start_at),
-    UNIQUE KEY uk_schedules_member_external_source (member_id, external_source_key)
+    INDEX idx_schedules_calendar_deleted_start (calendar_id, deleted, start_at),
+    UNIQUE KEY uk_schedules_member_external_source (member_id, external_source_key),
+    CONSTRAINT fk_schedules_calendar
+        FOREIGN KEY (calendar_id) REFERENCES schedule_calendars (id)
+        ON DELETE SET NULL
 ) COMMENT='Schedule core table';
 
 CREATE TABLE IF NOT EXISTS schedule_category_snapshots (
@@ -59,6 +109,7 @@ CREATE TABLE IF NOT EXISTS schedule_shares (
     owner_member_id BIGINT NOT NULL COMMENT 'Schedule owner member id',
     target_member_id BIGINT NOT NULL COMMENT 'Shared target member id',
     permission VARCHAR(30) NOT NULL COMMENT 'Share permission',
+    content_mode VARCHAR(30) NOT NULL DEFAULT 'SCHEDULE_AND_TRAVEL' COMMENT 'Shared content mode',
     status VARCHAR(30) NOT NULL COMMENT 'Share status',
     created_at DATETIME(6) NULL,
     updated_at DATETIME(6) NULL,
@@ -105,6 +156,7 @@ CREATE TABLE IF NOT EXISTS schedule_share_invitations (
     resource_id BIGINT NOT NULL COMMENT 'Schedule id or category id',
     owner_member_id BIGINT NOT NULL COMMENT 'Resource owner member id',
     permission VARCHAR(30) NOT NULL COMMENT 'Permission granted on accept',
+    content_mode VARCHAR(30) NOT NULL DEFAULT 'SCHEDULE_AND_TRAVEL' COMMENT 'Content mode granted on accept',
     token_hash VARCHAR(128) NOT NULL COMMENT 'SHA-256 hash of invitation token',
     status VARCHAR(30) NOT NULL COMMENT 'Invitation status',
     expires_at DATETIME(6) NOT NULL COMMENT 'Invitation expiration datetime',
@@ -185,6 +237,33 @@ CREATE TABLE IF NOT EXISTS schedule_travel_plans (
         ON DELETE CASCADE
 ) COMMENT='Per-member travel plans for shared schedules';
 
+CREATE TABLE IF NOT EXISTS schedule_route_setup_reminders (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'D-3 route setup reminder primary key',
+    schedule_id BIGINT NOT NULL COMMENT 'Route schedule id',
+    member_id BIGINT NOT NULL COMMENT 'Reminder recipient member id',
+    schedule_fingerprint VARCHAR(64) NOT NULL COMMENT 'Schedule condition fingerprint',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING, SENT, CANCELLED, or FAILED',
+    attempts INT NOT NULL DEFAULT 0 COMMENT 'Physical push attempt count',
+    next_attempt_at DATETIME(6) NOT NULL COMMENT 'Next dispatch time',
+    sent_at DATETIME(6) NULL COMMENT 'Logical dispatch completion time',
+    last_error VARCHAR(500) NULL COMMENT 'Last dispatch error',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_route_setup_reminders_schedule_member_fingerprint
+        (schedule_id, member_id, schedule_fingerprint),
+    INDEX idx_route_setup_reminders_dispatch (status, next_attempt_at, id),
+    INDEX idx_route_setup_reminders_member (member_id, id),
+    CONSTRAINT fk_route_setup_reminders_schedule
+        FOREIGN KEY (schedule_id) REFERENCES schedules (id)
+        ON DELETE CASCADE
+) COMMENT='D-3 per-member route setup reminder outbox';
+
 CREATE TABLE IF NOT EXISTS schedule_push_job (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Push job primary key',
     version BIGINT NULL COMMENT 'Optimistic lock version',
@@ -219,6 +298,29 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     INDEX idx_schedule_push_job_member_id (member_id),
     INDEX idx_schedule_push_job_schedule_id (schedule_id)
 ) COMMENT='Schedule push jobs';
+
+CREATE TABLE IF NOT EXISTS app_notifications (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'In-app notification primary key',
+    member_id BIGINT NOT NULL COMMENT 'Notification recipient member id',
+    deduplication_key VARCHAR(180) NULL COMMENT 'Logical event key used to merge concurrent delivery attempts',
+    type VARCHAR(80) NOT NULL COMMENT 'Client navigation and presentation type',
+    schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
+    category_id BIGINT NULL COMMENT 'Related category id when applicable',
+    title VARCHAR(200) NOT NULL COMMENT 'Notification title',
+    body VARCHAR(1000) NOT NULL COMMENT 'Notification body',
+    data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON',
+    created_at DATETIME(6) NOT NULL COMMENT 'Logical notification creation time',
+    read_at DATETIME(6) NULL COMMENT 'First read time',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_app_notifications_member_deduplication (member_id, deduplication_key),
+    INDEX idx_app_notifications_member_id_id (member_id, id),
+    INDEX idx_app_notifications_member_read_at (member_id, read_at)
+) COMMENT='Durable user-facing in-app notification inbox';
+
+-- Existing environments may have created data_json with a smaller text type while the
+-- entity mapping was being introduced. Keep the executable bootstrap schema corrective.
+ALTER TABLE app_notifications
+    MODIFY COLUMN data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON';
 
 CREATE TABLE IF NOT EXISTS favorite_place_categories (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Favorite place category primary key',
@@ -300,3 +402,29 @@ CREATE TABLE IF NOT EXISTS member_consents (
     UNIQUE KEY uk_member_consents_member_type_version (member_id, consent_type, document_version),
     INDEX idx_member_consents_member_agreed_at (member_id, agreed_at)
 ) COMMENT='Versioned member signup consent audit';
+
+CREATE TABLE IF NOT EXISTS calendar_day_cache (
+    solar_date DATE NOT NULL COMMENT 'Gregorian date in the Asia/Seoul calendar',
+    lunar_year INT NULL COMMENT 'Corresponding lunar calendar year',
+    lunar_month INT NULL COMMENT 'Corresponding lunar calendar month',
+    lunar_day INT NULL COMMENT 'Corresponding lunar calendar day',
+    leap_month BOOLEAN NULL COMMENT 'Whether the lunar date belongs to a leap month',
+    lunar_synced_at DATETIME(6) NULL COMMENT 'Last successful KASI lunar synchronization time in KST',
+    holidays_synced_at DATETIME(6) NULL COMMENT 'Last successful KASI holiday synchronization time in KST',
+    updated_at DATETIME(6) NOT NULL COMMENT 'Last cache update time in KST',
+    PRIMARY KEY (solar_date),
+    INDEX idx_calendar_day_cache_lunar_synced (lunar_synced_at),
+    INDEX idx_calendar_day_cache_holidays_synced (holidays_synced_at)
+) COMMENT='KASI Gregorian-to-lunar and holiday synchronization cache';
+
+CREATE TABLE IF NOT EXISTS public_holidays (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Public holiday cache primary key',
+    holiday_date DATE NOT NULL COMMENT 'Holiday date in the Asia/Seoul calendar',
+    name VARCHAR(100) NOT NULL COMMENT 'Korean holiday display name',
+    holiday_type VARCHAR(30) NOT NULL COMMENT 'Calendar metadata holiday type',
+    source VARCHAR(30) NOT NULL COMMENT 'Calendar data provider',
+    updated_at DATETIME(6) NOT NULL COMMENT 'Last successful cache update time in KST',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_public_holidays_date_name_type (holiday_date, name, holiday_type),
+    INDEX idx_public_holidays_date (holiday_date)
+) COMMENT='Shared Republic of Korea public holiday cache';

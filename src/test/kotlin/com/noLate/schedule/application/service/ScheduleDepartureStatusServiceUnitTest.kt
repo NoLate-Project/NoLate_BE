@@ -1,5 +1,7 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
@@ -17,6 +19,7 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -26,7 +29,9 @@ import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
 import org.mockito.kotlin.check
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
+import org.springframework.context.ApplicationEventPublisher
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -49,6 +54,12 @@ class ScheduleDepartureStatusServiceUnitTest {
     @Mock
     lateinit var memberRepository: MemberRepository
 
+    @Mock
+    lateinit var eventPublisher: ApplicationEventPublisher
+
+    @Mock
+    lateinit var scheduleAccessPolicy: ScheduleAccessPolicy
+
     private val now = Instant.parse("2026-07-11T01:20:00Z")
     private val clock = Clock.fixed(now, ZoneOffset.UTC)
 
@@ -62,6 +73,7 @@ class ScheduleDepartureStatusServiceUnitTest {
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             memberRepository = memberRepository,
+            eventPublisher = eventPublisher,
             clock = clock,
         )
     }
@@ -74,6 +86,30 @@ class ScheduleDepartureStatusServiceUnitTest {
         whenever(scheduleRepository.findScheduleDetail(scheduleId, targetMemberId)).thenReturn(schedule)
         whenever(scheduleRepository.findActiveForDepartureUpdate(scheduleId)).thenReturn(schedule)
         whenever(departureStatusRepository.findActiveForUpdate(scheduleId, targetMemberId)).thenReturn(null)
+        whenever(
+            scheduleShareRepository.findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(
+                scheduleId,
+                ScheduleShareStatus.ACTIVE,
+            )
+        ).thenReturn(
+            listOf(
+                scheduleShare(targetMemberId = targetMemberId),
+                scheduleShare(targetMemberId = 3L),
+            )
+        )
+        whenever(
+            categoryShareRepository.findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
+                5L,
+                ScheduleShareStatus.ACTIVE,
+            )
+        ).thenReturn(
+            listOf(
+                categoryShare(targetMemberId = 3L),
+                categoryShare(targetMemberId = 4L),
+            )
+        )
+        whenever(memberRepository.findByIdAndDeletedFalse(targetMemberId))
+            .thenReturn(member(targetMemberId, "target2@nolate.test"))
         whenever(departureStatusRepository.saveAndFlush(any<ScheduleDepartureStatus>()))
             .thenAnswer { it.getArgument(0) }
 
@@ -85,6 +121,13 @@ class ScheduleDepartureStatusServiceUnitTest {
             assertEquals(now, it.departedAt)
         })
         assertEquals(now, result.departedAt)
+        verify(eventPublisher).publishEvent(check<ScheduleParticipantDepartedEvent> {
+            assertEquals(scheduleId, it.scheduleId)
+            assertEquals("공유 일정", it.scheduleTitle)
+            assertEquals(targetMemberId, it.departedMemberId)
+            assertEquals("member2", it.departedMemberLabel)
+            assertEquals(listOf(1L, 3L, 4L), it.recipientMemberIds)
+        })
     }
 
     @Test
@@ -110,6 +153,38 @@ class ScheduleDepartureStatusServiceUnitTest {
         verify(departureStatusRepository).saveAndFlush(check {
             assertEquals(firstDepartedAt, it.departedAt)
         })
+        verifyNoInteractions(eventPublisher)
+    }
+
+    @Test
+    fun `schedule only recipient cannot publish a departure state`() {
+        val schedule = scheduleEntity(id = 10L, ownerMemberId = 1L)
+        whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
+        whenever(scheduleAccessPolicy.resolve(2L, schedule)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = false,
+                travelEnabled = false,
+                canViewAllTravelPlans = false,
+            )
+        )
+        val policyBackedService = ScheduleDepartureStatusService(
+            scheduleRepository = scheduleRepository,
+            departureStatusRepository = departureStatusRepository,
+            scheduleShareRepository = scheduleShareRepository,
+            categoryShareRepository = categoryShareRepository,
+            memberRepository = memberRepository,
+            eventPublisher = eventPublisher,
+            clock = clock,
+            scheduleAccessPolicy = scheduleAccessPolicy,
+        )
+
+        val error = assertThrows(BusinessException::class.java) {
+            policyBackedService.markDeparted(memberId = 2L, scheduleId = 10L)
+        }
+
+        assertEquals(ErrorCode.FORBIDDEN, error.errorCode)
+        verifyNoInteractions(departureStatusRepository, eventPublisher)
     }
 
     @Test

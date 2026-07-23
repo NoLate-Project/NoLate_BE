@@ -4,6 +4,7 @@ package com.noLate.notification.application
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.NotificationDeviceToken
@@ -29,6 +30,9 @@ class NotificationUseCaseUnitTest {
     @Mock
     lateinit var pushSendHistoryService: PushSendHistoryService
 
+    @Mock
+    lateinit var appNotificationService: AppNotificationService
+
     private lateinit var notificationUseCase: NotificationUseCase
 
     @BeforeEach
@@ -37,6 +41,7 @@ class NotificationUseCaseUnitTest {
             notificationTokenService = notificationTokenService,
             pushClient = pushClient,
             pushSendHistoryService = pushSendHistoryService,
+            appNotificationService = appNotificationService,
         )
     }
 
@@ -90,6 +95,13 @@ class NotificationUseCaseUnitTest {
             body = body,
             data = data,
             fcmMessageId = "message-id",
+        )
+        verify(appNotificationService, times(1)).record(
+            memberId = memberId,
+            title = title,
+            body = body,
+            data = data,
+            deduplicationKey = null,
         )
         verify(pushSendHistoryService).recordSuccess(
             memberId = memberId,
@@ -156,10 +168,32 @@ class NotificationUseCaseUnitTest {
             body = "내용",
             data = data,
         )
+        verify(appNotificationService).record(
+            memberId = memberId,
+            title = "제목",
+            body = "내용",
+            data = data,
+            deduplicationKey = null,
+        )
         verify(pushClient, never()).sendToToken(any(), any(), any(), any())
         assertEquals(0, result.requestedCount)
         assertEquals(0, result.sentCount)
         assertEquals(0, result.failedCount)
+    }
+
+    @Test
+    fun `공급자 점검용 푸시는 사용자 알림함에 저장하지 않을 수 있다`() {
+        whenever(notificationTokenService.getTokensByMember(1L)).thenReturn(emptyList())
+
+        notificationUseCase.sendToMember(
+            memberId = 1L,
+            title = "테스트",
+            body = "공급자 점검",
+            data = mapOf("type" to "PUSH_SCENARIO_TOKEN_CHECK"),
+            persistInInbox = false,
+        )
+
+        verifyNoInteractions(appNotificationService)
     }
 
     @Test

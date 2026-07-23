@@ -42,8 +42,15 @@ data class ScheduleDepartureParticipantDto(
 data class ScheduleDto(
     val id: Long? = null,
     val ownerMemberId: Long? = null,
+    val calendarId: Long? = null,
+    val scheduleType: ScheduleType? = null,
+    val calendarContentModeOverride: ScheduleShareContentMode? = null,
     /** Effective permission for the member receiving this response. */
     val sharePermission: ScheduleSharePermission? = null,
+    /** 직접 공유와 캘린더 공유를 합산한 유효 콘텐츠 모드다. */
+    val shareContentMode: ScheduleShareContentMode? = null,
+    /** 현재 사용자가 이 일정에서 개인 경로와 이동 현황을 사용할 수 있는지 나타낸다. */
+    val travelCollaborationEnabled: Boolean? = null,
     val title: String,
     val startAt: String,
     val endAt: String? = null,
@@ -94,6 +101,9 @@ data class ScheduleDto(
         val schedule = Schedule(
             id = id,
             memberId = memberId,
+            calendarId = calendarId,
+            scheduleType = scheduleType ?: inferScheduleType(),
+            calendarContentModeOverride = calendarContentModeOverride,
             title = title,
             startAt = parsedStartAt,
             endAt = parsedEndAt,
@@ -146,6 +156,9 @@ data class ScheduleDto(
             return ScheduleDto(
                 id = schedule.id,
                 ownerMemberId = schedule.memberId,
+                calendarId = schedule.calendarId,
+                scheduleType = schedule.scheduleType,
+                calendarContentModeOverride = schedule.calendarContentModeOverride,
                 title = schedule.title,
                 startAt = schedule.startAt.toString(),
                 endAt = schedule.endAt.toString(),
@@ -227,5 +240,15 @@ data class ScheduleDto(
                     throw IllegalArgumentException("날짜 형식이 올바르지 않습니다. value=$value")
                 }
         }
+
+        private fun ScheduleDto.inferScheduleType(): ScheduleType =
+            if (
+                destination != null || origin != null || route != null ||
+                travelMinutes != null || departAt != null || routeSetupRequired == true
+            ) {
+                ScheduleType.ROUTE
+            } else {
+                ScheduleType.NORMAL
+            }
     }
 }

@@ -18,6 +18,19 @@ interface ScheduleShareInvitationRepository : JpaRepository<ScheduleShareInvitat
         resourceType: ScheduleShareResourceType,
         resourceId: Long,
     ): ScheduleShareInvitation?
+
+    fun findByTokenHashAndDeletedFalse(tokenHash: String): ScheduleShareInvitation?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select i
+        from ScheduleShareInvitation i
+        where i.id = :id
+        """
+    )
+    fun findByIdForUpdate(@Param("id") id: Long): ScheduleShareInvitation?
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query(
         """
@@ -29,6 +42,24 @@ interface ScheduleShareInvitationRepository : JpaRepository<ScheduleShareInvitat
         """
     )
     fun findActiveByTokenHashForUpdate(@Param("tokenHash") tokenHash: String): ScheduleShareInvitation?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select i
+        from ScheduleShareInvitation i
+        where i.resourceType = :resourceType
+          and i.resourceId = :resourceId
+          and i.status = :status
+          and i.deleted = false
+        order by i.id asc
+        """
+    )
+    fun findAllPendingByResourceForUpdate(
+        @Param("resourceType") resourceType: ScheduleShareResourceType,
+        @Param("resourceId") resourceId: Long,
+        @Param("status") status: ScheduleShareInvitationStatus = ScheduleShareInvitationStatus.PENDING,
+    ): List<ScheduleShareInvitation>
 
     fun findAllByOwnerMemberIdAndResourceTypeAndResourceIdAndDeletedFalseOrderByIdDesc(
         ownerMemberId: Long,

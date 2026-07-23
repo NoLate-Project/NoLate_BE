@@ -53,7 +53,9 @@ class NotificationController(
             memberId = requireMemberId(principal),
             title = request.title,
             body = request.body,
-            data = request.data ?: emptyMap()
+            data = request.data ?: emptyMap(),
+            // 진단용 발송은 제품 이벤트가 아니므로 사용자의 알림함을 오염시키지 않는다.
+            persistInInbox = false,
         )
         return ApiResponse.success(result)
     }
