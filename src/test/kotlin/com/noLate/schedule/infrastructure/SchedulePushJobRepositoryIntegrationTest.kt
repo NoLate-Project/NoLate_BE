@@ -59,7 +59,7 @@ class SchedulePushJobRepositoryIntegrationTest @Autowired constructor(
     }
 
     @Test
-    fun `하나의 일정에는 push job을 중복 생성할 수 없다`() {
+    fun `같은 일정과 회원 조합에는 push job을 중복 생성할 수 없다`() {
         val first = createJob(scheduleId = 20L)
         val duplicate = createJob(scheduleId = 20L)
 
@@ -68,6 +68,17 @@ class SchedulePushJobRepositoryIntegrationTest @Autowired constructor(
         assertThrows(DataIntegrityViolationException::class.java) {
             repository.saveAndFlush(duplicate)
         }
+    }
+
+    @Test
+    fun `같은 일정에도 서로 다른 회원의 push job은 각각 저장된다`() {
+        repository.save(createJob(scheduleId = 21L, memberId = 1L))
+        repository.save(createJob(scheduleId = 21L, memberId = 2L))
+        repository.flush()
+
+        val jobs = repository.findAllByScheduleId(21L)
+
+        assertEquals(setOf(1L, 2L), jobs.map { it.memberId }.toSet())
     }
 
     @Test
@@ -96,9 +107,9 @@ class SchedulePushJobRepositoryIntegrationTest @Autowired constructor(
     /**
      * 중복 제약 테스트가 scheduleId 외의 값에 영향을 받지 않도록 동일한 기본 작업을 만든다.
      */
-    private fun createJob(scheduleId: Long): SchedulePushJob =
+    private fun createJob(scheduleId: Long, memberId: Long = 1L): SchedulePushJob =
         SchedulePushJob.create(
-            memberId = 1L,
+            memberId = memberId,
             scheduleId = scheduleId,
             scheduleAt = Instant.parse("2026-06-12T03:00:00Z"),
             departureAt = Instant.parse("2026-06-12T02:00:00Z"),

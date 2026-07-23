@@ -313,6 +313,13 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         join schedule_routes sr on sr.schedule_id = s.id
         where s.member_id = :memberId
           and sr.notification_enabled = true
+          and not exists (
+            select 1
+            from schedule_travel_plans stp
+            where stp.schedule_id = s.id
+              and stp.member_id = s.member_id
+              and stp.deleted = false
+          )
           and s.create_dt >= :monthStart
           and s.create_dt < :nextMonthStart
         """,
@@ -363,6 +370,26 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         """
     )
     fun findActiveForDepartureUpdate(
+        @Param("scheduleId") scheduleId: Long,
+    ): Schedule?
+
+    /**
+     * 참가자별 이동 계획의 최초 생성 경합을 직렬화한다.
+     *
+     * 아직 plan row가 없는 상태에서는 plan 자체를 잠글 수 없으므로 항상 존재하는 schedule
+     * row를 잠금 기준점으로 사용한다. DB 유일키와 함께 사용하면 같은 사용자의 동시 최초 저장은
+     * 한 행으로 수렴하고, 서로 다른 사용자 계획도 서로 덮어쓰지 않는다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select s
+        from Schedule s
+        where s.id = :scheduleId
+          and s.deleted = false
+        """
+    )
+    fun findActiveForTravelPlanUpdate(
         @Param("scheduleId") scheduleId: Long,
     ): Schedule?
 }

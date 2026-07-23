@@ -372,7 +372,7 @@ class ScheduleHybridParserServiceTest {
     }
 
     @Test
-    fun `does not call AI when voice transcript needs review`() {
+    fun `uses AI to fill a missing field in a voice transcript`() {
         val aiParser = RecordingAiParser(
             ScheduleAiParseOutcome(
                 attempted = true,
@@ -381,8 +381,8 @@ class ScheduleHybridParserServiceTest {
         )
         val service = ScheduleHybridParserService(ruleParser, aiParser)
 
-        // 목적지가 없는 불완전한 문장이어도 음성은 원샷 규칙 분석 결과만 반환해야 한다.
-        // AI 결과가 준비되어 있어도 호출 횟수가 0인지 확인해 외부 전송을 막는다.
+        // 원본 음성은 서버에 올리지 않고 개인정보가 마스킹된 전사문만 AI에 전달한다.
+        // 규칙으로 찾지 못한 목적지는 신뢰도 기준을 통과한 결과로 보완한다.
         val result = service.parse(
             text = "다음 수요일 오후 7시 약속 등록해줘",
             inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
@@ -390,10 +390,28 @@ class ScheduleHybridParserServiceTest {
             defaultDurationMinutes = 60,
         )
 
-        assertEquals(0, aiParser.calls)
-        assertFalse(result.aiAttempted)
+        assertEquals(1, aiParser.calls)
+        assertTrue(result.aiAttempted)
+        assertEquals("AI가 추론한 장소", result.destination?.name)
+        assertFalse("destination" in result.missingFields)
+    }
+
+    @Test
+    fun `low confidence media recognition is always returned for review`() {
+        val aiParser = RecordingAiParser(ScheduleAiParseOutcome(attempted = true))
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "2026년 7월 24일 오후 7시 강남역 회의",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-07-22",
+            defaultDurationMinutes = 60,
+            recognitionConfidence = 0.52,
+        )
+
+        assertEquals(1, aiParser.calls)
         assertTrue(result.needsReview)
-        assertTrue("destination" in result.missingFields)
+        assertTrue(result.warnings.any { "인식 신뢰도가 낮아" in it })
     }
 
     @Test

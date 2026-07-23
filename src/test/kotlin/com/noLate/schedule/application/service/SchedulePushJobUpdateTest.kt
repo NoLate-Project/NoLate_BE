@@ -61,7 +61,7 @@ class SchedulePushJobUpdateTest {
             now = originalMonitorStartAt,
         )
 
-        whenever(repository.findByScheduleId(10L)).thenReturn(job)
+        whenever(repository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
         whenever(repository.save(any<SchedulePushJob>())).thenAnswer { it.getArgument(0) }
 
         SchedulePushJobService(repository).registerFromScheduleDto(

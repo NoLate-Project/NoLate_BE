@@ -36,6 +36,7 @@ class ScheduleService(
     private val categoryRepository: ScheduleCategoryRepository? = null,
     private val categoryShareRepository: ScheduleCategoryShareRepository? = null,
     private val scheduleShareRepository: ScheduleShareRepository? = null,
+    private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
 
@@ -263,8 +264,20 @@ class ScheduleService(
     private fun toVisibleDtos(memberId: Long, schedules: List<Schedule>): List<ScheduleDto> {
         if (schedules.isEmpty()) return emptyList()
 
+        val scheduleIds = schedules.mapNotNull { it.id }
+        val myPlans = scheduleTravelPlanService?.loadMyPlans(memberId, scheduleIds).orEmpty()
+        fun personalizedDto(schedule: Schedule): ScheduleDto {
+            val base = schedule.toDto(objectMapper)
+            return scheduleTravelPlanService?.personalizeScheduleDto(
+                memberId = memberId,
+                schedule = schedule,
+                base = base,
+                plan = schedule.id?.let(myPlans::get),
+            ) ?: base
+        }
+
         val receivedSchedules = schedules.filter { it.memberId != memberId }
-        if (receivedSchedules.isEmpty()) return schedules.map { it.toDto(objectMapper) }
+        if (receivedSchedules.isEmpty()) return schedules.map(::personalizedDto)
 
         val directPermissionByScheduleId = scheduleShareRepository
             ?.findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
@@ -282,7 +295,7 @@ class ScheduleService(
             .orEmpty()
 
         return schedules.map { schedule ->
-            val dto = schedule.toDto(objectMapper)
+            val dto = personalizedDto(schedule)
             if (schedule.memberId == memberId) return@map dto
 
             val categoryPermission = schedule.categorySnapshot?.categoryId

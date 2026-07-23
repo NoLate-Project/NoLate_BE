@@ -25,7 +25,7 @@ class SchedulePushJobServiceTest {
 
     @Test
     fun `알림이 활성화된 저장 일정은 monitor start 시각으로 push job을 등록한다`() {
-        whenever(repository.findByScheduleId(10L)).thenReturn(null)
+        whenever(repository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(null)
         whenever(repository.save(any<SchedulePushJob>())).thenAnswer { it.getArgument(0) }
         val service = SchedulePushJobService(repository)
 

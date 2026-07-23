@@ -54,6 +54,14 @@ data class ScheduleDto(
     val departedAt: String? = null,
     val myDepartedAt: String? = null,
     val departureParticipants: List<ScheduleDepartureParticipantDto> = emptyList(),
+    /** 현재 로그인 사용자의 전체 이동 계획. 다른 참가자의 계획은 별도 권한 API로 조회한다. */
+    val myTravelPlan: ScheduleTravelPlanDto? = null,
+    /** 현재 사용자 계획의 설정/갱신 필요 상태. */
+    val travelPlanStatus: ScheduleTravelPlanStatus? = null,
+    /** 오너 또는 EDITOR인지 나타내는 응답 전용 권한 힌트. */
+    val canViewAllTravelPlans: Boolean? = null,
+    /** 일정 상세에서 사용하는 참가자별 이동 계획 요약. */
+    val travelPlanParticipants: List<ScheduleTravelPlanParticipantDto> = emptyList(),
     val travelMode: ScheduleTravelMode? = null,
     val origin: SchedulePlaceDto? = null,
     val destination: SchedulePlaceDto? = null,

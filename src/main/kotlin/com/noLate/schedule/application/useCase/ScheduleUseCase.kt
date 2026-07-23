@@ -5,6 +5,7 @@ import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
+import com.noLate.schedule.application.service.ScheduleTravelPlanService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportResultDto
 import com.noLate.schedule.domain.ScheduleImportSource
@@ -28,6 +29,7 @@ class ScheduleUseCase(
     private val scheduleDepartureStatusService: ScheduleDepartureStatusService,
     private val favoritePlaceService: FavoritePlaceService,
     private val clock: Clock = Clock.systemUTC(),
+    private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
     /**
@@ -56,8 +58,15 @@ class ScheduleUseCase(
         inputType: ScheduleParseInputType,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
+        recognitionConfidence: Double? = null,
     ): ScheduleParseDto {
-        return scheduleHybridParserService.parse(text, inputType, referenceDate, defaultDurationMinutes)
+        return scheduleHybridParserService.parse(
+            text,
+            inputType,
+            referenceDate,
+            defaultDurationMinutes,
+            recognitionConfidence,
+        )
     }
 
     /**
@@ -74,12 +83,14 @@ class ScheduleUseCase(
         inputType: ScheduleParseInputType,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
+        recognitionConfidence: Double? = null,
     ): ScheduleParseDto {
         val parsed = scheduleHybridParserService.parse(
             text,
             inputType,
             referenceDate,
             defaultDurationMinutes,
+            recognitionConfidence,
         )
         if (parsed.origin != null) return parsed
 
@@ -106,6 +117,9 @@ class ScheduleUseCase(
         // 1. 스케줄 생성
         val addSchedule = scheduleService.addSchedule(memberId, scheduleDto);
 
+        // 기존 오너 ScheduleRoute 저장은 유지하면서 사용자별 계획 테이블에도 호환 기록한다.
+        scheduleTravelPlanService?.syncOwnerTravelPlan(memberId, addSchedule)
+
         // 2. 스케줄 푸쉬 잡 생성
         if (canCreatePushJob(addSchedule)) {
             schedulePushJobService.registerFromScheduleDto(memberId, addSchedule)
@@ -125,6 +139,9 @@ class ScheduleUseCase(
         source: ScheduleImportSource,
     ): ScheduleImportResultDto {
         val result = scheduleService.importSchedule(memberId, scheduleDto, source)
+        if (result.created) {
+            scheduleTravelPlanService?.syncOwnerTravelPlan(memberId, result.schedule)
+        }
         if (result.created && canCreatePushJob(result.schedule)) {
             schedulePushJobService.registerFromScheduleDto(memberId, result.schedule)
         }
@@ -138,6 +155,12 @@ class ScheduleUseCase(
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
         val updated = scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
+        scheduleTravelPlanService?.syncOwnerTravelPlan(memberId, updated)
+        scheduleTravelPlanService?.findStaleNotificationMemberIds(scheduleId)
+            .orEmpty()
+            .forEach { staleMemberId ->
+                schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, staleMemberId)
+            }
         registerOrCancelPushJob(memberId, updated)
         return updated
     }
@@ -147,7 +170,7 @@ class ScheduleUseCase(
         if (canCreatePushJob(scheduleDto)) {
             schedulePushJobService.registerFromScheduleDto(memberId, scheduleDto)
         } else {
-            schedulePushJobService.cancelByScheduleId(scheduleId)
+            schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, memberId)
         }
     }
 
@@ -181,11 +204,11 @@ class ScheduleUseCase(
         val detail = scheduleService.getScheduleDetail(memberId, scheduleId)
 
         scheduleDepartureStatusService.markDeparted(memberId, scheduleId)
+        scheduleTravelPlanService?.disableNotification(memberId, scheduleId)
+        schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, memberId)
 
         val updated = if (detail.ownerMemberId == memberId) {
-            scheduleService.markDeparted(memberId, scheduleId).also {
-                schedulePushJobService.cancelByScheduleId(scheduleId)
-            }
+            scheduleService.markDeparted(memberId, scheduleId)
         } else {
             scheduleService.getScheduleDetail(memberId, scheduleId)
         }
@@ -206,10 +229,11 @@ class ScheduleUseCase(
      * 일정 편집 화면 진입 시 최신 저장 상태를 가져온다.
      */
     fun getScheduleDetail(memberId: Long, scheduleId: Long): ScheduleDto {
-        return scheduleDepartureStatusService.attachDepartureParticipants(
+        val withDeparture = scheduleDepartureStatusService.attachDepartureParticipants(
             currentMemberId = memberId,
             scheduleDto = scheduleService.getScheduleDetail(memberId, scheduleId),
         )
+        return scheduleTravelPlanService?.attachOverview(memberId, withDeparture) ?: withDeparture
     }
 
     /**

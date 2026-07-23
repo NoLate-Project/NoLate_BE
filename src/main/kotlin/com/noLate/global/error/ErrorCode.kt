@@ -34,6 +34,7 @@ enum class ErrorCode(
     SCHEDULE_SHARE_NOT_FOUND("S005", "일정 공유 정보가 존재하지 않습니다."),
     SCHEDULE_CATEGORY_SHARE_NOT_FOUND("S006", "일정 카테고리 공유 정보가 존재하지 않습니다."),
     SCHEDULE_SHARE_INVITATION_NOT_FOUND("S007", "일정 공유 초대가 존재하지 않습니다."),
+    SCHEDULE_TRAVEL_PLAN_NOT_FOUND("S008", "개인 이동 계획이 존재하지 않습니다."),
 
     // Favorite Place 영역
     FAVORITE_PLACE_CATEGORY_NOT_FOUND("F001", "즐겨찾기 장소 카테고리가 존재하지 않습니다."),

@@ -4,6 +4,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import com.noLate.subscription.domain.SubscriptionPlan
 import com.noLate.subscription.domain.SubscriptionPolicyDto
 import org.springframework.stereotype.Service
@@ -14,6 +15,7 @@ import java.time.ZoneId
 class SubscriptionPolicyService(
     private val memberRepository: MemberRepository,
     private val scheduleRepository: ScheduleRepository,
+    private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
 ) {
     private val seoulZone = ZoneId.of("Asia/Seoul")
 
@@ -75,6 +77,16 @@ class SubscriptionPolicyService(
             .atStartOfDay(seoulZone)
             .toLocalDateTime()
         val nextMonthStart = monthStart.plusMonths(1)
-        return scheduleRepository.countMonthlySmartSchedules(memberId, monthStart, nextMonthStart)
+        val legacyOwnerSchedules = scheduleRepository.countMonthlySmartSchedules(
+            memberId,
+            monthStart,
+            nextMonthStart,
+        )
+        val personalPlans = travelPlanRepository?.countMonthlyNotificationEnabledPlans(
+            memberId,
+            monthStart,
+            nextMonthStart,
+        ) ?: 0L
+        return legacyOwnerSchedules + personalPlans
     }
 }
