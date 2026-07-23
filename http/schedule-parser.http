@@ -127,3 +127,15 @@ Content-Type: application/json
   "referenceDate": "2026-01-01",
   "defaultDurationMinutes": 60
 }
+
+### FE 네이티브 STT가 만든 음성 전사 텍스트를 분석한다.
+POST {{baseUrl}}/api/schedules/parse
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "text": "내일 오후 세 시 강남역에서 민수랑 미팅 추가해줘",
+  "inputType": "VOICE_TRANSCRIPT",
+  "referenceDate": "2026-07-02",
+  "defaultDurationMinutes": 60
+}

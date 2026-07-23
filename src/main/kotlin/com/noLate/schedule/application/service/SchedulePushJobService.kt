@@ -3,18 +3,25 @@ package com.noLate.schedule.application.service
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobDto
+import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import jakarta.transaction.Transactional
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 
 @Service
 class SchedulePushJobService(
-    private val schedulePushJobRepository: SchedulePushJobRepository
+    private val schedulePushJobRepository: SchedulePushJobRepository,
+    @Value("\${schedule.push.departure-snooze-minutes:5}")
+    private val departureSnoozeMinutes: Long = 5,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
 
 
@@ -115,6 +122,32 @@ class SchedulePushJobService(
     @Transactional
     fun cancelByScheduleIdAndMemberId(scheduleId: Long, memberId: Long) {
         schedulePushJobRepository.findByScheduleIdAndMemberId(scheduleId, memberId)?.cancel()
+    }
+
+    @Transactional
+    fun snoozeDepartureReminder(memberId: Long, scheduleId: Long) {
+        val pushJob = schedulePushJobRepository.findByScheduleIdAndMemberId(scheduleId, memberId)
+            ?: return
+        val now = Instant.now(clock)
+
+        if (pushJob.status == SchedulePushJobStatus.CANCELED) {
+            return
+        }
+
+        if (!now.isBefore(pushJob.scheduleAt)) {
+            pushJob.complete()
+            return
+        }
+
+        val requestedSnoozeAt = now.plus(departureSnoozeMinutes, ChronoUnit.MINUTES)
+        val latestUsefulReminderAt = pushJob.scheduleAt.minus(1, ChronoUnit.MINUTES)
+        val nextCheckAt = minOf(requestedSnoozeAt, latestUsefulReminderAt)
+
+        if (!nextCheckAt.isAfter(now)) {
+            return
+        }
+
+        pushJob.snoozeUntil(nextCheckAt)
     }
 
     private fun parseInstant(value: String): Instant =

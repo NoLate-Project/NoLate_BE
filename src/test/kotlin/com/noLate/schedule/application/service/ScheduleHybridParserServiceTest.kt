@@ -439,6 +439,32 @@ class ScheduleHybridParserServiceTest {
         assertFalse("test@example.com" in aiParser.lastText.orEmpty())
     }
 
+    @Test
+    fun `does not call AI fallback for one shot voice transcript`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(destinationName = "강남역", destinationConfidence = 1.0),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "내일 미팅 추가해줘",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-02",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(0, aiParser.calls)
+        assertEquals("2026-07-03", result.date)
+        assertEquals(ScheduleParseSource.RULE_FALLBACK, result.parseSource)
+        assertFalse(result.aiAttempted)
+        assertTrue(result.needsReview)
+        assertTrue("time" in result.missingFields)
+        assertTrue("destination" in result.missingFields)
+    }
+
     /**
      * 실제 외부 API 없이 호출 횟수와 전달된 텍스트를 검증하기 위한 테스트 대역이다.
      */

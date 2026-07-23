@@ -16,6 +16,7 @@ class DepartureReminderPolicyTest {
      * 경계 직전과 직후는 아래 기준 시각에서 자동 계산한다.
      */
     private val recommendedDepartureAt = Instant.parse("2026-06-12T02:00:00Z")
+    private val scheduleAt = Instant.parse("2026-06-12T03:00:00Z")
     private val alertLeadMinutes = 15
     private val reminderIntervalMinutes = 5
 
@@ -25,7 +26,7 @@ class DepartureReminderPolicyTest {
     fun `출발 전 알림 시각 전에는 ETA만 갱신하고 푸시하지 않는다`() {
         assertEquals(
             DepartureReminderDecision.NONE,
-            policy.decide(
+            decide(
                 now = recommendedDepartureAt.minus(alertLeadMinutes + 1L, ChronoUnit.MINUTES),
                 recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = null,
@@ -40,7 +41,7 @@ class DepartureReminderPolicyTest {
     fun `출발 전 알림 시각에 도달하면 준비 알림을 선택한다`() {
         assertEquals(
             DepartureReminderDecision.ADVANCE_NOTICE,
-            policy.decide(
+            decide(
                 now = recommendedDepartureAt.minus(alertLeadMinutes.toLong(), ChronoUnit.MINUTES),
                 recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = null,
@@ -57,9 +58,8 @@ class DepartureReminderPolicyTest {
 
         assertEquals(
             DepartureReminderDecision.NONE,
-            policy.decide(
+            decide(
                 now = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES),
-                recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = recommendedDepartureAt,
                 lastReminderBoundaryAt = reminderBoundaryAt,
                 alertLeadMinutes = alertLeadMinutes,
@@ -89,9 +89,8 @@ class DepartureReminderPolicyTest {
     fun `안내 후 추천 출발 시각이 변경되면 변경 알림을 선택한다`() {
         assertEquals(
             DepartureReminderDecision.ADVANCE_NOTICE,
-            policy.decide(
+            decide(
                 now = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES),
-                recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = recommendedDepartureAt.plus(10, ChronoUnit.MINUTES),
                 lastReminderBoundaryAt = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES),
                 alertLeadMinutes = alertLeadMinutes,
@@ -104,9 +103,8 @@ class DepartureReminderPolicyTest {
     fun `추천 출발 시각과 같거나 지난 경우 지금 출발 경고를 선택한다`() {
         assertEquals(
             DepartureReminderDecision.DEPART_NOW,
-            policy.decide(
+            decide(
                 now = recommendedDepartureAt,
-                recommendedDepartureAt = recommendedDepartureAt,
                 lastNotifiedDepartureAt = recommendedDepartureAt,
                 lastReminderBoundaryAt = recommendedDepartureAt.minus(5, ChronoUnit.MINUTES),
                 alertLeadMinutes = alertLeadMinutes,
@@ -127,4 +125,69 @@ class DepartureReminderPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `지금 출발 알림 이후 3분 경계에 후속 알림을 선택한다`() {
+        val departureNoticeSentAt = recommendedDepartureAt
+
+        assertEquals(
+            DepartureReminderDecision.AFTER_DEPARTURE_3,
+            decide(
+                now = departureNoticeSentAt.plus(3, ChronoUnit.MINUTES),
+                departureNoticeSentAt = departureNoticeSentAt,
+                lastDepartureReminderBoundaryAt = recommendedDepartureAt,
+            ),
+        )
+    }
+
+    @Test
+    fun `여러 후속 알림 경계가 지나면 가장 최근 경계만 선택한다`() {
+        val departureNoticeSentAt = recommendedDepartureAt
+
+        assertEquals(
+            DepartureReminderDecision.BEFORE_SCHEDULE_1,
+            decide(
+                now = scheduleAt.minus(1, ChronoUnit.MINUTES),
+                departureNoticeSentAt = departureNoticeSentAt,
+                lastDepartureReminderBoundaryAt = recommendedDepartureAt,
+            ),
+        )
+    }
+
+    @Test
+    fun `일정 시작 이후에는 출발 알림을 선택하지 않는다`() {
+        assertEquals(
+            DepartureReminderDecision.NONE,
+            decide(
+                now = scheduleAt,
+                departureNoticeSentAt = recommendedDepartureAt,
+                lastDepartureReminderBoundaryAt = recommendedDepartureAt,
+            ),
+        )
+    }
+
+    private fun decide(
+        now: Instant,
+        recommendedDepartureAt: Instant = this.recommendedDepartureAt,
+        scheduleAt: Instant = this.scheduleAt,
+        lastNotifiedDepartureAt: Instant? = null,
+        lastReminderBoundaryAt: Instant? = null,
+        departureNoticeSentAt: Instant? = null,
+        lastDepartureReminderBoundaryAt: Instant? = null,
+        snoozedUntil: Instant? = null,
+        alertLeadMinutes: Int = this.alertLeadMinutes,
+        reminderIntervalMinutes: Int = this.reminderIntervalMinutes,
+    ): DepartureReminderDecision =
+        policy.decide(
+            now = now,
+            recommendedDepartureAt = recommendedDepartureAt,
+            scheduleAt = scheduleAt,
+            lastNotifiedDepartureAt = lastNotifiedDepartureAt,
+            lastReminderBoundaryAt = lastReminderBoundaryAt,
+            departureNoticeSentAt = departureNoticeSentAt,
+            lastDepartureReminderBoundaryAt = lastDepartureReminderBoundaryAt,
+            snoozedUntil = snoozedUntil,
+            alertLeadMinutes = alertLeadMinutes,
+            reminderIntervalMinutes = reminderIntervalMinutes,
+        )
 }

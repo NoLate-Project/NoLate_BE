@@ -9,6 +9,7 @@ import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
 import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleDepartureReminderStage
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelMode
@@ -478,7 +479,7 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
-    fun `실시간 추천 출발 시각에 도달하면 지금 출발 푸시를 보내고 job을 완료한다`() {
+    fun `실시간 추천 출발 시각에 도달하면 지금 출발 푸시를 보내고 후속 알림을 예약한다`() {
         val travelMinutes = 60
         val schedule = schedule(shortScheduleStartAt)
         val job = SchedulePushJob.create(
@@ -514,8 +515,114 @@ class SchedulePushJobWorkerTest {
             inboxDeduplicationKey = any(),
             persistInInbox = eq(true),
         )
-        assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
+        assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(testNow, job.lastPushedAt)
+        assertEquals(testNow, job.departureNoticeSentAt)
+        assertEquals(testNow.plus(3, ChronoUnit.MINUTES), job.nextCheckAt)
+    }
+
+    @Test
+    fun `지금 출발 알림 후 3분이 지나면 출발 확인 후속 푸시를 보낸다`() {
+        val schedule = schedule(startAt = testNow.plus(30, ChronoUnit.MINUTES))
+        val previousRecommendedDepartureAt = testNow.minus(3, ChronoUnit.MINUTES)
+        val job = dueDepartureJob(schedule)
+        markDepartNowSent(
+            job = job,
+            travelMinutes = 33,
+            recommendedDepartureAt = previousRecommendedDepartureAt,
+            sentAt = previousRecommendedDepartureAt,
+        )
+
+        stubDueJob(job, schedule, travelMinutes = 33)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(1L),
+            title = eq("출발 확인이 필요해요"),
+            body = check { assertTrue(it.contains("지금 출발해야 해요")) },
+            data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
+                assertEquals("true", it["departNow"])
+                assertEquals("AFTER_DEPARTURE_3", it["departureReminderDecision"])
+            },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
+        )
+        assertEquals("AFTER_DEPARTURE_3", job.lastDepartureReminderStage)
+        assertEquals(testNow, job.lastDepartureReminderBoundaryAt)
+        assertEquals(testNow.plus(4, ChronoUnit.MINUTES), job.nextCheckAt)
+    }
+
+    @Test
+    fun `여러 후속 경계가 밀렸다면 가장 긴급한 일정 1분 전 알림만 보낸다`() {
+        val schedule = schedule(startAt = testNow.plus(1, ChronoUnit.MINUTES))
+        val previousRecommendedDepartureAt = testNow.minus(10, ChronoUnit.MINUTES)
+        val job = dueDepartureJob(schedule)
+        markDepartNowSent(
+            job = job,
+            travelMinutes = 11,
+            recommendedDepartureAt = previousRecommendedDepartureAt,
+            sentAt = previousRecommendedDepartureAt,
+        )
+
+        stubDueJob(job, schedule, travelMinutes = 11)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(1L),
+            title = eq("곧 일정 시작이에요"),
+            body = check { assertTrue(it.contains("1분 남았어요")) },
+            data = check {
+                assertEquals("BEFORE_SCHEDULE_1", it["departureReminderDecision"])
+                assertEquals("true", it["departNow"])
+            },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
+        )
+        assertEquals("BEFORE_SCHEDULE_1", job.lastDepartureReminderStage)
+        assertEquals(testNow, job.lastDepartureReminderBoundaryAt)
+        assertEquals(schedule.startAt, job.nextCheckAt)
+    }
+
+    @Test
+    fun `사용자가 다시 알림을 요청한 시각에는 스누즈 푸시를 보내고 예약을 비운다`() {
+        val schedule = schedule(startAt = testNow.plus(30, ChronoUnit.MINUTES))
+        val previousRecommendedDepartureAt = testNow.minus(5, ChronoUnit.MINUTES)
+        val job = dueDepartureJob(schedule)
+        markDepartNowSent(
+            job = job,
+            travelMinutes = 35,
+            recommendedDepartureAt = previousRecommendedDepartureAt,
+            sentAt = previousRecommendedDepartureAt,
+        )
+        job.snoozeUntil(testNow)
+
+        stubDueJob(job, schedule, travelMinutes = 35)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(1L),
+            title = eq("다시 알려드려요"),
+            body = check { assertTrue(it.contains("아직 출발 전이면")) },
+            data = check {
+                assertEquals("SNOOZE", it["departureReminderDecision"])
+                assertEquals("5", it["snoozeMinutes"])
+                assertEquals("true", it["departNow"])
+            },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
+        )
+        assertNull(job.snoozedUntil)
+        assertEquals("DEPART_NOW", job.lastDepartureReminderStage)
     }
 
     @Test
@@ -571,7 +678,7 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
-    fun `일정 시작 직후에는 지연된 지금 출발 푸시를 발송한다`() {
+    fun `일정 시작 이후에는 지연된 출발 푸시 없이 job을 완료한다`() {
         val scheduleStartAt = testNow.minus(2, ChronoUnit.MINUTES)
         val schedule = schedule(scheduleStartAt)
         val job = SchedulePushJob.create(
@@ -784,7 +891,6 @@ class SchedulePushJobWorkerTest {
         trafficChangePolicy = TrafficChangePolicy(),
         retryDelayMinutes = 5,
         maxRetryCount = 3,
-        deliveryGraceMinutes = 10,
         departureAlertLeadMinutes = departureAlertLeadMinutes,
         departureReminderIntervalMinutes = departureReminderIntervalMinutes,
         processingTimeoutMinutes = 10,
@@ -816,6 +922,26 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
+    }
+
+    private fun markDepartNowSent(
+        job: SchedulePushJob,
+        travelMinutes: Int,
+        recommendedDepartureAt: Instant,
+        sentAt: Instant,
+    ) {
+        job.startProcessing("previous-worker")
+        job.finishCheck(
+            travelMinutes = travelMinutes,
+            recommendedDepartureAt = recommendedDepartureAt,
+            pushSent = true,
+            notifiedDepartureAt = recommendedDepartureAt,
+            departureReminderStage = ScheduleDepartureReminderStage.DEPART_NOW,
+            departureReminderBoundaryAt = recommendedDepartureAt,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            now = sentAt,
+        )
     }
 
     private fun schedule(

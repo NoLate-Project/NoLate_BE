@@ -30,14 +30,30 @@ class TrafficChangePolicy {
         val departureText = timeFormatter.format(recommendedDepartureAt)
         val delta = previousTravelMinutes?.let { currentTravelMinutes - it }
 
-        if (decision == DepartureReminderDecision.DEPART_NOW) {
+        if (decision.departNowAction) {
             val trafficChange = delta
                 ?.takeIf { it > 0 }
                 ?.let { " 이동 시간이 ${it}분 늘었어요." }
                 .orEmpty()
+
+            val titleBody = when (decision) {
+                DepartureReminderDecision.SNOOZE ->
+                    "다시 알려드려요" to "'$titleText' 출발 시간이 지났어요. 아직 출발 전이면 지금 출발하세요.$trafficChange"
+                DepartureReminderDecision.AFTER_DEPARTURE_3 ->
+                    "출발 확인이 필요해요" to "'$titleText'에 늦지 않으려면 지금 출발해야 해요.$trafficChange"
+                DepartureReminderDecision.AFTER_DEPARTURE_7 ->
+                    "늦을 수 있어요" to "'$titleText' 출발 확인이 없어요. 아직 출발 전이면 바로 출발하세요.$trafficChange"
+                DepartureReminderDecision.BEFORE_SCHEDULE_3 ->
+                    "곧 일정 시작이에요" to "'$titleText' 시작까지 3분 남았어요. 이동 중인지 확인해 주세요.$trafficChange"
+                DepartureReminderDecision.BEFORE_SCHEDULE_1 ->
+                    "곧 일정 시작이에요" to "'$titleText' 시작까지 1분 남았어요. 이동 중인지 확인해 주세요.$trafficChange"
+                else ->
+                    "지금 출발하세요" to "'$titleText'에 늦지 않으려면 지금 출발하세요.$trafficChange"
+            }
+
             return SchedulePushMessage(
-                title = "지금 출발하세요",
-                body = "'$titleText'에 늦지 않으려면 지금 출발하세요.$trafficChange",
+                title = titleBody.first,
+                body = titleBody.second,
                 trafficChangeMinutes = delta,
             )
         }

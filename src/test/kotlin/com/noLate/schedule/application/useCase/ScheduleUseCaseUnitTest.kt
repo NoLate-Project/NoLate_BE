@@ -75,11 +75,28 @@ class ScheduleUseCaseUnitTest {
     fun `사용자가 입력한 자연어 일정 문장은 일정 파서로 넘긴다`() {
         // UseCase는 파싱 규칙을 직접 알지 않고, 파서 서비스의 결과를 그대로 반환한다.
         val parsed = ScheduleParseDto(title = "점심 약속", date = "2026-05-30", time = "12:00")
-        whenever(scheduleHybridParserService.parse("내일 점심 약속", "2026-01-01", 60)).thenReturn(parsed)
+        whenever(
+            scheduleHybridParserService.parse(
+                "내일 점심 약속",
+                ScheduleParseInputType.CONVERSATION,
+                "2026-01-01",
+                60,
+            )
+        ).thenReturn(parsed)
 
-        val result = scheduleUseCase.parseScheduleText("내일 점심 약속", "2026-01-01", 60)
+        val result = scheduleUseCase.parseScheduleText(
+            text = "내일 점심 약속",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-01-01",
+            defaultDurationMinutes = 60,
+        )
 
-        verify(scheduleHybridParserService, times(1)).parse("내일 점심 약속", "2026-01-01", 60)
+        verify(scheduleHybridParserService, times(1)).parse(
+            "내일 점심 약속",
+            ScheduleParseInputType.CONVERSATION,
+            "2026-01-01",
+            60,
+        )
         assertEquals(parsed, result)
     }
 

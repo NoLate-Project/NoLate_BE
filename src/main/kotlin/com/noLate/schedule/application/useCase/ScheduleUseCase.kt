@@ -14,6 +14,7 @@ import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
 import jakarta.transaction.Transactional
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.Instant
@@ -31,6 +32,7 @@ class ScheduleUseCase(
     private val clock: Clock = Clock.systemUTC(),
     private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
 ) {
+    private val log = LoggerFactory.getLogger(javaClass)
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
     /**
      * 자유 형식 텍스트를 일정 입력 폼용 데이터로 분석한다.
@@ -39,12 +41,26 @@ class ScheduleUseCase(
      */
     fun parseScheduleText(
         text: String?,
+        inputType: ScheduleParseInputType,
         referenceDate: String?,
         defaultDurationMinutes: Int?,
     ): ScheduleParseDto {
-        // 기존 호출자와 테스트가 사용하던 3개 인자 경로는 그대로 보존한다. 신규 API 요청만
-        // 아래의 입력 타입 포함 오버로드를 사용하므로, 일반 텍스트 분석의 동작에는 영향이 없다.
-        return scheduleHybridParserService.parse(text, referenceDate, defaultDurationMinutes)
+        val result = scheduleHybridParserService.parse(
+            text,
+            inputType,
+            referenceDate,
+            defaultDurationMinutes,
+        )
+        log.info(
+            "Schedule parse completed. inputType={}, textLength={}, parseSource={}, aiAttempted={}, needsReview={}, missingFields={}",
+            inputType,
+            text?.length ?: 0,
+            result.parseSource,
+            result.aiAttempted,
+            result.needsReview,
+            result.missingFields,
+        )
+        return result
     }
 
     /**
@@ -214,6 +230,14 @@ class ScheduleUseCase(
         }
 
         return scheduleDepartureStatusService.attachDepartureParticipants(memberId, updated)
+    }
+
+    /**
+     * 사용자가 푸시의 "5분 뒤 다시 알림" 액션을 선택했을 때 출발 알림 job을 다시 깨운다.
+     */
+    @Transactional
+    fun snoozeDepartureReminder(memberId: Long, scheduleId: Long) {
+        schedulePushJobService.snoozeDepartureReminder(memberId, scheduleId)
     }
 
     /**

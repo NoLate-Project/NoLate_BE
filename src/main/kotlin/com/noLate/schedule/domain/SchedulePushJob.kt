@@ -126,6 +126,26 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var lastPushedAt: Instant? = null
         protected set
 
+    @Column(name = "departure_notice_sent_at")
+    @Comment("첫 지금 출발 알림 발송 시간")
+    var departureNoticeSentAt: Instant? = null
+        protected set
+
+    @Column(name = "last_departure_reminder_stage", length = 40)
+    @Comment("마지막으로 처리한 출발 후속 알림 단계")
+    var lastDepartureReminderStage: String? = null
+        protected set
+
+    @Column(name = "last_departure_reminder_boundary_at")
+    @Comment("마지막으로 처리한 출발 후속 알림 경계 시각")
+    var lastDepartureReminderBoundaryAt: Instant? = null
+        protected set
+
+    @Column(name = "snoozed_until")
+    @Comment("사용자가 다시 알림을 요청한 시각")
+    var snoozedUntil: Instant? = null
+        protected set
+
     @Column(name = "check_count", nullable = false)
     @Comment("교통상황 체크 횟수")
     var checkCount: Int = 0
@@ -214,6 +234,9 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         pushSent: Boolean,
         notifiedDepartureAt: Instant?,
         reminderBoundaryAt: Instant? = null,
+        departureReminderStage: ScheduleDepartureReminderStage? = null,
+        departureReminderBoundaryAt: Instant? = null,
+        clearSnooze: Boolean = false,
         nextCheckAt: Instant?,
         completeAfterCheck: Boolean,
         now: Instant = Instant.now()
@@ -231,6 +254,21 @@ class SchedulePushJob protected constructor() : BaseEntity() {
             if (reminderBoundaryAt != null) {
                 lastReminderBoundaryAt = reminderBoundaryAt
             }
+        }
+
+        if (departureReminderStage != null) {
+            lastDepartureReminderStage = departureReminderStage.name
+            lastDepartureReminderBoundaryAt = requireNotNull(departureReminderBoundaryAt) {
+                "출발 후속 알림 단계에는 경계 시각이 필요합니다."
+            }
+            if (departureReminderStage == ScheduleDepartureReminderStage.DEPART_NOW && departureNoticeSentAt == null) {
+                // 후속 +3/+7분 알림은 실제로 사용자에게 처음 출발을 재촉한 시각을 기준으로 삼는다.
+                departureNoticeSentAt = now
+            }
+        }
+
+        if (clearSnooze) {
+            snoozedUntil = null
         }
 
         if (completeAfterCheck) {
@@ -273,10 +311,30 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.lastReminderBoundaryAt = null
         this.lastCheckedAt = null
         this.lastPushedAt = null
+        this.departureNoticeSentAt = null
+        this.lastDepartureReminderStage = null
+        this.lastDepartureReminderBoundaryAt = null
+        this.snoozedUntil = null
         this.checkCount = 0
         this.retryCount = 0
         this.failureReason = null
 
+        clearLock()
+    }
+
+    /**
+     * 사용자가 "5분 뒤 다시 알림"을 선택했을 때 완료된 작업도 일정 시작 전이면 다시 깨울 수 있게 한다.
+     */
+    fun snoozeUntil(nextCheckAt: Instant) {
+        require(nextCheckAt.isBefore(scheduleAt)) {
+            "다시 알림 시각은 일정 시작 전이어야 합니다."
+        }
+
+        status = SchedulePushJobStatus.ACTIVE
+        this.nextCheckAt = nextCheckAt
+        this.snoozedUntil = nextCheckAt
+        failureReason = null
+        retryCount = 0
         clearLock()
     }
 
@@ -287,10 +345,6 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         return !now.isBefore(scheduleAt)
     }
 
-    /**
-     * 스케줄러가 추천 출발 시각에 잠시 멈췄다가 복구되더라도 최종 알림을 놓치지 않도록
-     * 일정 시작 이후의 짧은 유예 시간까지 작업을 처리할 수 있게 한다.
-     */
     fun isPastDeliveryWindow(now: Instant, graceMinutes: Long): Boolean {
         require(graceMinutes >= 0) { "graceMinutes는 0 이상이어야 합니다." }
         return now.isAfter(scheduleAt.plusSeconds(graceMinutes * 60))
