@@ -36,8 +36,8 @@ class MemberUseCase(
     private val refreshTokenService: RefreshTokenService,
     private val memberConsentService: MemberConsentService,
     private val memberSessionFenceService: MemberSessionFenceService,
+    private val accountCleanupService: AccountCleanupService,
     private val socialIdentityVerifier: SocialIdentityVerifier? = null,
-    private val accountCleanupService: AccountCleanupService? = null,
 ) {
 
     /**
@@ -193,10 +193,22 @@ class MemberUseCase(
     private fun issueTokens(memberDto: MemberDto): MemberDto {
         val memberId = requireNotNull(memberDto.id) { "member.id가 없습니다." }
         val memberName = requireNotNull(memberDto.name) { "member.name이 없습니다." }
+        // Explicit login은 member -> refresh row 순서로 잠근다. 활성 A session을 교체하면
+        // 새 generation을 열고, logout이 이미 다음 빈 generation을 열었다면 그 값을 사용한다.
+        // tokenLogin/refresh rotation은 이 경계를 호출하지 않아 같은 generation을 유지한다.
+        val sessionGeneration = memberSessionFenceService.beginExplicitLoginSession(memberId)
 
         // 3) accessToken + refreshToken 발급
-        val accessToken = jwtTokenProvider.createAccessToken(memberId, memberName)
-        val refreshToken = jwtTokenProvider.createRefreshToken(memberId, memberName)
+        val accessToken = jwtTokenProvider.createAccessToken(
+            memberId,
+            memberName,
+            sessionGeneration,
+        )
+        val refreshToken = jwtTokenProvider.createRefreshToken(
+            memberId,
+            memberName,
+            sessionGeneration,
+        )
 
         // 4) refreshToken 저장 (기존 것들 정리하는 정책은 RefreshTokenService 내에서 처리)
         val refreshExpiry = jwtTokenProvider.getRefreshTokenExpiryLocalDateTime()
@@ -227,32 +239,25 @@ class MemberUseCase(
     }
 
     /**
-     *  로그아웃
-     * - 전달받은 refreshToken 을 폐기(revoke)
-     * - accessToken 은 짧게 가져가고 별도 블랙리스트는 사용하지 않는 정책
+     * refresh-token logout.
+     *
+     * signed refresh JWT의 member/session generation과 DB의 현재 활성 refresh row가 모두
+     * 일치할 때만 generation을 한 번 진행시키고 refresh/device token을 삭제한다. 응답 유실
+     * replay나 이미 새 generation이 발급된 뒤 도착한 요청은 성공 no-op이다. access token은
+     * 별도 blacklist가 아니라 generation mismatch로 즉시 무효화된다.
      */
     @Transactional
     fun logout(refreshToken: String) {
-        // 1) 토큰이 유효하지 않더라도(DB에는 남아있을 수 있으므로) revoke는 시도
-        if (!jwtTokenProvider.validateToken(refreshToken) ||
-            !runCatching { jwtTokenProvider.isRefreshToken(refreshToken) }.getOrDefault(false)
-        ) {
-            // 이미 만료되었더라도 DB의 토큰은 폐기
-            refreshTokenService.revokeToken(refreshToken)
-            return
-        }
+        // v4 이전 refresh JWT는 signed session-generation이 없어 일반 인증/재발급에는
+        // fail-closed지만, 서명/issuer/만료/type과 DB 소유권이 유효하면 logout 정리는 허용한다.
+        val logoutSession = jwtTokenProvider.resolveRefreshSessionForLogout(refreshToken)
+            ?: return
 
-        // 2) 토큰에서 memberId 추출
-        val memberIdFromToken = jwtTokenProvider.getMemberIdFromToken(refreshToken)
-
-        // 3) DB에 있는 토큰 검증 (존재, 소유자 일치, 만료/폐기 여부)
-        val stored = refreshTokenService.validateAndGet(refreshToken)
-        if (stored.memberId != memberIdFromToken) {
-            throw BusinessException(ErrorCode.INVALID_TOKEN, "토큰 소유자가 일치하지 않습니다.")
-        }
-
-        // 4) 모든 세션과 기기 토큰을 제거하고 기존 access token도 즉시 무효화한다.
-        memberSessionFenceService.invalidateSessionsAndLogout(memberIdFromToken)
+        memberSessionFenceService.compareAndLogout(
+            memberId = logoutSession.memberId,
+            presentedSessionGeneration = logoutSession.sessionGeneration,
+            presentedRefreshToken = refreshToken,
+        )
     }
 
     /**
@@ -311,6 +316,19 @@ class MemberUseCase(
         }
 
         val memberIdFromToken = jwtTokenProvider.getMemberIdFromToken(refreshToken)
+        val tokenSessionGeneration = runCatching {
+            jwtTokenProvider.getSessionGeneration(refreshToken)
+        }.getOrElse {
+            throw BusinessException(
+                ErrorCode.INVALID_TOKEN,
+                "세션 정보가 없는 리프레시 토큰입니다.",
+            )
+        }
+        val currentSessionGeneration =
+            memberService.getSessionGenerationForUpdate(memberIdFromToken)
+        if (currentSessionGeneration != tokenSessionGeneration) {
+            throw BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다.")
+        }
 
         // 3) 회원 조회 (Optional<Member> 라고 가정)
         val memberOpt = memberService.getFindMemberId(memberIdFromToken)
@@ -325,8 +343,16 @@ class MemberUseCase(
         )
 
         // 4) 새 accessToken + refreshToken 발급
-        val newAccessToken = jwtTokenProvider.createAccessToken(memberIdFromToken, memberName)
-        val newRefreshToken = jwtTokenProvider.createRefreshToken(memberIdFromToken, memberName)
+        val newAccessToken = jwtTokenProvider.createAccessToken(
+            memberIdFromToken,
+            memberName,
+            currentSessionGeneration,
+        )
+        val newRefreshToken = jwtTokenProvider.createRefreshToken(
+            memberIdFromToken,
+            memberName,
+            currentSessionGeneration,
+        )
         val newRefreshExpiry = jwtTokenProvider.getRefreshTokenExpiryLocalDateTime()
 
         // 5) row lock으로 기존 refreshToken을 단 한 번만 소비하고 새 token으로 회전
@@ -382,13 +408,24 @@ class MemberUseCase(
         memberService.updateMember(member)  // 반환값은 굳이 안 써도 됨
     }
 
+    /**
+     * access-authenticated destructive account withdrawal.
+     *
+     * logout과 달리 stale/replayed 요청을 성공으로 숨기지 않는다. security filter가 통과한 뒤
+     * 요청이 지연될 수 있으므로 member row를 잠그고 presented access JWT generation을 다시
+     * 비교한다. mismatch면 401로 fail closed하고 더 최신 session/account를 변경하지 않는다.
+     */
     @Transactional
-    fun withdraw(memberId: Long, passwordForCheck: String?) {
-        // 1) 회원 조회
-        val member = memberService.getFindMemberId(memberId)
-            .orElseThrow {
-                BusinessException(ErrorCode.MEMBER_NOT_FOUND, "회원 정보를 찾을 수 없습니다.")
-            }
+    fun withdraw(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+        passwordForCheck: String?,
+    ) {
+        // 1) 인증된 access session과 회원 row를 같은 transaction에서 선형화
+        val member = memberService.getActiveMemberForUpdate(
+            memberId = memberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
 
         // 2) COMMON 계정은 비밀번호 검증
         if (member.loginType == LoginType.COMMON) {
@@ -405,16 +442,15 @@ class MemberUseCase(
 
         val id = requireNotNull(member.id) { "member.id 가 없습니다." }
 
-        memberService.invalidateSessions(id)
-        if (accountCleanupService != null) {
-            accountCleanupService.withdraw(member)
-            memberService.updateMember(member)
-        } else {
-            refreshTokenService.deleteAllByMemberId(memberId)
-            val byMemberId = memberSettingService.getByMemberId(memberId)
-            memberSettingService.softDelete(byMemberId.toEntity())
-            memberService.softDelete(member)
-        }
+        // 위 member lock을 outer transaction 종료까지 유지한 상태에서 generation과 refresh
+        // session만 먼저 닫는다. provider ownership row는 AccountCleanupService가
+        // job -> source -> delivery/history -> device-token 순서의 마지막에 제거한다.
+        memberSessionFenceService.invalidateSessionForWithdrawal(
+            memberId = id,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
+        accountCleanupService.withdraw(member)
+        memberService.updateMember(member)
     }
 
 

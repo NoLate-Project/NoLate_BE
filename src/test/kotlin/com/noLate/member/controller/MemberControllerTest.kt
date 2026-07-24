@@ -33,6 +33,7 @@ class MemberControllerTest {
         id = 1L,
         email = "user@test.com",
         name = "tester",
+        accessTokenSessionGeneration = 8L,
     )
 
     private val consentRequest = SignupConsentRequest(
@@ -249,7 +250,7 @@ class MemberControllerTest {
         )
 
         assertTrue(response.success)
-        verify(memberUseCase).withdraw(1L, null)
+        verify(memberUseCase).withdraw(1L, 8L, null)
     }
 
     @Test

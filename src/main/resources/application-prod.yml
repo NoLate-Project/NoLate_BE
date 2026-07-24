@@ -4,8 +4,9 @@ spring:
       mode: never
   jpa:
     hibernate:
-      # Flyway 없이 엔티티 정의를 기준으로 운영 스키마를 동기화한다.
-      ddl-auto: update
+      # 운영 DDL은 maintenance window의 검토된 SQL만 수행한다. update를 허용하면
+      # old/new writer 사이에서 nullable/index 변경 순서가 뒤섞일 수 있다.
+      ddl-auto: validate
     open-in-view: false
 
 logging:
@@ -23,7 +24,9 @@ springdoc:
 
 schedule:
   push:
-    enabled: true
+    # 최초 migration 기동은 false로 두어 guard/backfill/smoke가 끝나기 전에 어떤
+    # @Scheduled worker도 시작하지 않게 한다. 검증 뒤 명시적 재시작에서만 true로 전환한다.
+    enabled: ${SCHEDULE_PUSH_ENABLED:false}
 
 # 외부 경로 공급자는 키를 명시한 운영 환경에서만 활성화한다.
 # 키가 없는 배포도 앱 전체를 중단하지 않고, 경로 요청에서 공급자 미설정으로 응답한다.

@@ -13,8 +13,8 @@ import jakarta.persistence.*
             columnNames = ["token_fingerprint"],
         ),
         UniqueConstraint(
-            name = "uk_push_device_token_member_device_fingerprint",
-            columnNames = ["member_id", "device_fingerprint"],
+            name = "uk_push_device_token_device_fingerprint",
+            columnNames = ["device_fingerprint"],
         ),
     ],
 )
@@ -32,7 +32,8 @@ class NotificationDeviceToken(
 
     /**
      * 기기 식별자 (optional)
-     * - 같은 기기에서 토큰이 갱신될 수 있으므로, memberId + deviceId 로 upsert 용도로 사용
+     * - installation은 계정/플랫폼과 독립된 전역 device fingerprint 하나로 소유된다.
+     * - 같은 기기에서 계정이나 토큰이 바뀌면 기존 row의 ownership을 원자적으로 이전한다.
      */
     @Column(nullable = true, length = 100)
     var deviceId: String? = null,

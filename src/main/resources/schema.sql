@@ -294,7 +294,7 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     check_count INT NOT NULL DEFAULT 0 COMMENT 'Traffic check count',
     retry_count INT NOT NULL DEFAULT 0 COMMENT 'Retry count',
     notification_generation BIGINT NOT NULL DEFAULT 0 COMMENT 'Notification event generation incremented on schedule changes',
-    notification_input_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Deterministic notification semantic input SHA-256',
+    notification_input_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Deterministic notification semantic input SHA-256',
     locked_by VARCHAR(100) NULL COMMENT 'Worker id',
     locked_at DATETIME(6) NULL COMMENT 'Locked time',
     failure_reason VARCHAR(500) NULL COMMENT 'Last failure reason',
@@ -313,7 +313,7 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
 
 CREATE TABLE IF NOT EXISTS schedule_notification_action_receipts (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Action receipt primary key',
-    key_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+    key_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
         COMMENT 'Case-sensitive SHA-256 of the unpersisted Idempotency-Key',
     member_id BIGINT NOT NULL COMMENT 'Authenticated action member id',
     schedule_id BIGINT NOT NULL COMMENT 'Bound schedule id',
@@ -333,15 +333,15 @@ CREATE TABLE IF NOT EXISTS push_device_token (
     device_id VARCHAR(100) NULL,
     platform VARCHAR(20) NOT NULL,
     token VARCHAR(500) NOT NULL,
-    token_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    device_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    token_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
     ownership_version BIGINT NOT NULL DEFAULT 0,
     create_dt DATETIME(6) NULL,
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_push_device_token_token_fingerprint (token_fingerprint),
-    UNIQUE KEY uk_push_device_token_member_device_fingerprint (member_id, device_fingerprint)
-) COMMENT='Current per-member push token ownership; raw opaque values are never indexed';
+    UNIQUE KEY uk_push_device_token_device_fingerprint (device_fingerprint)
+) COMMENT='Current global byte-exact installation ownership; raw opaque values are never indexed';
 
 CREATE TABLE IF NOT EXISTS app_notifications (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'In-app notification primary key',
@@ -356,11 +356,27 @@ CREATE TABLE IF NOT EXISTS app_notifications (
     data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON',
     created_at DATETIME(6) NOT NULL COMMENT 'Logical notification creation time',
     read_at DATETIME(6) NULL COMMENT 'First read time',
+    manifest_state VARCHAR(24) NOT NULL DEFAULT 'INBOX_ONLY'
+        COMMENT 'INBOX_ONLY, OPEN, or immutable FROZEN recipient snapshot',
+    manifest_recipient_count INT NOT NULL DEFAULT 0
+        COMMENT 'Frozen delivery row count, including zero-device events',
+    manifest_frozen_at DATETIME(6) NULL COMMENT 'Recipient snapshot linearization time',
+    dispatch_status VARCHAR(24) NOT NULL DEFAULT 'NOT_REQUIRED'
+        COMMENT 'NOT_REQUIRED, PENDING, PROCESSING, COMPLETED, or FAILED',
+    dispatch_attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Durable outbox drainer claims',
+    next_dispatch_at DATETIME(6) NULL COMMENT 'Next bounded drainer eligibility time',
+    dispatch_locked_by VARCHAR(100) NULL COMMENT 'Outbox drainer lease owner',
+    dispatch_locked_at DATETIME(6) NULL COMMENT 'Outbox drainer lease time',
+    dispatch_completed_at DATETIME(6) NULL COMMENT 'Terminal drainer time',
+    dispatch_failure_reason VARCHAR(500) NULL COMMENT 'Sanitized last drainer outcome',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
     PRIMARY KEY (id),
     UNIQUE KEY uk_app_notifications_member_deduplication (member_id, deduplication_key),
     UNIQUE KEY uk_app_notifications_member_logical_event (member_id, logical_event_key),
     INDEX idx_app_notifications_member_id_id (member_id, id),
-    INDEX idx_app_notifications_member_read_at (member_id, read_at)
+    INDEX idx_app_notifications_member_read_at (member_id, read_at),
+    INDEX idx_app_notifications_dispatch_due (dispatch_status, next_dispatch_at, id),
+    INDEX idx_app_notifications_dispatch_lease (dispatch_status, dispatch_locked_at, id)
 ) COMMENT='Durable user-facing in-app notification inbox';
 
 -- Existing environments may have created data_json with a smaller text type while the
@@ -375,9 +391,9 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     event_key VARCHAR(100) NOT NULL COMMENT 'Durable logical event identifier',
     device_key VARCHAR(100) NOT NULL COMMENT 'Stable device id or one-way token fingerprint',
     device_token_id BIGINT NULL COMMENT 'Token row id at dispatch time; no foreign key so invalid-token removal keeps evidence',
-    token_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Case-sensitive token ownership snapshot',
+    token_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Case-sensitive token ownership snapshot',
     token_ownership_version BIGINT NOT NULL COMMENT 'Token ownership version snapshot',
-    device_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT 'One-way client device fingerprint',
+    device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT 'One-way client device fingerprint',
     platform VARCHAR(20) NOT NULL COMMENT 'Push platform',
     schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
     payload_type VARCHAR(80) NULL COMMENT 'Push payload type',
@@ -395,6 +411,16 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     INDEX idx_push_deliveries_status_attempted_at (status, last_attempted_at),
     INDEX idx_push_deliveries_schedule_id (schedule_id)
 ) COMMENT='Durable at-most-once per-device push delivery boundary';
+
+-- Production never runs schema.sql, but keeping the marker table in the executable
+-- development schema lets local schema inspection match the manual production DDL.
+-- The production marker row itself is inserted only by the final verified migration.
+CREATE TABLE IF NOT EXISTS application_schema_migrations (
+    version VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    description VARCHAR(255) NOT NULL,
+    applied_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (version)
+) COMMENT='Manually verified production schema versions';
 
 CREATE TABLE IF NOT EXISTS favorite_place_categories (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Favorite place category primary key',

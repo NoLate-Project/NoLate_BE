@@ -5,6 +5,8 @@ import com.noLate.auth.infrastructure.RefreshTokenRepository
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import org.springframework.stereotype.Service
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.time.LocalDateTime
 
 @Service
@@ -36,6 +38,37 @@ class RefreshTokenService (
         refresh.revoked = true
         refreshTokenRepository.save(refresh)
     }
+
+    /**
+     * member row를 먼저 잠근 logout fence 전용 검증.
+     *
+     * raw refresh token을 SQL 조건이나 로그에 넣지 않고, 회원별 row를 잠근 뒤 메모리에서
+     * constant-time 비교한다. 호출자는 반드시 member row lock을 먼저 보유해야 한다.
+     */
+    fun isPresentedTokenCurrentForUpdate(
+        memberId: Long,
+        presentedToken: String,
+    ): Boolean {
+        val current = refreshTokenRepository.findByMemberIdForUpdate(memberId)
+            ?: return false
+        val storedToken = current.token ?: return false
+        return current.memberId == memberId &&
+            !current.revoked &&
+            current.expiresAt.isAfter(LocalDateTime.now()) &&
+            MessageDigest.isEqual(
+                storedToken.toByteArray(StandardCharsets.UTF_8),
+                presentedToken.toByteArray(StandardCharsets.UTF_8),
+            )
+    }
+
+    /**
+     * Explicit login이 기존 session을 교체하는지 판단한다.
+     *
+     * caller가 member row를 먼저 잠근 상태에서 회원별 refresh row를 잠그므로, login과
+     * logout/refresh rotation이 같은 member -> refresh lock order로 선형화된다.
+     */
+    fun hasStoredTokenForUpdate(memberId: Long): Boolean =
+        refreshTokenRepository.findByMemberIdForUpdate(memberId) != null
 
     fun validateAndGet(refreshToken: String): RefreshToken {
         val entity = refreshTokenRepository.findByToken(refreshToken)

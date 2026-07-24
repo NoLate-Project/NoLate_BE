@@ -1,17 +1,22 @@
 package com.noLate.notification.application
 
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.notification.application.service.NotificationTokenService
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.junit.jupiter.SpringExtension
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -22,7 +27,8 @@ import java.util.concurrent.TimeUnit
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationTokenServiceIntegrationTest @Autowired constructor(
     private val notificationTokenService: NotificationTokenService,
-    private val notificationDeviceTokenRepository: NotificationDeviceTokenRepository
+    private val notificationDeviceTokenRepository: NotificationDeviceTokenRepository,
+    private val jdbcTemplate: JdbcTemplate,
 ) {
     @BeforeEach
     fun cleanTokens() {
@@ -36,7 +42,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         val deviceId = "dev-1"
 
         // 첫 등록
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = deviceId,
             platform = PushPlatform.ANDROID,
@@ -46,7 +52,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         assertEquals(1, notificationDeviceTokenRepository.findAllByMemberId(memberId).size)
 
         // when - 같은 deviceId로 새 토큰 등록 (플랫폼도 변경)
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = deviceId,
             platform = PushPlatform.IOS,
@@ -70,14 +76,14 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         val memberId = 900_002L
 
         // when
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = null,
             platform = PushPlatform.ANDROID,
             token = "token-1"
         )
 
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = null,
             platform = PushPlatform.IOS,
@@ -97,13 +103,13 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
     fun `deviceId가 없어도 같은 token 재등록은 한 레코드로 수렴한다`() {
         val memberId = 900_009L
 
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = null,
             platform = PushPlatform.ANDROID,
             token = "same-token-without-device",
         )
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = null,
             platform = PushPlatform.IOS,
@@ -121,13 +127,13 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         // given
         val memberId = 900_003L
 
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = "dev-1",
             platform = PushPlatform.ANDROID,
             token = "t1"
         )
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = "dev-2",
             platform = PushPlatform.IOS,
@@ -151,13 +157,13 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         // given
         val memberId = 900_004L
 
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = "d1",
             platform = PushPlatform.ANDROID,
             token = "t1"
         )
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId,
             deviceId = "d2",
             platform = PushPlatform.IOS,
@@ -179,19 +185,19 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         val memberId1 = 900_005L
         val memberId2 = 900_006L
 
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId1,
             deviceId = "d1",
             platform = PushPlatform.ANDROID,
             token = "m1-t1"
         )
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId1,
             deviceId = "d2",
             platform = PushPlatform.IOS,
             token = "m1-t2"
         )
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = memberId2,
             deviceId = "d3",
             platform = PushPlatform.ANDROID,
@@ -213,26 +219,28 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         val previousMemberId = 900_007L
         val currentMemberId = 900_008L
         val deviceId = "shared-device"
-        val token = "shared-token"
+        val previousToken = "previous-account-token"
+        val currentToken = "current-account-token"
 
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = previousMemberId,
             deviceId = deviceId,
             platform = PushPlatform.ANDROID,
-            token = token,
+            token = previousToken,
         )
-        notificationTokenService.registerToken(
+        registerToken(
             memberId = currentMemberId,
             deviceId = deviceId,
-            platform = PushPlatform.ANDROID,
-            token = token,
+            platform = PushPlatform.IOS,
+            token = currentToken,
         )
 
         assertTrue(notificationDeviceTokenRepository.findAllByMemberId(previousMemberId).isEmpty())
         val currentTokens = notificationDeviceTokenRepository.findAllByMemberId(currentMemberId)
         assertEquals(1, currentTokens.size)
-        assertEquals(token, currentTokens.single().token)
+        assertEquals(currentToken, currentTokens.single().token)
         assertEquals(deviceId, currentTokens.single().deviceId)
+        assertEquals(PushPlatform.IOS, currentTokens.single().platform)
     }
 
     @Test
@@ -249,7 +257,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
                 ready.countDown()
                 start.await()
                 runCatching {
-                    notificationTokenService.registerToken(
+                    registerToken(
                         memberId = memberId,
                         deviceId = "device-$memberId",
                         platform = PushPlatform.ANDROID,
@@ -270,5 +278,137 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         assertEquals(1, rows.size)
         assertTrue(rows.single().memberId in setOf(900_101L, 900_102L))
         assertEquals(token, rows.single().token)
+    }
+
+    @Test
+    fun `동일 device의 서로 다른 token 동시 등록도 전역 단일 owner로 수렴한다`() {
+        val deviceId = "globally-owned-installation"
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(2)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newFixedThreadPool(2)
+
+        listOf(
+            900_201L to "account-a-token",
+            900_202L to "account-b-token",
+        ).forEach { (memberId, token) ->
+            executor.submit {
+                ready.countDown()
+                start.await()
+                runCatching {
+                    registerToken(
+                        memberId = memberId,
+                        deviceId = deviceId,
+                        platform = PushPlatform.ANDROID,
+                        token = token,
+                    )
+                }.onFailure(failures::add)
+                done.countDown()
+            }
+        }
+
+        assertTrue(ready.await(5, TimeUnit.SECONDS))
+        start.countDown()
+        assertTrue(done.await(10, TimeUnit.SECONDS))
+        executor.shutdownNow()
+
+        assertTrue(failures.isEmpty(), failures.joinToString { it.javaClass.simpleName })
+        val rows = notificationDeviceTokenRepository.findAll()
+        assertEquals(1, rows.size)
+        assertEquals(deviceId, rows.single().deviceId)
+        assertTrue(rows.single().memberId in setOf(900_201L, 900_202L))
+        assertTrue(rows.single().token in setOf("account-a-token", "account-b-token"))
+    }
+
+    @Test
+    fun `old invalid response cannot delete device ownership transferred to another member`() {
+        registerToken(
+            memberId = 900_301L,
+            deviceId = "transfer-before-invalid",
+            platform = PushPlatform.ANDROID,
+            token = "old-invalid-token",
+        )
+        val stale = notificationDeviceTokenRepository.findAllByMemberId(900_301L).single()
+
+        registerToken(
+            memberId = 900_302L,
+            deviceId = "transfer-before-invalid",
+            platform = PushPlatform.IOS,
+            token = "new-valid-token",
+        )
+
+        val removed = notificationTokenService.removeTokenByOwnership(
+            memberId = 900_301L,
+            tokenId = requireNotNull(stale.id),
+            tokenFingerprint = stale.tokenFingerprint,
+            ownershipVersion = stale.ownershipVersion,
+        )
+
+        assertFalse(removed)
+        assertTrue(notificationDeviceTokenRepository.findAllByMemberId(900_301L).isEmpty())
+        assertEquals(
+            "new-valid-token",
+            notificationDeviceTokenRepository.findAllByMemberId(900_302L).single().token,
+        )
+    }
+
+    @Test
+    fun `registration write fails closed when authenticated target member does not exist`() {
+        val error = assertThrows<BusinessException> {
+            notificationTokenService.registerToken(
+                memberId = 999_999L,
+                deviceId = "missing-member-device",
+                platform = PushPlatform.ANDROID,
+                token = "missing-member-token",
+                accessTokenIssuedAt = TEST_ISSUED_AT,
+                accessTokenSessionGeneration = 0,
+            )
+        }
+
+        assertEquals(ErrorCode.UNAUTHORIZED, error.errorCode)
+        assertTrue(notificationDeviceTokenRepository.findAll().isEmpty())
+    }
+
+    private fun registerToken(
+        memberId: Long,
+        deviceId: String?,
+        platform: PushPlatform,
+        token: String,
+    ) {
+        ensureActiveMember(memberId)
+        notificationTokenService.registerToken(
+            memberId = memberId,
+            deviceId = deviceId,
+            platform = platform,
+            token = token,
+            accessTokenIssuedAt = TEST_ISSUED_AT,
+            accessTokenSessionGeneration = 0,
+        )
+    }
+
+    private fun ensureActiveMember(memberId: Long) {
+        val exists = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM `member` WHERE id = ?",
+            Long::class.java,
+            memberId,
+        ) ?: 0L
+        if (exists != 0L) return
+        jdbcTemplate.update(
+            """
+            INSERT INTO `member` (
+                id, name, password, email, login_type, subscription_plan,
+                curation_completed, session_generation, deleted
+            ) VALUES (?, ?, ?, ?, 'COMMON', 'FREE', FALSE, 0, FALSE)
+            """.trimIndent(),
+            memberId,
+            "member-$memberId",
+            "Password1!",
+            "push-fixture-$memberId@example.com",
+        )
+    }
+
+    private companion object {
+        val TEST_ISSUED_AT: Instant = Instant.parse("2026-07-24T03:00:00Z")
     }
 }

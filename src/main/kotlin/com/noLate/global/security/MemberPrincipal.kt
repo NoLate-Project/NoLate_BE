@@ -14,6 +14,11 @@ class MemberPrincipal (
      * logout 이후 세션 경계를 다시 검증하는 데 필요한 최소 claim만 보존한다.
      */
     val accessTokenIssuedAt: Instant? = null,
+    /**
+     * signed JWT `sg` claim. Push-token write transaction에서 member.sessionGeneration과
+     * 정확히 비교하며, iat 정밀도와 무관하게 logout 전후 순서를 보존한다.
+     */
+    val accessTokenSessionGeneration: Long? = null,
 ) : UserDetails{
     override fun getAuthorities() = emptyList<Nothing>()
 

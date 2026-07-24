@@ -33,6 +33,8 @@ data class AppNotificationSnapshot(
     val body: String,
     val data: Map<String, String>,
     val createdAt: Instant,
+    val deduplicationKey: String? = null,
+    val scheduleId: Long? = null,
 )
 
 /**
@@ -193,6 +195,8 @@ internal fun AppNotification.toSnapshot(objectMapper: ObjectMapper): AppNotifica
             ),
         ),
         createdAt = createdAt,
+        deduplicationKey = deduplicationKey,
+        scheduleId = scheduleId,
     )
 
 /**

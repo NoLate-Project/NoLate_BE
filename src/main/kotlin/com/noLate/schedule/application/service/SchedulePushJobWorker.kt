@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
+import java.time.Clock
 import java.time.Instant
 import java.time.Duration
 import java.time.temporal.ChronoUnit
@@ -43,6 +44,7 @@ class SchedulePushJobWorker(
     @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "schedule-push-${UUID.randomUUID()}"
@@ -53,8 +55,9 @@ class SchedulePushJobWorker(
     }
 
     fun runDueJobs(now: Instant): Int {
+        val recoveryAt = currentAtOrAfter(now)
         val recoveredCount = pushJobCoordinator.recoverStaleProcessingJobs(
-            now = now,
+            now = recoveryAt,
             processingTimeoutMinutes = processingTimeoutMinutes,
             deliveryGraceMinutes = deliveryGraceMinutes,
             batchSize = batchSize,
@@ -64,25 +67,31 @@ class SchedulePushJobWorker(
                 "Recovered stale schedule push jobs. count={}, timeoutMinutes={}, checkedAt={}",
                 recoveredCount,
                 processingTimeoutMinutes,
-                now,
+                recoveryAt,
             )
         }
 
         var claimedCount = 0
         repeat(batchSize.coerceIn(1, 200)) {
-            val job = pushJobCoordinator.claimNextDueJob(now, workerId)
+            // Each tail job is leased immediately before processing using the current clock.
+            // A slow provider for the previous job must not backdate this new lease.
+            val claimAt = currentAtOrAfter(now)
+            val job = pushJobCoordinator.claimNextDueJob(claimAt, workerId)
                 ?: return claimedCount
             claimedCount += 1
             log.info(
                 "Claimed schedule push job. jobId={}, workerId={}, checkedAt={}",
                 job.id,
                 workerId,
-                now,
+                claimAt,
             )
-            pushJobCoordinator.execute { process(job, now) }
+            pushJobCoordinator.execute { process(job, claimAt) }
         }
         return claimedCount
     }
+
+    private fun currentAtOrAfter(notBefore: Instant): Instant =
+        maxOf(notBefore, Instant.now(clock))
 
     private fun process(job: SchedulePushJob, now: Instant) {
         try {
@@ -199,13 +208,20 @@ class SchedulePushJobWorker(
                     "reminderBoundaryAt" to (reminderBoundaryAt?.toString() ?: ""),
                     "snoozeMinutes" to departureSnoozeMinutes.toString(),
                     "trafficChangeMinutes" to (liveMessage.trafficChangeMinutes?.toString() ?: "0"),
+                    "schedulePushJobId" to (job.id?.toString() ?: ""),
+                    "schedulePushCheckCount" to job.checkCount.toString(),
+                    "notificationGeneration" to job.notificationGeneration.toString(),
+                    "notificationInputFingerprint" to job.notificationInputFingerprint,
                 )
                 val dispatchFence = job.id?.let {
                     PushDispatchFence(
                         jobId = it,
                         workerId = workerId,
+                        jobVersion = requireNotNull(job.version),
                         notificationGeneration = job.notificationGeneration,
                         notificationInputFingerprint = job.notificationInputFingerprint,
+                        expectedMemberId = job.memberId,
+                        expectedScheduleId = job.scheduleId,
                     )
                 }
                 val sendResult = if (dispatchFence == null) {

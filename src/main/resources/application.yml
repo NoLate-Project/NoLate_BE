@@ -145,6 +145,16 @@ firebase:
   credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
   project-id: ${FIREBASE_PROJECT_ID:}
 
+notification:
+  push-outbox:
+    enabled: ${NOTIFICATION_PUSH_OUTBOX_ENABLED:true}
+    fixed-delay-ms: ${NOTIFICATION_PUSH_OUTBOX_FIXED_DELAY_MS:30000}
+    # provider 호출 직전에 한 건씩 claim하며 한 run의 최대 처리량만 제한한다.
+    batch-size: ${NOTIFICATION_PUSH_OUTBOX_BATCH_SIZE:50}
+    max-attempts: ${NOTIFICATION_PUSH_OUTBOX_MAX_ATTEMPTS:5}
+    retry-delay-seconds: ${NOTIFICATION_PUSH_OUTBOX_RETRY_DELAY_SECONDS:60}
+    processing-timeout-seconds: ${NOTIFICATION_PUSH_OUTBOX_PROCESSING_TIMEOUT_SECONDS:600}
+
 auth:
   social:
     kakao:

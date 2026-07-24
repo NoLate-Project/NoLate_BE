@@ -40,9 +40,27 @@ class MemberDto(
      */
     var curationCompleted: Boolean = false,
 
+    /**
+     * JWT 서명에만 쓰는 서버 내부 세션 fence다. API 응답/요청에는 노출하지 않는다.
+     */
+    @get:JsonIgnore
+    var sessionGeneration: Long = 0,
+
 ) {
     // JPA가 사용할 기본 생성자
-    protected constructor() : this(null, "", "", "", null, null ,"" , "", false, false)
+    protected constructor() : this(
+        id = null,
+        name = "",
+        password = "",
+        email = "",
+        loginType = null,
+        snsId = null,
+        accessToken = "",
+        refreshToken = "",
+        isNewMember = false,
+        curationCompleted = false,
+        sessionGeneration = 0,
+    )
 
     fun toEntity() : Member =
         Member(
@@ -53,6 +71,7 @@ class MemberDto(
             loginType = this.loginType,
             snsId = this.snsId,
             curationCompleted = this.curationCompleted,
+            sessionGeneration = this.sessionGeneration,
         )
 
 
@@ -66,6 +85,7 @@ class MemberDto(
                 loginType = member.loginType,
                 snsId = member.snsId,
                 curationCompleted = member.curationCompleted,
+                sessionGeneration = member.sessionGeneration,
             )
         }
     }

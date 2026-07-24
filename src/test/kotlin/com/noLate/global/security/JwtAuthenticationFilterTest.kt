@@ -29,21 +29,38 @@ class JwtAuthenticationFilterTest {
     @Test
     fun `refresh token is never accepted as bearer authentication`() {
         val request = MockHttpServletRequest().apply {
-            addHeader("Authorization", "Bearer ${tokenProvider.createRefreshToken(1L, "member")}")
+            addHeader("Authorization", "Bearer ${tokenProvider.createRefreshToken(1L, "member", 0)}")
         }
 
         filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
 
-        verify(memberService, never()).getPrincipalById(org.mockito.kotlin.any(), org.mockito.kotlin.any())
+        verify(memberService, never()).getPrincipalById(
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+        )
         kotlin.test.assertNull(SecurityContextHolder.getContext().authentication)
     }
 
     @Test
     fun `access token authenticates only an active non-revoked member`() {
-        val token = tokenProvider.createAccessToken(1L, "member")
+        val token = tokenProvider.createAccessToken(1L, "member", 7)
         val issuedAt = tokenProvider.getIssuedAt(token)
-        whenever(memberService.getPrincipalById(org.mockito.kotlin.eq(1L), org.mockito.kotlin.eq(issuedAt)))
-            .thenReturn(MemberPrincipal(1L, "member@example.com", "member", issuedAt))
+        whenever(
+            memberService.getPrincipalById(
+                org.mockito.kotlin.eq(1L),
+                org.mockito.kotlin.eq(issuedAt),
+                org.mockito.kotlin.eq(7),
+            )
+        ).thenReturn(
+            MemberPrincipal(
+                1L,
+                "member@example.com",
+                "member",
+                issuedAt,
+                7,
+            )
+        )
         val request = MockHttpServletRequest().apply {
             addHeader("Authorization", "Bearer $token")
         }
@@ -53,6 +70,7 @@ class JwtAuthenticationFilterTest {
         val principal = SecurityContextHolder.getContext().authentication?.principal as MemberPrincipal
         kotlin.test.assertEquals(1L, principal.id)
         kotlin.test.assertEquals(issuedAt, principal.accessTokenIssuedAt)
+        kotlin.test.assertEquals(7L, principal.accessTokenSessionGeneration)
     }
 
     @Test
@@ -62,13 +80,17 @@ class JwtAuthenticationFilterTest {
             servletPath = "/api/calendar/days"
             addHeader(
                 "Authorization",
-                "Bearer ${tokenProvider.createAccessToken(1L, "member")}",
+                "Bearer ${tokenProvider.createAccessToken(1L, "member", 0)}",
             )
         }
 
         filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
 
-        verify(memberService, never()).getPrincipalById(org.mockito.kotlin.any(), org.mockito.kotlin.any())
+        verify(memberService, never()).getPrincipalById(
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+        )
         kotlin.test.assertNull(SecurityContextHolder.getContext().authentication)
     }
 }

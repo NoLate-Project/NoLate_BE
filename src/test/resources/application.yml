@@ -83,6 +83,11 @@ firebase:
   credentials-path: ""
   project-id: nolate-test
 
+notification:
+  push-outbox:
+    enabled: false
+    fixed-delay-ms: 86400000
+
 logging:
   level:
     root: warn

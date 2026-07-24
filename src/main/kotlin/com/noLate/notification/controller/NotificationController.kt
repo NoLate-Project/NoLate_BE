@@ -41,6 +41,8 @@ class NotificationController(
             token = request.token,
             accessTokenIssuedAt = authenticated.accessTokenIssuedAt
                 ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
+            accessTokenSessionGeneration = authenticated.accessTokenSessionGeneration
+                ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
         )
         return ApiResponse.success(Unit)
     }

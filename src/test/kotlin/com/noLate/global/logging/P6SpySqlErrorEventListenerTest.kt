@@ -88,6 +88,26 @@ class P6SpySqlErrorEventListenerTest {
     }
 
     @Test
+    fun `push 전송 이력 성공 SQL은 raw device id와 payload를 기록하지 않는다`() {
+        val rawDeviceId = "private-installation-id"
+        val privatePayload = """{"scheduleId":"42","recipientMemberId":"7"}"""
+        val statementInformation = statementInformation(
+            """
+            insert into push_send_history(device_id, data_json, status)
+            values ('$rawDeviceId', '$privatePayload', 'SUCCESS')
+            """.trimIndent(),
+        )
+
+        listener.onAfterAnyExecute(statementInformation, 1_000_000, null)
+
+        val message = appender.list.single().formattedMessage
+        assertFalse(message.contains(rawDeviceId))
+        assertFalse(message.contains(privatePayload))
+        assertFalse(message.contains("SUCCESS"))
+        assertTrue(message.contains("[REDACTED]"))
+    }
+
+    @Test
     fun `SQLException message와 stack trace에 token이 있어도 구조화된 오류 정보만 기록한다`() {
         val rawToken = "secret-token-from-driver-error"
         val sqlException = SQLException(
@@ -111,6 +131,34 @@ class P6SpySqlErrorEventListenerTest {
         assertFalse(message.contains("private-device"))
         assertTrue(message.contains("sqlState=23000"))
         assertTrue(message.contains("vendorCode=1062"))
+        assertTrue(message.contains("exceptionClass=SQLException"))
+        assertEquals(null, event.throwableProxy)
+    }
+
+    @Test
+    fun `push 전송 이력 SQLException은 raw device id와 driver 원문을 기록하지 않는다`() {
+        val rawDeviceId = "private-history-device"
+        val sqlException = SQLException(
+            "failed history insert for device=$rawDeviceId",
+            "40001",
+            1213,
+        )
+
+        listener.onAfterAnyExecute(
+            statementInformation(
+                "insert into push_send_history(device_id, status) values ('$rawDeviceId', 'FAILED')",
+            ),
+            2_000_000,
+            sqlException,
+        )
+
+        val event = appender.list.single()
+        val message = event.formattedMessage
+        assertFalse(message.contains(rawDeviceId))
+        assertFalse(message.contains("failed history insert"))
+        assertFalse(message.contains("'FAILED'"))
+        assertTrue(message.contains("sqlState=40001"))
+        assertTrue(message.contains("vendorCode=1213"))
         assertTrue(message.contains("exceptionClass=SQLException"))
         assertEquals(null, event.throwableProxy)
     }

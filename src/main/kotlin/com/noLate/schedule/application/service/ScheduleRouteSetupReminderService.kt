@@ -17,8 +17,6 @@ import org.springframework.stereotype.Component
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.time.Clock
 import java.time.Instant
 
@@ -111,8 +109,12 @@ class ScheduleRouteSetupReminderService(
     }
 
     /**
-     * due marker를 비관적 락으로 선점한 뒤 회원별 한 알림으로 묶는다. 발송 직전에 공유 회수,
-     * 캘린더 알림 opt-out, 경로 저장, 일정 변경을 다시 확인해 오래된 알림을 취소한다.
+     * due marker를 비관적 락으로 선점한 뒤 marker별 immutable event로 발송한다.
+     *
+     * 여러 marker를 현재 batch 구성으로 묶으면 A의 부분 실패 뒤 B가 새로 due된 재시도에서
+     * event key가 A -> A+B로 바뀌어 A의 성공 기기까지 다시 호출될 수 있다. marker PK 하나를
+     * logical event 하나로 고정해 retry batch가 달라져도 payload와 per-device 경계를 보존한다.
+     * 발송 직전에는 공유 회수, 캘린더 알림 opt-out, 경로 저장, 일정 변경을 다시 확인한다.
      */
     @Transactional
     fun dispatch(now: Instant): Int {
@@ -131,28 +133,24 @@ class ScheduleRouteSetupReminderService(
             }
         }
 
-        var sentGroups = 0
-        valid.groupBy { it.first.memberId }.forEach { (memberId, entries) ->
-            val reminders = entries.map { it.first }
-            val schedules = entries.map { it.second }
+        var sentEvents = 0
+        valid.sortedBy { requireNotNull(it.first.id) }.forEach { (reminder, schedule) ->
+            val memberId = reminder.memberId
             try {
                 val title = "경로를 설정해주세요"
-                val body = if (schedules.size == 1) {
-                    "'${schedules.single().title}' 일정이 3일 안에 시작돼요. 내 출발 경로를 확인해주세요."
-                } else {
-                    "3일 안에 시작하는 일정 ${schedules.size}개의 내 출발 경로를 확인해주세요."
-                }
-                val scheduleIds = schedules.map { requireNotNull(it.id) }
-                val deduplicationKey = dispatchDeduplicationKey(memberId, reminders)
+                val body =
+                    "'${schedule.title}' 일정이 3일 안에 시작돼요. 내 출발 경로를 확인해주세요."
+                val scheduleId = requireNotNull(schedule.id)
+                val deduplicationKey = dispatchDeduplicationKey(memberId, reminder)
                 val payload = mapOf(
                     "type" to "ROUTE_SETUP_REMINDER",
-                    "scheduleId" to scheduleIds.first().toString(),
-                    "scheduleIds" to scheduleIds.joinToString(","),
-                    "count" to scheduleIds.size.toString(),
+                    "scheduleId" to scheduleId.toString(),
+                    "scheduleIds" to scheduleId.toString(),
+                    "count" to "1",
                 )
 
-                // marker id 집합의 deterministic key를 inbox와 기기별 delivery 경계에 함께
-                // 사용한다. 재시도 시 성공 기기는 건너뛰고 확인된 실패 기기만 다시 보낸다.
+                // marker PK의 deterministic key를 inbox와 기기별 delivery 경계에 함께
+                // 사용한다. 재시도 batch에 다른 marker가 합류해도 이 event는 변하지 않는다.
                 val result = notificationUseCase.sendToMember(
                     memberId = memberId,
                     title = title,
@@ -161,31 +159,39 @@ class ScheduleRouteSetupReminderService(
                     inboxDeduplicationKey = deduplicationKey,
                 )
                 if (result.retryableFailedCount > 0) {
-                    throw IllegalStateException(
+                    throw RouteSetupPushDispatchException(
                         "경로 미설정 push 재시도 필요: requested=${result.requestedCount}, " +
                             "retryableFailed=${result.retryableFailedCount}"
                     )
                 }
                 if (result.requestedCount > 0 && result.durablyHandledCount == 0) {
-                    throw IllegalStateException(
+                    throw RouteSetupPushDispatchException(
                         "경로 미설정 push 발송 실패: requested=${result.requestedCount}, failed=${result.failedCount}"
                     )
                 }
-                reminders.forEach { it.markSent(now) }
-                sentGroups += 1
+                reminder.markSent(now)
+                sentEvents += 1
             } catch (error: Exception) {
-                reminders.forEach {
-                    it.retryOrFail(
-                        now = now,
-                        reason = error.message ?: error.javaClass.simpleName,
-                        maxAttempts = maxAttempts.coerceAtLeast(1),
-                        retryDelaySeconds = retryDelaySeconds.coerceAtLeast(1),
-                    )
+                val failureReason = when (error) {
+                    is RouteSetupPushDispatchException -> requireNotNull(error.message)
+                    else -> error.javaClass.simpleName
                 }
-                log.warn("Route setup reminder dispatch failed. memberId={}", memberId, error)
+                reminder.retryOrFail(
+                    now = now,
+                    reason = failureReason,
+                    maxAttempts = maxAttempts.coerceAtLeast(1),
+                    retryDelaySeconds = retryDelaySeconds.coerceAtLeast(1),
+                )
+                log.warn(
+                    "Route setup reminder dispatch failed. memberId={}, scheduleId={}, markerId={}, errorCode={}",
+                    memberId,
+                    reminder.scheduleId,
+                    reminder.id,
+                    error.javaClass.simpleName,
+                )
             }
         }
-        return sentGroups
+        return sentEvents
     }
 
     private fun isStillRequired(
@@ -210,15 +216,12 @@ class ScheduleRouteSetupReminderService(
 
     private fun dispatchDeduplicationKey(
         memberId: Long,
-        reminders: List<ScheduleRouteSetupReminder>,
-    ): String {
-        val markerIds = reminders.map { requireNotNull(it.id) }.sorted().joinToString(",")
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(markerIds.toByteArray(StandardCharsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        return "route-setup:$memberId:$digest"
-    }
+        reminder: ScheduleRouteSetupReminder,
+    ): String =
+        "route-setup:$memberId:marker:${requireNotNull(reminder.id)}"
 }
+
+private class RouteSetupPushDispatchException(message: String) : RuntimeException(message)
 
 @Component
 class ScheduleRouteSetupReminderWorker(

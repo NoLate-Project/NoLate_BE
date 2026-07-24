@@ -16,8 +16,10 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.check
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.time.Instant
@@ -36,7 +38,7 @@ class ScheduleRouteSetupReminderServiceTest {
     private val now = Instant.parse("2026-07-23T00:00:00Z")
 
     @Test
-    fun `dispatch groups multiple due schedules into one member notification`() {
+    fun `dispatch freezes each due marker as its own logical notification`() {
         val firstSchedule = routeSchedule(10L, "병원", now.plusSeconds(60 * 60))
         val secondSchedule = routeSchedule(11L, "회의", now.plusSeconds(2 * 60 * 60))
         val first = reminder(101L, firstSchedule)
@@ -62,21 +64,33 @@ class ScheduleRouteSetupReminderServiceTest {
             .thenReturn(NotificationSendResult(requestedCount = 0))
         val service = service()
 
-        val sentGroups = service.dispatch(now)
+        val sentEvents = service.dispatch(now)
 
-        assertEquals(1, sentGroups)
+        assertEquals(2, sentEvents)
         assertEquals(ScheduleRouteSetupReminderStatus.SENT, first.status)
         assertEquals(ScheduleRouteSetupReminderStatus.SENT, second.status)
         verify(notificationUseCase).sendToMember(
             memberId = eq(2L),
             title = eq("경로를 설정해주세요"),
-            body = eq("3일 안에 시작하는 일정 2개의 내 출발 경로를 확인해주세요."),
+            body = eq("'병원' 일정이 3일 안에 시작돼요. 내 출발 경로를 확인해주세요."),
             data = check {
                 assertEquals("ROUTE_SETUP_REMINDER", it["type"])
-                assertEquals("10,11", it["scheduleIds"])
-                assertEquals("2", it["count"])
+                assertEquals("10", it["scheduleIds"])
+                assertEquals("1", it["count"])
             },
-            inboxDeduplicationKey = check { assertEquals(true, it.startsWith("route-setup:2:")) },
+            inboxDeduplicationKey = eq("route-setup:2:marker:101"),
+            persistInInbox = eq(true),
+        )
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(2L),
+            title = eq("경로를 설정해주세요"),
+            body = eq("'회의' 일정이 3일 안에 시작돼요. 내 출발 경로를 확인해주세요."),
+            data = check {
+                assertEquals("ROUTE_SETUP_REMINDER", it["type"])
+                assertEquals("11", it["scheduleIds"])
+                assertEquals("1", it["count"])
+            },
+            inboxDeduplicationKey = eq("route-setup:2:marker:102"),
             persistInInbox = eq(true),
         )
     }
@@ -107,6 +121,77 @@ class ScheduleRouteSetupReminderServiceTest {
         assertEquals(1, sentGroups)
         assertEquals(ScheduleRouteSetupReminderStatus.SENT, marker.status)
         verify(notificationUseCase).sendToMember(eq(2L), any(), any(), any(), any(), eq(true))
+    }
+
+    @Test
+    fun `partial failure retry keeps marker event stable when a new marker becomes due`() {
+        val firstSchedule = routeSchedule(10L, "병원", now.plusSeconds(60 * 60))
+        val secondSchedule = routeSchedule(11L, "회의", now.plusSeconds(2 * 60 * 60))
+        val first = reminder(101L, firstSchedule)
+        val second = reminder(102L, secondSchedule)
+        val retryAt = now.plusSeconds(300)
+        whenever(
+            reminderRepository.findDueForUpdate(
+                eq(ScheduleRouteSetupReminderStatus.PENDING),
+                eq(now),
+                any(),
+            )
+        ).thenReturn(listOf(first))
+        whenever(
+            reminderRepository.findDueForUpdate(
+                eq(ScheduleRouteSetupReminderStatus.PENDING),
+                eq(retryAt),
+                any(),
+            )
+        ).thenReturn(listOf(first, second))
+        stubRequired(firstSchedule)
+        stubRequired(secondSchedule)
+        whenever(notificationUseCase.sendToMember(eq(2L), any(), any(), any(), any(), eq(true)))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 2,
+                    sentCount = 1,
+                    failedCount = 1,
+                    retryableFailedCount = 1,
+                ),
+                NotificationSendResult(
+                    requestedCount = 2,
+                    sentCount = 1,
+                    alreadyDeliveredCount = 1,
+                ),
+                NotificationSendResult(requestedCount = 2, sentCount = 2),
+            )
+        val service = service()
+
+        assertEquals(0, service.dispatch(now))
+        assertEquals(ScheduleRouteSetupReminderStatus.PENDING, first.status)
+        assertEquals(retryAt, first.nextAttemptAt)
+
+        assertEquals(2, service.dispatch(retryAt))
+        assertEquals(ScheduleRouteSetupReminderStatus.SENT, first.status)
+        assertEquals(ScheduleRouteSetupReminderStatus.SENT, second.status)
+
+        val keyCaptor = argumentCaptor<String>()
+        val dataCaptor = argumentCaptor<Map<String, String>>()
+        verify(notificationUseCase, times(3)).sendToMember(
+            memberId = eq(2L),
+            title = any(),
+            body = any(),
+            data = dataCaptor.capture(),
+            inboxDeduplicationKey = keyCaptor.capture(),
+            persistInInbox = eq(true),
+        )
+        assertEquals(
+            listOf(
+                "route-setup:2:marker:101",
+                "route-setup:2:marker:101",
+                "route-setup:2:marker:102",
+            ),
+            keyCaptor.allValues,
+        )
+        assertEquals(dataCaptor.allValues[0], dataCaptor.allValues[1])
+        assertEquals("10", dataCaptor.allValues[1]["scheduleId"])
+        assertEquals("11", dataCaptor.allValues[2]["scheduleId"])
     }
 
     @Test
@@ -156,6 +241,26 @@ class ScheduleRouteSetupReminderServiceTest {
         maxAttempts = 3,
         retryDelaySeconds = 300,
     )
+
+    private fun stubRequired(schedule: Schedule) {
+        val scheduleId = requireNotNull(schedule.id)
+        whenever(scheduleRepository.findById(scheduleId)).thenReturn(Optional.of(schedule))
+        whenever(accessPolicy.resolve(2L, schedule)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = false,
+                travelEnabled = true,
+                canViewAllTravelPlans = false,
+            )
+        )
+        whenever(accessPolicy.routeReminderEnabled(2L, schedule)).thenReturn(true)
+        whenever(
+            travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(
+                scheduleId,
+                2L,
+            )
+        ).thenReturn(null)
+    }
 
     private fun reminder(id: Long, schedule: Schedule) = ScheduleRouteSetupReminder(
         id = id,

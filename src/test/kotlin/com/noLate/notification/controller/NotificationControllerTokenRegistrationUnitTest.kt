@@ -31,6 +31,7 @@ class NotificationControllerTokenRegistrationUnitTest {
             email = "member@example.com",
             name = "member",
             accessTokenIssuedAt = issuedAt,
+            accessTokenSessionGeneration = 7,
         )
         val controller = NotificationController(tokenService, notificationUseCase, historyService)
 
@@ -49,6 +50,7 @@ class NotificationControllerTokenRegistrationUnitTest {
             platform = PushPlatform.ANDROID,
             token = "opaque-token-not-logged",
             accessTokenIssuedAt = issuedAt,
+            accessTokenSessionGeneration = 7,
         )
     }
 }

@@ -15,6 +15,12 @@ interface MemberRepository : JpaRepository<Member, Long> {
     @Query("select member from Member member where member.id = :memberId")
     fun findByIdForUpdate(@Param("memberId") memberId: Long): Member?
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select member from Member member where member.id in :memberIds order by member.id")
+    fun findAllByIdsForUpdate(
+        @Param("memberIds") memberIds: Collection<Long>,
+    ): List<Member>
+
     fun removeMemberById(id: Long)
 
     fun findByEmailAndPasswordAndDeletedFalse(email: String?, password: String?) : Member?

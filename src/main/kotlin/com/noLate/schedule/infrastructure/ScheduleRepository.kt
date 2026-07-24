@@ -380,7 +380,9 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         select s.*
         from schedules s
         join schedule_routes sr on sr.schedule_id = s.id
-        left join schedule_push_job spj on spj.schedule_id = s.id
+        left join schedule_push_job spj
+          on spj.schedule_id = s.id
+         and spj.member_id = s.member_id
         where s.deleted = false
           and sr.notification_enabled = true
           and s.start_at > :now

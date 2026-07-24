@@ -22,7 +22,7 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
         sqlException: SQLException?,
     ) {
         val elapsedMs = TimeUnit.NANOSECONDS.toMillis(timeElapsedNanos)
-        val safeSql = statementInformation.sqlWithValues.redactPushTokenValues()
+        val safeSql = statementInformation.sqlWithValues.redactPushSensitiveValues()
 
         if (sqlException == null) {
             if (Thread.currentThread().name.startsWith(SCHEDULER_THREAD_PREFIX)) {
@@ -55,13 +55,19 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
 }
 
 /**
- * P6Spy의 sqlWithValues는 push token까지 문자열 literal로 치환한다. token column의 위치를
- * SQL 종류별로 추론하면 insert/update/select 변형에서 누락될 수 있으므로, token 테이블을
- * 다루는 문장은 모든 문자열 literal을 가려 원문 token이 로그에 들어갈 가능성을 닫는다.
+ * P6Spy의 sqlWithValues는 push token/device id까지 문자열 literal로 치환한다. column 위치를
+ * SQL 종류별로 추론하면 insert/update/select 변형에서 누락될 수 있으므로, provider endpoint
+ * 또는 그 전송 이력을 다루는 문장은 모든 문자열 literal을 가린다. push_send_history에도
+ * token row에서 복사한 raw deviceId가 있으므로 성공 SQL과 SQLException 모두 같은 경계다.
  */
-private fun String.redactPushTokenValues(): String {
-    if (!contains("push_device_token", ignoreCase = true)) return this
+private fun String.redactPushSensitiveValues(): String {
+    if (PUSH_SENSITIVE_TABLES.none { contains(it, ignoreCase = true) }) return this
     return replace(SQL_STRING_LITERAL, "'[REDACTED]'")
 }
+
+private val PUSH_SENSITIVE_TABLES = setOf(
+    "push_device_token",
+    "push_send_history",
+)
 
 private val SQL_STRING_LITERAL = Regex("'(?:''|[^'])*'")

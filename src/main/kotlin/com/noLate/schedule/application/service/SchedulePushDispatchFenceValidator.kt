@@ -15,12 +15,22 @@ class SchedulePushDispatchFenceValidator(
 ) : PushDispatchFenceValidator {
     override fun validate(fence: PushDispatchFence): Boolean {
         val job = repository.findByIdForUpdate(fence.jobId) ?: return false
-        val valid =
-            job.status == SchedulePushJobStatus.PROCESSING &&
-                job.lockedBy == fence.workerId &&
-                job.notificationGeneration == fence.notificationGeneration &&
-                job.notificationInputFingerprint == fence.notificationInputFingerprint
-        if (valid) {
+        val identityValid =
+            job.notificationGeneration == fence.notificationGeneration &&
+                job.notificationInputFingerprint == fence.notificationInputFingerprint &&
+                (fence.expectedMemberId == null || job.memberId == fence.expectedMemberId) &&
+                (fence.expectedScheduleId == null || job.scheduleId == fence.expectedScheduleId)
+        val leaseValid =
+            !fence.requireWorkerLease ||
+                (
+                    job.status == SchedulePushJobStatus.PROCESSING &&
+                        job.lockedBy == fence.workerId &&
+                        job.version == fence.jobVersion
+                    )
+        val sourceStateValid =
+            fence.requireWorkerLease || job.status != SchedulePushJobStatus.CANCELED
+        val valid = identityValid && leaseValid && sourceStateValid
+        if (valid && fence.requireWorkerLease) {
             check(
                 repository.heartbeatLeaseWithoutVersion(
                     fence.jobId,

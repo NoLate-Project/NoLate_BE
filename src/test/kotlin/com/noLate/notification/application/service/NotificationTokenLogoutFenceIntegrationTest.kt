@@ -85,6 +85,7 @@ class NotificationTokenLogoutFenceIntegrationTest @Autowired constructor(
                     platform = PushPlatform.ANDROID,
                     token = "token-register-first",
                     accessTokenIssuedAt = oldIssuedAt,
+                    accessTokenSessionGeneration = 0,
                 )
             }.onFailure(failures::add)
         }
@@ -121,11 +122,44 @@ class NotificationTokenLogoutFenceIntegrationTest @Autowired constructor(
                 platform = PushPlatform.ANDROID,
                 token = "token-logout-first",
                 accessTokenIssuedAt = oldIssuedAt,
+                accessTokenSessionGeneration = 0,
             )
         }
 
         assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
         assertTrue(tokenRepository.findAllByMemberId(memberId).isEmpty())
+    }
+
+    @Test
+    fun `same second old generation is rejected and post logout generation is immediately accepted`() {
+        val memberId = createMember("same-second@example.com")
+
+        sessionFenceService.invalidateSessionsAndLogout(memberId)
+
+        val oldFailure = assertThrows<BusinessException> {
+            tokenService.registerToken(
+                memberId = memberId,
+                deviceId = "same-second-device",
+                platform = PushPlatform.ANDROID,
+                token = "same-second-old-token",
+                accessTokenIssuedAt = logoutAt,
+                accessTokenSessionGeneration = 0,
+            )
+        }
+        assertEquals(ErrorCode.INVALID_TOKEN, oldFailure.errorCode)
+
+        tokenService.registerToken(
+            memberId = memberId,
+            deviceId = "same-second-device",
+            platform = PushPlatform.ANDROID,
+            token = "same-second-new-token",
+            accessTokenIssuedAt = logoutAt,
+            accessTokenSessionGeneration = 1,
+        )
+
+        val saved = tokenRepository.findAllByMemberId(memberId).single()
+        assertEquals("same-second-new-token", saved.token)
+        assertEquals(1L, memberRepository.findById(memberId).orElseThrow().sessionGeneration)
     }
 
     @Test
@@ -147,6 +181,7 @@ class NotificationTokenLogoutFenceIntegrationTest @Autowired constructor(
                     platform = PushPlatform.ANDROID,
                     token = "token-filter-passed",
                     accessTokenIssuedAt = oldIssuedAt,
+                    accessTokenSessionGeneration = 0,
                 )
             }.onFailure(failure::add)
             done.countDown()
@@ -185,6 +220,7 @@ class NotificationTokenLogoutFenceIntegrationTest @Autowired constructor(
                     platform = PushPlatform.ANDROID,
                     token = "shared-case-sensitive-token",
                     accessTokenIssuedAt = oldIssuedAt,
+                    accessTokenSessionGeneration = 0,
                 )
             }.onFailure(failures::add)
             done.countDown()
@@ -199,6 +235,7 @@ class NotificationTokenLogoutFenceIntegrationTest @Autowired constructor(
                     platform = PushPlatform.ANDROID,
                     token = "shared-case-sensitive-token",
                     accessTokenIssuedAt = newIssuedAt,
+                    accessTokenSessionGeneration = 0,
                 )
             }.onFailure(failures::add)
             done.countDown()
@@ -215,6 +252,77 @@ class NotificationTokenLogoutFenceIntegrationTest @Autowired constructor(
         val current = tokenRepository.findAllByMemberId(newMemberId).single()
         assertEquals("shared-device", current.deviceId)
         assertEquals("shared-case-sensitive-token", current.token)
+    }
+
+    @Test
+    fun `authenticated registration transfers a global installation between accounts`() {
+        val oldMemberId = createMember("installation-old@example.com")
+        val newMemberId = createMember("installation-new@example.com")
+
+        tokenService.registerToken(
+            memberId = oldMemberId,
+            deviceId = "one-global-installation",
+            platform = PushPlatform.UNKNOWN,
+            token = "old-owner-token",
+            accessTokenIssuedAt = logoutAt,
+            accessTokenSessionGeneration = 0,
+        )
+        tokenService.registerToken(
+            memberId = newMemberId,
+            deviceId = "one-global-installation",
+            platform = PushPlatform.IOS,
+            token = "new-owner-token",
+            accessTokenIssuedAt = logoutAt,
+            accessTokenSessionGeneration = 0,
+        )
+
+        assertTrue(tokenRepository.findAllByMemberId(oldMemberId).isEmpty())
+        val current = tokenRepository.findAllByMemberId(newMemberId).single()
+        assertEquals("new-owner-token", current.token)
+        assertEquals(PushPlatform.IOS, current.platform)
+    }
+
+    @Test
+    fun `concurrent authenticated account claims converge to one global installation owner`() {
+        val firstMemberId = createMember("claim-a@example.com")
+        val secondMemberId = createMember("claim-b@example.com")
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(2)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newFixedThreadPool(2)
+
+        listOf(
+            firstMemberId to "claim-a-token",
+            secondMemberId to "claim-b-token",
+        ).forEach { (memberId, token) ->
+            executor.submit {
+                ready.countDown()
+                start.await()
+                runCatching {
+                    tokenService.registerToken(
+                        memberId = memberId,
+                        deviceId = "concurrent-global-installation",
+                        platform = PushPlatform.ANDROID,
+                        token = token,
+                        accessTokenIssuedAt = logoutAt,
+                        accessTokenSessionGeneration = 0,
+                    )
+                }.onFailure(failures::add)
+                done.countDown()
+            }
+        }
+
+        assertTrue(ready.await(5, TimeUnit.SECONDS))
+        start.countDown()
+        assertTrue(done.await(10, TimeUnit.SECONDS))
+        executor.shutdownNow()
+
+        assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
+        val rows = tokenRepository.findAll()
+        assertEquals(1, rows.size)
+        assertTrue(rows.single().memberId in setOf(firstMemberId, secondMemberId))
+        assertTrue(rows.single().token in setOf("claim-a-token", "claim-b-token"))
     }
 
     private fun createMember(email: String): Long =

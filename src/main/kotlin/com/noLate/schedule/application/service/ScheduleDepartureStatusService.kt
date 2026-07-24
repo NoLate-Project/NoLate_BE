@@ -71,11 +71,11 @@ class ScheduleDepartureStatusService(
     }
 
     /**
-     * 첫 출발 전환을 다른 활성 참가자에게 알리는 커밋 후 이벤트를 만든다.
+     * 첫 출발 전환을 다른 활성 참가자에게 알리는 transaction event를 만든다.
      *
      * 개별 일정 공유와 카테고리 공유가 겹칠 수 있으므로 LinkedHashSet으로 중복을 제거한다.
      * 출발한 본인은 수신 목록에서 제외한다. 이벤트에는 엔티티 대신 푸시에 필요한 불변값만
-     * 넣어 AFTER_COMMIT 리스너가 영속성 컨텍스트 밖에서도 안전하게 처리할 수 있게 한다.
+     * 넣어 BEFORE_COMMIT listener가 같은 transaction의 durable outbox로 안전하게 옮긴다.
      */
     private fun publishParticipantDeparted(schedule: com.noLate.schedule.domain.Schedule, departedMemberId: Long) {
         val scheduleId = requireNotNull(schedule.id)

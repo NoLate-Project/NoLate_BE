@@ -35,7 +35,9 @@ import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.time.Instant
+import java.time.Clock
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
@@ -921,6 +923,73 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `느린 첫 처리 뒤 tail job은 실제 claim 시각으로 lease된다`() {
+        val advancingClock = AdvancingTestClock(testNow)
+        val later = testNow.plus(11, ChronoUnit.MINUTES)
+        val firstSchedule = schedule(
+            startAt = testNow.plus(180, ChronoUnit.MINUTES),
+            scheduleId = 31L,
+            memberId = 1L,
+        )
+        val secondSchedule = schedule(
+            startAt = testNow.plus(180, ChronoUnit.MINUTES),
+            scheduleId = 32L,
+            memberId = 2L,
+        )
+        val firstJob = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 31L,
+            scheduleAt = firstSchedule.startAt,
+            departureAt = firstSchedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minusSeconds(1),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        val secondJob = SchedulePushJob.create(
+            memberId = 2L,
+            scheduleId = 32L,
+            scheduleAt = secondSchedule.startAt,
+            departureAt = secondSchedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minusSeconds(1),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
+            )
+        ).thenReturn(listOf(firstJob))
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                later,
+                org.springframework.data.domain.PageRequest.of(0, 1),
+            )
+        ).thenReturn(listOf(secondJob), emptyList())
+        whenever(scheduleRepository.findScheduleDetail(31L, 1L)).thenReturn(firstSchedule)
+        whenever(scheduleRepository.findScheduleDetail(32L, 2L)).thenReturn(secondSchedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenAnswer {
+            if (advancingClock.instant() == testNow) {
+                advancingClock.advanceTo(later)
+            }
+            30
+        }
+
+        assertEquals(2, worker(clock = advancingClock).runDueJobs(testNow))
+
+        verify(
+            pushJobRepository,
+            times(2),
+        ).findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+            SchedulePushJobStatus.ACTIVE,
+            later,
+            org.springframework.data.domain.PageRequest.of(0, 1),
+        )
+        assertEquals(testNow, firstJob.lastCheckedAt)
+        assertEquals(later, secondJob.lastCheckedAt)
+    }
+
+    @Test
     // Simulates a server crash or shutdown after a worker marked a job PROCESSING.
     // The next worker run should unlock stale jobs and put them back into ACTIVE so they can be retried.
     fun `PROCESSING job이 timeout을 넘으면 ACTIVE로 복구하고 즉시 재검사 대상으로 만든다`() {
@@ -991,7 +1060,10 @@ class SchedulePushJobWorkerTest {
         })
     }
 
-    private fun worker(accessPolicy: ScheduleAccessPolicy? = null) = SchedulePushJobWorker(
+    private fun worker(
+        accessPolicy: ScheduleAccessPolicy? = null,
+        clock: Clock = Clock.fixed(testNow, ZoneOffset.UTC),
+    ) = SchedulePushJobWorker(
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
         trafficClient = trafficClient,
@@ -1008,6 +1080,7 @@ class SchedulePushJobWorkerTest {
         processingTimeoutMinutes = 10,
         travelPlanRepository = travelPlanRepository,
         scheduleAccessPolicy = accessPolicy,
+        clock = clock,
     )
 
     /**
@@ -1091,4 +1164,18 @@ class SchedulePushJobWorkerTest {
                 notificationIntervalMinutes = notificationIntervalMinutes,
             )
         }
+}
+
+private class AdvancingTestClock(
+    private var current: Instant,
+) : Clock() {
+    override fun getZone(): ZoneId = ZoneOffset.UTC
+
+    override fun withZone(zone: ZoneId): Clock = this
+
+    override fun instant(): Instant = current
+
+    fun advanceTo(next: Instant) {
+        current = next
+    }
 }

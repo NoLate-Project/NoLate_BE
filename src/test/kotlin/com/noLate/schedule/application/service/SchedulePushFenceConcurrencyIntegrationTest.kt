@@ -9,6 +9,7 @@ import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -137,6 +138,32 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
         assertEquals(1, persisted.notificationGeneration)
     }
 
+    @Test
+    fun `같은 worker id가 stale job을 다시 claim해도 이전 version fence는 거절된다`() {
+        val jobId = createClaimedJob(originalDto())
+        val staleFence = oldFence(jobId)
+
+        transactions.executeWithoutResult {
+            val job = requireNotNull(repository.findByIdForUpdate(jobId))
+            job.recoverProcessingTimeout(
+                reason = "stale test lease",
+                nextCheckAt = NOW.plusSeconds(1),
+            )
+            repository.flush()
+        }
+        transactions.executeWithoutResult {
+            val job = requireNotNull(repository.findByIdForUpdate(jobId))
+            job.startProcessing(workerId, NOW.plusSeconds(1))
+            repository.flush()
+        }
+
+        val accepted = transactions.execute {
+            validator.validate(staleFence)
+        } ?: true
+
+        assertFalse(accepted)
+    }
+
     private fun createClaimedJob(dto: ScheduleDto): Long {
         val created = requireNotNull(jobService.registerFromScheduleDto(1L, dto))
         val jobId = requireNotNull(created.id)
@@ -153,6 +180,7 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
         return PushDispatchFence(
             jobId = jobId,
             workerId = workerId,
+            jobVersion = requireNotNull(job.version),
             notificationGeneration = 0,
             notificationInputFingerprint = job.notificationInputFingerprint,
         )

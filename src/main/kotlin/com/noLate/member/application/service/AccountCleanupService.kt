@@ -1,6 +1,5 @@
 package com.noLate.member.application.service
 
-import com.noLate.auth.application.RefreshTokenService
 import com.noLate.favorite.infrastructure.FavoritePlaceCategoryRepository
 import com.noLate.favorite.infrastructure.FavoritePlaceRepository
 import com.noLate.member.domain.member.Member
@@ -28,7 +27,6 @@ import java.util.UUID
 /** 계정 경계를 넘을 수 있는 인증/기기/사용자 데이터를 한 트랜잭션에서 정리한다. */
 @Service
 class AccountCleanupService(
-    private val refreshTokenService: RefreshTokenService,
     private val deviceTokenRepository: NotificationDeviceTokenRepository,
     private val pushDeliveryRepository: PushDeliveryRepository,
     private val pushHistoryRepository: PushSendHistoryRepository,
@@ -50,22 +48,17 @@ class AccountCleanupService(
     private val notificationActionReceiptRepository: ScheduleNotificationActionReceiptRepository,
 ) {
     @Transactional
-    fun logoutAll(memberId: Long) {
-        refreshTokenService.deleteAllByMemberId(memberId)
-        deviceTokenRepository.deleteAllByMemberId(memberId)
-    }
-
-    @Transactional
     fun withdraw(member: Member) {
         val memberId = requireNotNull(member.id)
-        logoutAll(memberId)
 
-        // 참조 테이블부터 정리한 후 소유 리소스를 제거한다.
+        // Provider worker와 동일한 lock 방향을 유지한다:
+        // schedule job -> immutable source -> delivery/history -> device ownership.
+        // MemberSessionFenceService가 member lock과 refresh revoke를 이미 완료했다.
+        pushJobRepository.deleteAllByMemberId(memberId)
+        appNotificationRepository.deleteAllByMemberId(memberId)
         pushDeliveryRepository.deleteAllByMemberId(memberId)
         pushHistoryRepository.deleteAllByMemberId(memberId)
-        appNotificationRepository.deleteAllByMemberId(memberId)
         notificationActionReceiptRepository.deleteAllByMemberId(memberId)
-        pushJobRepository.deleteAllByMemberId(memberId)
         departureStatusRepository.deleteAllByMemberId(memberId)
         travelPlanRepository.deleteAllByMemberId(memberId)
         scheduleShareRepository.deleteAllByOwnerMemberIdOrTargetMemberId(memberId, memberId)
@@ -80,6 +73,7 @@ class AccountCleanupService(
         memberProfileRepository.deleteByMemberId(memberId)
         memberSettingRepository.deleteAllByMemberId(memberId)
         memberConsentRepository.deleteAllByMemberId(memberId)
+        deviceTokenRepository.deleteAllByMemberId(memberId)
 
         // 회원 row는 감사/참조 안정성을 위해 남기되 재식별 정보를 제거하고 인증을 차단한다.
         member.name = "탈퇴 회원"

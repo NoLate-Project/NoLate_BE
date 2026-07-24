@@ -7,8 +7,10 @@ import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleNotificationActionReceipt
 import com.noLate.schedule.domain.ScheduleNotificationActionType
 import com.noLate.schedule.infrastructure.ScheduleNotificationActionReceiptRepository
+import org.hibernate.exception.ConstraintViolationException
 import org.springframework.dao.ConcurrencyFailureException
-import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.DuplicateKeyException
+import org.springframework.dao.TransientDataAccessException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -80,23 +82,45 @@ class ScheduleNotificationActionIdempotencyService(
     }
 
     private fun <T> retryUniqueRace(block: () -> T): T {
-        var lastFailure: RuntimeException? = null
         repeat(3) { attempt ->
             try {
                 return block()
-            } catch (failure: DataIntegrityViolationException) {
-                lastFailure = failure
+            } catch (failure: RuntimeException) {
+                if (!failure.isExpectedActionReceiptCollision() &&
+                    failure !is TransientDataAccessException
+                ) {
+                    throw failure
+                }
                 if (attempt == 2) {
                     throw ConcurrencyFailureException(
                         "Idempotency receipt registration did not converge.",
-                        failure,
                     )
                 }
             }
         }
-        throw checkNotNull(lastFailure)
+        throw ConcurrencyFailureException(
+            "Idempotency receipt registration did not converge.",
+        )
     }
 }
+
+private fun RuntimeException.isExpectedActionReceiptCollision(): Boolean {
+    if (this is DuplicateKeyException) return true
+
+    var current: Throwable? = this
+    val visited = mutableSetOf<Throwable>()
+    while (current != null && visited.add(current)) {
+        val constraintName = (current as? ConstraintViolationException)?.constraintName
+        if (constraintName?.contains(ACTION_RECEIPT_UNIQUE_CONSTRAINT, ignoreCase = true) == true) {
+            return true
+        }
+        current = current.cause
+    }
+    return false
+}
+
+private const val ACTION_RECEIPT_UNIQUE_CONSTRAINT =
+    "uk_schedule_notification_action_key_fingerprint"
 
 @Service
 class ScheduleNotificationActionIdempotencyWriter(

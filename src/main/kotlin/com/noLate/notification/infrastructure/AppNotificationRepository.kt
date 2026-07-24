@@ -1,8 +1,11 @@
 package com.noLate.notification.infrastructure
 
 import com.noLate.notification.domain.AppNotification
+import com.noLate.notification.domain.PushOutboxDispatchStatus
+import jakarta.persistence.LockModeType
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
@@ -14,6 +17,53 @@ interface AppNotificationRepository : JpaRepository<AppNotification, Long> {
         memberId: Long,
         deduplicationKey: String,
     ): AppNotification?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select notification
+        from AppNotification notification
+        where notification.memberId = :memberId
+          and notification.deduplicationKey = :deduplicationKey
+        """
+    )
+    fun findByMemberIdAndDeduplicationKeyForUpdate(
+        @Param("memberId") memberId: Long,
+        @Param("deduplicationKey") deduplicationKey: String,
+    ): AppNotification?
+
+    fun findByMemberIdAndLogicalEventKey(
+        memberId: Long,
+        logicalEventKey: String,
+    ): AppNotification?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select notification
+        from AppNotification notification
+        where notification.memberId = :memberId
+          and notification.logicalEventKey = :logicalEventKey
+        """
+    )
+    fun findByMemberIdAndLogicalEventKeyForUpdate(
+        @Param("memberId") memberId: Long,
+        @Param("logicalEventKey") logicalEventKey: String,
+    ): AppNotification?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    fun findAllByDispatchStatusAndNextDispatchAtLessThanEqualOrderByNextDispatchAtAscIdAsc(
+        dispatchStatus: PushOutboxDispatchStatus,
+        nextDispatchAt: Instant,
+        pageable: Pageable,
+    ): List<AppNotification>
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    fun findAllByDispatchStatusAndDispatchLockedAtLessThanEqualOrderByDispatchLockedAtAscIdAsc(
+        dispatchStatus: PushOutboxDispatchStatus,
+        dispatchLockedAt: Instant,
+        pageable: Pageable,
+    ): List<AppNotification>
 
     fun findByIdAndMemberId(id: Long, memberId: Long): AppNotification?
 

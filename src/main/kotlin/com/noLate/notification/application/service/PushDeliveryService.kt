@@ -1,13 +1,14 @@
 package com.noLate.notification.application.service
 
+import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.NotificationDeviceToken
-import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.notification.domain.PushDelivery
 import com.noLate.notification.domain.PushDeliveryStatus
+import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
-import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -22,6 +23,7 @@ data class PushDeliveryClaim(
     val tokenFingerprint: String? = null,
     val tokenOwnershipVersion: Long? = null,
     val deliveredAt: Instant? = null,
+    val token: NotificationDeviceToken? = null,
 )
 
 enum class PushDeliveryClaimOutcome {
@@ -49,47 +51,37 @@ class PushDeliveryService(
     private val writer: PushDeliveryWriter,
 ) {
 
-    /**
-     * provider loop 전에 현재 대상 기기 전체를 한 transaction에서 PENDING으로 만든다.
-     * inbox가 이미 존재해도 누락 row를 보충하므로 manifest 직전 crash를 다음 실행이 복구한다.
-     */
-    fun prepareManifest(
-        memberId: Long,
-        eventKey: String,
-        tokens: List<NotificationDeviceToken>,
-        data: Map<String, String>,
-    ) {
-        if (tokens.isEmpty()) return
-        val normalizedEventKey = eventKey.take(100)
-        try {
-            writer.prepareManifest(memberId, normalizedEventKey, tokens, data)
-        } catch (_: DataIntegrityViolationException) {
-            // 동시 manifest 생성의 unique 충돌 transaction이 끝난 뒤 누락분을 다시 보충한다.
-            writer.prepareManifest(memberId, normalizedEventKey, tokens, data)
-        }
-    }
-
     fun claim(
         memberId: Long,
         eventKey: String,
-        token: NotificationDeviceToken,
+        deliveryId: Long,
         fence: PushDispatchFence? = null,
     ): PushDeliveryClaim {
-        val deviceKey = token.deliveryDeviceKey(memberId)
         val normalizedEventKey = eventKey.take(100)
         return try {
-            writer.claim(memberId, normalizedEventKey, deviceKey, fence)
+            writer.claim(memberId, normalizedEventKey, deliveryId, fence)
         } catch (_: OptimisticLockingFailureException) {
-            writer.claim(memberId, normalizedEventKey, deviceKey, fence)
+            writer.claim(memberId, normalizedEventKey, deliveryId, fence)
         }
     }
 
-    fun markSuccess(deliveryId: Long, providerMessageId: String) {
-        writer.markSuccess(deliveryId, providerMessageId)
+    fun markSuccess(
+        deliveryId: Long,
+        providerMessageId: String,
+        fence: PushDispatchFence? = null,
+        sourceLease: PushOutboxDispatchLease? = null,
+    ) {
+        writer.markSuccess(deliveryId, providerMessageId, fence, sourceLease)
     }
 
-    fun markFailure(deliveryId: Long, errorCode: String, errorMessage: String?) {
-        writer.markFailure(deliveryId, errorCode, errorMessage)
+    fun markFailure(
+        deliveryId: Long,
+        errorCode: String,
+        errorMessage: String?,
+        fence: PushDispatchFence? = null,
+        sourceLease: PushOutboxDispatchLease? = null,
+    ) {
+        writer.markFailure(deliveryId, errorCode, errorMessage, fence, sourceLease)
     }
 
     fun markInvalidToken(deliveryId: Long, errorCode: String, errorMessage: String?) {
@@ -101,55 +93,32 @@ class PushDeliveryService(
 class PushDeliveryWriter(
     private val repository: PushDeliveryRepository,
     private val tokenRepository: NotificationDeviceTokenRepository,
+    private val appNotificationRepository: AppNotificationRepository,
     private val clock: Clock,
     private val fenceValidator: PushDispatchFenceValidator? = null,
+    @Value("\${notification.push-outbox.retry-delay-seconds:60}")
+    private val outboxRetryDelaySeconds: Long = 60,
+    @Value("\${notification.push-outbox.max-attempts:5}")
+    private val outboxMaxAttempts: Int = 5,
 ) {
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun prepareManifest(
-        memberId: Long,
-        eventKey: String,
-        tokens: List<NotificationDeviceToken>,
-        data: Map<String, String>,
-    ) {
-        val existingDeviceKeys = repository.findAllByMemberIdAndEventKey(memberId, eventKey)
-            .mapTo(mutableSetOf()) { it.deviceKey }
-        val missing = tokens
-            .distinctBy { it.deliveryDeviceKey(memberId) }
-            .filter { existingDeviceKeys.add(it.deliveryDeviceKey(memberId)) }
-            .map { token ->
-                PushDelivery(
-                    memberId = memberId,
-                    eventKey = eventKey,
-                    deviceKey = token.deliveryDeviceKey(memberId),
-                    deviceTokenId = token.id,
-                    tokenFingerprint = token.tokenFingerprint,
-                    tokenOwnershipVersion = token.ownershipVersion,
-                    deviceFingerprint = token.deviceFingerprint,
-                    platform = token.platform,
-                    scheduleId = data["scheduleId"]?.toLongOrNull(),
-                    payloadType = data["type"]?.take(80),
-                )
-            }
-        if (missing.isNotEmpty()) {
-            repository.saveAllAndFlush(missing)
-        }
-    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun claim(
         memberId: Long,
         eventKey: String,
-        deviceKey: String,
+        deliveryId: Long,
         fence: PushDispatchFence? = null,
     ): PushDeliveryClaim {
         if (fence != null && fenceValidator?.validate(fence) != true) {
+            if (!fence.requireWorkerLease) {
+                return terminalizeRejectedPersistedClaim(memberId, eventKey, deliveryId)
+            }
             return PushDeliveryClaim(PushDeliveryClaimOutcome.FENCE_REJECTED)
         }
-        val existing = repository.findByMemberIdAndEventKeyAndDeviceKey(
+        val existing = repository.findByIdAndMemberIdAndEventKey(
+            deliveryId,
             memberId,
             eventKey,
-            deviceKey,
         ) ?: return PushDeliveryClaim(PushDeliveryClaimOutcome.DEDUPLICATED)
         return when (existing.status) {
             PushDeliveryStatus.SUCCESS ->
@@ -176,7 +145,7 @@ class PushDeliveryWriter(
                         it.memberId == memberId &&
                             it.tokenFingerprint == existing.tokenFingerprint &&
                             it.ownershipVersion == existing.tokenOwnershipVersion &&
-                            it.deliveryDeviceKey(memberId) == existing.deviceKey
+                            it.deliveryDeviceKey() == existing.deviceKey
                     }
                 if (verifiedToken == null) {
                     existing.markSuperseded(
@@ -195,21 +164,114 @@ class PushDeliveryWriter(
                     tokenId = verifiedToken.id,
                     tokenFingerprint = verifiedToken.tokenFingerprint,
                     tokenOwnershipVersion = verifiedToken.ownershipVersion,
+                    token = verifiedToken,
                 )
             }
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun markSuccess(deliveryId: Long, providerMessageId: String) {
-        repository.findById(deliveryId).orElse(null)
-            ?.markSuccess(Instant.now(clock), providerMessageId)
+    private fun terminalizeRejectedPersistedClaim(
+        memberId: Long,
+        eventKey: String,
+        deliveryId: Long,
+    ): PushDeliveryClaim {
+        val delivery = repository.findByIdAndMemberIdAndEventKey(
+            deliveryId,
+            memberId,
+            eventKey,
+        ) ?: return PushDeliveryClaim(PushDeliveryClaimOutcome.DEDUPLICATED)
+        return when (delivery.status) {
+            PushDeliveryStatus.PENDING,
+            PushDeliveryStatus.FAILED -> {
+                delivery.markSuperseded(
+                    Instant.now(clock),
+                    "Persisted source identity changed before safety dispatch.",
+                )
+                repository.saveAndFlush(delivery)
+                PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED, delivery.id)
+            }
+
+            PushDeliveryStatus.SUCCESS ->
+                PushDeliveryClaim(
+                    PushDeliveryClaimOutcome.ALREADY_SUCCESS,
+                    delivery.id,
+                    deliveredAt = delivery.deliveredAt,
+                )
+
+            PushDeliveryStatus.DISPATCHING ->
+                PushDeliveryClaim(PushDeliveryClaimOutcome.AMBIGUOUS, delivery.id)
+
+            PushDeliveryStatus.INVALID_TOKEN ->
+                PushDeliveryClaim(PushDeliveryClaimOutcome.INVALID_TOKEN, delivery.id)
+
+            PushDeliveryStatus.SUPERSEDED ->
+                PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED, delivery.id)
+        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun markFailure(deliveryId: Long, errorCode: String, errorMessage: String?) {
-        repository.findById(deliveryId).orElse(null)
-            ?.markFailure(Instant.now(clock), errorCode, errorMessage)
+    fun markSuccess(
+        deliveryId: Long,
+        providerMessageId: String,
+        fence: PushDispatchFence? = null,
+        sourceLease: PushOutboxDispatchLease? = null,
+    ) {
+        val identity = repository.findById(deliveryId).orElse(null) ?: return
+        val directSourceFenceStillOwned =
+            fence?.requireWorkerLease == true && fenceValidator?.validate(fence) == true
+        val source = appNotificationRepository.findByMemberIdAndLogicalEventKeyForUpdate(
+            identity.memberId,
+            identity.eventKey,
+        )
+        val sourceFenceStillOwned =
+            directSourceFenceStillOwned || source.ownsDispatchLease(sourceLease)
+        val delivery = repository.findByIdForUpdate(deliveryId) ?: return
+        if (delivery.memberId != identity.memberId || delivery.eventKey != identity.eventKey) return
+
+        val now = Instant.now(clock)
+        if (!delivery.markSuccess(now, providerMessageId)) return
+        if (!sourceFenceStillOwned) {
+            source?.scheduleConfirmedDeliveryReconciliation(now.plusSeconds(1))
+        }
+        repository.flush()
+        appNotificationRepository.flush()
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun markFailure(
+        deliveryId: Long,
+        errorCode: String,
+        errorMessage: String?,
+        fence: PushDispatchFence? = null,
+        sourceLease: PushOutboxDispatchLease? = null,
+    ) {
+        val identity = repository.findById(deliveryId).orElse(null) ?: return
+
+        val directSourceFenceStillOwned =
+            fence?.requireWorkerLease == true && fenceValidator?.validate(fence) == true
+        // Source row first, delivery row second is the global lock order for late confirmed
+        // failures. Outbox completion/recovery also locks the source row first, so a provider
+        // response racing lease recovery serializes without a source<->delivery deadlock.
+        val source = appNotificationRepository.findByMemberIdAndLogicalEventKeyForUpdate(
+            identity.memberId,
+            identity.eventKey,
+        )
+        val sourceFenceStillOwned =
+            directSourceFenceStillOwned || source.ownsDispatchLease(sourceLease)
+        val delivery = repository.findByIdForUpdate(deliveryId) ?: return
+        if (delivery.memberId != identity.memberId || delivery.eventKey != identity.eventKey) return
+
+        val now = Instant.now(clock)
+        if (!delivery.markFailure(now, errorCode, errorMessage)) return
+        if (!sourceFenceStillOwned) {
+            source?.scheduleAfterConfirmedDeliveryFailure(
+                nextAt = now.plusSeconds(outboxRetryDelaySeconds.coerceAtLeast(1)),
+                retryAllowed = delivery.attemptCount < outboxMaxAttempts.coerceAtLeast(1),
+                reason = "CONFIRMED_PROVIDER_FAILURE",
+            )
+        }
+        repository.flush()
+        appNotificationRepository.flush()
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -219,10 +281,25 @@ class PushDeliveryWriter(
     }
 }
 
-internal fun NotificationDeviceToken.deliveryDeviceKey(memberId: Long): String {
+internal fun NotificationDeviceToken.deliveryDeviceKey(): String {
     return if (deviceFingerprint != null) {
-        "device-sha256:${OpaquePushIdentifier.fingerprint("$memberId:$deviceFingerprint")}"
+        "device-sha256:$deviceFingerprint"
     } else {
         "token-sha256:$tokenFingerprint"
     }
 }
+
+/**
+ * A persisted schedule fence proves only event identity. The active outbox attempt is a separate
+ * lease and must be checked against the locked source row before a provider result may rely on its
+ * outer worker to perform completion/retry. A stale late result therefore reopens the source.
+ */
+private fun AppNotification?.ownsDispatchLease(lease: PushOutboxDispatchLease?): Boolean =
+    this != null &&
+        lease != null &&
+        id == lease.notificationId &&
+        memberId == lease.memberId &&
+        logicalEventKey == lease.logicalEventKey &&
+        dispatchStatus == com.noLate.notification.domain.PushOutboxDispatchStatus.PROCESSING &&
+        dispatchLockedBy == lease.workerId &&
+        dispatchAttemptCount == lease.attemptCount

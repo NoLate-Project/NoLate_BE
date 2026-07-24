@@ -4,9 +4,12 @@ package com.noLate.member.application
 import com.noLate.auth.application.RefreshTokenService
 import com.noLate.auth.domain.RefreshToken
 import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.JwtTokenProvider
+import com.noLate.global.security.LogoutRefreshSession
 import com.noLate.member.application.service.MemberProfileService
 import com.noLate.member.application.service.MemberConsentService
+import com.noLate.member.application.service.AccountCleanupService
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
 import com.noLate.member.application.service.MemberSessionFenceService
@@ -19,9 +22,7 @@ import com.noLate.member.domain.member.Member
 import com.noLate.member.domain.member.MemberDto
 import com.noLate.member.domain.consent.MemberConsentSource
 import com.noLate.member.domain.consent.SignupConsentCommand
-import com.noLate.member.domain.memberSetting.MemberSetting
 import com.noLate.member.domain.memberSetting.MemberSettingDto
-import com.noLate.member.domain.memberSetting.ThemeType
 import com.noLate.member.domain.profile.MemberProfileDto
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -68,6 +69,9 @@ class MemberUseCaseUnitTest {
     @Mock
     lateinit var memberSessionFenceService: MemberSessionFenceService
 
+    @Mock
+    lateinit var accountCleanupService: AccountCleanupService
+
     private val signupConsents = SignupConsentCommand(
         termsVersion = "2026.07.16",
         privacyCollectionVersion = "2026.07.16",
@@ -90,6 +94,7 @@ class MemberUseCaseUnitTest {
             memberConsentService = memberConsentService,
             memberSessionFenceService = memberSessionFenceService,
             socialIdentityVerifier = socialIdentityVerifier,
+            accountCleanupService = accountCleanupService,
         )
     }
 
@@ -173,9 +178,10 @@ class MemberUseCaseUnitTest {
         whenever(memberValidator.validateAndGetMemberForCommonLogin(loginRequestDto))
             .thenReturn(validatedDto)
 
-        whenever(jwtTokenProvider.createAccessToken(1L, "테스트유저"))
+        whenever(memberSessionFenceService.beginExplicitLoginSession(1L)).thenReturn(1L)
+        whenever(jwtTokenProvider.createAccessToken(1L, "테스트유저", 1L))
             .thenReturn("access-token")
-        whenever(jwtTokenProvider.createRefreshToken(1L, "테스트유저"))
+        whenever(jwtTokenProvider.createRefreshToken(1L, "테스트유저", 1L))
             .thenReturn("refresh-token")
         val expiry = LocalDateTime.now().plusDays(7)
         whenever(jwtTokenProvider.getRefreshTokenExpiryLocalDateTime())
@@ -187,11 +193,12 @@ class MemberUseCaseUnitTest {
         // then
         verify(memberValidator, times(1))
             .validateAndGetMemberForCommonLogin(loginRequestDto)
+        verify(memberSessionFenceService).beginExplicitLoginSession(1L)
 
         verify(jwtTokenProvider, times(1))
-            .createAccessToken(1L, "테스트유저")
+            .createAccessToken(1L, "테스트유저", 1L)
         verify(jwtTokenProvider, times(1))
-            .createRefreshToken(1L, "테스트유저")
+            .createRefreshToken(1L, "테스트유저", 1L)
 
         verify(refreshTokenService, times(1))
             .saveNewToken(eq(1L), eq("refresh-token"), eq(expiry))
@@ -230,9 +237,10 @@ class MemberUseCaseUnitTest {
         whenever(memberService.findByLoginTypeAndSnsId(LoginType.KAKAO, "kakao-123"))
             .thenReturn(savedSnsDto)
 
-        whenever(jwtTokenProvider.createAccessToken(10L, "SNS유저"))
+        whenever(memberSessionFenceService.beginExplicitLoginSession(10L)).thenReturn(1L)
+        whenever(jwtTokenProvider.createAccessToken(10L, "SNS유저", 1L))
             .thenReturn("access-token-sns")
-        whenever(jwtTokenProvider.createRefreshToken(10L, "SNS유저"))
+        whenever(jwtTokenProvider.createRefreshToken(10L, "SNS유저", 1L))
             .thenReturn("refresh-token-sns")
         val expiry = LocalDateTime.now().plusDays(7)
         whenever(jwtTokenProvider.getRefreshTokenExpiryLocalDateTime())
@@ -247,10 +255,11 @@ class MemberUseCaseUnitTest {
             .findByLoginTypeAndSnsId(LoginType.KAKAO, "kakao-123")
         verify(memberService, never()).addMember(any<Member>())
         verifyNoInteractions(memberSettingService, memberProfileService, memberConsentService)
+        verify(memberSessionFenceService).beginExplicitLoginSession(10L)
         verify(jwtTokenProvider, times(1))
-            .createAccessToken(10L, "SNS유저")
+            .createAccessToken(10L, "SNS유저", 1L)
         verify(jwtTokenProvider, times(1))
-            .createRefreshToken(10L, "SNS유저")
+            .createRefreshToken(10L, "SNS유저", 1L)
         verify(refreshTokenService, times(1))
             .saveNewToken(eq(10L), eq("refresh-token-sns"), eq(expiry))
 
@@ -293,9 +302,10 @@ class MemberUseCaseUnitTest {
                 )
             }
 
-        whenever(jwtTokenProvider.createAccessToken(11L, "이메일없는SNS유저"))
+        whenever(memberSessionFenceService.beginExplicitLoginSession(11L)).thenReturn(1L)
+        whenever(jwtTokenProvider.createAccessToken(11L, "이메일없는SNS유저", 1L))
             .thenReturn("access-token-no-email")
-        whenever(jwtTokenProvider.createRefreshToken(11L, "이메일없는SNS유저"))
+        whenever(jwtTokenProvider.createRefreshToken(11L, "이메일없는SNS유저", 1L))
             .thenReturn("refresh-token-no-email")
         val expiry = LocalDateTime.now().plusDays(7)
         whenever(jwtTokenProvider.getRefreshTokenExpiryLocalDateTime())
@@ -328,6 +338,7 @@ class MemberUseCaseUnitTest {
         )
         verify(refreshTokenService, times(1))
             .saveNewToken(eq(11L), eq("refresh-token-no-email"), eq(expiry))
+        verify(memberSessionFenceService).beginExplicitLoginSession(11L)
 
         assertEquals("naver_naver_without-email@social.local", result.email)
         assertEquals("access-token-no-email", result.accessToken)
@@ -401,9 +412,11 @@ class MemberUseCaseUnitTest {
         whenever(memberService.getFindMemberId(memberId))
             .thenReturn(Optional.of(member))
 
-        whenever(jwtTokenProvider.createAccessToken(memberId, "테스트유저"))
+        whenever(jwtTokenProvider.getSessionGeneration(oldRefreshToken)).thenReturn(0L)
+        whenever(memberService.getSessionGenerationForUpdate(memberId)).thenReturn(0L)
+        whenever(jwtTokenProvider.createAccessToken(memberId, "테스트유저", 0L))
             .thenReturn("new-access")
-        whenever(jwtTokenProvider.createRefreshToken(memberId, "테스트유저"))
+        whenever(jwtTokenProvider.createRefreshToken(memberId, "테스트유저", 0L))
             .thenReturn("new-refresh")
         val newExpiry = LocalDateTime.now().plusDays(7)
         whenever(jwtTokenProvider.getRefreshTokenExpiryLocalDateTime())
@@ -454,9 +467,11 @@ class MemberUseCaseUnitTest {
         whenever(memberService.getFindMemberId(memberId))
             .thenReturn(Optional.of(member))
 
-        whenever(jwtTokenProvider.createAccessToken(memberId, "두번째유저"))
+        whenever(jwtTokenProvider.getSessionGeneration(oldRefreshToken)).thenReturn(0L)
+        whenever(memberService.getSessionGenerationForUpdate(memberId)).thenReturn(0L)
+        whenever(jwtTokenProvider.createAccessToken(memberId, "두번째유저", 0L))
             .thenReturn("new-access-2")
-        whenever(jwtTokenProvider.createRefreshToken(memberId, "두번째유저"))
+        whenever(jwtTokenProvider.createRefreshToken(memberId, "두번째유저", 0L))
             .thenReturn("new-refresh-2")
         val newExpiry = LocalDateTime.now().plusDays(7)
         whenever(jwtTokenProvider.getRefreshTokenExpiryLocalDateTime())
@@ -476,50 +491,51 @@ class MemberUseCaseUnitTest {
     }
 
     @Test
-    fun `logout은 토큰이 유효하면 validateAndGet으로 소유자 검증 후 revoke를 호출한다`() {
+    fun `logout은 signed refresh session과 raw token을 atomic compare-and-revoke fence에 전달한다`() {
         // given
         val refreshToken = "logout-refresh"
         val memberId = 3L
 
-        whenever(jwtTokenProvider.validateToken(refreshToken))
-            .thenReturn(true)
-        whenever(jwtTokenProvider.isRefreshToken(refreshToken)).thenReturn(true)
-        whenever(jwtTokenProvider.getMemberIdFromToken(refreshToken))
-            .thenReturn(memberId)
-
-        val stored = RefreshToken(
-            id = 200L,
-            memberId = memberId,
-            token = refreshToken,
-            expiresAt = LocalDateTime.now().plusDays(1),
-            revoked = false
-        )
-        whenever(refreshTokenService.validateAndGet(refreshToken))
-            .thenReturn(stored)
+        whenever(jwtTokenProvider.resolveRefreshSessionForLogout(refreshToken))
+            .thenReturn(LogoutRefreshSession(memberId, 4L, false))
 
         // when
         memberUseCase.logout(refreshToken)
 
         // then
-        verify(refreshTokenService, times(1))
-            .validateAndGet(refreshToken)
-        verify(memberSessionFenceService).invalidateSessionsAndLogout(memberId)
+        verify(memberSessionFenceService).compareAndLogout(memberId, 4L, refreshToken)
+        verify(refreshTokenService, never()).validateAndGet(any())
+        verify(refreshTokenService, never()).revokeToken(any())
     }
 
     @Test
-    fun `logout은 토큰이 유효하지 않아도 revoke를 시도한다`() {
+    fun `서명 검증할 수 없는 logout token은 account-wide revoke 권한 없이 성공 no-op이다`() {
         // given
         val refreshToken = "invalid-refresh"
 
-        whenever(jwtTokenProvider.validateToken(refreshToken))
-            .thenReturn(false)
+        whenever(jwtTokenProvider.resolveRefreshSessionForLogout(refreshToken))
+            .thenReturn(null)
 
         // when
         memberUseCase.logout(refreshToken)
 
         // then
         verify(refreshTokenService, never()).validateAndGet(any())
-        verify(refreshTokenService, times(1)).revokeToken(refreshToken)
+        verify(refreshTokenService, never()).revokeToken(any())
+        verifyNoInteractions(memberSessionFenceService)
+    }
+
+    @Test
+    fun `sg 없는 배포 전 refresh token도 generation 0 compare-and-revoke에만 위임한다`() {
+        val refreshToken = "legacy-logout-refresh"
+        val memberId = 30L
+        whenever(jwtTokenProvider.resolveRefreshSessionForLogout(refreshToken))
+            .thenReturn(LogoutRefreshSession(memberId, 0L, true))
+
+        memberUseCase.logout(refreshToken)
+
+        verify(memberSessionFenceService).compareAndLogout(memberId, 0L, refreshToken)
+        verify(refreshTokenService, never()).revokeToken(refreshToken)
     }
 
     @Test
@@ -585,32 +601,38 @@ class MemberUseCaseUnitTest {
             password = "encoded-pw",
             name = "탈퇴유저",
             loginType = LoginType.COMMON,
-            snsId = null
+            snsId = null,
+            sessionGeneration = 6,
         )
 
-        val settingDto = MemberSettingDto(
-            id = 1L,
-            memberId = memberId,
-            pushEnabled = false,
-            emailEnabled = false,
-            marketingConsent = false,
-            theme = ThemeType.LIGTH
-        )
-
-        whenever(memberService.getFindMemberId(memberId))
-            .thenReturn(Optional.of(member))
+        whenever(memberService.getActiveMemberForUpdate(memberId, 6L))
+            .thenReturn(member)
         whenever(passwordEncoder.matches("pw", "encoded-pw"))
             .thenReturn(true)
-        whenever(memberSettingService.getByMemberId(memberId))
-            .thenReturn(settingDto)
 
         // when
-        memberUseCase.withdraw(memberId, "pw")
+        memberUseCase.withdraw(memberId, 6L, "pw")
 
         // then
-        verify(refreshTokenService, times(1)).deleteAllByMemberId(memberId)
-        verify(memberSettingService, times(1)).softDelete(any<MemberSetting>())
-        verify(memberService, times(1)).softDelete(member)
+        verify(memberSessionFenceService).invalidateSessionForWithdrawal(memberId, 6L)
+        verify(accountCleanupService).withdraw(member)
+        verify(memberService).updateMember(member)
+    }
+
+    @Test
+    fun `withdraw는 filter 이후 session generation이 바뀌면 account cleanup 전에 fail closed한다`() {
+        val memberId = 21L
+        whenever(memberService.getActiveMemberForUpdate(memberId, 3L))
+            .thenThrow(BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다."))
+
+        val failure = assertThrows<BusinessException> {
+            memberUseCase.withdraw(memberId, 3L, "pw")
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
+        verify(memberSessionFenceService, never()).invalidateSessionForWithdrawal(any(), any())
+        verifyNoInteractions(accountCleanupService)
+        verify(memberService, never()).updateMember(any())
     }
 
     @Test

@@ -7,8 +7,12 @@ import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
+import org.hibernate.exception.ConstraintViolationException
 import org.slf4j.LoggerFactory
-import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.ConcurrencyFailureException
+import org.springframework.dao.CannotAcquireLockException
+import org.springframework.dao.DuplicateKeyException
+import org.springframework.dao.TransientDataAccessException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -34,9 +38,12 @@ class NotificationTokenService (
         deviceId: String?,
         platform: PushPlatform,
         token: String,
-        accessTokenIssuedAt: Instant? = null,
+        accessTokenIssuedAt: Instant,
+        accessTokenSessionGeneration: Long,
     ) {
-        val normalizedDeviceId = deviceId?.trim()?.takeIf { it.isNotEmpty() }
+        // deviceId는 대소문자와 앞뒤 공백까지 UTF-8 byte identity의 일부인 opaque 값이다.
+        // 빈 문자열만 optional null과 동일하게 보고, 그 외 값을 trim/case-fold하지 않는다.
+        val normalizedDeviceId = deviceId?.takeIf { it.isNotEmpty() }
         val tokenFingerprint = OpaquePushIdentifier.fingerprint(token)
         val deviceFingerprint = normalizedDeviceId?.let(OpaquePushIdentifier::fingerprint)
         repeat(3) { attempt ->
@@ -49,6 +56,7 @@ class NotificationTokenService (
                     token = token,
                     tokenFingerprint = tokenFingerprint,
                     accessTokenIssuedAt = accessTokenIssuedAt,
+                    accessTokenSessionGeneration = accessTokenSessionGeneration,
                 )
                 logRegistration(
                     memberId,
@@ -58,11 +66,24 @@ class NotificationTokenService (
                     result.result,
                 )
                 return
-            } catch (_: DataIntegrityViolationException) {
+            } catch (ex: RuntimeException) {
+                if (!ex.isExpectedTokenFingerprintCollision() &&
+                    ex !is TransientDataAccessException
+                ) {
+                    throw ex
+                }
                 // 빈 key-range에 대한 동시 insert는 fingerprint unique에서 한 caller가 진다.
-                // 실패 transaction을 버린 뒤 새 transaction에서 canonical row를 다시 잠근다.
+                // deadlock/lock-timeout도 실패 transaction을 버린 뒤 fresh REQUIRES_NEW에서
+                // canonical row를 다시 잠근다. raw token/device는 오류에 포함하지 않는다.
+                log.warn(
+                    "Push token registration concurrency retry. attempt={}, failureType={}",
+                    attempt + 1,
+                    ex.javaClass.simpleName,
+                )
                 if (attempt == 2) {
-                    throw IllegalStateException("Push token registration did not converge.")
+                    throw ConcurrencyFailureException(
+                        "Push token registration did not converge after bounded retries.",
+                    )
                 }
             }
         }
@@ -75,7 +96,7 @@ class NotificationTokenService (
     fun removeToken(memberId: Long, deviceId: String) {
         notificationRepository.deleteByMemberIdAndDeviceFingerprint(
             memberId,
-            OpaquePushIdentifier.fingerprint(deviceId.trim()),
+            OpaquePushIdentifier.fingerprint(deviceId),
         )
     }
 
@@ -140,6 +161,30 @@ class NotificationTokenService (
     }
 }
 
+private fun RuntimeException.isExpectedTokenFingerprintCollision(): Boolean {
+    if (this is DuplicateKeyException) return true
+
+    var current: Throwable? = this
+    val visited = mutableSetOf<Throwable>()
+    while (current != null && visited.add(current)) {
+        val constraintName = (current as? ConstraintViolationException)?.constraintName
+        if (constraintName != null &&
+            TOKEN_FINGERPRINT_UNIQUE_CONSTRAINTS.any {
+                constraintName.contains(it, ignoreCase = true)
+            }
+        ) {
+            return true
+        }
+        current = current.cause
+    }
+    return false
+}
+
+private val TOKEN_FINGERPRINT_UNIQUE_CONSTRAINTS = setOf(
+    "uk_push_device_token_token_fingerprint",
+    "uk_push_device_token_device_fingerprint",
+)
+
 data class NotificationTokenRegistrationResult(
     val removedOwnershipCount: Int,
     val result: String,
@@ -159,24 +204,63 @@ class NotificationTokenWriter(
         platform: PushPlatform,
         token: String,
         tokenFingerprint: String,
-        accessTokenIssuedAt: Instant? = null,
+        accessTokenIssuedAt: Instant,
+        accessTokenSessionGeneration: Long,
     ): NotificationTokenRegistrationResult {
-        if (accessTokenIssuedAt != null) {
-            val member = memberRepository.findByIdForUpdate(memberId)
-                ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
-            if (member.deleted ||
-                member.tokensValidAfter?.let { !accessTokenIssuedAt.isAfter(it) } == true
-            ) {
-                throw BusinessException(ErrorCode.INVALID_TOKEN)
-            }
-            // 테스트 hook도 member row lock을 획득한 뒤에만 실행된다. 운영 bean이 없으면 no-op이다.
-            registrationObserver?.afterMemberSessionFence(memberId)
+        /*
+         * 후보 ownership을 non-locking snapshot으로 먼저 읽고 모든 관련 member row를 ID
+         * 오름차순으로 잠근다. logout과 registration 모두 member -> token 순서다.
+         * snapshot 이후 새 owner가 나타나면 token row를 수정하지 않고 transient retry한다.
+         */
+        val snapshotOwnerIds =
+            notificationRepository.findRegistrationCandidateOwnerMemberIds(
+                tokenFingerprint,
+                deviceFingerprint,
+            )
+        val memberFenceIds = (
+            snapshotOwnerIds +
+                listOf(memberId)
+            )
+            .distinct()
+            .sorted()
+        val lockedMembers = if (memberFenceIds.isEmpty()) {
+            emptyList()
+        } else {
+            memberRepository.findAllByIdsForUpdate(memberFenceIds)
         }
 
+        val member = lockedMembers.firstOrNull { it.id == memberId }
+            ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+        if (member.deleted ||
+            member.sessionGeneration != accessTokenSessionGeneration
+        ) {
+            throw BusinessException(ErrorCode.INVALID_TOKEN)
+        }
+        // iat는 서명된 요청 provenance로 전달되지만 초 단위 정밀도 때문에 순서 판정에는 쓰지
+        // 않는다. signed session generation이 logout과의 단조 fence다.
+        // 테스트 hook도 member row lock을 획득한 뒤에만 실행된다. 운영 bean이 없으면 no-op이다.
+        registrationObserver?.afterMemberSessionFence(memberId)
+
         // 전역 lock order: member row -> token fingerprint/device rows.
-        val tokenMatches = notificationRepository.findAllByTokenFingerprint(tokenFingerprint)
+        val candidateIds = notificationRepository.findRegistrationCandidateIds(
+            tokenFingerprint,
+            deviceFingerprint,
+        )
+        val candidates = if (candidateIds.isEmpty()) {
+            emptyList()
+        } else {
+            notificationRepository.findAllByIdsForUpdate(candidateIds)
+        }
+        if (candidates.any { it.memberId !in memberFenceIds }) {
+            throw CannotAcquireLockException(
+                "Push token ownership changed during registration fencing.",
+            )
+        }
+        val tokenMatches = candidates.filter { it.tokenFingerprint == tokenFingerprint }
         val deviceMatches = deviceFingerprint
-            ?.let { notificationRepository.findAllByMemberIdAndDeviceFingerprint(memberId, it) }
+            ?.let { fingerprint ->
+                candidates.filter { it.deviceFingerprint == fingerprint }
+            }
             .orEmpty()
         val preferred = if (deviceFingerprint != null) {
             deviceMatches.maxByOrNull { it.id ?: Long.MIN_VALUE }

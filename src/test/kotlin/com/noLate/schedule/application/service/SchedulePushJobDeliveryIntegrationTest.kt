@@ -13,15 +13,20 @@ import com.noLate.notification.application.service.PushDeliveryService
 import com.noLate.notification.application.service.PushDeliveryWriter
 import com.noLate.notification.application.service.PushEventOutboxService
 import com.noLate.notification.application.service.PushEventOutboxWriter
+import com.noLate.notification.application.service.PushOutboxDispatchCoordinator
+import com.noLate.notification.application.service.PushOutboxDispatchWorker
+import com.noLate.notification.application.service.PushOutboxDispatchWriter
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.PushDeliveryStatus
 import com.noLate.notification.domain.OpaquePushIdentifier
+import com.noLate.notification.domain.PushOutboxDispatchStatus
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
+import com.noLate.notification.support.registerAuthenticatedPushToken
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
@@ -42,6 +47,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -52,6 +58,9 @@ import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 @DataJpaTest
@@ -72,6 +81,11 @@ import java.util.concurrent.atomic.AtomicInteger
     PushEventOutboxWriter::class,
     SchedulePushDispatchFenceValidator::class,
     NotificationUseCase::class,
+    PushOutboxDispatchCoordinator::class,
+    PushOutboxDispatchWriter::class,
+    PushOutboxDispatchWorker::class,
+    SchedulePersistedPushDispatchFenceFactory::class,
+    SchedulePushOutboxConfirmedDeliveryReconciler::class,
     SchedulePushJobDeliveryTestConfig::class,
 )
 @TestPropertySource(
@@ -88,11 +102,21 @@ import java.util.concurrent.atomic.AtomicInteger
         "schedule.push.departure-reminder-interval-minutes=5",
         "schedule.push.departure-snooze-minutes=5",
         "schedule.push.processing-timeout-minutes=10",
+        "notification.push-outbox.enabled=true",
+        "notification.push-outbox.batch-size=10",
+        "notification.push-outbox.max-attempts=3",
+        "notification.push-outbox.retry-delay-seconds=1",
+        "notification.push-outbox.processing-timeout-seconds=600",
     ]
 )
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     private val worker: SchedulePushJobWorker,
+    private val outboxWorker: PushOutboxDispatchWorker,
+    private val notificationUseCase: NotificationUseCase,
+    private val outboxCoordinator: PushOutboxDispatchCoordinator,
+    private val outboxConfirmedReconciler: SchedulePushOutboxConfirmedDeliveryReconciler,
+    private val clock: Clock,
     private val scheduleRepository: ScheduleRepository,
     private val pushJobRepository: SchedulePushJobRepository,
     private val tokenService: NotificationTokenService,
@@ -102,6 +126,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     private val historyRepository: PushSendHistoryRepository,
     private val pushClient: WorkerDeliveryPushClient,
     private val trafficClient: WorkerDeliveryTrafficClient,
+    private val jdbcTemplate: JdbcTemplate,
 ) {
     private val now = Instant.parse("2026-07-24T03:00:00Z")
 
@@ -249,6 +274,224 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         assertEquals(null, persisted.departureNoticeSentAt)
     }
 
+    @Test
+    fun `stale schedule worker가 ambiguous로 전진한 뒤 late confirmed failure는 같은 event를 재시도하고 confirmed 지표를 보정한다`() {
+        val schedule = createDueSchedule(memberId = 805L)
+        val job = createDueJob(schedule)
+        val token = "late-schedule-worker-token"
+        register(schedule.memberId, "late-schedule-worker-device", token)
+        val providerGate = pushClient.blockThenFailOnce(token)
+        val firstResults = ConcurrentLinkedQueue<Int>()
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        executor.submit {
+            runCatching { worker.runDueJobs(now) }
+                .onSuccess(firstResults::add)
+                .onFailure(failures::add)
+        }
+        assertTrue(providerGate.entered.await(5, TimeUnit.SECONDS))
+        assertEquals(PushDeliveryStatus.DISPATCHING, deliveries(schedule.memberId).single().status)
+
+        val replacementAt = now.plus(11, ChronoUnit.MINUTES)
+        assertEquals(1, worker.runDueJobs(replacementAt))
+        val afterReplacement = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(1, afterReplacement.checkCount)
+        assertEquals(null, afterReplacement.lastPushedAt)
+        assertEquals(replacementAt, afterReplacement.lastUncertainAt)
+        assertEquals(
+            PushOutboxDispatchStatus.NOT_REQUIRED,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+
+        providerGate.release.countDown()
+        executor.shutdown()
+        assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
+        assertEquals(listOf(1), firstResults.toList())
+        assertEquals(PushDeliveryStatus.FAILED, deliveries(schedule.memberId).single().status)
+        assertEquals(
+            PushOutboxDispatchStatus.PENDING,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+
+        // The first safety-outbox attempt itself now stalls beyond its lease and is reclaimed.
+        // Its replacement sees DISPATCHING as ambiguous and closes only that replacement view.
+        val safetyProviderGate = pushClient.blockThenFailOnce(token)
+        val safetyResults = ConcurrentLinkedQueue<Int>()
+        val safetyExecutor = Executors.newSingleThreadExecutor()
+        val staleSafetyWorker = newOutboxWorker()
+        val replacementSafetyWorker = newOutboxWorker()
+        safetyExecutor.submit {
+            runCatching { staleSafetyWorker.runDueEvents(replacementAt.plusSeconds(1)) }
+                .onSuccess(safetyResults::add)
+                .onFailure(failures::add)
+        }
+        assertTrue(safetyProviderGate.entered.await(5, TimeUnit.SECONDS))
+        assertEquals(
+            PushOutboxDispatchStatus.PROCESSING,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+
+        assertEquals(1, replacementSafetyWorker.runDueEvents(replacementAt.plusSeconds(602)))
+        assertEquals(
+            PushOutboxDispatchStatus.COMPLETED,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+
+        // The stale safety-outbox provider result is now a confirmed rejection. Its source lease
+        // identity no longer matches attempt 1, so delivery FAILED and outbox PENDING reopen
+        // atomically even though the replacement attempt already completed.
+        safetyProviderGate.release.countDown()
+        safetyExecutor.shutdown()
+        assertTrue(safetyExecutor.awaitTermination(10, TimeUnit.SECONDS))
+        assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
+        assertEquals(listOf(1), safetyResults.toList())
+        assertEquals(PushDeliveryStatus.FAILED, deliveries(schedule.memberId).single().status)
+        assertEquals(
+            PushOutboxDispatchStatus.PENDING,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+
+        // The third outbox attempt safely retries only the confirmed-failed device, then
+        // reconciles confirmed schedule metrics before completing its still-owned source lease.
+        assertEquals(1, newOutboxWorker().runDueEvents(replacementAt.plusSeconds(603)))
+
+        val reconciled = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(1, reconciled.checkCount)
+        assertEquals(replacementAt, reconciled.lastUncertainAt)
+        assertEquals(now, reconciled.lastPushedAt)
+        assertEquals(3, pushClient.attempts(token))
+        assertEquals(PushDeliveryStatus.SUCCESS, deliveries(schedule.memberId).single().status)
+        assertEquals(
+            PushOutboxDispatchStatus.COMPLETED,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+    }
+
+    @Test
+    fun `stale schedule worker가 ambiguous로 전진한 뒤 late success는 provider 재호출 없이 confirmed 지표를 보정한다`() {
+        val schedule = createDueSchedule(memberId = 806L)
+        val job = createDueJob(schedule)
+        val token = "late-schedule-success-token"
+        register(schedule.memberId, "late-schedule-success-device", token)
+        val providerGate = pushClient.blockThenSucceedOnce(token)
+        val firstResults = ConcurrentLinkedQueue<Int>()
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        executor.submit {
+            runCatching { worker.runDueJobs(now) }
+                .onSuccess(firstResults::add)
+                .onFailure(failures::add)
+        }
+        assertTrue(providerGate.entered.await(5, TimeUnit.SECONDS))
+
+        val replacementAt = now.plus(11, ChronoUnit.MINUTES)
+        assertEquals(1, worker.runDueJobs(replacementAt))
+        val afterReplacement = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(1, afterReplacement.checkCount)
+        assertEquals(null, afterReplacement.lastPushedAt)
+        assertEquals(replacementAt, afterReplacement.lastUncertainAt)
+
+        providerGate.release.countDown()
+        executor.shutdown()
+        assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
+        assertEquals(listOf(1), firstResults.toList())
+        assertEquals(PushDeliveryStatus.SUCCESS, deliveries(schedule.memberId).single().status)
+        assertEquals(
+            PushOutboxDispatchStatus.PENDING,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+
+        assertEquals(1, outboxWorker.runDueEvents(replacementAt.plusSeconds(1)))
+
+        val reconciled = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(1, reconciled.checkCount)
+        assertEquals(replacementAt, reconciled.lastUncertainAt)
+        assertEquals(now, reconciled.lastPushedAt)
+        assertEquals(1, pushClient.attempts(token))
+        assertEquals(
+            PushOutboxDispatchStatus.COMPLETED,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+    }
+
+    @Test
+    fun `schedule safety outbox보다 의미 편집이 먼저면 old generation 실패 기기는 provider 없이 superseded 된다`() {
+        val schedule = createDueSchedule(memberId = 807L)
+        val job = createDueJob(schedule)
+        val token = "edited-before-safety-token"
+        register(schedule.memberId, "edited-before-safety-device", token)
+        val providerGate = pushClient.blockThenFailOnce(token)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        executor.submit {
+            runCatching { worker.runDueJobs(now) }
+                .onFailure(failures::add)
+        }
+        assertTrue(providerGate.entered.await(5, TimeUnit.SECONDS))
+        val replacementAt = now.plus(11, ChronoUnit.MINUTES)
+        assertEquals(1, worker.runDueJobs(replacementAt))
+        providerGate.release.countDown()
+        executor.shutdown()
+        assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
+        assertEquals(PushDeliveryStatus.FAILED, deliveries(schedule.memberId).single().status)
+        assertEquals(
+            PushOutboxDispatchStatus.PENDING,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+
+        val edited = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        val editedScheduleAt = edited.scheduleAt.plus(5, ChronoUnit.MINUTES)
+        assertTrue(
+            edited.changeSchedule(
+                scheduleAt = editedScheduleAt,
+                departureAt = editedScheduleAt.minus(45, ChronoUnit.MINUTES),
+                monitorStartAt = now,
+                intervalMinutes = edited.intervalMinutes,
+            )
+        )
+        pushJobRepository.saveAndFlush(edited)
+        assertEquals(1, edited.notificationGeneration)
+
+        assertEquals(1, outboxWorker.runDueEvents(replacementAt.plusSeconds(1)))
+
+        assertEquals(1, pushClient.attempts(token))
+        assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(schedule.memberId).single().status)
+        assertEquals(
+            PushOutboxDispatchStatus.COMPLETED,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
+                .single()
+                .dispatchStatus,
+        )
+        val afterSafety = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(1, afterSafety.notificationGeneration)
+        assertEquals(0, afterSafety.checkCount)
+        assertEquals(null, afterSafety.lastPushedAt)
+    }
+
     private fun createDueSchedule(memberId: Long): Schedule {
         val startAt = now.plus(60, ChronoUnit.MINUTES)
         return scheduleRepository.saveAndFlush(
@@ -320,13 +563,28 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     }
 
     private fun register(memberId: Long, deviceId: String, token: String) {
-        tokenService.registerToken(
+        registerAuthenticatedPushToken(
+            jdbcTemplate = jdbcTemplate,
+            tokenService = tokenService,
             memberId = memberId,
             deviceId = deviceId,
             platform = PushPlatform.ANDROID,
             token = token,
         )
     }
+
+    private fun newOutboxWorker(): PushOutboxDispatchWorker =
+        PushOutboxDispatchWorker(
+            notificationUseCase = notificationUseCase,
+            coordinator = outboxCoordinator,
+            clock = clock,
+            enabled = true,
+            batchSize = 1,
+            maxAttempts = 3,
+            retryDelaySeconds = 1,
+            processingTimeoutSeconds = 600,
+            confirmedDeliveryReconcilers = listOf(outboxConfirmedReconciler),
+        )
 
     private fun deliveries(memberId: Long) =
         inboxRepository.findAllByMemberIdOrderByIdDesc(memberId)
@@ -359,16 +617,28 @@ class WorkerDeliveryPushClient : PushClient {
     private val attempts = ConcurrentHashMap<String, AtomicInteger>()
     private val failOnce = ConcurrentHashMap.newKeySet<String>()
     private val calls = ConcurrentHashMap<String, CopyOnWriteArrayList<WorkerPushCall>>()
+    private val blockingFailures = ConcurrentHashMap<String, WorkerBlockingProviderFailure>()
+    private val blockingSuccesses = ConcurrentHashMap<String, WorkerBlockingProviderFailure>()
 
     fun reset() {
         attempts.clear()
         failOnce.clear()
         calls.clear()
+        blockingFailures.values.forEach { it.release.countDown() }
+        blockingFailures.clear()
+        blockingSuccesses.values.forEach { it.release.countDown() }
+        blockingSuccesses.clear()
     }
 
     fun failOnce(token: String) {
         failOnce += token
     }
+
+    fun blockThenFailOnce(token: String): WorkerBlockingProviderFailure =
+        WorkerBlockingProviderFailure().also { blockingFailures[token] = it }
+
+    fun blockThenSucceedOnce(token: String): WorkerBlockingProviderFailure =
+        WorkerBlockingProviderFailure().also { blockingSuccesses[token] = it }
 
     fun attempts(token: String): Int = attempts[token]?.get() ?: 0
 
@@ -383,11 +653,29 @@ class WorkerDeliveryPushClient : PushClient {
         val attempt = attempts.computeIfAbsent(token) { AtomicInteger() }.incrementAndGet()
         calls.computeIfAbsent(token) { CopyOnWriteArrayList() }
             .add(WorkerPushCall(title, body, LinkedHashMap(data)))
+        blockingFailures.remove(token)?.let { gate ->
+            gate.entered.countDown()
+            check(gate.release.await(10, TimeUnit.SECONDS)) {
+                "Timed out waiting to release deterministic schedule provider failure."
+            }
+            throw ConfirmedPushDeliveryException("provider explicitly rejected")
+        }
+        blockingSuccesses.remove(token)?.let { gate ->
+            gate.entered.countDown()
+            check(gate.release.await(10, TimeUnit.SECONDS)) {
+                "Timed out waiting to release deterministic schedule provider success."
+            }
+        }
         if (failOnce.remove(token)) {
             throw ConfirmedPushDeliveryException("provider explicitly rejected")
         }
         return PushSendResult("worker-message-$attempt")
     }
+}
+
+class WorkerBlockingProviderFailure {
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
 }
 
 data class WorkerPushCall(

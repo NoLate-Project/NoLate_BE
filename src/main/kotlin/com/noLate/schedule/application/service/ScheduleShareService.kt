@@ -840,8 +840,9 @@ class ScheduleShareService(
 
     /**
      * 공유 저장은 아직 현재 트랜잭션 안에 있다. 여기서는 도메인 이벤트만 발행하고,
-     * 실제 외부 푸시 호출은 AFTER_COMMIT 리스너가 담당한다. 따라서 이후 DB 작업이
-     * 실패해 롤백되면 수신자는 존재하지 않는 공유 알림을 받지 않는다.
+     * BEFORE_COMMIT 리스너가 immutable outbox/manifest를 같은 트랜잭션에 저장한다.
+     * 실제 외부 푸시 호출은 commit 뒤 bounded drainer가 담당하므로 이후 DB 작업이
+     * 실패해 롤백되면 outbox도 함께 사라지고 수신자는 존재하지 않는 공유 알림을 받지 않는다.
      */
     private fun publishShareGrantedIfNeeded(
         grant: ShareGrantResult,

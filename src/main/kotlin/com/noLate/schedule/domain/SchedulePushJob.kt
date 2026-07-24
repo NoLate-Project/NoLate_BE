@@ -281,6 +281,70 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     }
 
     /**
+     * Source lease가 ambiguous로 회차를 닫은 뒤 safety outbox가 같은 immutable event의
+     * 확정 성공을 얻었을 때 confirmed 지표만 멱등 보정한다.
+     *
+     * check/status/lease는 되감지 않는다. 바로 다음 회차까지만 event 의미 필드를 보정하고,
+     * 그보다 뒤의 회차가 이미 진행됐다면 최신 의미를 덮지 않도록 성공 시각만 남긴다.
+     */
+    fun reconcileLateConfirmedPush(
+        eventCheckCount: Int,
+        confirmedAt: Instant,
+        notifiedDepartureAt: Instant?,
+        reminderBoundaryAt: Instant?,
+        departureReminderStage: ScheduleDepartureReminderStage?,
+    ) {
+        if (eventCheckCount < 0 || checkCount < eventCheckCount) return
+        recordConfirmedPush(confirmedAt)
+        if (checkCount > eventCheckCount + 1) return
+
+        if (notifiedDepartureAt != null) {
+            lastNotifiedDepartureAt = notifiedDepartureAt
+            lastHandledDepartureAt = notifiedDepartureAt
+        }
+        if (reminderBoundaryAt != null) {
+            lastReminderBoundaryAt = reminderBoundaryAt
+            lastHandledReminderBoundaryAt = reminderBoundaryAt
+        }
+        if (departureReminderStage == null) return
+
+        val boundaryAt = when {
+            lastHandledDepartureReminderStage == departureReminderStage.name ->
+                lastHandledDepartureReminderBoundaryAt
+
+            departureReminderStage == ScheduleDepartureReminderStage.DEPART_NOW ->
+                notifiedDepartureAt
+
+            departureReminderStage == ScheduleDepartureReminderStage.AFTER_DEPARTURE_3 ->
+                (handledDepartureNoticeAt ?: departureNoticeSentAt)?.plusSeconds(3 * 60)
+
+            departureReminderStage == ScheduleDepartureReminderStage.AFTER_DEPARTURE_7 ->
+                (handledDepartureNoticeAt ?: departureNoticeSentAt)?.plusSeconds(7 * 60)
+
+            departureReminderStage == ScheduleDepartureReminderStage.BEFORE_SCHEDULE_3 ->
+                scheduleAt.minusSeconds(3 * 60)
+
+            departureReminderStage == ScheduleDepartureReminderStage.BEFORE_SCHEDULE_1 ->
+                scheduleAt.minusSeconds(60)
+
+            else -> null
+        } ?: return
+        val currentConfirmedBoundary = lastDepartureReminderBoundaryAt
+        if (currentConfirmedBoundary == null || !boundaryAt.isBefore(currentConfirmedBoundary)) {
+            lastDepartureReminderStage = departureReminderStage.name
+            lastDepartureReminderBoundaryAt = boundaryAt
+        }
+        if (departureReminderStage == ScheduleDepartureReminderStage.DEPART_NOW) {
+            if (departureNoticeSentAt == null) {
+                departureNoticeSentAt = confirmedAt
+            }
+            if (handledDepartureNoticeAt == null) {
+                handledDepartureNoticeAt = confirmedAt
+            }
+        }
+    }
+
+    /**
      * 교통상황 체크 후 이동시간, 추천 출발 시간, 푸시 발송 여부를 반영한다.
      */
     fun finishCheck(

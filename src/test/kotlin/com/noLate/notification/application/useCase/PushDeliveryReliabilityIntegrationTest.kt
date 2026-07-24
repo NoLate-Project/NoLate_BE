@@ -17,13 +17,18 @@ import com.noLate.notification.application.service.PushEventOutboxWriter
 import com.noLate.notification.application.service.deliveryDeviceKey
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.domain.NotificationDeviceToken
+import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.PushDeliveryStatus
+import com.noLate.notification.domain.PushLogicalEventKey
+import com.noLate.notification.domain.PushManifestState
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.domain.PushSendStatus
+import com.noLate.notification.domain.withPushAccountBinding
 import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
+import com.noLate.notification.support.registerAuthenticatedPushToken
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -37,6 +42,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Propagation
@@ -84,6 +90,8 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     private val pushDeliveryService: PushDeliveryService,
     private val pushSendHistoryService: PushSendHistoryService,
     private val pushEventOutboxService: PushEventOutboxService,
+    private val objectMapper: ObjectMapper,
+    private val jdbcTemplate: JdbcTemplate,
 ) {
 
     @BeforeEach
@@ -101,12 +109,14 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         register(memberId, "device-1", "success-token")
 
         val first = send(memberId, "repeat-event")
+        register(memberId, "device-late", "late-after-completion-token")
         val second = send(memberId, "repeat-event")
 
         assertEquals(1, first.sentCount)
         assertEquals(0, second.attemptedCount)
         assertEquals(1, second.alreadyDeliveredCount)
         assertEquals(1, pushClient.attempts("success-token"))
+        assertEquals(0, pushClient.attempts("late-after-completion-token"))
         assertEquals(1, inboxRepository.findAllByMemberIdOrderByIdDesc(memberId).size)
         assertEquals(PushDeliveryStatus.SUCCESS, deliveries(memberId).single().status)
     }
@@ -144,28 +154,178 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `같은 event 재시도는 현재 입력이 바뀌어도 최초 payload와 의미 결정을 유지한다`() {
+        val memberId = 516L
+        register(memberId, "device-a", "immutable-success-token")
+        register(memberId, "device-b", "immutable-retry-token")
+        pushClient.failOnce("immutable-retry-token")
+        val originalData = mapOf(
+            "type" to "SCHEDULE_DEPARTURE_REMINDER",
+            "scheduleId" to "7001",
+            "decision" to "ADVANCE_NOTICE",
+            "stage" to "ADVANCE_NOTICE",
+            "etaMinutes" to "40",
+            "delayMinutes" to "10",
+        )
+
+        val first = notificationUseCase.sendToMember(
+            memberId = memberId,
+            title = "10분 일찍 출발하세요",
+            body = "최초 ETA 40분",
+            data = originalData,
+            inboxDeduplicationKey = "immutable-payload-event",
+        )
+        val retried = notificationUseCase.sendToMember(
+            memberId = memberId,
+            title = "지금 출발하세요",
+            body = "현재 ETA 25분",
+            data = originalData + mapOf(
+                "decision" to "DEPART_NOW",
+                "stage" to "DEPART_NOW",
+                "etaMinutes" to "25",
+                "delayMinutes" to "0",
+            ),
+            inboxDeduplicationKey = "immutable-payload-event",
+        )
+
+        assertEquals(1, first.sentCount)
+        assertEquals(1, first.retryableFailedCount)
+        assertEquals(1, retried.sentCount)
+        assertEquals(1, retried.alreadyDeliveredCount)
+        val retryCalls = pushClient.calls("immutable-retry-token")
+        assertEquals(2, retryCalls.size)
+        assertTrue(retryCalls.all { it.title == "10분 일찍 출발하세요" })
+        assertTrue(retryCalls.all { it.body == "최초 ETA 40분" })
+        assertTrue(retryCalls.all { it.data["decision"] == "ADVANCE_NOTICE" })
+        assertTrue(retryCalls.all { it.data["stage"] == "ADVANCE_NOTICE" })
+        assertTrue(retryCalls.all { it.data["etaMinutes"] == "40" })
+        assertTrue(retryCalls.all { it.data["delayMinutes"] == "10" })
+        assertTrue(retryCalls.all { it.data["logicalEventKey"] != null })
+        assertTrue(retryCalls.all { it.data["recipientMemberId"] == memberId.toString() })
+    }
+
+    @Test
+    fun `frozen manifest는 삭제된 pending 기기를 terminal 처리하고 새 기기를 과거 event에 추가하지 않는다`() {
+        val memberId = 517L
+        register(memberId, "device-a", "manifest-success-token")
+        register(memberId, "device-b", "manifest-pending-token")
+        val prepared = pushEventOutboxService.prepare(
+            memberId = memberId,
+            title = "고정 manifest",
+            body = "현재 수신자만",
+            data = pushData(),
+            deduplicationKey = "frozen-recipient-event",
+            persistInInbox = true,
+            fence = null,
+        )
+        val deliveryByToken = prepared.deliveryIds.associateBy { id ->
+            deliveryRepository.findById(id).orElseThrow().tokenFingerprint
+        }
+        val successToken = tokenRepository.findAllByMemberId(memberId)
+            .single { it.token == "manifest-success-token" }
+        val successDeliveryId = requireNotNull(deliveryByToken[successToken.tokenFingerprint])
+        val successClaim = pushDeliveryService.claim(
+            memberId = memberId,
+            eventKey = prepared.logicalEventKey,
+            deliveryId = successDeliveryId,
+        )
+        val snapshot = requireNotNull(prepared.snapshot)
+        val accepted = pushClient.sendToToken(
+            token = requireNotNull(successClaim.providerToken),
+            title = snapshot.title,
+            body = snapshot.body,
+            data = snapshot.data,
+        )
+        pushDeliveryService.markSuccess(successDeliveryId, accepted.messageId)
+
+        tokenService.removeToken(memberId, "device-b")
+        register(memberId, "device-c", "late-device-token")
+
+        val resumed = notificationUseCase.redrivePersistedEvent(
+            memberId,
+            prepared.logicalEventKey,
+        )
+
+        assertEquals(0, resumed.attemptedCount)
+        assertEquals(1, resumed.alreadyDeliveredCount)
+        assertEquals(1, resumed.supersededCount)
+        assertEquals(0, pushClient.attempts("manifest-pending-token"))
+        assertEquals(0, pushClient.attempts("late-device-token"))
+        assertEquals(2, deliveries(memberId).size)
+        assertEquals(
+            setOf(PushDeliveryStatus.SUCCESS, PushDeliveryStatus.SUPERSEDED),
+            deliveries(memberId).map { it.status }.toSet(),
+        )
+    }
+
+    @Test
+    fun `완료된 zero-device event는 이후 등록 기기로 확장하지 않는다`() {
+        val memberId = 518L
+
+        val first = send(memberId, "zero-device-event")
+        register(memberId, "device-after-event", "late-zero-device-token")
+        val second = send(memberId, "zero-device-event")
+
+        assertEquals(1, first.noDeviceEventCount)
+        assertEquals(1, second.noDeviceEventCount)
+        assertEquals(0, second.requestedCount)
+        assertEquals(0, pushClient.attempts("late-zero-device-token"))
+        assertTrue(deliveries(memberId).isEmpty())
+    }
+
+    @Test
+    fun `비정상 committed OPEN 복구도 현재 기기를 과거 manifest에 붙이지 않는다`() {
+        val memberId = 521L
+        val dedupeKey = "committed-open-recovery"
+        val eventKey = PushLogicalEventKey.deterministic(memberId, dedupeKey)
+        val canonicalData = pushData().withPushAccountBinding(eventKey, memberId)
+        inboxRepository.saveAndFlush(
+            AppNotification(
+                memberId = memberId,
+                deduplicationKey = dedupeKey,
+                logicalEventKey = eventKey,
+                type = requireNotNull(canonicalData["type"]),
+                scheduleId = canonicalData["scheduleId"]?.toLongOrNull(),
+                title = "생성 중이던 이벤트",
+                body = "현재 기기로 확장하면 안 됩니다.",
+                dataJson = objectMapper.writeValueAsString(canonicalData),
+                createdAt = Instant.parse("2026-07-24T03:00:00Z"),
+                manifestState = PushManifestState.OPEN,
+            )
+        )
+        register(memberId, "late-open-device", "late-open-token")
+
+        val resumed = send(memberId, dedupeKey)
+
+        assertEquals(1, resumed.noDeviceEventCount)
+        assertEquals(0, resumed.requestedCount)
+        assertEquals(0, pushClient.attempts("late-open-token"))
+        val persisted = inboxRepository.findAllByMemberIdOrderByIdDesc(memberId).single()
+        assertEquals(PushManifestState.FROZEN, persisted.manifestState)
+        assertEquals(0, persisted.manifestRecipientCount)
+        assertTrue(deliveries(memberId).isEmpty())
+    }
+
+    @Test
     fun `manifest 생성 후 첫 claim 전에 종료되어도 모든 PENDING 기기를 다음 실행이 보낸다`() {
         val memberId = 507L
         register(memberId, "device-1", "pending-token-1")
         register(memberId, "device-2", "pending-token-2")
         val data = pushData()
-        val inbox = appNotificationService.recordWithResult(
+        val prepared = pushEventOutboxService.prepare(
             memberId = memberId,
             title = "출발 시간 안내",
             body = "이동을 준비해주세요.",
             data = data,
             deduplicationKey = "manifest-before-claim-event",
-        )
-        val eventKey = inbox.notification.logicalEventKey
-
-        pushDeliveryService.prepareManifest(
-            memberId = memberId,
-            eventKey = eventKey,
-            tokens = tokenRepository.findAllByMemberId(memberId),
-            data = data,
+            persistInInbox = true,
+            fence = null,
         )
 
-        val pending = deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(memberId, eventKey)
+        val pending = deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(
+            memberId,
+            prepared.logicalEventKey,
+        )
         assertEquals(2, pending.size)
         assertTrue(pending.all { it.status == PushDeliveryStatus.PENDING })
         assertTrue(pending.all { it.attemptCount == 0 && it.firstAttemptedAt == null })
@@ -180,7 +340,7 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     }
 
     @Test
-    fun `inbox 생성 직후 종료되어 manifest가 없어도 다음 실행이 전체 manifest를 복구한다`() {
+    fun `legacy inbox-only 이벤트는 다음 실행에서 현재 기기로 확장하지 않는다`() {
         val memberId = 510L
         register(memberId, "device-1", "inbox-crash-token-1")
         register(memberId, "device-2", "inbox-crash-token-2")
@@ -200,9 +360,11 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
 
         val resumed = send(memberId, "inbox-before-manifest-event")
 
-        assertEquals(2, resumed.sentCount)
-        assertEquals(2, deliveries(memberId).size)
-        assertTrue(deliveries(memberId).all { it.status == PushDeliveryStatus.SUCCESS })
+        assertEquals(0, resumed.sentCount)
+        assertEquals(1, resumed.noDeviceEventCount)
+        assertEquals(0, deliveries(memberId).size)
+        assertEquals(0, pushClient.attempts("inbox-crash-token-1"))
+        assertEquals(0, pushClient.attempts("inbox-crash-token-2"))
     }
 
     @Test
@@ -211,7 +373,6 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         val nextOwner = 512L
         val rawToken = "ownership-transfer-token"
         register(memberId, "old-device", rawToken)
-        val staleToken = tokenRepository.findAllByMemberId(memberId).single()
         val prepared = pushEventOutboxService.prepare(
             memberId = memberId,
             title = "소유권 경합",
@@ -219,7 +380,6 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
             data = pushData(),
             deduplicationKey = "ownership-transfer-event",
             persistInInbox = true,
-            tokens = listOf(staleToken),
             fence = null,
         )
 
@@ -227,7 +387,7 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         val claim = pushDeliveryService.claim(
             memberId = memberId,
             eventKey = prepared.logicalEventKey,
-            token = staleToken,
+            deliveryId = prepared.deliveryIds.single(),
         )
 
         assertEquals(
@@ -243,6 +403,28 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
             ).single().status,
         )
         assertEquals(nextOwner, tokenRepository.findAll().single().memberId)
+    }
+
+    @Test
+    fun `같은 installation이 A에서 B로 이전되면 A delivery는 없고 B에게만 보낸다`() {
+        val previousOwner = 519L
+        val currentOwner = 520L
+        val deviceId = "globally-transferred-device"
+        register(previousOwner, deviceId, "previous-owner-token")
+        register(currentOwner, deviceId, "current-owner-token")
+
+        val previousResult = send(previousOwner, "previous-owner-after-transfer")
+        val currentResult = send(currentOwner, "current-owner-after-transfer")
+
+        assertTrue(tokenRepository.findAllByMemberId(previousOwner).isEmpty())
+        assertEquals(1, tokenRepository.findAllByMemberId(currentOwner).size)
+        assertEquals(1, previousResult.noDeviceEventCount)
+        assertEquals(0, previousResult.requestedCount)
+        assertTrue(deliveries(previousOwner).isEmpty())
+        assertEquals(1, currentResult.sentCount)
+        assertEquals(0, pushClient.attempts("previous-owner-token"))
+        assertEquals(1, pushClient.attempts("current-owner-token"))
+        assertEquals(PushDeliveryStatus.SUCCESS, deliveries(currentOwner).single().status)
     }
 
     @Test
@@ -298,23 +480,12 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     }
 
     @Test
-    fun `같은 실제 deviceId의 중복 token row는 provider를 한 번만 호출한다`() {
+    fun `같은 실제 deviceId를 다시 등록하면 단일 row와 단일 delivery로 수렴한다`() {
         val memberId = 509L
         register(memberId, "same-device", "legacy-token-a")
-        val persisted = tokenRepository.findAllByMemberId(memberId).single()
-        val duplicateTokenService = mock<NotificationTokenService>()
-        whenever(duplicateTokenService.getTokensByMember(memberId)).thenReturn(
-            listOf(persisted, persisted)
-        )
-        val useCase = NotificationUseCase(
-            notificationTokenService = duplicateTokenService,
-            pushClient = pushClient,
-            pushSendHistoryService = pushSendHistoryService,
-            appNotificationService = appNotificationService,
-            pushDeliveryService = pushDeliveryService,
-        )
+        register(memberId, "same-device", "replacement-token-b")
 
-        val result = useCase.sendToMember(
+        val result = notificationUseCase.sendToMember(
             memberId = memberId,
             title = "출발 시간 안내",
             body = "이동을 준비해주세요.",
@@ -322,33 +493,33 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
             inboxDeduplicationKey = "duplicate-device-event",
         )
 
-        assertEquals(2, result.requestedCount)
+        assertEquals(1, tokenRepository.findAllByMemberId(memberId).size)
+        assertEquals(1, result.requestedCount)
         assertEquals(1, result.attemptedCount)
         assertEquals(1, result.sentCount)
-        assertEquals(1, result.alreadyDeliveredCount)
-        assertEquals(1, pushClient.attempts("legacy-token-a"))
+        assertEquals(0, pushClient.attempts("legacy-token-a"))
+        assertEquals(1, pushClient.attempts("replacement-token-b"))
         assertEquals(1, deliveries(memberId).size)
     }
 
     @Test
     fun `platform 변경은 동일 member device의 delivery identity를 바꾸지 않는다`() {
-        val memberId = 515L
         val android = NotificationDeviceToken(
-            memberId = memberId,
+            memberId = 515L,
             deviceId = "mutable-platform-device",
             platform = PushPlatform.UNKNOWN,
             token = "platform-token-before",
         )
         val ios = NotificationDeviceToken(
-            memberId = memberId,
+            memberId = 515L,
             deviceId = "mutable-platform-device",
             platform = PushPlatform.IOS,
             token = "platform-token-after",
         )
 
         assertEquals(
-            android.deliveryDeviceKey(memberId),
-            ios.deliveryDeviceKey(memberId),
+            android.deliveryDeviceKey(),
+            ios.deliveryDeviceKey(),
         )
     }
 
@@ -453,7 +624,9 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     )
 
     private fun register(memberId: Long, deviceId: String, token: String) {
-        tokenService.registerToken(
+        registerAuthenticatedPushToken(
+            jdbcTemplate = jdbcTemplate,
+            tokenService = tokenService,
             memberId = memberId,
             deviceId = deviceId,
             platform = PushPlatform.ANDROID,
@@ -486,6 +659,7 @@ class PushDeliveryReliabilityTestConfig {
 
 class RecordingReliabilityPushClient : PushClient {
     private val attempts = ConcurrentHashMap<String, AtomicInteger>()
+    private val recordedCalls = ConcurrentHashMap<String, MutableList<RecordedPushCall>>()
     private val failOnce = ConcurrentHashMap.newKeySet<String>()
     private val crashOnce = ConcurrentHashMap.newKeySet<String>()
     private val unknownOnce = ConcurrentHashMap.newKeySet<String>()
@@ -494,6 +668,7 @@ class RecordingReliabilityPushClient : PushClient {
 
     fun reset() {
         attempts.clear()
+        recordedCalls.clear()
         failOnce.clear()
         crashOnce.clear()
         unknownOnce.clear()
@@ -524,6 +699,9 @@ class RecordingReliabilityPushClient : PushClient {
 
     fun attempts(token: String): Int = attempts[token]?.get() ?: 0
 
+    fun calls(token: String): List<RecordedPushCall> =
+        recordedCalls[token]?.toList().orEmpty()
+
     override fun sendToToken(
         token: String,
         title: String,
@@ -531,6 +709,9 @@ class RecordingReliabilityPushClient : PushClient {
         data: Map<String, String>,
     ): PushSendResult {
         val attempt = attempts.computeIfAbsent(token) { AtomicInteger() }.incrementAndGet()
+        recordedCalls.computeIfAbsent(token) {
+            java.util.Collections.synchronizedList(mutableListOf())
+        }.add(RecordedPushCall(title, body, LinkedHashMap(data)))
         if (invalid.contains(token)) {
             invalidCallbacks.remove(token)?.invoke()
             throw InvalidPushTokenException(token)
@@ -548,5 +729,11 @@ class RecordingReliabilityPushClient : PushClient {
         return PushSendResult("message-$attempt")
     }
 }
+
+data class RecordedPushCall(
+    val title: String,
+    val body: String,
+    val data: Map<String, String>,
+)
 
 class SimulatedProcessExit : Error("simulated process exit after provider acceptance")

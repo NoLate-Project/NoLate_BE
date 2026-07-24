@@ -1,5 +1,5 @@
 -- Apply after 2026-07-24-push-deliveries.sql, then immediately apply
--- 2026-07-24-push-delivery-linearization.sql before deploying the three code commits.
+-- 2026-07-24-push-delivery-linearization.sql before deploying the reliability code set.
 -- The original draft added raw token/device unique indexes under the database collation.
 -- That is intentionally superseded: opaque identity is migrated only through binary
 -- SHA-256 fingerprints in the linearization migration.

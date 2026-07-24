@@ -129,21 +129,23 @@ class PushDelivery(
         errorMessage = null
     }
 
-    fun markSuccess(at: Instant, messageId: String) {
-        if (status != PushDeliveryStatus.DISPATCHING) return
+    fun markSuccess(at: Instant, messageId: String): Boolean {
+        if (status != PushDeliveryStatus.DISPATCHING) return false
         status = PushDeliveryStatus.SUCCESS
         deliveredAt = at
         providerMessageId = messageId.take(300)
         errorCode = null
         errorMessage = null
+        return true
     }
 
-    fun markFailure(at: Instant, code: String, message: String?) {
-        if (status != PushDeliveryStatus.DISPATCHING) return
+    fun markFailure(at: Instant, code: String, message: String?): Boolean {
+        if (status != PushDeliveryStatus.DISPATCHING) return false
         status = PushDeliveryStatus.FAILED
         lastAttemptedAt = at
         errorCode = code.take(120)
         errorMessage = message?.take(1000)
+        return true
     }
 
     fun markInvalidToken(at: Instant, code: String, message: String?) {
