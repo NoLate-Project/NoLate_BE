@@ -4,6 +4,7 @@ import com.noLate.notification.application.ConfirmedPushDeliveryException
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationSnapshot
+import com.noLate.notification.application.service.AuthenticatedPushSessionFence
 import com.noLate.notification.application.service.NotificationTokenService
 import com.noLate.notification.application.service.PersistedPushDispatchFenceFactory
 import com.noLate.notification.application.service.PreparedPushEvent
@@ -72,6 +73,36 @@ class NotificationUseCase(
             sendEphemeral(memberId, title, body, data)
         }
 
+    /**
+     * Public access-authenticated test send.
+     *
+     * Unlike worker/internal sends, this mutation must still own the signed access session at the
+     * outbox write, delivery claim, and final provider ownership lease. Its durable source key
+     * retains that fence for confirmed-failure redrives without exposing the generation in the
+     * client payload.
+     */
+    fun sendAuthenticatedToMember(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+        title: String,
+        body: String,
+        data: Map<String, String> = emptyMap(),
+    ): NotificationSendResult {
+        val sessionFence = AuthenticatedPushSessionFence(
+            memberId = memberId,
+            sessionGeneration = presentedSessionGeneration,
+        )
+        return prepareAndDispatch(
+            memberId = memberId,
+            title = title,
+            body = body,
+            data = data,
+            inboxDeduplicationKey = sessionFence.newDeduplicationKey(),
+            dispatchFence = null,
+            sessionFence = sessionFence,
+        )
+    }
+
     fun sendToMemberFenced(
         memberId: Long,
         title: String,
@@ -107,10 +138,18 @@ class NotificationUseCase(
             ?: throw IllegalStateException("Persisted push event does not exist.")
         val recoveredFence = prepared.snapshot
             ?.let { persistedPushDispatchFenceFactory?.create(it) }
+        val recoveredSessionFence = prepared.snapshot
+            ?.let {
+                AuthenticatedPushSessionFence.restore(
+                    memberId = memberId,
+                    deduplicationKey = it.deduplicationKey,
+                )
+            }
         return dispatchPrepared(
             prepared = prepared,
             dispatchFence = recoveredFence,
             sourceLease = sourceLease,
+            sessionFence = recoveredSessionFence,
         )
     }
 
@@ -121,6 +160,7 @@ class NotificationUseCase(
         data: Map<String, String>,
         inboxDeduplicationKey: String?,
         dispatchFence: PushDispatchFence?,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): NotificationSendResult {
         val prepared = pushEventOutboxService.prepare(
             memberId = memberId,
@@ -130,6 +170,7 @@ class NotificationUseCase(
             deduplicationKey = inboxDeduplicationKey,
             persistInInbox = true,
             fence = dispatchFence,
+            sessionFence = sessionFence,
         )
         if (!prepared.recipientActive) {
             return NotificationSendResult(recipientInactive = true)
@@ -137,13 +178,14 @@ class NotificationUseCase(
         if (!prepared.fenceAccepted) {
             return NotificationSendResult(fenceRejected = true)
         }
-        return dispatchPrepared(prepared, dispatchFence)
+        return dispatchPrepared(prepared, dispatchFence, sessionFence = sessionFence)
     }
 
     private fun dispatchPrepared(
         prepared: PreparedPushEvent,
         dispatchFence: PushDispatchFence?,
         sourceLease: PushOutboxDispatchLease? = null,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): NotificationSendResult {
         val snapshot = requireNotNull(prepared.snapshot) {
             "A frozen push event must contain its immutable payload."
@@ -175,10 +217,18 @@ class NotificationUseCase(
                 eventKey = prepared.logicalEventKey,
                 deliveryId = deliveryId,
                 fence = dispatchFence,
+                sessionFence = sessionFence,
             )
             result += when (claim.outcome) {
                 PushDeliveryClaimOutcome.SEND ->
-                    sendClaimed(memberId, snapshot, claim, dispatchFence, sourceLease)
+                    sendClaimed(
+                        memberId,
+                        snapshot,
+                        claim,
+                        dispatchFence,
+                        sourceLease,
+                        sessionFence,
+                    )
 
                 PushDeliveryClaimOutcome.ALREADY_SUCCESS ->
                     NotificationSendResult(
@@ -256,6 +306,7 @@ class NotificationUseCase(
         claim: PushDeliveryClaim,
         dispatchFence: PushDispatchFence? = null,
         sourceLease: PushOutboxDispatchLease? = null,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): NotificationSendResult {
         val tokenEntity = requireNotNull(claim.token) {
             "A SEND claim must contain the verified token snapshot."
@@ -272,10 +323,15 @@ class NotificationUseCase(
                 title = snapshot.title,
                 body = snapshot.body,
                 data = snapshot.data,
+                dispatchFence = dispatchFence,
+                sessionFence = sessionFence,
             )
             if (providerSend.outcome == PushTokenProviderLeaseOutcome.SUPERSEDED) {
                 deliveryId?.let { pushDeliveryService.markOwnershipSuperseded(it) }
                 return NotificationSendResult(supersededCount = 1)
+            }
+            if (providerSend.outcome == PushTokenProviderLeaseOutcome.DEFERRED) {
+                return NotificationSendResult(deferredCount = 1)
             }
             if (providerSend.outcome == PushTokenProviderLeaseOutcome.BUSY) {
                 // 다른 logical event가 같은 token의 provider boundary를 잠시 보유한 경우다.
@@ -459,6 +515,10 @@ class NotificationUseCase(
                 title = snapshot.title,
                 body = snapshot.body,
                 data = snapshot.data,
+                logicalEventKey = snapshot.logicalEventKey,
+                scheduleId = snapshot.scheduleId ?: snapshot.data["scheduleId"]?.toLongOrNull(),
+                categoryId = snapshot.categoryId ?: snapshot.data["categoryId"]?.toLongOrNull(),
+                calendarId = snapshot.calendarId ?: snapshot.data["calendarId"]?.toLongOrNull(),
             )
         }.onFailure {
             log.warn(
@@ -483,6 +543,10 @@ class NotificationUseCase(
                 body = snapshot.body,
                 data = snapshot.data,
                 fcmMessageId = providerMessageId,
+                logicalEventKey = snapshot.logicalEventKey,
+                scheduleId = snapshot.scheduleId ?: snapshot.data["scheduleId"]?.toLongOrNull(),
+                categoryId = snapshot.categoryId ?: snapshot.data["categoryId"]?.toLongOrNull(),
+                calendarId = snapshot.calendarId ?: snapshot.data["calendarId"]?.toLongOrNull(),
             )
         }.onFailure {
             log.warn(
@@ -512,6 +576,10 @@ class NotificationUseCase(
                 status = status,
                 errorCode = errorCode,
                 errorMessage = errorMessage,
+                logicalEventKey = snapshot.logicalEventKey,
+                scheduleId = snapshot.scheduleId ?: snapshot.data["scheduleId"]?.toLongOrNull(),
+                categoryId = snapshot.categoryId ?: snapshot.data["categoryId"]?.toLongOrNull(),
+                calendarId = snapshot.calendarId ?: snapshot.data["calendarId"]?.toLongOrNull(),
             )
         }.onFailure {
             log.warn(

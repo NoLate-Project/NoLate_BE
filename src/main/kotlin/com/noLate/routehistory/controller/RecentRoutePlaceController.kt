@@ -44,8 +44,10 @@ class RecentRoutePlaceController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: SaveRecentRoutePlaceRequest,
     ): ApiResponse<RecentRoutePlaceDto> {
+        val authenticated = requireMemberPrincipal(principal)
         val result = recentRoutePlaceService.saveRecentPlace(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
             label = request.label,
             placeName = request.placeName,
             address = request.address,
@@ -63,9 +65,11 @@ class RecentRoutePlaceController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable recentPlaceId: Long,
     ): ApiResponse<Unit> {
+        val authenticated = requireMemberPrincipal(principal)
         recentRoutePlaceService.deleteRecentPlace(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
             recentPlaceId = recentPlaceId,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
         )
         return ApiResponse.success(Unit)
     }
@@ -83,3 +87,9 @@ data class SaveRecentRoutePlaceRequest(
 
 private fun requireMemberId(principal: MemberPrincipal?): Long =
     principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+private fun requireMemberPrincipal(principal: MemberPrincipal?): MemberPrincipal =
+    principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+private fun requireSessionGeneration(principal: MemberPrincipal): Long =
+    principal.accessTokenSessionGeneration ?: throw BusinessException(ErrorCode.INVALID_TOKEN)

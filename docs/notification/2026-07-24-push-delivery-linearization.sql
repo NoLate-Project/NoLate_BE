@@ -25,6 +25,7 @@ BEGIN
         WHERE table_schema = DATABASE()
           AND (
               (table_name = 'app_notifications' AND column_name = 'logical_event_key')
+              OR (table_name = 'push_send_history' AND column_name = 'logical_event_key')
               OR (table_name = 'push_device_token' AND column_name = 'token_fingerprint')
               OR (table_name = 'member' AND column_name = 'session_generation')
           )
@@ -107,6 +108,137 @@ BEGIN
             SET MESSAGE_TEXT =
                 'push linearization migration blocked: resolve duplicate device fingerprints first';
     END IF;
+
+    -- A legacy share-received inbox row is a private navigation payload, not durable grant
+    -- authority. Do not silently preserve it when the recipient has already lost the resource.
+    -- Operators must drain source/history together under maintenance before retrying migration.
+    IF EXISTS (
+        SELECT 1
+        FROM app_notifications source
+        WHERE source.type = 'CATEGORY_SHARE_RECEIVED'
+          AND (
+              source.category_id IS NULL
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM schedule_categories category
+                  JOIN schedule_category_shares grant_row
+                    ON grant_row.category_id = category.id
+                   AND grant_row.target_member_id = source.member_id
+                   AND grant_row.status = 'ACTIVE'
+                   AND grant_row.deleted = FALSE
+                  WHERE category.id = source.category_id
+                    AND category.deleted = FALSE
+              )
+          )
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push migration blocked: drain revoked legacy category share notifications';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM app_notifications source
+        WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+          AND CASE
+              WHEN NOT JSON_VALID(source.data_json) THEN TRUE
+              WHEN JSON_TYPE(source.data_json) <> 'OBJECT' THEN TRUE
+              WHEN COALESCE(
+                    JSON_UNQUOTE(JSON_EXTRACT(source.data_json, '$.calendarId')),
+                    ''
+                ) NOT REGEXP '^[1-9][0-9]*$' THEN TRUE
+              ELSE NOT EXISTS (
+                  SELECT 1
+                  FROM schedule_calendars calendar
+                  JOIN schedule_calendar_members membership
+                    ON membership.calendar_id = calendar.id
+                   AND membership.member_id = source.member_id
+                   AND membership.status = 'ACTIVE'
+                   AND membership.deleted = FALSE
+                  WHERE calendar.id = CAST(
+                      JSON_UNQUOTE(JSON_EXTRACT(source.data_json, '$.calendarId'))
+                      AS UNSIGNED
+                  )
+                    AND calendar.status = 'ACTIVE'
+                    AND calendar.deleted = FALSE
+              )
+          END
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push migration blocked: drain revoked legacy calendar share notifications';
+    END IF;
+
+    -- History can outlive an already-deleted inbox source. It carries the same private payload
+    -- and therefore needs its own current-grant precondition before typed columns are added.
+    IF EXISTS (
+        SELECT 1
+        FROM push_send_history history
+        WHERE history.payload_type = 'CATEGORY_SHARE_RECEIVED'
+          AND CASE
+              WHEN NOT JSON_VALID(history.data_json) THEN TRUE
+              WHEN JSON_TYPE(history.data_json) <> 'OBJECT' THEN TRUE
+              WHEN COALESCE(
+                    JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.categoryId')),
+                    ''
+                ) NOT REGEXP '^[1-9][0-9]*$' THEN TRUE
+              ELSE NOT EXISTS (
+                  SELECT 1
+                  FROM schedule_categories category
+                  JOIN schedule_category_shares grant_row
+                    ON grant_row.category_id = category.id
+                   AND grant_row.target_member_id = history.member_id
+                   AND grant_row.status = 'ACTIVE'
+                   AND grant_row.deleted = FALSE
+                  WHERE category.id = CAST(
+                      JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.categoryId'))
+                      AS UNSIGNED
+                  )
+                    AND category.deleted = FALSE
+              )
+          END
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push migration blocked: drain revoked legacy category share history';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM push_send_history history
+        WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
+          AND CASE
+              WHEN NOT JSON_VALID(history.data_json) THEN TRUE
+              WHEN JSON_TYPE(history.data_json) <> 'OBJECT' THEN TRUE
+              WHEN COALESCE(
+                    JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.calendarId')),
+                    ''
+                ) NOT REGEXP '^[1-9][0-9]*$' THEN TRUE
+              ELSE NOT EXISTS (
+                  SELECT 1
+                  FROM schedule_calendars calendar
+                  JOIN schedule_calendar_members membership
+                    ON membership.calendar_id = calendar.id
+                   AND membership.member_id = history.member_id
+                   AND membership.status = 'ACTIVE'
+                   AND membership.deleted = FALSE
+                  WHERE calendar.id = CAST(
+                      JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.calendarId'))
+                      AS UNSIGNED
+                  )
+                    AND calendar.status = 'ACTIVE'
+                    AND calendar.deleted = FALSE
+              )
+          END
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push migration blocked: drain revoked legacy calendar share history';
+    END IF;
 END//
 DELIMITER ;
 
@@ -150,6 +282,80 @@ ALTER TABLE app_notifications
         COMMENT 'Durable logical push/outbox event key',
     ADD UNIQUE KEY uk_app_notifications_member_logical_event
         (member_id, logical_event_key);
+
+-- Navigation payload JSON is immutable, but final recipient authorization must use an indexed,
+-- typed resource snapshot rather than reparsing mutable/current request data on every redrive.
+-- Existing calendar-share rows are backfilled only when their canonical JSON contains a positive
+-- decimal id; malformed identity stays NULL and the postcondition fails closed.
+ALTER TABLE app_notifications
+    ADD COLUMN calendar_id BIGINT NULL
+        COMMENT 'Immutable shared-calendar authorization resource id'
+        AFTER category_id,
+    ADD INDEX idx_app_notifications_calendar_id (calendar_id);
+
+UPDATE app_notifications
+SET calendar_id = CAST(
+    JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.calendarId')) AS UNSIGNED
+)
+WHERE type = 'CALENDAR_SHARE_RECEIVED'
+  AND JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.calendarId')) REGEXP '^[1-9][0-9]*$';
+
+-- Provider history contains the same private title/body/navigation payload as the source. Persist
+-- a typed immutable identity so resource revocation can delete exact source evidence without
+-- broad category/calendar deletion that could erase independently authorized schedule history.
+ALTER TABLE push_send_history
+    ADD COLUMN logical_event_key VARCHAR(100) NULL
+        COMMENT 'Canonical durable outbox/source event key'
+        AFTER schedule_id,
+    ADD COLUMN category_id BIGINT NULL
+        COMMENT 'Immutable category resource id when applicable'
+        AFTER logical_event_key,
+    ADD COLUMN calendar_id BIGINT NULL
+        COMMENT 'Immutable shared-calendar resource id when applicable'
+        AFTER category_id,
+    ADD INDEX idx_push_send_history_member_event (member_id, logical_event_key),
+    ADD INDEX idx_push_send_history_category_member (category_id, member_id),
+    ADD INDEX idx_push_send_history_calendar_member (calendar_id, member_id);
+
+UPDATE push_send_history
+SET logical_event_key = LEFT(
+        JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.logicalEventKey')),
+        100
+    )
+WHERE JSON_VALID(data_json)
+  AND JSON_TYPE(data_json) = 'OBJECT'
+  AND JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.logicalEventKey')) IS NOT NULL
+  AND CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.logicalEventKey'))) > 0;
+
+-- A source join is authoritative when the legacy history already carried its event key.
+UPDATE push_send_history history
+JOIN app_notifications source
+  ON source.member_id = history.member_id
+ AND source.logical_event_key = history.logical_event_key
+SET history.schedule_id = source.schedule_id,
+    history.category_id = source.category_id,
+    history.calendar_id = source.calendar_id,
+    history.payload_type = source.type;
+
+-- Standalone/older history may have no surviving source but can still be safely typed from a
+-- positive canonical resource id. Malformed share history remains NULL and fails postcondition.
+UPDATE push_send_history
+SET category_id = CAST(
+    JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.categoryId')) AS UNSIGNED
+)
+WHERE category_id IS NULL
+  AND JSON_VALID(data_json)
+  AND JSON_TYPE(data_json) = 'OBJECT'
+  AND JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.categoryId')) REGEXP '^[1-9][0-9]*$';
+
+UPDATE push_send_history
+SET calendar_id = CAST(
+    JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.calendarId')) AS UNSIGNED
+)
+WHERE calendar_id IS NULL
+  AND JSON_VALID(data_json)
+  AND JSON_TYPE(data_json) = 'OBJECT'
+  AND JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.calendarId')) REGEXP '^[1-9][0-9]*$';
 
 -- Existing inbox rows are intentionally not expanded to devices during or after rollout.
 -- New code creates OPEN and FROZEN in one business transaction; the explicit states allow
@@ -301,7 +507,19 @@ ALTER TABLE push_deliveries
         COMMENT 'One-way client device fingerprint',
     ADD COLUMN token_fingerprint VARCHAR(64)
         CHARACTER SET ascii COLLATE ascii_bin NOT NULL AFTER device_token_id,
-    ADD COLUMN token_ownership_version BIGINT NOT NULL AFTER token_fingerprint;
+    ADD COLUMN token_ownership_version BIGINT NOT NULL AFTER token_fingerprint,
+    ADD COLUMN calendar_id BIGINT NULL
+        COMMENT 'Frozen shared-calendar authorization resource id'
+        AFTER schedule_id,
+    ADD INDEX idx_push_deliveries_calendar_id (calendar_id);
+
+UPDATE push_deliveries delivery
+JOIN app_notifications source
+  ON source.member_id = delivery.member_id
+ AND source.logical_event_key = delivery.event_key
+SET delivery.calendar_id = source.calendar_id
+WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+  AND source.calendar_id IS NOT NULL;
 
 -- Meaningful-edit generation fence and confirmed-vs-uncertain schedule semantics.
 ALTER TABLE schedule_push_job
@@ -377,6 +595,203 @@ BEGIN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
                 'push linearization verification failed: canonical notification binding';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM app_notifications
+        WHERE type = 'CALENDAR_SHARE_RECEIVED'
+          AND (
+              calendar_id IS NULL
+              OR JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.calendarId')) <>
+                 CAST(calendar_id AS CHAR)
+          )
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push linearization verification failed: calendar notification resource snapshot';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM push_deliveries delivery
+        JOIN app_notifications source
+          ON source.member_id = delivery.member_id
+         AND source.logical_event_key = delivery.event_key
+        WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+          AND (
+              delivery.calendar_id IS NULL
+              OR delivery.calendar_id <> source.calendar_id
+          )
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push linearization verification failed: calendar delivery resource snapshot';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM app_notifications source
+        WHERE source.type = 'CATEGORY_SHARE_RECEIVED'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM schedule_categories category
+              JOIN schedule_category_shares grant_row
+                ON grant_row.category_id = category.id
+               AND grant_row.target_member_id = source.member_id
+               AND grant_row.status = 'ACTIVE'
+               AND grant_row.deleted = FALSE
+              WHERE category.id = source.category_id
+                AND category.deleted = FALSE
+          )
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push verification failed: revoked category share source remains';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM app_notifications source
+        WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM schedule_calendars calendar
+              JOIN schedule_calendar_members membership
+                ON membership.calendar_id = calendar.id
+               AND membership.member_id = source.member_id
+               AND membership.status = 'ACTIVE'
+               AND membership.deleted = FALSE
+              WHERE calendar.id = source.calendar_id
+                AND calendar.status = 'ACTIVE'
+                AND calendar.deleted = FALSE
+          )
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push verification failed: revoked calendar share source remains';
+    END IF;
+
+    IF (
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = 'push_send_history'
+          AND column_name IN ('logical_event_key', 'category_id', 'calendar_id')
+    ) <> 3 OR (
+        SELECT COUNT(DISTINCT index_name)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = 'push_send_history'
+          AND index_name IN (
+              'idx_push_send_history_member_event',
+              'idx_push_send_history_category_member',
+              'idx_push_send_history_calendar_member'
+          )
+    ) <> 3 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push verification failed: history source identity schema';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM push_send_history history
+        WHERE (
+                history.payload_type = 'CATEGORY_SHARE_RECEIVED'
+                AND history.category_id IS NULL
+              )
+           OR (
+                history.payload_type = 'CALENDAR_SHARE_RECEIVED'
+                AND history.calendar_id IS NULL
+              )
+           OR (
+                JSON_VALID(history.data_json)
+                AND JSON_TYPE(history.data_json) = 'OBJECT'
+                AND JSON_UNQUOTE(
+                    JSON_EXTRACT(history.data_json, '$.logicalEventKey')
+                ) IS NOT NULL
+                AND (
+                    history.logical_event_key IS NULL
+                    OR history.logical_event_key <> LEFT(
+                        JSON_UNQUOTE(
+                            JSON_EXTRACT(history.data_json, '$.logicalEventKey')
+                        ),
+                        100
+                    )
+                )
+              )
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push verification failed: history typed source identity';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM push_send_history history
+        WHERE history.payload_type = 'CATEGORY_SHARE_RECEIVED'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM schedule_categories category
+              JOIN schedule_category_shares grant_row
+                ON grant_row.category_id = category.id
+               AND grant_row.target_member_id = history.member_id
+               AND grant_row.status = 'ACTIVE'
+               AND grant_row.deleted = FALSE
+              WHERE category.id = history.category_id
+                AND category.deleted = FALSE
+          )
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push verification failed: revoked category share history remains';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM push_send_history history
+        WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM schedule_calendars calendar
+              JOIN schedule_calendar_members membership
+                ON membership.calendar_id = calendar.id
+               AND membership.member_id = history.member_id
+               AND membership.status = 'ACTIVE'
+               AND membership.deleted = FALSE
+              WHERE calendar.id = history.calendar_id
+                AND calendar.status = 'ACTIVE'
+                AND calendar.deleted = FALSE
+          )
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push verification failed: revoked calendar share history remains';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM push_send_history history
+        JOIN app_notifications source
+          ON source.member_id = history.member_id
+         AND source.logical_event_key = history.logical_event_key
+        WHERE NOT (history.schedule_id <=> source.schedule_id)
+           OR NOT (history.category_id <=> source.category_id)
+           OR NOT (history.calendar_id <=> source.calendar_id)
+           OR NOT (history.payload_type <=> source.type)
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push verification failed: history/source identity mismatch';
     END IF;
 
     IF EXISTS (
@@ -540,6 +955,120 @@ WHERE logical_event_key IS NULL
    OR JSON_EXTRACT(data_json, '$.recipientMemberId') IS NULL
    OR JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.logicalEventKey')) <> logical_event_key
    OR JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.recipientMemberId')) <> CAST(member_id AS CHAR);
+
+SELECT COUNT(*) AS invalid_calendar_notification_resource_snapshot
+FROM app_notifications
+WHERE type = 'CALENDAR_SHARE_RECEIVED'
+  AND (
+      calendar_id IS NULL
+      OR JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.calendarId')) <> CAST(calendar_id AS CHAR)
+  );
+
+SELECT COUNT(*) AS invalid_calendar_delivery_resource_snapshot
+FROM push_deliveries delivery
+JOIN app_notifications source
+  ON source.member_id = delivery.member_id
+ AND source.logical_event_key = delivery.event_key
+WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+  AND (
+      delivery.calendar_id IS NULL
+      OR delivery.calendar_id <> source.calendar_id
+  );
+
+SELECT COUNT(*) AS revoked_category_share_sources
+FROM app_notifications source
+WHERE source.type = 'CATEGORY_SHARE_RECEIVED'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM schedule_categories category
+      JOIN schedule_category_shares grant_row
+        ON grant_row.category_id = category.id
+       AND grant_row.target_member_id = source.member_id
+       AND grant_row.status = 'ACTIVE'
+       AND grant_row.deleted = FALSE
+      WHERE category.id = source.category_id
+        AND category.deleted = FALSE
+  );
+
+SELECT COUNT(*) AS revoked_calendar_share_sources
+FROM app_notifications source
+WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM schedule_calendars calendar
+      JOIN schedule_calendar_members membership
+        ON membership.calendar_id = calendar.id
+       AND membership.member_id = source.member_id
+       AND membership.status = 'ACTIVE'
+       AND membership.deleted = FALSE
+      WHERE calendar.id = source.calendar_id
+        AND calendar.status = 'ACTIVE'
+        AND calendar.deleted = FALSE
+  );
+
+SELECT COUNT(*) AS invalid_push_history_source_identity
+FROM push_send_history history
+WHERE (
+        history.payload_type = 'CATEGORY_SHARE_RECEIVED'
+        AND history.category_id IS NULL
+      )
+   OR (
+        history.payload_type = 'CALENDAR_SHARE_RECEIVED'
+        AND history.calendar_id IS NULL
+      )
+   OR (
+        JSON_VALID(history.data_json)
+        AND JSON_TYPE(history.data_json) = 'OBJECT'
+        AND JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.logicalEventKey')) IS NOT NULL
+        AND (
+            history.logical_event_key IS NULL
+            OR history.logical_event_key <> LEFT(
+                JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.logicalEventKey')),
+                100
+            )
+        )
+      );
+
+SELECT COUNT(*) AS revoked_category_share_histories
+FROM push_send_history history
+WHERE history.payload_type = 'CATEGORY_SHARE_RECEIVED'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM schedule_categories category
+      JOIN schedule_category_shares grant_row
+        ON grant_row.category_id = category.id
+       AND grant_row.target_member_id = history.member_id
+       AND grant_row.status = 'ACTIVE'
+       AND grant_row.deleted = FALSE
+      WHERE category.id = history.category_id
+        AND category.deleted = FALSE
+  );
+
+SELECT COUNT(*) AS revoked_calendar_share_histories
+FROM push_send_history history
+WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM schedule_calendars calendar
+      JOIN schedule_calendar_members membership
+        ON membership.calendar_id = calendar.id
+       AND membership.member_id = history.member_id
+       AND membership.status = 'ACTIVE'
+       AND membership.deleted = FALSE
+      WHERE calendar.id = history.calendar_id
+        AND calendar.status = 'ACTIVE'
+        AND calendar.deleted = FALSE
+  );
+
+SELECT COUNT(*) AS mismatched_push_history_source_identity
+FROM push_send_history history
+JOIN app_notifications source
+  ON source.member_id = history.member_id
+ AND source.logical_event_key = history.logical_event_key
+WHERE NOT (history.schedule_id <=> source.schedule_id)
+   OR NOT (history.category_id <=> source.category_id)
+   OR NOT (history.calendar_id <=> source.calendar_id)
+   OR NOT (history.payload_type <=> source.type);
 
 SELECT COUNT(*) AS duplicate_token_fingerprint_groups
 FROM (

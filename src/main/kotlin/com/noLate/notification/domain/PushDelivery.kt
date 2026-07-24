@@ -42,6 +42,10 @@ import java.time.Instant
             name = "idx_push_deliveries_schedule_id",
             columnList = "schedule_id",
         ),
+        Index(
+            name = "idx_push_deliveries_calendar_id",
+            columnList = "calendar_id",
+        ),
     ],
 )
 class PushDelivery(
@@ -85,6 +89,13 @@ class PushDelivery(
 
     @Column(name = "schedule_id")
     val scheduleId: Long? = null,
+
+    /**
+     * Frozen shared-calendar grant identity. A redrive validates this snapshot rather than
+     * attaching the delivery to whichever calendar/device state happens to exist later.
+     */
+    @Column(name = "calendar_id")
+    val calendarId: Long? = null,
 
     @Column(name = "payload_type", length = 80)
     val payloadType: String? = null,
@@ -145,6 +156,28 @@ class PushDelivery(
         lastAttemptedAt = at
         errorCode = code.take(120)
         errorMessage = message?.take(1000)
+        return true
+    }
+
+    /**
+     * The authoritative source became temporarily busy after this delivery was claimed but before
+     * the provider ownership lease was acquired. No provider call occurred, so restore a safely
+     * retryable state and return the provisional claim attempt to the delivery budget.
+     */
+    fun deferBeforeProvider(reason: String): Boolean {
+        if (status != PushDeliveryStatus.DISPATCHING || attemptCount <= 0) return false
+        attemptCount -= 1
+        status = if (attemptCount == 0) {
+            firstAttemptedAt = null
+            lastAttemptedAt = null
+            errorCode = null
+            errorMessage = null
+            PushDeliveryStatus.PENDING
+        } else {
+            errorCode = "AUTHORITATIVE_SOURCE_PROCESSING"
+            errorMessage = reason.take(1000)
+            PushDeliveryStatus.FAILED
+        }
         return true
     }
 

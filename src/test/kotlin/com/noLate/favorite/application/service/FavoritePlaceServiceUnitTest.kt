@@ -3,6 +3,7 @@ package com.noLate.favorite.application.service
 import com.noLate.favorite.domain.FavoritePlace
 import com.noLate.favorite.infrastructure.FavoritePlaceCategoryRepository
 import com.noLate.favorite.infrastructure.FavoritePlaceRepository
+import com.noLate.member.application.service.MemberService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -26,11 +27,14 @@ class FavoritePlaceServiceUnitTest {
     @Mock
     lateinit var placeRepository: FavoritePlaceRepository
 
+    @Mock
+    lateinit var memberService: MemberService
+
     private lateinit var service: FavoritePlaceService
 
     @BeforeEach
     fun setUp() {
-        service = FavoritePlaceService(categoryRepository, placeRepository)
+        service = FavoritePlaceService(categoryRepository, placeRepository, memberService)
     }
 
     @Test
@@ -87,6 +91,7 @@ class FavoritePlaceServiceUnitTest {
 
         val result = service.saveDefaultOrigin(
             memberId = 7L,
+            presentedSessionGeneration = 3L,
             label = "회사",
             placeName = "NoLate 오피스",
             address = "서울 강남구 테헤란로",
@@ -121,6 +126,7 @@ class FavoritePlaceServiceUnitTest {
 
         val result = service.saveDefaultOrigin(
             memberId = 7L,
+            presentedSessionGeneration = 3L,
             label = null,
             placeName = "서울역",
             address = "서울 중구 한강대로 405",
@@ -142,7 +148,7 @@ class FavoritePlaceServiceUnitTest {
 
     @Test
     fun `clearDefaultOrigin clears the member default flag`() {
-        service.clearDefaultOrigin(7L)
+        service.clearDefaultOrigin(7L, presentedSessionGeneration = 3L)
 
         verify(placeRepository).clearDefaultOrigin(7L)
     }

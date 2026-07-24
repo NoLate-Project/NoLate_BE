@@ -22,6 +22,7 @@ import com.noLate.notification.application.service.PushOutboxDispatchWorker
 import com.noLate.notification.application.service.PushOutboxDispatchWriter
 import com.noLate.notification.application.service.PushTokenProviderLeaseService
 import com.noLate.notification.application.service.PushTokenProviderLeaseWriter
+import com.noLate.notification.application.service.PushTokenProviderLeaseObserver
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.PushDelivery
@@ -63,6 +64,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Persisted schedule outbox의 safety fence를 실제 manifest/claim/source 전이까지 검증한다.
@@ -111,6 +113,7 @@ class SchedulePersistedPushSafetyIntegrationTest @Autowired constructor(
     private val outboxWorker: PushOutboxDispatchWorker,
     private val outboxService: PushEventOutboxService,
     private val pushDeliveryService: PushDeliveryService,
+    private val notificationUseCase: NotificationUseCase,
     private val jobRepository: SchedulePushJobRepository,
     private val inboxRepository: AppNotificationRepository,
     private val deliveryRepository: PushDeliveryRepository,
@@ -119,6 +122,7 @@ class SchedulePersistedPushSafetyIntegrationTest @Autowired constructor(
     private val memberRepository: MemberRepository,
     private val tokenService: NotificationTokenService,
     private val pushClient: SchedulePersistedPushSafetyClient,
+    private val providerLeaseObserver: ScheduleFenceProviderLeaseObserver,
     private val jdbcTemplate: JdbcTemplate,
     transactionManager: PlatformTransactionManager,
 ) {
@@ -127,6 +131,7 @@ class SchedulePersistedPushSafetyIntegrationTest @Autowired constructor(
     @BeforeEach
     fun clean() {
         pushClient.reset()
+        providerLeaseObserver.reset()
         deliveryRepository.deleteAll()
         historyRepository.deleteAll()
         inboxRepository.deleteAll()
@@ -176,6 +181,169 @@ class SchedulePersistedPushSafetyIntegrationTest @Autowired constructor(
         assertEquals(0, source(fixture).dispatchFailureCount)
         assertEquals(PushDeliveryStatus.SUCCESS, deliveries(fixture).single().status)
         assertEquals(1, pushClient.attempts("deferred-token"))
+    }
+
+    @Test
+    fun `claim 뒤 source worker가 PROCESSING이면 provider 전 claim을 되돌리고 실패 예산 없이 연기한다`() {
+        val token = "provider-fence-deferred-token"
+        val fixture = prepareSafetyEvent(
+            memberId = 9_202L,
+            tokens = listOf(token),
+        )
+        val gate = providerLeaseObserver.arm()
+        val result = AtomicReference<Int?>()
+        val failure = AtomicReference<Throwable?>()
+        val executor = Executors.newSingleThreadExecutor()
+        val future = executor.submit {
+            runCatching { outboxWorker.runDueEvents(NOW) }
+                .onSuccess(result::set)
+                .onFailure(failure::set)
+        }
+
+        try {
+            assertTrue(gate.beforeLease.await(10, TimeUnit.SECONDS))
+            assertEquals(PushDeliveryStatus.DISPATCHING, deliveries(fixture).single().status)
+            assertEquals(1, deliveries(fixture).single().attemptCount)
+
+            transactions.executeWithoutResult {
+                requireNotNull(jobRepository.findByIdForUpdate(requireNotNull(fixture.job.id)))
+                    .startProcessing("authoritative-schedule-worker", NOW)
+                jobRepository.flush()
+            }
+
+            gate.allowLease.countDown()
+            future.get(10, TimeUnit.SECONDS)
+            failure.get()?.let { throw AssertionError(it) }
+            assertEquals(1, result.get())
+
+            val deferredSource = source(fixture)
+            val deferredDelivery = deliveries(fixture).single()
+            assertEquals(PushOutboxDispatchStatus.PENDING, deferredSource.dispatchStatus)
+            assertEquals(1, deferredSource.dispatchAttemptCount)
+            assertEquals(0, deferredSource.dispatchFailureCount)
+            assertEquals(NOW.plusSeconds(1), deferredSource.nextDispatchAt)
+            assertEquals(PushDeliveryStatus.PENDING, deferredDelivery.status)
+            assertEquals(0, deferredDelivery.attemptCount)
+            assertEquals(0, pushClient.attempts(token))
+
+            transactions.executeWithoutResult {
+                requireNotNull(jobRepository.findByIdForUpdate(requireNotNull(fixture.job.id)))
+                    .recoverProcessingTimeout(
+                        reason = "authoritative worker lease expired",
+                        nextCheckAt = NOW.plusSeconds(1),
+                    )
+                jobRepository.flush()
+            }
+
+            assertEquals(1, outboxWorker.runDueEvents(NOW.plusSeconds(1)))
+            assertEquals(PushOutboxDispatchStatus.COMPLETED, source(fixture).dispatchStatus)
+            assertEquals(0, source(fixture).dispatchFailureCount)
+            assertEquals(PushDeliveryStatus.SUCCESS, deliveries(fixture).single().status)
+            assertEquals(1, deliveries(fixture).single().attemptCount)
+            assertEquals(1, pushClient.attempts(token))
+        } finally {
+            gate.allowLease.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `delivery claim 뒤 schedule generation이 바뀌면 provider lease가 old payload를 차단한다`() {
+        val memberId = 9_219L
+        val token = "schedule-provider-fence-token"
+        registerAuthenticatedPushToken(
+            jdbcTemplate = jdbcTemplate,
+            tokenService = tokenService,
+            memberId = memberId,
+            deviceId = "schedule-provider-fence-device",
+            platform = PushPlatform.ANDROID,
+            token = token,
+        )
+        val scheduleId = 109_219L
+        val job = jobRepository.saveAndFlush(
+            SchedulePushJob.create(
+                memberId = memberId,
+                scheduleId = scheduleId,
+                scheduleAt = NOW.plusSeconds(3_600),
+                departureAt = NOW.plusSeconds(1_800),
+                monitorStartAt = NOW.minusSeconds(60),
+                intervalMinutes = 20,
+                notificationInputFingerprint = "old-fingerprint",
+            ).apply {
+                startProcessing("direct-provider-fence-worker", NOW)
+            }
+        )
+        val jobId = requireNotNull(job.id)
+        val fence = PushDispatchFence(
+            jobId = jobId,
+            workerId = "direct-provider-fence-worker",
+            jobVersion = requireNotNull(job.version),
+            notificationGeneration = job.notificationGeneration,
+            notificationInputFingerprint = job.notificationInputFingerprint,
+            expectedMemberId = memberId,
+            expectedScheduleId = scheduleId,
+        )
+        val gate = providerLeaseObserver.arm()
+        val completed = CountDownLatch(1)
+        val result = AtomicReference<com.noLate.notification.application.useCase.NotificationSendResult?>()
+        val failure = AtomicReference<Throwable?>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        executor.submit {
+            runCatching {
+                notificationUseCase.sendToMemberFenced(
+                    memberId = memberId,
+                    title = "old ETA title",
+                    body = "old ETA body",
+                    data = mapOf(
+                        "type" to "SCHEDULE_DEPARTURE_REMINDER",
+                        "scheduleId" to scheduleId.toString(),
+                        "schedulePushJobId" to jobId.toString(),
+                        "notificationGeneration" to "0",
+                        "schedulePushCheckCount" to "0",
+                        "notificationInputFingerprint" to "old-fingerprint",
+                    ),
+                    inboxDeduplicationKey = "schedule-push-job:$jobId:g0:c0",
+                    dispatchFence = fence,
+                )
+            }.onSuccess(result::set).onFailure(failure::set)
+            completed.countDown()
+        }
+
+        try {
+            assertTrue(gate.beforeLease.await(10, TimeUnit.SECONDS))
+            transactions.executeWithoutResult {
+                val locked = requireNotNull(jobRepository.findByIdForUpdate(jobId))
+                assertTrue(
+                    locked.changeSchedule(
+                        scheduleAt = NOW.plusSeconds(3_900),
+                        departureAt = NOW.plusSeconds(2_100),
+                        monitorStartAt = NOW.plusSeconds(300),
+                        intervalMinutes = 20,
+                        notificationInputFingerprint = "new-fingerprint",
+                    )
+                )
+                jobRepository.flush()
+            }
+
+            gate.allowLease.countDown()
+            assertTrue(completed.await(10, TimeUnit.SECONDS))
+
+            assertEquals(null, failure.get())
+            assertEquals(1, result.get()?.supersededCount)
+            assertEquals(0, pushClient.attempts(token))
+            assertEquals(PushDeliveryStatus.SUPERSEDED, deliveryRepository.findAll().single().status)
+            assertEquals(
+                PushOutboxDispatchStatus.COMPLETED,
+                inboxRepository.findAll().single().dispatchStatus,
+            )
+            assertEquals(1L, jobRepository.findById(jobId).orElseThrow().notificationGeneration)
+        } finally {
+            gate.allowLease.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
     }
 
     @ParameterizedTest
@@ -550,6 +718,10 @@ class SchedulePersistedPushSafetyTestConfig {
     @Bean
     fun schedulePersistedSafetyPushClient(): SchedulePersistedPushSafetyClient =
         SchedulePersistedPushSafetyClient()
+
+    @Bean
+    fun scheduleFenceProviderLeaseObserver(): ScheduleFenceProviderLeaseObserver =
+        ScheduleFenceProviderLeaseObserver()
 }
 
 class SchedulePersistedPushSafetyClient : PushClient {
@@ -589,3 +761,25 @@ class ScheduleSafetyBlockingFailure {
     val entered = CountDownLatch(1)
     val release = CountDownLatch(1)
 }
+
+class ScheduleFenceProviderLeaseObserver : PushTokenProviderLeaseObserver {
+    private val armed = AtomicReference<ScheduleFenceProviderLeaseGate?>()
+
+    fun arm(): ScheduleFenceProviderLeaseGate =
+        ScheduleFenceProviderLeaseGate().also { check(armed.compareAndSet(null, it)) }
+
+    fun reset() {
+        armed.getAndSet(null)?.allowLease?.countDown()
+    }
+
+    override fun beforeOwnershipLease(tokenId: Long) {
+        val gate = armed.getAndSet(null) ?: return
+        gate.beforeLease.countDown()
+        check(gate.allowLease.await(10, TimeUnit.SECONDS))
+    }
+}
+
+class ScheduleFenceProviderLeaseGate(
+    val beforeLease: CountDownLatch = CountDownLatch(1),
+    val allowLease: CountDownLatch = CountDownLatch(1),
+)

@@ -5,6 +5,10 @@ import com.noLate.notification.application.service.PushDispatchFenceDecision
 import com.noLate.notification.application.service.PushDispatchFenceValidator
 import com.noLate.notification.application.service.PushRecipientAuthorizationValidator
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
+import com.noLate.schedule.domain.ScheduleCalendarStatus
+import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.domain.SchedulePushJobStatus
@@ -82,6 +86,8 @@ class SchedulePushRecipientAccessValidator(
     private val accessPolicy: ScheduleAccessPolicy,
     private val categoryRepository: ScheduleCategoryRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
+    private val calendarRepository: ScheduleCalendarRepository,
+    private val calendarMemberRepository: ScheduleCalendarMemberRepository,
 ) : PushRecipientAuthorizationValidator {
     fun canDispatch(memberId: Long, scheduleId: Long): Boolean {
         return canDispatch(
@@ -89,6 +95,7 @@ class SchedulePushRecipientAccessValidator(
             scheduleId = scheduleId,
             categoryId = null,
             payloadType = SCHEDULE_PUSH_PAYLOAD_TYPE,
+            calendarId = null,
         )
     }
 
@@ -97,7 +104,11 @@ class SchedulePushRecipientAccessValidator(
         scheduleId: Long?,
         categoryId: Long?,
         payloadType: String?,
+        calendarId: Long?,
     ): Boolean {
+        if (payloadType == CALENDAR_SHARE_RECEIVED_PAYLOAD_TYPE) {
+            return calendarId?.let { canDispatchCalendar(memberId, it) } ?: false
+        }
         if (scheduleId != null) {
             return canDispatchSchedule(memberId, scheduleId, payloadType)
         }
@@ -110,7 +121,24 @@ class SchedulePushRecipientAccessValidator(
             return categoryShareRepository.findByCategoryIdAndTargetMemberId(categoryId, memberId)
                 ?.takeIf { !it.deleted && it.status == ScheduleShareStatus.ACTIVE } != null
         }
+        if (calendarId != null) {
+            return canDispatchCalendar(memberId, calendarId)
+        }
         return true
+    }
+
+    private fun canDispatchCalendar(memberId: Long, calendarId: Long): Boolean {
+        val calendar = calendarRepository.findByIdAndStatusAndDeletedFalse(
+            calendarId,
+            ScheduleCalendarStatus.ACTIVE,
+        ) ?: return false
+        if (calendar.deleted) return false
+        return calendarMemberRepository
+            .findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                calendarId,
+                memberId,
+                ScheduleCalendarMemberStatus.ACTIVE,
+            ) != null
     }
 
     private fun canDispatchSchedule(
@@ -133,6 +161,7 @@ class SchedulePushRecipientAccessValidator(
 
     private companion object {
         const val SCHEDULE_PUSH_PAYLOAD_TYPE = "SCHEDULE_PUSH"
+        const val CALENDAR_SHARE_RECEIVED_PAYLOAD_TYPE = "CALENDAR_SHARE_RECEIVED"
         val TRAVEL_REQUIRED_PAYLOAD_TYPES = setOf(
             SCHEDULE_PUSH_PAYLOAD_TYPE,
             "ROUTE_SETUP_REMINDER",

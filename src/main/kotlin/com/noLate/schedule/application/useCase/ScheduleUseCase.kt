@@ -8,6 +8,7 @@ import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleNotificationActionIdempotencyService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
+import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportResultDto
 import com.noLate.schedule.domain.ScheduleImportSource
@@ -36,6 +37,7 @@ class ScheduleUseCase(
     private val memberService: MemberService,
     private val clock: Clock = Clock.systemUTC(),
     private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
+    private val scheduleTravelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
@@ -208,12 +210,19 @@ class ScheduleUseCase(
         // 잠금 없는 상세는 actor의 접근 권한과 owner identity만 미리 확인한다. 실제 수정 권한과
         // schedule 상태는 member -> job fence 뒤 updateSchedule에서 다시 검증한다.
         val current = scheduleService.getScheduleDetail(memberId, scheduleId)
+        val previousOwnerMemberId = current.ownerMemberId ?: memberId
+        val previousCalendarId = current.calendarId
+        val previewCalendarAudienceMemberIds = previousCalendarId
+            ?.let { scheduleTravelPlanService?.findActiveCalendarAudienceMemberIds(it) }
+            .orEmpty()
         val previewNotificationMemberIds =
             scheduleTravelPlanService?.findNotificationEnabledMemberIds(scheduleId).orEmpty()
         val editFence = schedulePushJobService.lockForScheduleEdit(
             scheduleId = scheduleId,
             requiredMemberIds =
-                setOf(memberId, current.ownerMemberId ?: memberId) + previewNotificationMemberIds,
+                setOf(memberId, previousOwnerMemberId) +
+                    previewCalendarAudienceMemberIds +
+                    previewNotificationMemberIds,
             actorMemberId = memberId,
             presentedSessionGeneration = presentedSessionGeneration,
         )
@@ -223,6 +232,22 @@ class ScheduleUseCase(
             editFence.lockedMemberIds,
         )
         val updated = scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
+        val currentPreviousCalendarAudienceMemberIds = previousCalendarId
+            ?.let { scheduleTravelPlanService?.findActiveCalendarAudienceMemberIds(it) }
+            .orEmpty()
+        editFence.requireContains(currentPreviousCalendarAudienceMemberIds)
+        val accessCleanupCandidates = (
+            previewCalendarAudienceMemberIds +
+                currentPreviousCalendarAudienceMemberIds +
+                previewNotificationMemberIds
+            ) - previousOwnerMemberId
+        editFence.requireContains(accessCleanupCandidates)
+        if (accessCleanupCandidates.isNotEmpty()) {
+            scheduleTravelAccessCleanupService?.cancelRevokedForSchedule(
+                scheduleId,
+                accessCleanupCandidates,
+            )
+        }
         // 공유 EDITOR가 수정해도 평탄형 경로와 기존 오너 push job은 실제 일정 소유자 기준으로
         // 동기화한다. 요청자를 오너로 간주하면 공유 편집 직후 SCHEDULE_NOT_FOUND로 롤백된다.
         val ownerMemberId = updated.ownerMemberId ?: memberId

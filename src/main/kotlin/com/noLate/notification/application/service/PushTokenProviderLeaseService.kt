@@ -10,6 +10,7 @@ import com.noLate.notification.infrastructure.PushDeliveryRepository
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
+import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
@@ -18,6 +19,8 @@ import java.util.UUID
 enum class PushTokenProviderLeaseOutcome {
     ACQUIRED,
     SUPERSEDED,
+    /** Authoritative source is temporarily PROCESSING; provider was not called and retry is safe. */
+    DEFERRED,
     BUSY,
 }
 
@@ -54,6 +57,8 @@ class PushTokenProviderLeaseService(
         title: String,
         body: String,
         data: Map<String, String>,
+        dispatchFence: PushDispatchFence? = null,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): PushTokenProviderSendResult {
         observer?.beforeOwnershipLease(requireNotNull(claim.tokenId))
         val lease = writer.acquire(
@@ -62,6 +67,8 @@ class PushTokenProviderLeaseService(
             tokenId = requireNotNull(claim.tokenId),
             tokenFingerprint = requireNotNull(claim.tokenFingerprint),
             ownershipVersion = requireNotNull(claim.tokenOwnershipVersion),
+            dispatchFence = dispatchFence,
+            sessionFence = sessionFence,
         )
         if (lease.outcome != PushTokenProviderLeaseOutcome.ACQUIRED) {
             return PushTokenProviderSendResult(lease.outcome)
@@ -96,7 +103,9 @@ class PushTokenProviderLeaseWriter(
     private val appNotificationRepository: AppNotificationRepository,
     private val memberRepository: MemberRepository,
     private val clock: Clock,
+    private val fenceValidator: PushDispatchFenceValidator? = null,
     private val recipientAuthorizationValidator: PushRecipientAuthorizationValidator? = null,
+    private val sourceFreshnessValidator: PushSourceFreshnessValidator? = null,
     @Value("\${notification.push-token.dispatch-lease-seconds:600}")
     private val leaseSeconds: Long = 600,
     @Value("\${notification.push-token.provider-max-call-seconds:60}")
@@ -108,21 +117,55 @@ class PushTokenProviderLeaseWriter(
         }
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(
+        propagation = Propagation.REQUIRES_NEW,
+        isolation = Isolation.READ_COMMITTED,
+    )
     fun acquire(
         memberId: Long,
         deliveryId: Long?,
         tokenId: Long,
         tokenFingerprint: String,
         ownershipVersion: Long,
+        dispatchFence: PushDispatchFence? = null,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): PushTokenProviderLease {
+        // This must be the first database read as well as the first lock. Calendar/share removal,
+        // schedule edit, logout, and withdrawal all start with the same recipient member row.
+        // READ_COMMITTED prevents an earlier identity lookup from pinning a stale authorization
+        // snapshot while this transaction waits for that member lock.
+        val recipient =
+            memberRepository.findActiveNotificationRecipientForUpdate(memberId)
+                ?: return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
         val deliveryIdentity = deliveryId
             ?.let { deliveryRepository.findById(it).orElse(null) }
         if (deliveryId != null && deliveryIdentity == null) {
             return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
         }
-        if (memberRepository.findActiveNotificationRecipientForUpdate(memberId) == null) {
-            return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
+        if (sessionFence != null && !sessionFence.matches(recipient)) {
+            return supersedeFencedDelivery(
+                memberId,
+                deliveryIdentity,
+                "Authenticated session changed before provider dispatch.",
+                "AUTHENTICATED_SESSION_GENERATION_CHANGED",
+            )
+        }
+        if (dispatchFence != null) {
+            when (
+                fenceValidator?.evaluate(dispatchFence)
+                    ?: PushDispatchFenceDecision.REJECT_TERMINAL
+            ) {
+                PushDispatchFenceDecision.ACCEPT -> Unit
+                PushDispatchFenceDecision.RETRY_LATER ->
+                    return deferFencedDelivery(memberId, deliveryIdentity)
+                PushDispatchFenceDecision.REJECT_TERMINAL ->
+                    return supersedeFencedDelivery(
+                        memberId,
+                        deliveryIdentity,
+                        "Schedule source identity changed before provider dispatch.",
+                        "SCHEDULE_SOURCE_FENCE_CHANGED",
+                    )
+            }
         }
 
         val delivery =
@@ -149,7 +192,10 @@ class PushTokenProviderLeaseWriter(
                         scheduleId = source.scheduleId ?: lockedDelivery.scheduleId,
                         categoryId = source.categoryId,
                         payloadType = source.type,
+                        calendarId = source.calendarId ?: lockedDelivery.calendarId,
                     ) == false
+                        ||
+                        sourceFreshnessValidator?.isFresh(source.toFrozenPushSource()) == false
                 ) {
                     lockedDelivery.markDispatchOwnershipSuperseded(
                         Instant.now(clock),
@@ -230,6 +276,64 @@ class PushTokenProviderLeaseWriter(
             deliveryRepository.saveAndFlush(delivery)
         }
         return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
+    }
+
+    private fun supersedeFencedDelivery(
+        memberId: Long,
+        deliveryIdentity: com.noLate.notification.domain.PushDelivery?,
+        deliveryReason: String,
+        sourceReason: String,
+    ): PushTokenProviderLease {
+        if (deliveryIdentity == null) {
+            return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
+        }
+        val source = appNotificationRepository.findByMemberIdAndLogicalEventKeyForUpdate(
+            memberId,
+            deliveryIdentity.eventKey,
+        )
+        val delivery = deliveryRepository.findByIdForUpdate(
+            requireNotNull(deliveryIdentity.id),
+        )
+        if (
+            delivery != null &&
+            delivery.memberId == memberId &&
+            delivery.eventKey == deliveryIdentity.eventKey &&
+            delivery.markDispatchOwnershipSuperseded(
+                Instant.now(clock),
+                deliveryReason,
+            )
+        ) {
+            deliveryRepository.saveAndFlush(delivery)
+        }
+        source?.completeSupersededDispatch(
+            Instant.now(clock),
+            sourceReason,
+        )
+        appNotificationRepository.flush()
+        return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
+    }
+
+    private fun deferFencedDelivery(
+        memberId: Long,
+        deliveryIdentity: com.noLate.notification.domain.PushDelivery?,
+    ): PushTokenProviderLease {
+        if (deliveryIdentity == null) {
+            return PushTokenProviderLease(PushTokenProviderLeaseOutcome.DEFERRED)
+        }
+        val delivery = deliveryRepository.findByIdForUpdate(
+            requireNotNull(deliveryIdentity.id),
+        )
+        if (
+            delivery != null &&
+            delivery.memberId == memberId &&
+            delivery.eventKey == deliveryIdentity.eventKey &&
+            delivery.deferBeforeProvider(
+                "Authoritative schedule source is processing before provider dispatch.",
+            )
+        ) {
+            deliveryRepository.saveAndFlush(delivery)
+        }
+        return PushTokenProviderLease(PushTokenProviderLeaseOutcome.DEFERRED)
     }
 }
 

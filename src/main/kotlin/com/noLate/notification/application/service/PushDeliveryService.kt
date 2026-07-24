@@ -72,12 +72,13 @@ class PushDeliveryService(
         eventKey: String,
         deliveryId: Long,
         fence: PushDispatchFence? = null,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): PushDeliveryClaim {
         val normalizedEventKey = eventKey.take(100)
         return try {
-            writer.claim(memberId, normalizedEventKey, deliveryId, fence)
+            writer.claim(memberId, normalizedEventKey, deliveryId, fence, sessionFence)
         } catch (_: OptimisticLockingFailureException) {
-            writer.claim(memberId, normalizedEventKey, deliveryId, fence)
+            writer.claim(memberId, normalizedEventKey, deliveryId, fence, sessionFence)
         }
     }
 
@@ -114,6 +115,7 @@ class PushDeliveryWriter(
     private val clock: Clock,
     private val fenceValidator: PushDispatchFenceValidator? = null,
     private val recipientAuthorizationValidator: PushRecipientAuthorizationValidator? = null,
+    private val sourceFreshnessValidator: PushSourceFreshnessValidator? = null,
     @Value("\${notification.push-outbox.retry-delay-seconds:60}")
     private val outboxRetryDelaySeconds: Long = 60,
     @Value("\${notification.push-outbox.max-attempts:5}")
@@ -126,10 +128,14 @@ class PushDeliveryWriter(
         eventKey: String,
         deliveryId: Long,
         fence: PushDispatchFence? = null,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): PushDeliveryClaim {
         // member -> schedule fence -> delivery -> token is shared with withdrawal cleanup.
-        if (memberRepository.findActiveNotificationRecipientForUpdate(memberId) == null) {
-            return PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED)
+        val recipient =
+            memberRepository.findActiveNotificationRecipientForUpdate(memberId)
+                ?: return PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED)
+        if (sessionFence != null && !sessionFence.matches(recipient)) {
+            return terminalizeRejectedSessionClaim(memberId, eventKey, deliveryId)
         }
         if (fence != null) {
             val decision = fenceValidator?.evaluate(fence)
@@ -158,7 +164,10 @@ class PushDeliveryWriter(
                 scheduleId = source.scheduleId ?: existing.scheduleId,
                 categoryId = source.categoryId,
                 payloadType = source.type,
+                calendarId = source.calendarId ?: existing.calendarId,
             ) == false
+                ||
+                sourceFreshnessValidator?.isFresh(source.toFrozenPushSource()) == false
         ) {
             if (
                 existing.status == PushDeliveryStatus.PENDING ||
@@ -280,6 +289,24 @@ class PushDeliveryWriter(
             PushDeliveryStatus.SUPERSEDED ->
                 PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED, delivery.id)
         }
+    }
+
+    private fun terminalizeRejectedSessionClaim(
+        memberId: Long,
+        eventKey: String,
+        deliveryId: Long,
+    ): PushDeliveryClaim {
+        val source = appNotificationRepository.findByMemberIdAndLogicalEventKeyForUpdate(
+            memberId,
+            eventKey,
+        )
+        val result = terminalizeRejectedPersistedClaim(memberId, eventKey, deliveryId)
+        source?.completeSupersededDispatch(
+            Instant.now(clock),
+            "AUTHENTICATED_SESSION_GENERATION_CHANGED",
+        )
+        appNotificationRepository.flush()
+        return result
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -443,6 +470,18 @@ class PushDeliveryWriter(
         return changed
     }
 }
+
+internal fun AppNotification.toFrozenPushSource(): FrozenPushSource =
+    FrozenPushSource(
+        memberId = memberId,
+        logicalEventKey = logicalEventKey,
+        deduplicationKey = deduplicationKey,
+        canonicalDataJson = dataJson,
+        payloadType = type,
+        scheduleId = scheduleId,
+        categoryId = categoryId,
+        calendarId = calendarId,
+    )
 
 private data class LateScheduleFailureFence(
     val decision: PushDispatchFenceDecision? = null,

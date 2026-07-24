@@ -75,6 +75,8 @@ class NotificationUseCaseUnitTest {
                 any(),
                 any(),
                 any(),
+                anyOrNull(),
+                anyOrNull(),
             ),
         ).thenAnswer { invocation ->
             val claim = invocation.getArgument<PushDeliveryClaim>(1)
@@ -151,6 +153,10 @@ class NotificationUseCaseUnitTest {
             body = eq(body),
             data = argThat { canonicalFor(memberId, data) },
             fcmMessageId = eq("message-id"),
+            logicalEventKey = anyOrNull(),
+            scheduleId = isNull(),
+            categoryId = isNull(),
+            calendarId = isNull(),
         )
         verifyNoInteractions(appNotificationService)
         verify(pushSendHistoryService).recordSuccess(
@@ -160,6 +166,10 @@ class NotificationUseCaseUnitTest {
             body = eq(body),
             data = argThat { canonicalFor(memberId, data) },
             fcmMessageId = eq("message-id"),
+            logicalEventKey = anyOrNull(),
+            scheduleId = isNull(),
+            categoryId = isNull(),
+            calendarId = isNull(),
         )
         assertEquals(2, result.requestedCount)
         assertEquals(2, result.sentCount)
@@ -204,6 +214,10 @@ class NotificationUseCaseUnitTest {
             status = eq(PushSendStatus.INVALID_TOKEN),
             errorCode = eq(InvalidPushTokenException::class.java.simpleName),
             errorMessage = eq("유효하지 않은 푸시 토큰입니다."),
+            logicalEventKey = anyOrNull(),
+            scheduleId = isNull(),
+            categoryId = isNull(),
+            calendarId = isNull(),
         )
         verify(notificationTokenService).removeTokenByOwnership(
             memberId,
@@ -236,6 +250,10 @@ class NotificationUseCaseUnitTest {
             title = eq("제목"),
             body = eq("내용"),
             data = argThat { canonicalFor(memberId, data) },
+            logicalEventKey = anyOrNull(),
+            scheduleId = eq(10L),
+            categoryId = isNull(),
+            calendarId = isNull(),
         )
         verifyNoInteractions(appNotificationService)
         verify(pushClient, never()).sendToToken(any(), any(), any(), any())

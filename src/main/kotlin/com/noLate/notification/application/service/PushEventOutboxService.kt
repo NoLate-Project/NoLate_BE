@@ -53,6 +53,7 @@ class PushEventOutboxService(
         deduplicationKey: String?,
         persistInInbox: Boolean,
         fence: PushDispatchFence?,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): PreparedPushEvent {
         require(persistInInbox) {
             "Durable push events must be persisted; use the explicit ephemeral send path otherwise."
@@ -65,6 +66,7 @@ class PushEventOutboxService(
                 data = data,
                 deduplicationKey = deduplicationKey,
                 fence = fence,
+                sessionFence = sessionFence,
             )
         }
     }
@@ -150,6 +152,7 @@ class PushEventOutboxWriter(
         data: Map<String, String>,
         deduplicationKey: String?,
         fence: PushDispatchFence?,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): PreparedPushEvent =
         prepareWithinTransaction(
             memberId = memberId,
@@ -159,6 +162,7 @@ class PushEventOutboxWriter(
             deduplicationKey = deduplicationKey,
             fence = fence,
             durableDispatch = false,
+            sessionFence = sessionFence,
         )
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -201,11 +205,15 @@ class PushEventOutboxWriter(
         deduplicationKey: String?,
         fence: PushDispatchFence?,
         durableDispatch: Boolean,
+        sessionFence: AuthenticatedPushSessionFence? = null,
     ): PreparedPushEvent {
         // Global notification/withdrawal lock order starts with the recipient member. The active
         // check and every source/manifest write below are committed under this same row lock.
-        if (memberRepository.findActiveNotificationRecipientForUpdate(memberId) == null) {
-            return inactiveRecipient()
+        val recipient =
+            memberRepository.findActiveNotificationRecipientForUpdate(memberId)
+                ?: return inactiveRecipient()
+        if (sessionFence != null) {
+            sessionFence.requireCurrent(recipient)
         }
         if (
             recipientAuthorizationValidator?.canDispatch(
@@ -213,6 +221,7 @@ class PushEventOutboxWriter(
                 scheduleId = data["scheduleId"]?.toLongOrNull(),
                 categoryId = data["categoryId"]?.toLongOrNull(),
                 payloadType = data["type"],
+                calendarId = data["calendarId"]?.toLongOrNull(),
             ) == false
         ) {
             return inactiveRecipient()
@@ -267,6 +276,7 @@ class PushEventOutboxWriter(
                     ?: "GENERAL",
                 scheduleId = canonicalData["scheduleId"]?.toLongOrNull(),
                 categoryId = canonicalData["categoryId"]?.toLongOrNull(),
+                calendarId = canonicalData["calendarId"]?.toLongOrNull(),
                 title = title.take(200),
                 body = body.take(1000),
                 dataJson = objectMapper.writeValueAsString(canonicalData),
@@ -313,6 +323,7 @@ class PushEventOutboxWriter(
                         deviceFingerprint = token.deviceFingerprint,
                         platform = token.platform,
                         scheduleId = data["scheduleId"]?.toLongOrNull(),
+                        calendarId = data["calendarId"]?.toLongOrNull(),
                         payloadType = data["type"]?.take(80),
                     )
                 }

@@ -11,11 +11,13 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import jakarta.transaction.Transactional
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 @Component
+@Profile("!prod")
 @ConditionalOnProperty(
     prefix = "notification.push-schedule-scenario",
     name = ["enabled"],

@@ -145,8 +145,10 @@ firebase:
   enabled: ${FIREBASE_ENABLED:false}
   credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
   project-id: ${FIREBASE_PROJECT_ID:}
-  # 합계가 push-token provider-max-call보다 작아 token dispatch lease가 provider I/O
-  # 전체를 덮도록 유지한다.
+  # strict invariant:
+  # connect+read+write < provider-max-call < dispatch-lease,
+  # firebase-admin 9.8.0 worst case ((connect+read+write)*5 + 60s*4) < dispatch-lease,
+  # dispatch-lease-wait > provider-max-call. 등호나 0/음수는 startup에서 거절한다.
   connect-timeout-millis: ${FIREBASE_CONNECT_TIMEOUT_MILLIS:5000}
   read-timeout-millis: ${FIREBASE_READ_TIMEOUT_MILLIS:30000}
   write-timeout-millis: ${FIREBASE_WRITE_TIMEOUT_MILLIS:5000}

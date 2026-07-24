@@ -132,6 +132,8 @@ class ScheduleRouteSetupReminderServiceTest {
         assertEquals("10", data.firstValue["scheduleId"])
         assertEquals("10", data.firstValue["scheduleIds"])
         assertEquals("1", data.firstValue["count"])
+        assertEquals("101", data.firstValue["routeSetupReminderId"])
+        assertEquals(marker.scheduleFingerprint, data.firstValue["routeSetupScheduleFingerprint"])
     }
 
     @Test

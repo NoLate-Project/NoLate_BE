@@ -51,12 +51,94 @@ FROM (
     GROUP BY SHA2(CAST(device_id AS BINARY), 256)
     HAVING COUNT(*) > 1
 ) duplicates;
+
+SELECT COUNT(*) AS revoked_legacy_category_share_sources
+FROM app_notifications source
+LEFT JOIN schedule_categories category
+  ON category.id = source.category_id
+ AND category.deleted = FALSE
+LEFT JOIN schedule_category_shares grant_row
+  ON grant_row.category_id = source.category_id
+ AND grant_row.target_member_id = source.member_id
+ AND grant_row.status = 'ACTIVE'
+ AND grant_row.deleted = FALSE
+WHERE source.type = 'CATEGORY_SHARE_RECEIVED'
+  AND (category.id IS NULL OR grant_row.id IS NULL);
+
+SELECT COUNT(*) AS revoked_legacy_calendar_share_sources
+FROM app_notifications source
+LEFT JOIN schedule_calendars calendar
+  ON calendar.id = CAST(
+      CASE
+          WHEN JSON_VALID(source.data_json)
+           AND JSON_TYPE(source.data_json) = 'OBJECT'
+           AND JSON_UNQUOTE(JSON_EXTRACT(source.data_json, '$.calendarId'))
+               REGEXP '^[1-9][0-9]*$'
+          THEN JSON_UNQUOTE(JSON_EXTRACT(source.data_json, '$.calendarId'))
+          ELSE NULL
+      END AS UNSIGNED
+  )
+ AND calendar.status = 'ACTIVE'
+ AND calendar.deleted = FALSE
+LEFT JOIN schedule_calendar_members membership
+  ON membership.calendar_id = calendar.id
+ AND membership.member_id = source.member_id
+ AND membership.status = 'ACTIVE'
+ AND membership.deleted = FALSE
+WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+  AND (calendar.id IS NULL OR membership.id IS NULL);
+
+SELECT COUNT(*) AS revoked_legacy_category_share_histories
+FROM push_send_history history
+LEFT JOIN schedule_categories category
+  ON category.id = CAST(
+      CASE
+          WHEN JSON_VALID(history.data_json)
+           AND JSON_TYPE(history.data_json) = 'OBJECT'
+           AND JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.categoryId'))
+               REGEXP '^[1-9][0-9]*$'
+          THEN JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.categoryId'))
+          ELSE NULL
+      END AS UNSIGNED
+  )
+ AND category.deleted = FALSE
+LEFT JOIN schedule_category_shares grant_row
+  ON grant_row.category_id = category.id
+ AND grant_row.target_member_id = history.member_id
+ AND grant_row.status = 'ACTIVE'
+ AND grant_row.deleted = FALSE
+WHERE history.payload_type = 'CATEGORY_SHARE_RECEIVED'
+  AND (category.id IS NULL OR grant_row.id IS NULL);
+
+SELECT COUNT(*) AS revoked_legacy_calendar_share_histories
+FROM push_send_history history
+LEFT JOIN schedule_calendars calendar
+  ON calendar.id = CAST(
+      CASE
+          WHEN JSON_VALID(history.data_json)
+           AND JSON_TYPE(history.data_json) = 'OBJECT'
+           AND JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.calendarId'))
+               REGEXP '^[1-9][0-9]*$'
+          THEN JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.calendarId'))
+          ELSE NULL
+      END AS UNSIGNED
+  )
+ AND calendar.status = 'ACTIVE'
+ AND calendar.deleted = FALSE
+LEFT JOIN schedule_calendar_members membership
+  ON membership.calendar_id = calendar.id
+ AND membership.member_id = history.member_id
+ AND membership.status = 'ACTIVE'
+ AND membership.deleted = FALSE
+WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
+  AND (calendar.id IS NULL OR membership.id IS NULL);
 ```
 
 `push_deliveries` table이 이미 있으면 row count가 0이어야 하고, 나머지 오류 count도 모두
-0이어야 한다. 특히 `legacy_push_token_count`와 `legacy_schedule_push_job_count`는 반드시
-0이어야 한다. SQL은 fingerprint count만 보여주며 raw token/device id를 운영 로그, ticket,
-chat에 복사하지 않는다.
+0이어야 한다. 특히 `legacy_push_token_count`, `legacy_schedule_push_job_count`, 그리고
+네 `revoked_legacy_*_share_*` count는 반드시 0이어야 한다. SQL은 count/fingerprint만
+보여주며 raw token/device id나 notification title/body/data를 운영 로그, ticket, chat에
+복사하지 않는다.
 
 ## 2. Legacy drain
 
@@ -76,6 +158,135 @@ count가 0이 아니면 배포를 계속하지 않는다.
 - global device fingerprint 중복: platform 값과 무관하게 installation owner를 하나로
   결정한다. 단순히 가장 큰 id를 선택하지 말고 최근 인증된 account registration evidence를
   사용한다.
+- revoked legacy share source/history: 현재 ACTIVE category grant 또는 ACTIVE
+  calendar+membership가 없는 `*_SHARE_RECEIVED`는 권한 근거가 아니라 private payload
+  잔존물이다. 신규 logical event key로 바꾸거나 보관하지 않고, 승인된 evidence 보관 후
+  history를 먼저 지우고 inbox source를 지운다. 같은 category/calendar를 가진 일반 schedule
+  history는 삭제 대상이 아니다.
+
+아래 drain은 모든 writer가 중지되고 backup/change 승인이 끝난 뒤에만 실행한다. 임시 테이블은
+private payload가 아니라 PK만 담는다. `payload_type`이 정확히 share-received인 legacy history와
+같은 타입의 inbox source만 대상으로 하므로, direct schedule grant가 남은 schedule push
+history를 category/calendar 단위로 과삭제하지 않는다.
+
+```sql
+START TRANSACTION;
+
+CREATE TEMPORARY TABLE revoked_legacy_share_history_ids (
+    id BIGINT NOT NULL PRIMARY KEY
+);
+CREATE TEMPORARY TABLE revoked_legacy_share_source_ids (
+    id BIGINT NOT NULL PRIMARY KEY
+);
+
+INSERT IGNORE INTO revoked_legacy_share_history_ids(id)
+SELECT history.id
+FROM push_send_history history
+LEFT JOIN schedule_categories category
+  ON category.id = CAST(
+      CASE
+          WHEN JSON_VALID(history.data_json)
+           AND JSON_TYPE(history.data_json) = 'OBJECT'
+           AND JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.categoryId'))
+               REGEXP '^[1-9][0-9]*$'
+          THEN JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.categoryId'))
+          ELSE NULL
+      END AS UNSIGNED
+  )
+ AND category.deleted = FALSE
+LEFT JOIN schedule_category_shares grant_row
+  ON grant_row.category_id = category.id
+ AND grant_row.target_member_id = history.member_id
+ AND grant_row.status = 'ACTIVE'
+ AND grant_row.deleted = FALSE
+WHERE history.payload_type = 'CATEGORY_SHARE_RECEIVED'
+  AND (category.id IS NULL OR grant_row.id IS NULL);
+
+INSERT IGNORE INTO revoked_legacy_share_history_ids(id)
+SELECT history.id
+FROM push_send_history history
+LEFT JOIN schedule_calendars calendar
+  ON calendar.id = CAST(
+      CASE
+          WHEN JSON_VALID(history.data_json)
+           AND JSON_TYPE(history.data_json) = 'OBJECT'
+           AND JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.calendarId'))
+               REGEXP '^[1-9][0-9]*$'
+          THEN JSON_UNQUOTE(JSON_EXTRACT(history.data_json, '$.calendarId'))
+          ELSE NULL
+      END AS UNSIGNED
+  )
+ AND calendar.status = 'ACTIVE'
+ AND calendar.deleted = FALSE
+LEFT JOIN schedule_calendar_members membership
+  ON membership.calendar_id = calendar.id
+ AND membership.member_id = history.member_id
+ AND membership.status = 'ACTIVE'
+ AND membership.deleted = FALSE
+WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
+  AND (calendar.id IS NULL OR membership.id IS NULL);
+
+INSERT IGNORE INTO revoked_legacy_share_source_ids(id)
+SELECT source.id
+FROM app_notifications source
+LEFT JOIN schedule_categories category
+  ON category.id = source.category_id
+ AND category.deleted = FALSE
+LEFT JOIN schedule_category_shares grant_row
+  ON grant_row.category_id = source.category_id
+ AND grant_row.target_member_id = source.member_id
+ AND grant_row.status = 'ACTIVE'
+ AND grant_row.deleted = FALSE
+WHERE source.type = 'CATEGORY_SHARE_RECEIVED'
+  AND (category.id IS NULL OR grant_row.id IS NULL);
+
+INSERT IGNORE INTO revoked_legacy_share_source_ids(id)
+SELECT source.id
+FROM app_notifications source
+LEFT JOIN schedule_calendars calendar
+  ON calendar.id = CAST(
+      CASE
+          WHEN JSON_VALID(source.data_json)
+           AND JSON_TYPE(source.data_json) = 'OBJECT'
+           AND JSON_UNQUOTE(JSON_EXTRACT(source.data_json, '$.calendarId'))
+               REGEXP '^[1-9][0-9]*$'
+          THEN JSON_UNQUOTE(JSON_EXTRACT(source.data_json, '$.calendarId'))
+          ELSE NULL
+      END AS UNSIGNED
+  )
+ AND calendar.status = 'ACTIVE'
+ AND calendar.deleted = FALSE
+LEFT JOIN schedule_calendar_members membership
+  ON membership.calendar_id = calendar.id
+ AND membership.member_id = source.member_id
+ AND membership.status = 'ACTIVE'
+ AND membership.deleted = FALSE
+WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+  AND (calendar.id IS NULL OR membership.id IS NULL);
+
+SELECT COUNT(*) AS approved_revoked_share_histories
+FROM revoked_legacy_share_history_ids;
+SELECT COUNT(*) AS approved_revoked_share_sources
+FROM revoked_legacy_share_source_ids;
+
+DELETE history
+FROM push_send_history history
+JOIN revoked_legacy_share_history_ids target ON target.id = history.id;
+
+DELETE source
+FROM app_notifications source
+JOIN revoked_legacy_share_source_ids target ON target.id = source.id;
+
+SELECT COUNT(*) AS remaining_approved_revoked_share_histories
+FROM push_send_history history
+JOIN revoked_legacy_share_history_ids target ON target.id = history.id;
+SELECT COUNT(*) AS remaining_approved_revoked_share_sources
+FROM app_notifications source
+JOIN revoked_legacy_share_source_ids target ON target.id = source.id;
+
+-- 두 remaining count가 0인 경우에만 승인된 change record와 대조 후 commit한다.
+COMMIT;
+```
 
 위 evidence를 보관하고 `push_deliveries`/legacy event를 먼저 정리한 뒤, 승인된 운영 change로
 legacy schedule job과 모든 기존 push token을 명시적으로 삭제한다. v4 이전 JWT에는 `sg`가
@@ -118,6 +329,13 @@ old writer가 모두 중지된 상태에서 정확히 다음 순서로 실행한
 - case-sensitive token SHA-256 global unique
 - platform과 member에 무관한 device SHA-256 global unique
 - per-delivery ownership snapshot
+- immutable shared-calendar id on source and delivery rows; `CALENDAR_SHARE_RECEIVED` dispatch
+  revalidates an active calendar and active recipient membership under the recipient member lock
+- `push_send_history` canonical logical event/category/calendar identity and exact
+  member+event cleanup; legacy resource fallback is restricted to the matching
+  `CATEGORY_SHARE_RECEIVED`/`CALENDAR_SHARE_RECEIVED` payload type
+- revoked legacy share source와 source가 이미 사라진 standalone share history의
+  pre/post fail-fast; 승인된 drain 없이는 marker 기록 금지
 - claim 뒤 account ownership 이동을 막는 token별 provider dispatch lease와
   logout/withdraw 중 lease identity를 보존하는 retirement marker
 - schedule notification generation/action receipt
@@ -180,10 +398,15 @@ WHERE table_schema = DATABASE()
       (table_name = 'member' AND column_name = 'session_generation')
       OR
       (table_name = 'app_notifications' AND column_name IN (
+          'calendar_id',
           'manifest_state', 'manifest_recipient_count', 'manifest_frozen_at',
           'dispatch_status', 'dispatch_attempt_count', 'dispatch_failure_count', 'next_dispatch_at',
           'dispatch_locked_by', 'dispatch_locked_at', 'dispatch_completed_at',
           'dispatch_failure_reason', 'version'
+      ))
+      OR
+      (table_name = 'push_send_history' AND column_name IN (
+          'logical_event_key', 'category_id', 'calendar_id'
       ))
   )
 ORDER BY table_name, ordinal_position;
@@ -206,6 +429,67 @@ unique index가 없어야 한다. `uk_push_device_token_token_fingerprint`와
 `invalid_notification_account_binding`도 0이어야 한다. valid JSON scalar/array였던 legacy
 payload는 기존 앱의 `Map<String, String>` 계약 밖 데이터이므로 migration이 최소 account
 binding object로 정규화한다.
+
+아래 calendar snapshot/history/grant 검증도 모두 0이어야 한다. 0이 아니면 payload에서 id를
+추정해 발송하지 않고 writer를 계속 중지한 채 승인된 source+history drain/보정을 수행한 뒤
+migration postcondition을 다시 실행한다.
+
+```sql
+SELECT COUNT(*) AS invalid_calendar_notification_resource_snapshot
+FROM app_notifications
+WHERE type = 'CALENDAR_SHARE_RECEIVED'
+  AND (
+      calendar_id IS NULL
+      OR JSON_UNQUOTE(JSON_EXTRACT(data_json, '$.calendarId')) <> CAST(calendar_id AS CHAR)
+  );
+
+SELECT COUNT(*) AS invalid_calendar_delivery_resource_snapshot
+FROM push_deliveries delivery
+JOIN app_notifications source
+  ON source.member_id = delivery.member_id
+ AND source.logical_event_key = delivery.event_key
+WHERE source.type = 'CALENDAR_SHARE_RECEIVED'
+  AND (
+      delivery.calendar_id IS NULL
+      OR delivery.calendar_id <> source.calendar_id
+  );
+
+SELECT COUNT(*) AS invalid_push_history_source_identity
+FROM push_send_history
+WHERE (payload_type = 'CATEGORY_SHARE_RECEIVED' AND category_id IS NULL)
+   OR (payload_type = 'CALENDAR_SHARE_RECEIVED' AND calendar_id IS NULL);
+
+SELECT COUNT(*) AS revoked_category_share_histories
+FROM push_send_history history
+WHERE history.payload_type = 'CATEGORY_SHARE_RECEIVED'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM schedule_categories category
+      JOIN schedule_category_shares grant_row
+        ON grant_row.category_id = category.id
+       AND grant_row.target_member_id = history.member_id
+       AND grant_row.status = 'ACTIVE'
+       AND grant_row.deleted = FALSE
+      WHERE category.id = history.category_id
+        AND category.deleted = FALSE
+  );
+
+SELECT COUNT(*) AS revoked_calendar_share_histories
+FROM push_send_history history
+WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM schedule_calendars calendar
+      JOIN schedule_calendar_members membership
+        ON membership.calendar_id = calendar.id
+       AND membership.member_id = history.member_id
+       AND membership.status = 'ACTIVE'
+       AND membership.deleted = FALSE
+      WHERE calendar.id = history.calendar_id
+        AND calendar.status = 'ACTIVE'
+        AND calendar.deleted = FALSE
+  );
+```
 
 ## 5. Deploy and resume
 
@@ -248,6 +532,29 @@ reaper 또는 다음 registration이 삭제해 새 account가 과거 lease를 �
 token lease 만료 뒤에만 등록/소유권 이전을 운영적으로 재개한다. 이 timeout/lease 불변식과
 실제 느린 provider 중 ownership transfer 대기를 staging에서 검증한다. H2/단위 테스트만으로 이 gate를
 대체하지 않는다.
+
+artifact 기본값은 아래의 엄격한 부등식을 만족한다.
+
+```text
+FCM 5s(connect) + 30s(read) + 5s(write) = 40s
+40s < provider max 60s < dispatch lease 600s
+registration/ownership-transfer wait 70s > provider max 60s
+```
+
+firebase-admin 9.8.0의 단일 FCM 요청은 HTTP 503을 최대 네 번 재시도하고 각
+`Retry-After`를 최대 60초까지 허용한다. 시작 검증은 고정된 SDK 계약의 최악 예산도
+`(connect + read + write) * 5 + 60s * 4 = 440s < dispatch lease 600s`인지 확인한다.
+ownership-transfer wait가 먼저 끝나면 등록 요청은 fail-closed로 실패할 뿐 활성 lease를
+넘어 소유권을 이전하지 않는다. firebase-admin 버전을 올릴 때는 retry 상수, startup
+invariant, 느린-provider staging gate를 함께 갱신하지 않으면 배포하지 않는다.
+
+각 값은 `FIREBASE_CONNECT_TIMEOUT_MILLIS`, `FIREBASE_READ_TIMEOUT_MILLIS`,
+`FIREBASE_WRITE_TIMEOUT_MILLIS`, `NOTIFICATION_PUSH_PROVIDER_MAX_CALL_SECONDS`,
+`NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_SECONDS`,
+`NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_WAIT_MILLIS`로 설정한다. 등호도 허용하지 않으며,
+음수·0 또는 위 순서를 깨는 환경 변수 조합은 Firebase credential/provider 초기화 전에
+startup을 실패시킨다. staging에서는 배포 artifact의 resolved configuration이 정확히
+`5000/30000/5000ms`, `60/600s`, `70000ms`인지 먼저 확인한다.
 
 ## 6. Rollback policy
 

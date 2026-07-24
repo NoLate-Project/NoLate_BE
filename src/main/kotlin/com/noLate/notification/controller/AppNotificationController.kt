@@ -67,26 +67,41 @@ class AppNotificationController(
     fun markRead(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable notificationId: Long,
-    ): ApiResponse<AppNotificationResponse> =
-        ApiResponse.success(
-            appNotificationService
-                .markRead(requireMemberId(principal), notificationId)
-                .toResponse()
+    ): ApiResponse<AppNotificationResponse> {
+        val authenticated = requirePrincipal(principal)
+        return ApiResponse.success(
+            appNotificationService.markRead(
+                memberId = authenticated.id,
+                notificationId = notificationId,
+                presentedSessionGeneration = requireSessionGeneration(authenticated),
+            ).toResponse()
         )
+    }
 
     @Operation(summary = "내 앱 알림 모두 읽음 처리")
     @PatchMapping("/read-all")
     fun markAllRead(
         @AuthenticationPrincipal principal: MemberPrincipal?,
-    ): ApiResponse<AppNotificationMarkAllReadResponse> =
-        ApiResponse.success(
+    ): ApiResponse<AppNotificationMarkAllReadResponse> {
+        val authenticated = requirePrincipal(principal)
+        return ApiResponse.success(
             AppNotificationMarkAllReadResponse(
-                updatedCount = appNotificationService.markAllRead(requireMemberId(principal))
+                updatedCount = appNotificationService.markAllRead(
+                    memberId = authenticated.id,
+                    presentedSessionGeneration = requireSessionGeneration(authenticated),
+                )
             )
         )
+    }
 
     private fun requireMemberId(principal: MemberPrincipal?): Long =
         principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+    private fun requirePrincipal(principal: MemberPrincipal?): MemberPrincipal =
+        principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+    private fun requireSessionGeneration(principal: MemberPrincipal): Long =
+        principal.accessTokenSessionGeneration ?: throw BusinessException(ErrorCode.INVALID_TOKEN)
 
     private fun AppNotification.toResponse(): AppNotificationResponse =
         AppNotificationResponse(

@@ -120,7 +120,10 @@ class MemberController(
     fun completeCuration(
         @AuthenticationPrincipal principal: MemberPrincipal?,
     ): ApiResponse<CurationStatusResponse> {
-        val completed = memberUseCase.completeCuration(requireMemberId(principal))
+        val completed = memberUseCase.completeCuration(
+            memberId = requireMemberId(principal),
+            presentedSessionGeneration = requireSessionGeneration(principal),
+        )
         return ApiResponse.success(CurationStatusResponse(curationCompleted = completed))
     }
 
@@ -129,7 +132,10 @@ class MemberController(
     fun getMyProfile(
         @AuthenticationPrincipal principal: MemberPrincipal?,
     ): ApiResponse<MemberProfileDto> {
-        val result = memberUseCase.getMyProfile(requireMemberId(principal))
+        val result = memberUseCase.getMyProfile(
+            memberId = requireMemberId(principal),
+            presentedSessionGeneration = requireSessionGeneration(principal),
+        )
         return ApiResponse.success(result)
     }
 
@@ -148,6 +154,7 @@ class MemberController(
                 imgId = request.imgId,
                 intro = request.intro,
             ),
+            presentedSessionGeneration = requireSessionGeneration(principal),
         )
         return ApiResponse.success(result)
     }
@@ -162,6 +169,7 @@ class MemberController(
             memberId = requireMemberId(principal),
             currentPassword = request.currentPassword,
             newPassword = request.newPassword,
+            presentedSessionGeneration = requireSessionGeneration(principal),
         )
         return ApiResponse.success(Unit)
     }
@@ -188,7 +196,9 @@ class MemberController(
 
     private fun requireSessionGeneration(principal: MemberPrincipal?): Long =
         principal?.accessTokenSessionGeneration
-            ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+            ?: throw BusinessException(
+                if (principal == null) ErrorCode.UNAUTHORIZED else ErrorCode.INVALID_TOKEN,
+            )
 }
 
 data class SignUpRequest(

@@ -20,8 +20,10 @@ import com.noLate.notification.application.service.PushEventOutboxWriter
 import com.noLate.notification.application.service.PushOutboxDispatchCoordinator
 import com.noLate.notification.application.service.PushOutboxDispatchWorker
 import com.noLate.notification.application.service.PushOutboxDispatchWriter
+import com.noLate.notification.application.service.PushRecipientAuthorizationValidator
 import com.noLate.notification.application.service.PushTokenProviderLeaseService
 import com.noLate.notification.application.service.PushTokenProviderLeaseWriter
+import com.noLate.notification.application.service.PushTokenProviderLeaseOutcome
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.PushDeliveryStatus
@@ -35,6 +37,28 @@ import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.notification.support.registerAuthenticatedPushToken
 import com.noLate.notification.support.ensureActivePushMember
 import com.noLate.schedule.domain.ScheduleShareResourceType
+import com.noLate.schedule.domain.ScheduleCalendar
+import com.noLate.schedule.domain.ScheduleCalendarMember
+import com.noLate.schedule.domain.ScheduleCalendarRole
+import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleDepartureStatus
+import com.noLate.schedule.domain.ScheduleRouteSetupReminder
+import com.noLate.schedule.domain.ScheduleShare
+import com.noLate.schedule.domain.ScheduleShareContentMode
+import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.ScheduleTravelPlan
+import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
+import com.noLate.schedule.domain.ScheduleType
+import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
+import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
+import com.noLate.schedule.infrastructure.ScheduleShareRepository
+import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -85,6 +109,10 @@ import java.util.concurrent.atomic.AtomicInteger
     PushTokenProviderLeaseWriter::class,
     PushOutboxDispatchWorker::class,
     AccountCleanupService::class,
+    ScheduleAccessPolicy::class,
+    RouteSetupReminderPolicy::class,
+    SchedulePushSourceFreshnessValidator::class,
+    ScheduleTravelAccessCleanupService::class,
     ScheduleSharePushNotificationListener::class,
     ScheduleDeparturePushNotificationListener::class,
     DurableScheduleNotificationOutboxTestConfig::class,
@@ -112,8 +140,11 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
     private val historyRepository: PushSendHistoryRepository,
     private val tokenService: NotificationTokenService,
     private val shareListener: ScheduleSharePushNotificationListener,
+    private val pushEventOutboxService: PushEventOutboxService,
     private val dispatchWorker: PushOutboxDispatchWorker,
     private val notificationUseCase: NotificationUseCase,
+    private val pushDeliveryService: PushDeliveryService,
+    private val pushTokenProviderLeaseService: PushTokenProviderLeaseService,
     private val dispatchCoordinator: PushOutboxDispatchCoordinator,
     private val pushClient: DurableOutboxRecordingPushClient,
     private val clock: Clock,
@@ -121,6 +152,14 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
     private val jdbcTemplate: JdbcTemplate,
     private val accountCleanupService: AccountCleanupService,
     private val memberRepository: MemberRepository,
+    private val calendarRepository: ScheduleCalendarRepository,
+    private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val scheduleRepository: ScheduleRepository,
+    private val scheduleShareRepository: ScheduleShareRepository,
+    private val routeSetupReminderRepository: ScheduleRouteSetupReminderRepository,
+    private val travelPlanRepository: ScheduleTravelPlanRepository,
+    private val departureStatusRepository: ScheduleDepartureStatusRepository,
+    private val travelAccessCleanupService: ScheduleTravelAccessCleanupService,
 ) {
     @BeforeEach
     fun clean() {
@@ -129,6 +168,13 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
         historyRepository.deleteAll()
         notificationRepository.deleteAll()
         tokenRepository.deleteAll()
+        departureStatusRepository.deleteAll()
+        travelPlanRepository.deleteAll()
+        routeSetupReminderRepository.deleteAll()
+        scheduleShareRepository.deleteAll()
+        scheduleRepository.deleteAll()
+        calendarMemberRepository.deleteAll()
+        calendarRepository.deleteAll()
         listOf(71L, 73L, 74L, 75L, 85L).forEach {
             ensureActivePushMember(jdbcTemplate, it)
         }
@@ -454,6 +500,258 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
     }
 
     @ParameterizedTest
+    @EnumSource(CalendarPushGrantRevocation::class)
+    fun `calendar share enqueue 뒤 membership 또는 calendar가 회수되면 redrive는 provider 없이 terminal이다`(
+        revocation: CalendarPushGrantRevocation,
+    ) {
+        val memberId = 9_200L + revocation.ordinal
+        val token = "calendar-revoked-${revocation.name.lowercase()}-token"
+        register(memberId, "calendar-revoked-${revocation.name.lowercase()}-device", token)
+        val calendarId = publishCalendarShare(memberId, "calendar-revoked-${revocation.name}")
+
+        val source = notificationRepository.findAllByMemberIdOrderByIdDesc(memberId).single()
+        val delivery = deliveryRepository
+            .findAllByMemberIdAndEventKeyOrderByIdAsc(memberId, source.logicalEventKey)
+            .single()
+        assertEquals(calendarId, source.calendarId)
+        assertEquals(calendarId, delivery.calendarId)
+        assertEquals(calendarId.toString(), objectMapper.readTree(source.dataJson)["calendarId"].asText())
+
+        revokeCalendarGrant(calendarId, memberId, revocation)
+
+        assertEquals(0, dispatchWorker.runDueEvents(NOW))
+        assertEquals(0, pushClient.attempts(token))
+        assertTrue(deliveryRepository.findById(requireNotNull(delivery.id)).isEmpty)
+        assertTrue(notificationRepository.findById(requireNotNull(source.id)).isEmpty)
+    }
+
+    @Test
+    fun `calendar membership이 delivery claim 뒤 회수되면 provider lease가 최종 차단한다`() {
+        val memberId = 9_210L
+        val token = "calendar-after-claim-token"
+        register(memberId, "calendar-after-claim-device", token)
+        val calendarId = publishCalendarShare(memberId, "calendar-after-claim")
+        val source = notificationRepository.findAllByMemberIdOrderByIdDesc(memberId).single()
+        val delivery = deliveryRepository
+            .findAllByMemberIdAndEventKeyOrderByIdAsc(memberId, source.logicalEventKey)
+            .single()
+
+        val claim = pushDeliveryService.claim(
+            memberId = memberId,
+            eventKey = source.logicalEventKey,
+            deliveryId = requireNotNull(delivery.id),
+        )
+        assertEquals(
+            com.noLate.notification.application.service.PushDeliveryClaimOutcome.SEND,
+            claim.outcome,
+        )
+        // Deliberately bypass ScheduleTravelAccessCleanupService. This proves the provider-boundary
+        // typed calendar authorization is an independent final fence after a delivery was claimed.
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            val membership = requireNotNull(
+                calendarMemberRepository.findForUpdate(calendarId, memberId)
+            )
+            membership.remove()
+            calendarMemberRepository.saveAndFlush(membership)
+        }
+
+        val result = pushTokenProviderLeaseService.sendIfOwned(
+            memberId = memberId,
+            claim = claim,
+            title = source.title,
+            body = source.body,
+            data = objectMapper.readValue(
+                source.dataJson,
+                objectMapper.typeFactory.constructMapType(
+                    LinkedHashMap::class.java,
+                    String::class.java,
+                    String::class.java,
+                ),
+            ),
+        )
+
+        assertEquals(PushTokenProviderLeaseOutcome.SUPERSEDED, result.outcome)
+        assertEquals(0, pushClient.attempts(token))
+        assertEquals(
+            PushDeliveryStatus.SUPERSEDED,
+            deliveryRepository.findById(requireNotNull(delivery.id)).orElseThrow().status,
+        )
+        assertTrue(notificationRepository.findById(requireNotNull(source.id)).isPresent)
+        assertEquals(1, dispatchWorker.runDueEvents(NOW))
+        assertEquals(
+            PushOutboxDispatchStatus.COMPLETED,
+            notificationRepository.findById(requireNotNull(source.id)).orElseThrow().dispatchStatus,
+        )
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+        value = DurableLateProviderOutcome::class,
+        names = ["SUCCESS", "CONFIRMED_FAILURE"],
+    )
+    fun `calendar provider 결과가 revoke cleanup 뒤 늦게 돌아와도 history를 재생성하지 않는다`(
+        outcome: DurableLateProviderOutcome,
+    ) {
+        val memberId = 9_220L + outcome.ordinal
+        val token = "calendar-late-${outcome.name.lowercase()}-token"
+        register(memberId, "calendar-late-${outcome.name.lowercase()}-device", token)
+        val calendarId = publishCalendarShare(memberId, "calendar-late-${outcome.name}")
+        val providerGate = pushClient.blockThen(token, outcome)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        executor.submit {
+            runCatching { dispatchWorker.runDueEvents(NOW) }
+                .onFailure(failures::add)
+        }
+        assertTrue(providerGate.entered.await(5, TimeUnit.SECONDS))
+        assertEquals(PushDeliveryStatus.DISPATCHING, deliveryRepository.findAll().single().status)
+
+        // The provider request cannot be recalled, but cleanup wins the database linearization.
+        // Late success/failure history must revalidate the typed calendar grant and remain a no-op.
+        revokeCalendarGrant(calendarId, memberId, CalendarPushGrantRevocation.REMOVED)
+        assertTrue(notificationRepository.findAllByMemberIdOrderByIdDesc(memberId).isEmpty())
+        assertTrue(deliveryRepository.findAll().none { it.memberId == memberId })
+        assertTrue(historyRepository.findAll().none { it.memberId == memberId })
+
+        providerGate.release.countDown()
+        executor.shutdown()
+        assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
+        assertEquals(1, pushClient.attempts(token))
+        assertTrue(notificationRepository.findAllByMemberIdOrderByIdDesc(memberId).isEmpty())
+        assertTrue(deliveryRepository.findAll().none { it.memberId == memberId })
+        assertTrue(historyRepository.findAll().none { it.memberId == memberId })
+        assertEquals(0, dispatchWorker.runDueEvents(NOW.plusSeconds(1)))
+    }
+
+    @ParameterizedTest
+    @EnumSource(RouteSetupPushInvalidation::class)
+    fun `route setup enqueue 뒤 계획 완료 또는 의미 변경은 provider 없이 terminal이다`(
+        invalidation: RouteSetupPushInvalidation,
+    ) {
+        val memberId = 9_300L + invalidation.ordinal
+        val token = "route-setup-${invalidation.name.lowercase()}-token"
+        register(memberId, "route-setup-${invalidation.name.lowercase()}-device", token)
+        val fixture = enqueueRouteSetupReminder(memberId)
+
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            when (invalidation) {
+                RouteSetupPushInvalidation.PLAN_COMPLETED -> {
+                    travelPlanRepository.saveAndFlush(
+                        ScheduleTravelPlan(
+                            scheduleId = fixture.scheduleId,
+                            memberId = memberId,
+                            travelMinutes = 25,
+                            travelMode = ScheduleTravelMode.TRANSIT,
+                            originName = "현재 출발지",
+                            originLat = 37.50,
+                            originLng = 127.00,
+                            scheduleFingerprint = fixture.scheduleFingerprint,
+                        )
+                    )
+                }
+
+                RouteSetupPushInvalidation.SCHEDULE_EDITED -> {
+                    val schedule = scheduleRepository.findById(fixture.scheduleId).orElseThrow()
+                    schedule.startAt = schedule.startAt.plusSeconds(60)
+                    scheduleRepository.saveAndFlush(schedule)
+                }
+            }
+        }
+
+        assertEquals(1, dispatchWorker.runDueEvents(NOW))
+        assertEquals(0, pushClient.attempts(token))
+        assertEquals(
+            PushDeliveryStatus.SUPERSEDED,
+            deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(
+                memberId,
+                fixture.logicalEventKey,
+            ).single().status,
+        )
+        assertEquals(
+            PushOutboxDispatchStatus.COMPLETED,
+            notificationRepository.findByMemberIdAndLogicalEventKey(
+                memberId,
+                fixture.logicalEventKey,
+            )?.dispatchStatus,
+        )
+    }
+
+    @Test
+    fun `departure nudge enqueue 뒤 target이 출발하면 drain은 provider를 호출하지 않는다`() {
+        val memberId = 9_310L
+        val requesterMemberId = 109_310L
+        val token = "departed-target-nudge-token"
+        ensureActivePushMember(jdbcTemplate, requesterMemberId)
+        register(memberId, "departed-target-nudge-device", token)
+        val scheduleId = requireNotNull(
+            TransactionTemplate(transactionManager).execute {
+                val schedule = scheduleRepository.saveAndFlush(
+                    Schedule(
+                        memberId = requesterMemberId,
+                        title = "출발 확인 source freshness",
+                        startAt = NOW.plusSeconds(3_600),
+                        endAt = NOW.plusSeconds(7_200),
+                        scheduleType = ScheduleType.ROUTE,
+                    )
+                )
+                val persistedScheduleId = requireNotNull(schedule.id)
+                scheduleShareRepository.saveAndFlush(
+                    ScheduleShare(
+                        scheduleId = persistedScheduleId,
+                        ownerMemberId = requesterMemberId,
+                        targetMemberId = memberId,
+                        permission = ScheduleSharePermission.VIEWER,
+                        contentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+                    )
+                )
+                persistedScheduleId
+            }
+        )
+        val prepared = requireNotNull(
+            TransactionTemplate(transactionManager).execute {
+                pushEventOutboxService.enqueueDurable(
+                    memberId = memberId,
+                    title = "출발 확인 요청",
+                    body = "이미 출발한 대상에게는 도착하면 안 됩니다.",
+                    data = mapOf(
+                        "type" to "SCHEDULE_DEPARTURE_NUDGE",
+                        "scheduleId" to scheduleId.toString(),
+                        "requestedByMemberId" to requesterMemberId.toString(),
+                    ),
+                    deduplicationKey =
+                        "schedule-departure-nudge:$scheduleId:$requesterMemberId:$memberId:test",
+                )
+            }
+        )
+        departureStatusRepository.saveAndFlush(
+            ScheduleDepartureStatus(
+                scheduleId = scheduleId,
+                memberId = memberId,
+                departedAt = NOW.minusSeconds(1),
+            )
+        )
+
+        assertEquals(1, dispatchWorker.runDueEvents(NOW))
+        assertEquals(0, pushClient.attempts(token))
+        assertEquals(
+            PushDeliveryStatus.SUPERSEDED,
+            deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(
+                memberId,
+                prepared.logicalEventKey,
+            ).single().status,
+        )
+        assertEquals(
+            PushOutboxDispatchStatus.COMPLETED,
+            notificationRepository.findByMemberIdAndLogicalEventKey(
+                memberId,
+                prepared.logicalEventKey,
+            )?.dispatchStatus,
+        )
+    }
+
+    @ParameterizedTest
     @EnumSource(DurableLateProviderOutcome::class)
     fun `provider result가 탈퇴 뒤 늦게 돌아와도 notification rows를 재생성하지 않는다`(
         outcome: DurableLateProviderOutcome,
@@ -555,6 +853,138 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
         }
     }
 
+    private fun publishCalendarShare(memberId: Long, eventId: String): Long {
+        val ownerMemberId = memberId + 100_000L
+        ensureActivePushMember(jdbcTemplate, ownerMemberId)
+        return requireNotNull(
+            TransactionTemplate(transactionManager).execute {
+                val calendar = calendarRepository.saveAndFlush(
+                    ScheduleCalendar(
+                        ownerMemberId = ownerMemberId,
+                        title = "frozen shared calendar",
+                    )
+                )
+                val calendarId = requireNotNull(calendar.id)
+                calendarMemberRepository.saveAndFlush(
+                    ScheduleCalendarMember(
+                        calendarId = calendarId,
+                        memberId = memberId,
+                        role = ScheduleCalendarRole.VIEWER,
+                    )
+                )
+                publisher.publishEvent(
+                    ScheduleShareGrantedEvent(
+                        targetMemberId = memberId,
+                        resourceType = ScheduleShareResourceType.CALENDAR,
+                        resourceId = calendarId,
+                        resourceTitle = calendar.title,
+                        notificationEventId = eventId,
+                    )
+                )
+                calendarId
+            }
+        )
+    }
+
+    private fun enqueueRouteSetupReminder(memberId: Long): RouteSetupPushFixture =
+        requireNotNull(
+            TransactionTemplate(transactionManager).execute {
+                val schedule = Schedule(
+                    memberId = memberId,
+                    title = "provider 전 경로 신선도",
+                    startAt = NOW.plusSeconds(24 * 60 * 60),
+                    endAt = NOW.plusSeconds(25 * 60 * 60),
+                    scheduleType = ScheduleType.ROUTE,
+                ).apply {
+                    updateRoute(
+                        travelMinutes = null,
+                        departAt = null,
+                        departedAt = null,
+                        travelMode = null,
+                        locationName = "목적지",
+                        originName = null,
+                        originAddress = null,
+                        originLat = null,
+                        originLng = null,
+                        destinationName = "목적지",
+                        destinationAddress = null,
+                        destinationLat = 37.55,
+                        destinationLng = 126.97,
+                        routeJson = null,
+                        notificationEnabled = false,
+                        notificationLeadMinutes = null,
+                        notificationIntervalMinutes = null,
+                    )
+                }
+                val savedSchedule = scheduleRepository.saveAndFlush(schedule)
+                val scheduleId = requireNotNull(savedSchedule.id)
+                val fingerprint = ScheduleTravelPlanFingerprint.calculate(savedSchedule)
+                val marker = routeSetupReminderRepository.saveAndFlush(
+                    ScheduleRouteSetupReminder(
+                        scheduleId = scheduleId,
+                        memberId = memberId,
+                        scheduleFingerprint = fingerprint,
+                        nextAttemptAt = NOW,
+                    )
+                )
+                marker.markSent(NOW)
+                routeSetupReminderRepository.saveAndFlush(marker)
+                val prepared = pushEventOutboxService.enqueueDurable(
+                    memberId = memberId,
+                    title = "경로를 설정해주세요",
+                    body = "현재 일정에 필요한 경로를 설정해주세요.",
+                    data = mapOf(
+                        "type" to "ROUTE_SETUP_REMINDER",
+                        "scheduleId" to scheduleId.toString(),
+                        "scheduleIds" to scheduleId.toString(),
+                        "count" to "1",
+                        "routeSetupReminderId" to requireNotNull(marker.id).toString(),
+                        "routeSetupScheduleFingerprint" to fingerprint,
+                    ),
+                    deduplicationKey =
+                        "route-setup:$memberId:marker:${requireNotNull(marker.id)}",
+                )
+                RouteSetupPushFixture(
+                    scheduleId = scheduleId,
+                    scheduleFingerprint = fingerprint,
+                    logicalEventKey = prepared.logicalEventKey,
+                )
+            }
+        )
+
+    private fun revokeCalendarGrant(
+        calendarId: Long,
+        memberId: Long,
+        revocation: CalendarPushGrantRevocation,
+    ) {
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            when (revocation) {
+                CalendarPushGrantRevocation.REMOVED -> {
+                    val membership = requireNotNull(
+                        calendarMemberRepository.findForUpdate(calendarId, memberId)
+                    )
+                    membership.remove()
+                    calendarMemberRepository.saveAndFlush(membership)
+                }
+
+                CalendarPushGrantRevocation.LEFT -> {
+                    val membership = requireNotNull(
+                        calendarMemberRepository.findForUpdate(calendarId, memberId)
+                    )
+                    membership.leave()
+                    calendarMemberRepository.saveAndFlush(membership)
+                }
+
+                CalendarPushGrantRevocation.ARCHIVED -> {
+                    val calendar = requireNotNull(calendarRepository.findActiveForUpdate(calendarId))
+                    calendar.archive()
+                    calendarRepository.saveAndFlush(calendar)
+                }
+            }
+            travelAccessCleanupService.cancelRevokedForCalendar(calendarId, listOf(memberId))
+        }
+    }
+
     private fun newWorker(): PushOutboxDispatchWorker =
         PushOutboxDispatchWorker(
             notificationUseCase = notificationUseCase,
@@ -585,7 +1015,74 @@ class DurableScheduleNotificationOutboxTestConfig {
     @Bean
     fun durableOutboxPushClient(): DurableOutboxRecordingPushClient =
         DurableOutboxRecordingPushClient()
+
+    /**
+     * Existing tests in this slice intentionally use synthetic schedule/category ids. Keep those
+     * fixtures accepted while exercising the production shared-calendar validator verbatim.
+     */
+    @Bean
+    fun durableOutboxRecipientAuthorizationValidator(
+        scheduleRepository: ScheduleRepository,
+        scheduleShareRepository: ScheduleShareRepository,
+        categoryRepository: ScheduleCategoryRepository,
+        categoryShareRepository: ScheduleCategoryShareRepository,
+        calendarRepository: ScheduleCalendarRepository,
+        calendarMemberRepository: ScheduleCalendarMemberRepository,
+    ): PushRecipientAuthorizationValidator {
+        val accessPolicy = ScheduleAccessPolicy(
+            scheduleShareRepository = scheduleShareRepository,
+            categoryShareRepository = categoryShareRepository,
+            calendarRepository = calendarRepository,
+            calendarMemberRepository = calendarMemberRepository,
+            categoryRepository = categoryRepository,
+        )
+        val delegate = SchedulePushRecipientAccessValidator(
+            scheduleRepository = scheduleRepository,
+            accessPolicy = accessPolicy,
+            categoryRepository = categoryRepository,
+            categoryShareRepository = categoryShareRepository,
+            calendarRepository = calendarRepository,
+            calendarMemberRepository = calendarMemberRepository,
+        )
+        return object : PushRecipientAuthorizationValidator {
+            override fun canDispatch(
+                memberId: Long,
+                scheduleId: Long?,
+                categoryId: Long?,
+                payloadType: String?,
+                calendarId: Long?,
+            ): Boolean =
+                if (calendarId != null || payloadType == "CALENDAR_SHARE_RECEIVED") {
+                    delegate.canDispatch(
+                        memberId = memberId,
+                        scheduleId = scheduleId,
+                        categoryId = categoryId,
+                        payloadType = payloadType,
+                        calendarId = calendarId,
+                    )
+                } else {
+                    true
+                }
+        }
+    }
 }
+
+enum class CalendarPushGrantRevocation {
+    REMOVED,
+    LEFT,
+    ARCHIVED,
+}
+
+enum class RouteSetupPushInvalidation {
+    PLAN_COMPLETED,
+    SCHEDULE_EDITED,
+}
+
+data class RouteSetupPushFixture(
+    val scheduleId: Long,
+    val scheduleFingerprint: String,
+    val logicalEventKey: String,
+)
 
 data class DurableOutboxPushCall(
     val title: String,

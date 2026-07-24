@@ -28,6 +28,23 @@ interface PushSendHistoryRepository : JpaRepository<PushSendHistory, Long> {
         memberIds: Collection<Long>,
     ): List<PushSendHistory>
 
+    fun findAllByMemberIdInAndLogicalEventKeyIn(
+        memberIds: Collection<Long>,
+        logicalEventKeys: Collection<String>,
+    ): List<PushSendHistory>
+
+    fun findAllByCategoryIdAndMemberIdInAndPayloadType(
+        categoryId: Long,
+        memberIds: Collection<Long>,
+        payloadType: String,
+    ): List<PushSendHistory>
+
+    fun findAllByCalendarIdAndMemberIdInAndPayloadType(
+        calendarId: Long,
+        memberIds: Collection<Long>,
+        payloadType: String,
+    ): List<PushSendHistory>
+
     fun findAllByMemberIdOrderBySentAtDesc(memberId: Long, pageable: Pageable): List<PushSendHistory>
 
     fun findAllByScheduleIdOrderBySentAtDesc(scheduleId: Long, pageable: Pageable): List<PushSendHistory>

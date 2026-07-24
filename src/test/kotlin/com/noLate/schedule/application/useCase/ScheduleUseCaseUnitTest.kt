@@ -13,6 +13,7 @@ import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleNotificationActionIdempotencyService
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
+import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
@@ -69,6 +70,9 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var memberService: MemberService
 
+    @Mock
+    lateinit var scheduleTravelAccessCleanupService: ScheduleTravelAccessCleanupService
+
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
     private val sessionGeneration = 11L
 
@@ -86,6 +90,7 @@ class ScheduleUseCaseUnitTest {
             scheduleTravelPlanService = scheduleTravelPlanService,
             notificationActionIdempotencyService = notificationActionIdempotencyService,
             memberService = memberService,
+            scheduleTravelAccessCleanupService = scheduleTravelAccessCleanupService,
         )
     }
 
@@ -361,6 +366,54 @@ class ScheduleUseCaseUnitTest {
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, 2L)
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, 3L)
         verify(schedulePushJobService).registerFromScheduleDto(memberId, updated)
+    }
+
+    @Test
+    fun `calendar detach freezes the previous audience in the edit fence and cleans revoked members`() {
+        val ownerMemberId = 1L
+        val calendarMemberId = 2L
+        val scheduleId = 10L
+        val calendarId = 77L
+        val current = scheduleDto().copy(
+            id = scheduleId,
+            ownerMemberId = ownerMemberId,
+            calendarId = calendarId,
+        )
+        val request = scheduleDto(title = "detached").copy(calendarId = null)
+        val updated = request.copy(id = scheduleId, ownerMemberId = ownerMemberId)
+        val lockedIds = setOf(ownerMemberId, calendarMemberId)
+
+        whenever(scheduleService.getScheduleDetail(ownerMemberId, scheduleId)).thenReturn(current)
+        whenever(scheduleTravelPlanService.findActiveCalendarAudienceMemberIds(calendarId))
+            .thenReturn(lockedIds)
+        whenever(scheduleTravelPlanService.findNotificationEnabledMemberIds(scheduleId))
+            .thenReturn(emptySet())
+        whenever(
+            schedulePushJobService.lockForScheduleEdit(
+                scheduleId,
+                lockedIds,
+                ownerMemberId,
+                sessionGeneration,
+            )
+        ).thenReturn(ScheduleEditMemberFence(lockedIds))
+        whenever(scheduleService.updateSchedule(ownerMemberId, scheduleId, request))
+            .thenReturn(updated)
+
+        scheduleUseCase.updateSchedule(
+            ownerMemberId,
+            scheduleId,
+            request,
+            sessionGeneration,
+        )
+
+        verify(schedulePushJobService).lockForScheduleEdit(
+            scheduleId,
+            lockedIds,
+            ownerMemberId,
+            sessionGeneration,
+        )
+        verify(scheduleTravelAccessCleanupService)
+            .cancelRevokedForSchedule(scheduleId, setOf(calendarMemberId))
     }
 
     @Test

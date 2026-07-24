@@ -43,6 +43,10 @@ import java.time.Instant
             name = "idx_app_notifications_member_read_at",
             columnList = "member_id, read_at",
         ),
+        Index(
+            name = "idx_app_notifications_calendar_id",
+            columnList = "calendar_id",
+        ),
     ],
 )
 @DynamicUpdate
@@ -73,6 +77,13 @@ class AppNotification(
 
     @Column(name = "category_id")
     val categoryId: Long? = null,
+
+    /**
+     * Shared-calendar notification authorization must not depend on reparsing mutable JSON.
+     * The immutable source row keeps the granted calendar identity through every redrive.
+     */
+    @Column(name = "calendar_id")
+    val calendarId: Long? = null,
 
     @Column(nullable = false, length = 200)
     val title: String,

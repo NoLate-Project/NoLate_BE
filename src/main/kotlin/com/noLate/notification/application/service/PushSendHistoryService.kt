@@ -31,6 +31,10 @@ class PushSendHistoryService(
         body: String,
         data: Map<String, String>,
         fcmMessageId: String,
+        logicalEventKey: String? = data["logicalEventKey"],
+        scheduleId: Long? = data["scheduleId"]?.toLongOrNull(),
+        categoryId: Long? = data["categoryId"]?.toLongOrNull(),
+        calendarId: Long? = data["calendarId"]?.toLongOrNull(),
     ): PushSendHistory? = save(
         memberId = memberId,
         token = token,
@@ -39,6 +43,10 @@ class PushSendHistoryService(
         data = data,
         status = PushSendStatus.SUCCESS,
         fcmMessageId = fcmMessageId,
+        logicalEventKey = logicalEventKey,
+        scheduleId = scheduleId,
+        categoryId = categoryId,
+        calendarId = calendarId,
     )
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -51,6 +59,10 @@ class PushSendHistoryService(
         status: PushSendStatus,
         errorCode: String,
         errorMessage: String?,
+        logicalEventKey: String? = data["logicalEventKey"],
+        scheduleId: Long? = data["scheduleId"]?.toLongOrNull(),
+        categoryId: Long? = data["categoryId"]?.toLongOrNull(),
+        calendarId: Long? = data["calendarId"]?.toLongOrNull(),
     ): PushSendHistory? = save(
         memberId = memberId,
         token = token,
@@ -60,6 +72,10 @@ class PushSendHistoryService(
         status = status,
         errorCode = errorCode,
         errorMessage = errorMessage?.redact(token.token),
+        logicalEventKey = logicalEventKey,
+        scheduleId = scheduleId,
+        categoryId = categoryId,
+        calendarId = calendarId,
     )
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -68,6 +84,10 @@ class PushSendHistoryService(
         title: String,
         body: String,
         data: Map<String, String>,
+        logicalEventKey: String? = data["logicalEventKey"],
+        scheduleId: Long? = data["scheduleId"]?.toLongOrNull(),
+        categoryId: Long? = data["categoryId"]?.toLongOrNull(),
+        calendarId: Long? = data["calendarId"]?.toLongOrNull(),
     ): PushSendHistory? = save(
         memberId = memberId,
         token = null,
@@ -77,6 +97,10 @@ class PushSendHistoryService(
         status = PushSendStatus.NO_TOKEN,
         errorCode = "NO_TOKEN",
         errorMessage = "등록된 푸시 토큰이 없습니다.",
+        logicalEventKey = logicalEventKey,
+        scheduleId = scheduleId,
+        categoryId = categoryId,
+        calendarId = calendarId,
     )
 
     fun getRecentByMember(memberId: Long, limit: Int = 50): List<PushSendHistory> =
@@ -95,6 +119,10 @@ class PushSendHistoryService(
         fcmMessageId: String? = null,
         errorCode: String? = null,
         errorMessage: String? = null,
+        logicalEventKey: String?,
+        scheduleId: Long?,
+        categoryId: Long?,
+        calendarId: Long?,
     ): PushSendHistory? {
         // member is the first lock in both notification writers and withdrawal. A provider result
         // that returns after account cleanup therefore cannot recreate private history payloads.
@@ -102,9 +130,10 @@ class PushSendHistoryService(
         if (
             recipientAuthorizationValidator?.canDispatch(
                 memberId = memberId,
-                scheduleId = data["scheduleId"]?.toLongOrNull(),
-                categoryId = data["categoryId"]?.toLongOrNull(),
+                scheduleId = scheduleId,
+                categoryId = categoryId,
                 payloadType = data["type"],
+                calendarId = calendarId,
             ) == false
         ) {
             return null
@@ -114,7 +143,10 @@ class PushSendHistoryService(
             deviceTokenId = token?.id,
             deviceId = token?.deviceId,
             platform = token?.platform ?: PushPlatform.UNKNOWN,
-            scheduleId = data["scheduleId"]?.toLongOrNull(),
+            scheduleId = scheduleId,
+            logicalEventKey = logicalEventKey?.take(100),
+            categoryId = categoryId,
+            calendarId = calendarId,
             payloadType = data["type"],
             title = title,
             body = body,

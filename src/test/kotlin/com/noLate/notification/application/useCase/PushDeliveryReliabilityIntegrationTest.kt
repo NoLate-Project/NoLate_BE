@@ -6,6 +6,8 @@ import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.ConfirmedPushDeliveryException
 import com.noLate.notification.application.PushClient
 import com.noLate.notification.application.PushSendResult
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationWriter
 import com.noLate.notification.application.service.NotificationTokenService
@@ -766,6 +768,154 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         val history = historyRepository.findAll().single()
         assertEquals(PushSendStatus.INVALID_TOKEN, history.status)
         assertFalse(history.errorMessage.orEmpty().contains(token))
+    }
+
+    @Test
+    fun `filter를 지난 test send는 새 session과 token 등록 뒤 outbox write 전에 거절된다`() {
+        val memberId = 531L
+        ensureActivePushMember(jdbcTemplate, memberId)
+        val filterPassed = CountDownLatch(1)
+        val resumeMutation = CountDownLatch(1)
+        val completed = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        executor.submit {
+            filterPassed.countDown()
+            check(resumeMutation.await(10, TimeUnit.SECONDS))
+            runCatching {
+                notificationUseCase.sendAuthenticatedToMember(
+                    memberId = memberId,
+                    presentedSessionGeneration = 0L,
+                    title = "stale private title",
+                    body = "stale private body",
+                    data = mapOf("type" to "TEST"),
+                )
+            }.onFailure(failure::set)
+            completed.countDown()
+        }
+
+        try {
+            assertTrue(filterPassed.await(10, TimeUnit.SECONDS))
+            assertEquals(
+                1,
+                jdbcTemplate.update(
+                    "UPDATE `member` SET session_generation = 1 WHERE id = ?",
+                    memberId,
+                ),
+            )
+            tokenService.registerToken(
+                memberId = memberId,
+                deviceId = "g2-test-send-device",
+                platform = PushPlatform.ANDROID,
+                token = "g2-test-send-token",
+                accessTokenIssuedAt = Instant.parse("2026-07-24T03:00:00Z"),
+                accessTokenSessionGeneration = 1L,
+            )
+
+            resumeMutation.countDown()
+            assertTrue(completed.await(10, TimeUnit.SECONDS))
+
+            val rejected = failure.get()
+            assertTrue(rejected is BusinessException)
+            assertEquals(ErrorCode.INVALID_TOKEN, (rejected as BusinessException).errorCode)
+            assertTrue(inboxRepository.findAllByMemberIdOrderByIdDesc(memberId).isEmpty())
+            assertTrue(deliveryRepository.findAll().none { it.memberId == memberId })
+            assertTrue(historyRepository.findAll().none { it.memberId == memberId })
+            assertEquals(0, pushClient.attempts("g2-test-send-token"))
+        } finally {
+            resumeMutation.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `test send provider lease는 claim 뒤 바뀐 session을 최종 검증한다`() {
+        val memberId = 532L
+        register(memberId, "session-provider-device", "session-provider-token")
+        val gate = providerLeaseObserver.arm()
+        val completed = CountDownLatch(1)
+        val result = AtomicReference<NotificationSendResult?>()
+        val failure = AtomicReference<Throwable?>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        executor.submit {
+            runCatching {
+                notificationUseCase.sendAuthenticatedToMember(
+                    memberId = memberId,
+                    presentedSessionGeneration = 0L,
+                    title = "g1 private title",
+                    body = "g1 private body",
+                    data = mapOf("type" to "TEST"),
+                )
+            }.onSuccess(result::set).onFailure(failure::set)
+            completed.countDown()
+        }
+
+        try {
+            assertTrue(gate.beforeLease.await(10, TimeUnit.SECONDS))
+            assertEquals(
+                1,
+                jdbcTemplate.update(
+                    "UPDATE `member` SET session_generation = 1 WHERE id = ?",
+                    memberId,
+                ),
+            )
+            gate.allowLease.countDown()
+            assertTrue(completed.await(10, TimeUnit.SECONDS))
+
+            assertEquals(null, failure.get())
+            assertEquals(1, result.get()?.supersededCount)
+            assertEquals(0, pushClient.attempts("session-provider-token"))
+            assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(memberId).single().status)
+            assertEquals(
+                com.noLate.notification.domain.PushOutboxDispatchStatus.COMPLETED,
+                inboxRepository.findAllByMemberIdOrderByIdDesc(memberId).single().dispatchStatus,
+            )
+        } finally {
+            gate.allowLease.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `confirmed failure redrive도 source에 저장된 session generation을 복원한다`() {
+        val memberId = 533L
+        register(memberId, "session-redrive-device", "session-redrive-token")
+        pushClient.failOnce("session-redrive-token")
+
+        val first = notificationUseCase.sendAuthenticatedToMember(
+            memberId = memberId,
+            presentedSessionGeneration = 0L,
+            title = "g1 retry title",
+            body = "g1 retry body",
+            data = mapOf("type" to "TEST"),
+        )
+        assertEquals(1, first.retryableFailedCount)
+        val source = inboxRepository.findAllByMemberIdOrderByIdDesc(memberId).single()
+        assertTrue(source.deduplicationKey.orEmpty().startsWith("authenticated-push:v1:g0:"))
+
+        assertEquals(
+            1,
+            jdbcTemplate.update(
+                "UPDATE `member` SET session_generation = 1 WHERE id = ?",
+                memberId,
+            ),
+        )
+        val retried = notificationUseCase.redrivePersistedEvent(
+            memberId = memberId,
+            logicalEventKey = source.logicalEventKey,
+        )
+
+        assertEquals(1, retried.supersededCount)
+        assertEquals(1, pushClient.attempts("session-redrive-token"))
+        assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(memberId).single().status)
+        assertEquals(
+            com.noLate.notification.domain.PushOutboxDispatchStatus.COMPLETED,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(memberId).single().dispatchStatus,
+        )
     }
 
     private fun send(memberId: Long, key: String): NotificationSendResult {

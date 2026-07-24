@@ -53,15 +53,17 @@ class NotificationController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: SendTestNotificationRequest
     ): ApiResponse<NotificationSendResult> {
+        val authenticated = requirePrincipal(principal)
         // 인증된 공개 API는 테스트 발송도 recipient/member withdrawal fence와 frozen manifest를
         // 통과한다. 그래야 security filter 이후 탈퇴가 commit된 요청이 token을 다시 조회해
         // provider를 호출하거나 notification row를 재생성할 수 없다.
-        val result = notificationUseCase.sendToMember(
-            memberId = requireMemberId(principal),
+        val result = notificationUseCase.sendAuthenticatedToMember(
+            memberId = authenticated.id,
+            presentedSessionGeneration = authenticated.accessTokenSessionGeneration
+                ?: throw BusinessException(ErrorCode.INVALID_TOKEN),
             title = request.title,
             body = request.body,
             data = request.data ?: emptyMap(),
-            persistInInbox = true,
         )
         return ApiResponse.success(result)
     }
@@ -105,6 +107,9 @@ data class PushSendHistoryResponse(
     val deviceId: String?,
     val platform: PushPlatform,
     val scheduleId: Long?,
+    val logicalEventKey: String?,
+    val categoryId: Long?,
+    val calendarId: Long?,
     val payloadType: String?,
     val title: String,
     val body: String,
@@ -124,6 +129,9 @@ private fun PushSendHistory.toResponse(): PushSendHistoryResponse =
         deviceId = deviceId,
         platform = platform,
         scheduleId = scheduleId,
+        logicalEventKey = logicalEventKey,
+        categoryId = categoryId,
+        calendarId = calendarId,
         payloadType = payloadType,
         title = title,
         body = body,

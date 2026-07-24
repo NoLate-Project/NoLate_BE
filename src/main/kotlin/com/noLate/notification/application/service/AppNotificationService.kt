@@ -36,6 +36,8 @@ data class AppNotificationSnapshot(
     val createdAt: Instant,
     val deduplicationKey: String? = null,
     val scheduleId: Long? = null,
+    val categoryId: Long? = null,
+    val calendarId: Long? = null,
 )
 
 /**
@@ -49,6 +51,7 @@ data class AppNotificationSnapshot(
 class AppNotificationService(
     private val repository: AppNotificationRepository,
     private val writer: AppNotificationWriter,
+    private val memberRepository: MemberRepository,
     private val objectMapper: ObjectMapper,
     private val clock: Clock,
 ) {
@@ -100,6 +103,7 @@ class AppNotificationService(
             type = canonicalData["type"]?.trim()?.takeIf { it.isNotEmpty() }?.take(80) ?: "GENERAL",
             scheduleId = canonicalData["scheduleId"]?.toLongOrNull(),
             categoryId = canonicalData["categoryId"]?.toLongOrNull(),
+            calendarId = canonicalData["calendarId"]?.toLongOrNull(),
             title = title.take(200),
             body = body.take(1000),
             dataJson = objectMapper.writeValueAsString(canonicalData),
@@ -167,7 +171,12 @@ class AppNotificationService(
         repository.countByMemberIdAndReadAtIsNull(memberId)
 
     @Transactional
-    fun markRead(memberId: Long, notificationId: Long): AppNotification {
+    fun markRead(
+        memberId: Long,
+        notificationId: Long,
+        presentedSessionGeneration: Long,
+    ): AppNotification {
+        requireCurrentMutationSession(memberId, presentedSessionGeneration)
         val notification = repository.findByIdAndMemberId(notificationId, memberId)
             ?: throw BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND)
         if (notification.markRead(Instant.now(clock))) {
@@ -177,8 +186,29 @@ class AppNotificationService(
     }
 
     @Transactional
-    fun markAllRead(memberId: Long): Int =
-        repository.markAllRead(memberId, Instant.now(clock))
+    fun markAllRead(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ): Int {
+        requireCurrentMutationSession(memberId, presentedSessionGeneration)
+        return repository.markAllRead(memberId, Instant.now(clock))
+    }
+
+    /**
+     * Security filter가 인증한 뒤 지연된 읽음 mutation과 logout/re-login을 member row에서
+     * 선형화한다. 이 잠금과 읽음 UPDATE는 같은 service transaction에 있으므로 logout이
+     * 먼저 commit되면 과거 generation 요청은 어떤 notification row도 바꾸지 못한다.
+     */
+    private fun requireCurrentMutationSession(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        val member = memberRepository.findActiveNotificationRecipientForUpdate(memberId)
+            ?: throw BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다.")
+        if (member.sessionGeneration != presentedSessionGeneration) {
+            throw BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다.")
+        }
+    }
 }
 
 internal fun AppNotification.toSnapshot(objectMapper: ObjectMapper): AppNotificationSnapshot =
@@ -198,6 +228,8 @@ internal fun AppNotification.toSnapshot(objectMapper: ObjectMapper): AppNotifica
         createdAt = createdAt,
         deduplicationKey = deduplicationKey,
         scheduleId = scheduleId,
+        categoryId = categoryId,
+        calendarId = calendarId,
     )
 
 /**

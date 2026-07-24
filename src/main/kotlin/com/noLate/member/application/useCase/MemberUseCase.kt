@@ -282,12 +282,18 @@ class MemberUseCase(
             .curationCompleted
     }
 
-    @Transactional
-    fun completeCuration(memberId: Long): Boolean {
-        val member = memberService.getFindMemberId(memberId)
-            .orElseThrow {
-                BusinessException(ErrorCode.MEMBER_NOT_FOUND, "회원 정보를 찾을 수 없습니다.")
-            }
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun completeCuration(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ): Boolean {
+        // security filter 통과 뒤 logout/re-login이 commit될 수 있다. 실제 member write와
+        // 같은 transaction의 첫 mutation 경계에서 member row를 잠그고 signed generation을
+        // 다시 확인해 이전 session이 curation 상태를 되살리지 못하게 한다.
+        val member = memberService.getActiveMemberForUpdate(
+            memberId,
+            presentedSessionGeneration,
+        )
 
         // 완료 API는 재시도될 수 있다. 이미 완료된 회원은 불필요한 UPDATE 없이 성공으로 응답한다.
         if (!member.curationCompleted) {
@@ -375,13 +381,18 @@ class MemberUseCase(
      * 🔑 비밀번호 변경 (COMMON 계정만)
      * - 기존 비밀번호 검증 후 새 비밀번호로 교체
      */
-    @Transactional
-    fun changePassword(memberId: Long, currentPassword: String, newPassword: String) {
-        // 1) 회원 조회
-        val member = memberService.getFindMemberId(memberId)
-            .orElseThrow {
-                BusinessException(ErrorCode.MEMBER_NOT_FOUND, "회원 정보를 찾을 수 없습니다.")
-            }
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun changePassword(
+        memberId: Long,
+        currentPassword: String,
+        newPassword: String,
+        presentedSessionGeneration: Long,
+    ) {
+        // password read/validation/write가 모두 같은 locked member snapshot을 사용한다.
+        val member = memberService.getActiveMemberForUpdate(
+            memberId,
+            presentedSessionGeneration,
+        )
 
         // 2) COMMON 계정만 비밀번호 변경 허용
         if (member.loginType != LoginType.COMMON) {
@@ -461,13 +472,15 @@ class MemberUseCase(
 
     // Legacy members may not have a profile row yet, so this read path can create
     // the default profile and must not run in a read-only transaction.
-    @Transactional
-    fun getMyProfile(memberId: Long): MemberProfileDto {
-        // 회원 존재 여부 먼저 확인해도 좋음
-        val exists = memberService.getFindMemberId(memberId)
-        if (exists.isEmpty) {
-            throw BusinessException(ErrorCode.MEMBER_NOT_FOUND, "회원 정보를 찾을 수 없습니다.")
-        }
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun getMyProfile(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ): MemberProfileDto {
+        // GET이지만 legacy 회원에게 default profile을 생성할 수 있으므로 state-changing
+        // boundary로 취급한다. profile이 이미 있어도 동일하게 fail-closed해 API 의미가
+        // 데이터 존재 여부에 따라 달라지지 않게 한다.
+        memberService.getActiveMemberForUpdate(memberId, presentedSessionGeneration)
 
         return memberProfileService.getByMemberId(memberId)
             ?: memberProfileService.createDefaultProfile(memberId)
@@ -476,12 +489,13 @@ class MemberUseCase(
     /**
      * ✏️ 내 프로필 수정
      */
-    @Transactional
-    fun updateMyProfile(memberId: Long, dto: MemberProfileDto): MemberProfileDto {
-        val exists = memberService.getFindMemberId(memberId)
-        if (exists.isEmpty) {
-            throw BusinessException(ErrorCode.MEMBER_NOT_FOUND, "회원 정보를 찾을 수 없습니다.")
-        }
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun updateMyProfile(
+        memberId: Long,
+        dto: MemberProfileDto,
+        presentedSessionGeneration: Long,
+    ): MemberProfileDto {
+        memberService.getActiveMemberForUpdate(memberId, presentedSessionGeneration)
 
         // 여기서 nickname 길이, 금지어 등 검증을 Validator로 뺄 수도 있음
         return memberProfileService.updateProfile(memberId, dto)

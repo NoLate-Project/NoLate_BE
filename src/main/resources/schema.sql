@@ -336,12 +336,43 @@ CREATE TABLE IF NOT EXISTS push_device_token (
     token_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
     ownership_version BIGINT NOT NULL DEFAULT 0,
+    dispatch_lease_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    dispatch_lease_until DATETIME(6) NULL,
+    retirement_requested BOOLEAN NOT NULL DEFAULT FALSE,
     create_dt DATETIME(6) NULL,
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_push_device_token_token_fingerprint (token_fingerprint),
-    UNIQUE KEY uk_push_device_token_device_fingerprint (device_fingerprint)
+    UNIQUE KEY uk_push_device_token_device_fingerprint (device_fingerprint),
+    INDEX idx_push_device_token_dispatch_lease (dispatch_lease_until, id)
 ) COMMENT='Current global byte-exact installation ownership; raw opaque values are never indexed';
+
+CREATE TABLE IF NOT EXISTS push_send_history (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Provider attempt history primary key',
+    member_id BIGINT NOT NULL COMMENT 'Notification recipient member id',
+    device_token_id BIGINT NULL COMMENT 'Token row id at send time',
+    device_id VARCHAR(100) NULL COMMENT 'Legacy operational device label; never indexed',
+    platform VARCHAR(20) NOT NULL COMMENT 'Push platform',
+    schedule_id BIGINT NULL COMMENT 'Immutable schedule resource id when applicable',
+    logical_event_key VARCHAR(100) NULL COMMENT 'Canonical durable outbox/source event key',
+    category_id BIGINT NULL COMMENT 'Immutable category resource id when applicable',
+    calendar_id BIGINT NULL COMMENT 'Immutable shared-calendar resource id when applicable',
+    payload_type VARCHAR(80) NULL COMMENT 'Canonical push payload type',
+    title VARCHAR(200) NOT NULL COMMENT 'Provider payload title',
+    body VARCHAR(1000) NOT NULL COMMENT 'Provider payload body',
+    data_json LONGTEXT NOT NULL COMMENT 'Canonical provider data payload',
+    status VARCHAR(30) NOT NULL COMMENT 'SUCCESS, FAILED, UNKNOWN, INVALID_TOKEN, or NO_TOKEN',
+    fcm_message_id VARCHAR(300) NULL COMMENT 'Provider acceptance message id',
+    error_code VARCHAR(120) NULL COMMENT 'Sanitized provider/local error class or code',
+    error_message VARCHAR(1000) NULL COMMENT 'Sanitized failure detail',
+    sent_at DATETIME(6) NOT NULL COMMENT 'Provider result/history time',
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_push_send_history_member_event (member_id, logical_event_key),
+    INDEX idx_push_send_history_category_member (category_id, member_id),
+    INDEX idx_push_send_history_calendar_member (calendar_id, member_id)
+) COMMENT='Per-attempt push provider history with durable source identity';
 
 CREATE TABLE IF NOT EXISTS app_notifications (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'In-app notification primary key',
@@ -351,6 +382,7 @@ CREATE TABLE IF NOT EXISTS app_notifications (
     type VARCHAR(80) NOT NULL COMMENT 'Client navigation and presentation type',
     schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
     category_id BIGINT NULL COMMENT 'Related category id when applicable',
+    calendar_id BIGINT NULL COMMENT 'Immutable shared-calendar authorization resource id',
     title VARCHAR(200) NOT NULL COMMENT 'Notification title',
     body VARCHAR(1000) NOT NULL COMMENT 'Notification body',
     data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON',
@@ -364,6 +396,8 @@ CREATE TABLE IF NOT EXISTS app_notifications (
     dispatch_status VARCHAR(24) NOT NULL DEFAULT 'NOT_REQUIRED'
         COMMENT 'NOT_REQUIRED, PENDING, PROCESSING, COMPLETED, or FAILED',
     dispatch_attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Durable outbox drainer claims',
+    dispatch_failure_count INT NOT NULL DEFAULT 0
+        COMMENT 'Actual retry-budget failures; expected deferrals do not increment',
     next_dispatch_at DATETIME(6) NULL COMMENT 'Next bounded drainer eligibility time',
     dispatch_locked_by VARCHAR(100) NULL COMMENT 'Outbox drainer lease owner',
     dispatch_locked_at DATETIME(6) NULL COMMENT 'Outbox drainer lease time',
@@ -375,6 +409,7 @@ CREATE TABLE IF NOT EXISTS app_notifications (
     UNIQUE KEY uk_app_notifications_member_logical_event (member_id, logical_event_key),
     INDEX idx_app_notifications_member_id_id (member_id, id),
     INDEX idx_app_notifications_member_read_at (member_id, read_at),
+    INDEX idx_app_notifications_calendar_id (calendar_id),
     INDEX idx_app_notifications_dispatch_due (dispatch_status, next_dispatch_at, id),
     INDEX idx_app_notifications_dispatch_lease (dispatch_status, dispatch_locked_at, id)
 ) COMMENT='Durable user-facing in-app notification inbox';
@@ -396,6 +431,7 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT 'One-way client device fingerprint',
     platform VARCHAR(20) NOT NULL COMMENT 'Push platform',
     schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
+    calendar_id BIGINT NULL COMMENT 'Frozen shared-calendar authorization resource id',
     payload_type VARCHAR(80) NULL COMMENT 'Push payload type',
     status VARCHAR(30) NOT NULL COMMENT 'PENDING, DISPATCHING, SUCCESS, FAILED, INVALID_TOKEN, or SUPERSEDED',
     attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Provider call attempt count',
@@ -409,7 +445,8 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     UNIQUE KEY uk_push_deliveries_member_event_device (member_id, event_key, device_key),
     INDEX idx_push_deliveries_member_event (member_id, event_key),
     INDEX idx_push_deliveries_status_attempted_at (status, last_attempted_at),
-    INDEX idx_push_deliveries_schedule_id (schedule_id)
+    INDEX idx_push_deliveries_schedule_id (schedule_id),
+    INDEX idx_push_deliveries_calendar_id (calendar_id)
 ) COMMENT='Durable at-most-once per-device push delivery boundary';
 
 -- Production never runs schema.sql, but keeping the marker table in the executable

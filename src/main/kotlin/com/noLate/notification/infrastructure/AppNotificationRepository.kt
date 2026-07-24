@@ -42,6 +42,11 @@ interface AppNotificationRepository : JpaRepository<AppNotification, Long> {
         memberIds: Collection<Long>,
     ): List<AppNotification>
 
+    fun findAllByCalendarIdAndMemberIdIn(
+        calendarId: Long,
+        memberIds: Collection<Long>,
+    ): List<AppNotification>
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select notification from AppNotification notification where notification.id = :id")
     fun findByIdForUpdate(@Param("id") id: Long): AppNotification?

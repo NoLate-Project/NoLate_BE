@@ -554,15 +554,15 @@ class MemberUseCaseUnitTest {
             snsId = null
         )
 
-        whenever(memberService.getFindMemberId(memberId))
-            .thenReturn(Optional.of(member))
+        whenever(memberService.getActiveMemberForUpdate(memberId, 4L))
+            .thenReturn(member)
         whenever(passwordEncoder.matches(currentPassword, "encoded-old"))
             .thenReturn(true)
         whenever(passwordEncoder.encode(newPassword))
             .thenReturn("encoded-new")
 
         // when
-        memberUseCase.changePassword(memberId, currentPassword, newPassword)
+        memberUseCase.changePassword(memberId, currentPassword, newPassword, 4L)
 
         // then
         verify(memberService, times(1)).updateMember(check {
@@ -582,11 +582,11 @@ class MemberUseCaseUnitTest {
             snsId = "kakao-xyz"
         )
 
-        whenever(memberService.getFindMemberId(memberId))
-            .thenReturn(Optional.of(member))
+        whenever(memberService.getActiveMemberForUpdate(memberId, 5L))
+            .thenReturn(member)
 
         val ex = assertThrows<BusinessException> {
-            memberUseCase.changePassword(memberId, "any", "new-password")
+            memberUseCase.changePassword(memberId, "any", "new-password", 5L)
         }
 
         assertTrue(ex.message?.contains("SNS") == true)
@@ -652,8 +652,8 @@ class MemberUseCaseUnitTest {
             loginType = LoginType.COMMON,
             snsId = null
         )
-        whenever(memberService.getFindMemberId(memberId))
-            .thenReturn(Optional.of(member))
+        whenever(memberService.getActiveMemberForUpdate(memberId, 6L))
+            .thenReturn(member)
 
         val existingProfile = MemberProfileDto(
             id = 10L,
@@ -667,7 +667,7 @@ class MemberUseCaseUnitTest {
         whenever(memberProfileService.getByMemberId(memberId))
             .thenReturn(existingProfile)
 
-        val result1 = memberUseCase.getMyProfile(memberId)
+        val result1 = memberUseCase.getMyProfile(memberId, 6L)
         assertEquals("닉", result1.nickname)
 
         // 2) 프로필이 없는 경우 → 기본 생성
@@ -677,8 +677,9 @@ class MemberUseCaseUnitTest {
         whenever(memberProfileService.createDefaultProfile(memberId))
             .thenReturn(defaultProfile)
 
-        val result2 = memberUseCase.getMyProfile(memberId)
+        val result2 = memberUseCase.getMyProfile(memberId, 6L)
         assertEquals(memberId, result2.memberId)
+        verify(memberService, times(2)).getActiveMemberForUpdate(memberId, 6L)
     }
 
     @Test
@@ -692,8 +693,8 @@ class MemberUseCaseUnitTest {
             loginType = LoginType.COMMON,
             snsId = null
         )
-        whenever(memberService.getFindMemberId(memberId))
-            .thenReturn(Optional.of(member))
+        whenever(memberService.getActiveMemberForUpdate(memberId, 7L))
+            .thenReturn(member)
 
         val reqDto = MemberProfileDto(
             memberId = memberId,
@@ -706,7 +707,7 @@ class MemberUseCaseUnitTest {
         whenever(memberProfileService.updateProfile(memberId, reqDto))
             .thenReturn(updatedDto)
 
-        val result = memberUseCase.updateMyProfile(memberId, reqDto)
+        val result = memberUseCase.updateMyProfile(memberId, reqDto, 7L)
 
         assertEquals("새닉", result.nickname)
         assertEquals("저는 수정된 유저입니다.", result.intro)
@@ -725,10 +726,10 @@ class MemberUseCaseUnitTest {
     @Test
     fun `completeCuration은 미완료 회원을 완료로 저장한다`() {
         val member = Member(id = 51L, curationCompleted = false)
-        whenever(memberService.getFindMemberId(51L)).thenReturn(Optional.of(member))
+        whenever(memberService.getActiveMemberForUpdate(51L, 8L)).thenReturn(member)
         whenever(memberService.updateMember(member)).thenReturn(member.toDto())
 
-        val result = memberUseCase.completeCuration(51L)
+        val result = memberUseCase.completeCuration(51L, 8L)
 
         assertTrue(result)
         assertTrue(member.curationCompleted)
@@ -738,9 +739,9 @@ class MemberUseCaseUnitTest {
     @Test
     fun `completeCuration은 이미 완료된 회원을 다시 저장하지 않는다`() {
         val member = Member(id = 52L, curationCompleted = true)
-        whenever(memberService.getFindMemberId(52L)).thenReturn(Optional.of(member))
+        whenever(memberService.getActiveMemberForUpdate(52L, 9L)).thenReturn(member)
 
-        val result = memberUseCase.completeCuration(52L)
+        val result = memberUseCase.completeCuration(52L, 9L)
 
         assertTrue(result)
         verify(memberService, never()).updateMember(any())

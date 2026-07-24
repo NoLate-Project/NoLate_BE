@@ -8,12 +8,29 @@ import jakarta.persistence.Enumerated
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
+import jakarta.persistence.Index
 import jakarta.persistence.Lob
 import jakarta.persistence.Table
 import java.time.Instant
 
 @Entity
-@Table(name = "push_send_history")
+@Table(
+    name = "push_send_history",
+    indexes = [
+        Index(
+            name = "idx_push_send_history_member_event",
+            columnList = "member_id, logical_event_key",
+        ),
+        Index(
+            name = "idx_push_send_history_category_member",
+            columnList = "category_id, member_id",
+        ),
+        Index(
+            name = "idx_push_send_history_calendar_member",
+            columnList = "calendar_id, member_id",
+        ),
+    ],
+)
 class PushSendHistory(
 
     @Id
@@ -35,6 +52,20 @@ class PushSendHistory(
 
     @Column
     val scheduleId: Long? = null,
+
+    /**
+     * Immutable outbox/source identity. Legacy standalone history can remain null, but every
+     * durable event writer supplies the source key so resource revocation can remove the exact
+     * private provider evidence before deleting the inbox source.
+     */
+    @Column(name = "logical_event_key", length = 100)
+    val logicalEventKey: String? = null,
+
+    @Column(name = "category_id")
+    val categoryId: Long? = null,
+
+    @Column(name = "calendar_id")
+    val calendarId: Long? = null,
 
     @Column(length = 80)
     val payloadType: String? = null,

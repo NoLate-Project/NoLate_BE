@@ -6,6 +6,9 @@ import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.PushPlatform
+import com.noLate.notification.domain.PushSendHistory
+import com.noLate.notification.domain.PushSendStatus
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
@@ -76,12 +79,12 @@ class NotificationControllerTokenRegistrationUnitTest {
             sentCount = 1,
         )
         whenever(
-            notificationUseCase.sendToMember(
+            notificationUseCase.sendAuthenticatedToMember(
                 memberId = 92L,
+                presentedSessionGeneration = 8L,
                 title = request.title,
                 body = request.body,
                 data = request.data.orEmpty(),
-                persistInInbox = true,
             )
         ).thenReturn(expected)
         val controller = NotificationController(tokenService, notificationUseCase, historyService)
@@ -89,12 +92,44 @@ class NotificationControllerTokenRegistrationUnitTest {
         val response = controller.sendTest(principal, request)
 
         assertSame(expected, response.data)
-        verify(notificationUseCase).sendToMember(
+        verify(notificationUseCase).sendAuthenticatedToMember(
             memberId = 92L,
+            presentedSessionGeneration = 8L,
             title = request.title,
             body = request.body,
             data = request.data.orEmpty(),
-            persistInInbox = true,
         )
+    }
+
+    @Test
+    fun `public send histories expose durable event and typed resource identity`() {
+        val principal = MemberPrincipal(
+            id = 93L,
+            email = "member@example.com",
+            name = "member",
+        )
+        val history = PushSendHistory(
+            id = 501L,
+            memberId = 93L,
+            scheduleId = null,
+            logicalEventKey = "logical:calendar-share-history",
+            categoryId = 31L,
+            calendarId = 41L,
+            payloadType = "CALENDAR_SHARE_RECEIVED",
+            title = "shared calendar",
+            body = "calendar invitation",
+            dataJson = """{"calendarId":"41"}""",
+            status = PushSendStatus.SUCCESS,
+            sentAt = Instant.parse("2026-07-24T03:01:00Z"),
+        )
+        whenever(historyService.getRecentByMember(93L, 25)).thenReturn(listOf(history))
+        val controller = NotificationController(tokenService, notificationUseCase, historyService)
+
+        val response = requireNotNull(controller.getSendHistories(principal, 25).data).single()
+
+        assertEquals("logical:calendar-share-history", response.logicalEventKey)
+        assertEquals(31L, response.categoryId)
+        assertEquals(41L, response.calendarId)
+        assertEquals("CALENDAR_SHARE_RECEIVED", response.payloadType)
     }
 }

@@ -64,6 +64,9 @@ class PushSendHistoryServiceTest {
         val data = mapOf(
             "type" to "SCHEDULE_TRAFFIC",
             "scheduleId" to "13",
+            "categoryId" to "17",
+            "calendarId" to "19",
+            "logicalEventKey" to "logical:history-source",
             "trafficChangeMinutes" to "15",
         )
 
@@ -81,11 +84,14 @@ class PushSendHistoryServiceTest {
         assertEquals("android-emulator", history.deviceId)
         assertEquals(PushPlatform.ANDROID, history.platform)
         assertEquals(13L, history.scheduleId)
+        assertEquals("logical:history-source", history.logicalEventKey)
+        assertEquals(17L, history.categoryId)
+        assertEquals(19L, history.calendarId)
         assertEquals("SCHEDULE_TRAFFIC", history.payloadType)
         assertEquals(PushSendStatus.SUCCESS, history.status)
         assertEquals("projects/nolate/messages/123", history.fcmMessageId)
         assertEquals(Instant.parse("2026-06-18T00:00:00Z"), history.sentAt)
-        assertEquals("""{"type":"SCHEDULE_TRAFFIC","scheduleId":"13","trafficChangeMinutes":"15"}""", history.dataJson)
+        assertEquals(ObjectMapper().writeValueAsString(data), history.dataJson)
         verify(repository).save(any<PushSendHistory>())
     }
 

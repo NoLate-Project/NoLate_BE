@@ -23,9 +23,9 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import com.noLate.subscription.application.SubscriptionPolicyService
-import jakarta.transaction.Transactional
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDateTime
@@ -145,6 +145,13 @@ class ScheduleTravelPlanService(
     @Transactional
     fun findNotificationEnabledMemberIds(scheduleId: Long): Set<Long> =
         travelPlanRepository.findNotificationEnabledMemberIdsByScheduleId(scheduleId).toSet()
+
+    @Transactional
+    fun findActiveCalendarAudienceMemberIds(calendarId: Long): Set<Long> =
+        scheduleAccessPolicy
+            ?.activeCalendarMemberIds(calendarId)
+            .orEmpty()
+            .toSet()
 
     /**
      * schedule row lock을 얻은 뒤 다시 읽은 알림 대상은 편집이 job gap을 잡기 전에 잠근

@@ -412,8 +412,24 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         val signed = memberUseCase.signUp(signUpDto, signupConsents)
         val memberId = signed.id!!
 
-        // 비밀번호 변경
-        memberUseCase.changePassword(memberId, "OldPassword1!", "NewPassword1!")
+        val activeSession = memberUseCase.login(
+            MemberDto(
+                email = signUpDto.email,
+                password = "OldPassword1!",
+                loginType = LoginType.COMMON,
+            ),
+        )
+
+        // 비밀번호 변경은 security filter가 검증한 signed session generation을 write
+        // transaction 안에서 다시 확인한다.
+        memberUseCase.changePassword(
+            memberId = memberId,
+            currentPassword = "OldPassword1!",
+            newPassword = "NewPassword1!",
+            presentedSessionGeneration = jwtTokenProvider.getSessionGeneration(
+                requireNotNull(activeSession.accessToken),
+            ),
+        )
 
         // 새 비밀번호로 로그인 → 성공
         val loginNew = memberUseCase.login(

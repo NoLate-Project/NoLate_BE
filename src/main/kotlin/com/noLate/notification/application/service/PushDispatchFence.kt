@@ -54,14 +54,51 @@ fun interface PersistedPushDispatchFenceFactory {
 
 /**
  * Immutable push source가 가리키는 business resource의 현재 recipient 권한을 provider 직전
- * member-row lock 아래에서 다시 확인한다. 알림 모듈은 schedule/category 도메인을 알지 않고,
+ * member-row lock 아래에서 다시 확인한다. 알림 모듈은 schedule/category/calendar 도메인을 알지 않고,
  * 도메인 구현체가 식별자와 payload type을 해석한다.
  */
-fun interface PushRecipientAuthorizationValidator {
+interface PushRecipientAuthorizationValidator {
     fun canDispatch(
         memberId: Long,
         scheduleId: Long?,
         categoryId: Long?,
         payloadType: String?,
+    ): Boolean =
+        canDispatch(
+            memberId = memberId,
+            scheduleId = scheduleId,
+            categoryId = categoryId,
+            payloadType = payloadType,
+            calendarId = null,
+        )
+
+    fun canDispatch(
+        memberId: Long,
+        scheduleId: Long?,
+        categoryId: Long?,
+        payloadType: String?,
+        calendarId: Long?,
     ): Boolean
+}
+
+/**
+ * Immutable outbox source가 만들어진 뒤 business state가 의미 있게 완료/변경됐는지 확인한다.
+ *
+ * Recipient authorization과 분리하는 이유는 권한은 그대로여도 알림의 목적이 사라질 수 있기
+ * 때문이다. 예를 들어 경로 설정을 끝냈거나 출발 확인 요청의 대상이 이미 출발한 경우다.
+ */
+data class FrozenPushSource(
+    val memberId: Long,
+    val logicalEventKey: String,
+    val deduplicationKey: String?,
+    /** Exact canonical payload frozen with the outbox source; domain validators fail closed. */
+    val canonicalDataJson: String,
+    val payloadType: String?,
+    val scheduleId: Long?,
+    val categoryId: Long?,
+    val calendarId: Long?,
+)
+
+fun interface PushSourceFreshnessValidator {
+    fun isFresh(source: FrozenPushSource): Boolean
 }

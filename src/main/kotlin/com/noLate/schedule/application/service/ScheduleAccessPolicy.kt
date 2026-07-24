@@ -140,6 +140,25 @@ class ScheduleAccessPolicy(
     }
 
     /**
+     * Schedule PUT may detach or move a schedule away from its current calendar. Cleanup must
+     * freeze the whole current calendar audience, including members whose stale notification rows
+     * outlive a previous content-mode change, before it changes the schedule's calendar id.
+     */
+    fun activeCalendarMemberIds(calendarId: Long): List<Long> {
+        if (
+            calendarRepository.findByIdAndStatusAndDeletedFalse(
+                calendarId,
+                ScheduleCalendarStatus.ACTIVE,
+            ) == null
+        ) {
+            return emptyList()
+        }
+        return calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+    }
+
+    /**
      * 캘린더 멤버는 자신의 D-3 알림을 끌 수 있다. 같은 일정에 직접 공유나 legacy 카테고리
      * 공유가 겹치면 그 grant에는 별도 opt-out이 없으므로 활성 경로 공유를 우선한다.
      */

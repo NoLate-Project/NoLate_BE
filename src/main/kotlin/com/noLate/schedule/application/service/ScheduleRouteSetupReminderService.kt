@@ -18,6 +18,7 @@ import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
+import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
@@ -98,6 +99,10 @@ internal enum class RouteSetupOutboxEnqueueOutcome {
     NONE,
 }
 
+fun interface ScheduleRouteSetupReminderDispatchObserver {
+    fun afterCandidateRead(reminderId: Long)
+}
+
 /**
  * One marker is linearized in a short transaction:
  * member -> marker -> immutable outbox/manifest.
@@ -114,14 +119,19 @@ class ScheduleRouteSetupReminderDispatchWriter(
     private val accessPolicy: ScheduleAccessPolicy,
     private val reminderPolicy: RouteSetupReminderPolicy,
     private val pushEventOutboxService: PushEventOutboxService,
+    private val dispatchObserver: ScheduleRouteSetupReminderDispatchObserver? = null,
 ) {
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(
+        propagation = Propagation.REQUIRES_NEW,
+        isolation = Isolation.READ_COMMITTED,
+    )
     internal fun enqueueNext(now: Instant): RouteSetupOutboxEnqueueOutcome {
         val candidate = reminderRepository.findDueCandidates(
             status = ScheduleRouteSetupReminderStatus.PENDING,
             now = now,
             pageable = PageRequest.of(0, 1),
         ).singleOrNull() ?: return RouteSetupOutboxEnqueueOutcome.NONE
+        dispatchObserver?.afterCandidateRead(requireNotNull(candidate.id))
 
         val recipientActive =
             memberRepository.findActiveNotificationRecipientForUpdate(candidate.memberId) != null
@@ -154,6 +164,8 @@ class ScheduleRouteSetupReminderDispatchWriter(
                 "scheduleId" to scheduleId.toString(),
                 "scheduleIds" to scheduleId.toString(),
                 "count" to "1",
+                "routeSetupReminderId" to requireNotNull(marker.id).toString(),
+                "routeSetupScheduleFingerprint" to marker.scheduleFingerprint,
             ),
             deduplicationKey = "route-setup:$memberId:marker:${requireNotNull(marker.id)}",
         )

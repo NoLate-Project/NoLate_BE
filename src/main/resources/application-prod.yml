@@ -34,6 +34,8 @@ schedule:
 notification:
   push-scenario:
     enabled: false
+  push-schedule-scenario:
+    enabled: false
 
 # 외부 경로 공급자는 키를 명시한 운영 환경에서만 활성화한다.
 # 키가 없는 배포도 앱 전체를 중단하지 않고, 경로 요청에서 공급자 미설정으로 응답한다.
