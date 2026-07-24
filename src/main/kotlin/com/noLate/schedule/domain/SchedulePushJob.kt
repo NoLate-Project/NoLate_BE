@@ -138,17 +138,17 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         protected set
 
     @Column(name = "last_eta_failure_reason", length = 500)
-    @Comment("마지막 ETA fallback 사유")
+    @Comment("마지막 ETA fallback 안정 reason code와 안전 메시지")
     var lastEtaFailureReason: String? = null
         protected set
 
     @Column(name = "last_traffic_change_minutes")
-    @Comment("마지막으로 관찰한 ETA 변경량(분)")
+    @Comment("비교 가능한 live-to-live ETA의 마지막 변경량(분)")
     var lastTrafficChangeMinutes: Int? = null
         protected set
 
     @Column(name = "last_changed_at")
-    @Comment("ETA가 마지막으로 변경된 확인 시각")
+    @Comment("비교 가능한 live-to-live ETA가 마지막으로 변경된 확인 시각")
     var lastChangedAt: Instant? = null
         protected set
 
@@ -276,15 +276,23 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         etaFailureReason: String? = null,
         now: Instant = Instant.now()
     ) {
-        lastTravelMinutes?.let { previousTravelMinutes ->
-            if (previousTravelMinutes != travelMinutes) {
-                lastTrafficChangeMinutes = travelMinutes - previousTravelMinutes
-                lastChangedAt = now
+        if (etaSource == TrafficSource.LIVE_PROVIDER) {
+            requireNotNull(liveFetchedAt) {
+                "LIVE_PROVIDER ETA에는 provider 취득 시각이 필요합니다."
+            }
+        }
+        val evaluatedAt = maxOf(now, liveFetchedAt ?: now)
+        if (lastEtaSource == TrafficSource.LIVE_PROVIDER && etaSource == TrafficSource.LIVE_PROVIDER) {
+            lastTravelMinutes?.let { previousTravelMinutes ->
+                if (previousTravelMinutes != travelMinutes) {
+                    lastTrafficChangeMinutes = travelMinutes - previousTravelMinutes
+                    lastChangedAt = evaluatedAt
+                }
             }
         }
         lastTravelMinutes = travelMinutes
         lastRecommendedDepartureAt = recommendedDepartureAt
-        lastCheckedAt = now
+        lastCheckedAt = evaluatedAt
         if (liveFetchedAt != null) {
             lastLiveFetchedAt = liveFetchedAt
         }
@@ -296,7 +304,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         failureReason = null
 
         if (pushSent) {
-            lastPushedAt = now
+            lastPushedAt = evaluatedAt
             lastNotifiedDepartureAt = notifiedDepartureAt
             if (reminderBoundaryAt != null) {
                 lastReminderBoundaryAt = reminderBoundaryAt
@@ -310,7 +318,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
             }
             if (departureReminderStage == ScheduleDepartureReminderStage.DEPART_NOW && departureNoticeSentAt == null) {
                 // 후속 +3/+7분 알림은 실제로 사용자에게 처음 출발을 재촉한 시각을 기준으로 삼는다.
-                departureNoticeSentAt = now
+                departureNoticeSentAt = evaluatedAt
             }
         }
 

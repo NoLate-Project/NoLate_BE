@@ -5,6 +5,7 @@ import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficRequest
+import com.noLate.schedule.application.sanitizeTrafficFailureReason
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
 import com.noLate.schedule.application.service.policy.DepartureReminderDecision
 import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
@@ -13,6 +14,7 @@ import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
+import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
@@ -23,6 +25,7 @@ import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.Duration
+import java.time.Clock
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 
@@ -45,6 +48,7 @@ class SchedulePushJobWorker(
     @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "schedule-push-${UUID.randomUUID()}"
@@ -52,7 +56,7 @@ class SchedulePushJobWorker(
     @Scheduled(fixedDelayString = "\${schedule.push.fixed-delay-ms:60000}")
     @Transactional
     fun runDueJobs() {
-        runDueJobs(Instant.now())
+        runDueJobs(Instant.now(clock))
     }
 
     fun runDueJobs(now: Instant): Int {
@@ -150,6 +154,9 @@ class SchedulePushJobWorker(
             )
             val trafficResult = trafficClient.getTravelMinutes(request)
             val travelMinutes = trafficResult.travelMinutes
+            val comparableLiveChange =
+                job.lastEtaSource == TrafficSource.LIVE_PROVIDER &&
+                    trafficResult.source == TrafficSource.LIVE_PROVIDER
             val recommendedDepartureAt = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
             val reminderDecision = departureReminderPolicy.decide(
                 now = now,
@@ -174,7 +181,7 @@ class SchedulePushJobWorker(
                 null
             }
             val trafficChangeMinutes = trafficChangeMinutes(
-                previousTravelMinutes = job.lastTravelMinutes,
+                previousTravelMinutes = job.lastTravelMinutes.takeIf { comparableLiveChange },
                 currentTravelMinutes = travelMinutes,
             )
             val showDepartureActions = reminderDecision.departNowAction ||
@@ -186,7 +193,7 @@ class SchedulePushJobWorker(
             val pushSent = if (shouldPush) {
                 val message = trafficChangePolicy.createMessage(
                     scheduleTitle = schedule.title,
-                    previousTravelMinutes = job.lastTravelMinutes,
+                    previousTravelMinutes = job.lastTravelMinutes.takeIf { comparableLiveChange },
                     currentTravelMinutes = travelMinutes,
                     recommendedDepartureAt = recommendedDepartureAt,
                     decision = reminderDecision,
@@ -282,8 +289,8 @@ class SchedulePushJobWorker(
                 etaSource = trafficResult.source,
                 liveFetchedAt = trafficResult.fetchedAt,
                 etaStale = trafficResult.stale,
-                etaFailureReason = trafficResult.failureReason,
-                now = now,
+                etaFailureReason = sanitizeTrafficFailureReason(trafficResult.failureReason),
+                now = maxOf(now, Instant.now(clock), trafficResult.fetchedAt ?: now),
             )
         } catch (exception: Exception) {
             log.warn("Schedule push job failed. jobId={}", job.id, exception)

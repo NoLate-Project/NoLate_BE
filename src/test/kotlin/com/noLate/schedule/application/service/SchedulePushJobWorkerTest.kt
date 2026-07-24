@@ -35,6 +35,7 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -222,6 +223,9 @@ class SchedulePushJobWorkerTest {
             notifiedDepartureAt = null,
             nextCheckAt = testNow,
             completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = previousRecommendedDepartureAt.minus(60, ChronoUnit.MINUTES),
+            etaStale = false,
             now = previousRecommendedDepartureAt.minus(60, ChronoUnit.MINUTES),
         )
 
@@ -271,6 +275,9 @@ class SchedulePushJobWorkerTest {
             notifiedDepartureAt = null,
             nextCheckAt = testNow,
             completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
+            etaStale = false,
             now = testNow.minus(1, ChronoUnit.MINUTES),
         )
 
@@ -303,6 +310,60 @@ class SchedulePushJobWorkerTest {
         assertEquals(testNow, job.lastPushedAt)
         assertNull(job.lastNotifiedDepartureAt)
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
+    }
+
+    @Test
+    fun `provider timeout fallback 증가는 교통 악화 push나 change 이력을 만들지 않는다`() {
+        val schedule = schedule(defaultScheduleStartAt)
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        job.startProcessing("live-worker")
+        job.finishCheck(
+            travelMinutes = 30,
+            recommendedDepartureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
+            etaStale = false,
+            now = testNow.minus(1, ChronoUnit.MINUTES),
+        )
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = 45,
+                source = TrafficSource.SAVED_FALLBACK,
+                stale = true,
+                failureReason = "PROVIDER_TIMEOUT: 실시간 ETA 공급자 응답 시간이 초과되었습니다.",
+            )
+        )
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+        assertEquals(45, job.lastTravelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, job.lastEtaSource)
+        assertTrue(job.lastEtaStale == true)
+        assertNull(job.lastTrafficChangeMinutes)
+        assertNull(job.lastChangedAt)
+        assertEquals(
+            schedule.startAt.minus(45, ChronoUnit.MINUTES),
+            job.lastRecommendedDepartureAt,
+        )
     }
 
     @Test
@@ -383,6 +444,9 @@ class SchedulePushJobWorkerTest {
             reminderBoundaryAt = firstReminderBoundaryAt,
             nextCheckAt = secondReminderAt,
             completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = firstReminderBoundaryAt,
+            etaStale = false,
             now = firstReminderBoundaryAt,
         )
 
@@ -445,6 +509,9 @@ class SchedulePushJobWorkerTest {
             notifiedDepartureAt = previousRecommendedDepartureAt,
             nextCheckAt = testNow,
             completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
+            etaStale = false,
             now = testNow.minus(1, ChronoUnit.MINUTES),
         )
 
@@ -904,6 +971,7 @@ class SchedulePushJobWorkerTest {
         processingTimeoutMinutes = 10,
         travelPlanRepository = travelPlanRepository,
         scheduleAccessPolicy = accessPolicy,
+        clock = Clock.fixed(testNow, ZoneId.of("UTC")),
     )
 
     /**
@@ -948,6 +1016,9 @@ class SchedulePushJobWorkerTest {
             departureReminderBoundaryAt = recommendedDepartureAt,
             nextCheckAt = testNow,
             completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = sentAt,
+            etaStale = false,
             now = sentAt,
         )
     }

@@ -75,7 +75,7 @@ class ScheduleEtaProvenanceIntegrationTest @Autowired constructor(
         assertEquals(TrafficSource.SELECTED_ROUTE, stored.lastEtaSource)
         assertTrue(stored.lastEtaStale == true)
         assertTrue(stored.lastEtaFailureReason.orEmpty().startsWith("PROVIDER_TIMEOUT:"))
-        assertEquals(4, stored.lastTrafficChangeMinutes)
-        assertEquals(fallbackCheckedAt, stored.lastChangedAt)
+        assertEquals(null, stored.lastTrafficChangeMinutes)
+        assertEquals(null, stored.lastChangedAt)
     }
 }

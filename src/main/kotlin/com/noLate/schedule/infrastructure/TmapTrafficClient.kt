@@ -1,7 +1,6 @@
 package com.noLate.schedule.infrastructure
 
 import com.fasterxml.jackson.databind.JsonNode
-import com.noLate.route.infrastructure.tmapTransitSecondsToMinutes
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
@@ -30,7 +29,15 @@ class TmapTrafficClient(
     @Value("\${schedule.traffic.tmap.base-url}") baseUrl: String,
     private val clock: Clock = Clock.systemUTC(),
     requestFactory: ClientHttpRequestFactory = externalHttpRequestFactory(),
+    @Value("\${schedule.traffic.max-travel-minutes:1440}")
+    private val maxTravelMinutes: Int = 1_440,
 ) : TrafficClient {
+    init {
+        require(maxTravelMinutes in 1..10_080) {
+            "schedule.traffic.max-travel-minutes는 1~10080분이어야 합니다."
+        }
+    }
+
     private val restClient = RestClient.builder()
         .baseUrl(baseUrl)
         .defaultHeader("appKey", appKey)
@@ -40,16 +47,20 @@ class TmapTrafficClient(
     override fun getTravelMinutes(request: TrafficRequest): TrafficResult {
         request.liveRefreshBlockedReason?.let { return request.fallbackResult(it) }
 
-        if (request.travelMode in setOf(ScheduleTravelMode.BIKE, ScheduleTravelMode.ETC)) {
+        if (request.travelMode == ScheduleTravelMode.BIKE) {
             return request.fallbackResult(
                 TrafficFailureReasons.unsupportedMode(request.travelMode)
             )
         }
-        if (request.travelMode == ScheduleTravelMode.TRANSIT && !request.selectedRouteJson.isNullOrBlank()) {
-            return request.fallbackResult(TrafficFailureReasons.SELECTED_TRANSIT_ROUTE_NOT_REFRESHABLE)
+        if (request.travelMode == ScheduleTravelMode.TRANSIT) {
+            return request.fallbackResult(TrafficFailureReasons.TRANSIT_ITINERARY_REFRESH_UNSUPPORTED)
         }
         if (
-            request.travelMode in setOf(ScheduleTravelMode.CAR, ScheduleTravelMode.WALK) &&
+            request.travelMode in setOf(
+                ScheduleTravelMode.CAR,
+                ScheduleTravelMode.ETC,
+                ScheduleTravelMode.WALK,
+            ) &&
             !request.selectedRouteJson.isNullOrBlank() &&
             request.selectedRouteOption == null
         ) {
@@ -69,14 +80,12 @@ class TmapTrafficClient(
     }
 
     private fun getLiveTravelMinutes(request: TrafficRequest): Int {
-        if (request.travelMode == ScheduleTravelMode.TRANSIT) {
-            return getTransitTravelMinutes(request)
-        }
-
-        val path = if (request.travelMode == ScheduleTravelMode.WALK) {
-            "/tmap/routes/pedestrian"
-        } else {
-            "/tmap/routes"
+        val path = when (request.travelMode) {
+            ScheduleTravelMode.CAR,
+            ScheduleTravelMode.ETC -> "/tmap/routes"
+            ScheduleTravelMode.WALK -> "/tmap/routes/pedestrian"
+            ScheduleTravelMode.TRANSIT -> error("대중교통 동일 itinerary 실시간 갱신은 지원하지 않습니다.")
+            ScheduleTravelMode.BIKE -> error("자전거 실시간 ETA는 지원하지 않습니다.")
         }
         val form = linkedMapOf(
             "startX" to request.originLng.toString(),
@@ -107,41 +116,14 @@ class TmapTrafficClient(
             ?.path("properties")
             ?.path("totalTime")
             ?.takeIf { it.isNumber }
-            ?.asLong()
+            ?.asDouble()
             ?: error("Tmap 응답에 totalTime이 없습니다.")
 
-        return ceil(totalTimeSeconds / 60.0).toInt().coerceAtLeast(1)
-    }
-
-    private fun getTransitTravelMinutes(request: TrafficRequest): Int {
-        val response = restClient.post()
-            .uri("/transit/routes")
-            .contentType(MediaType.APPLICATION_JSON)
-            .body(
-                mapOf(
-                    "startX" to request.originLng.toString(),
-                    "startY" to request.originLat.toString(),
-                    "endX" to request.destinationLng.toString(),
-                    "endY" to request.destinationLat.toString(),
-                    "count" to 1,
-                    "lang" to 0,
-                    "format" to "json",
-                )
-            )
-            .retrieve()
-            .body(JsonNode::class.java)
-            ?: error("Tmap 대중교통 응답이 비어 있습니다.")
-
-        val totalTimeSeconds = response.path("metaData")
-            .path("plan")
-            .path("itineraries")
-            .firstOrNull()
-            ?.path("totalTime")
-            ?.takeIf { it.isNumber }
-            ?.asDouble()
-            ?: error("Tmap 대중교통 응답에 totalTime이 없습니다.")
-
-        return tmapTransitSecondsToMinutes(totalTimeSeconds)
+        return validatedTmapTravelMinutes(
+            totalTimeSeconds = totalTimeSeconds,
+            maxTravelMinutes = maxTravelMinutes,
+            travelMode = request.travelMode,
+        )
     }
 
     private fun providerFailureReason(exception: Throwable): String {
@@ -155,4 +137,29 @@ class TmapTrafficClient(
             else -> TrafficFailureReasons.PROVIDER_UNAVAILABLE
         }
     }
+}
+
+internal fun validatedTmapTravelMinutes(
+    totalTimeSeconds: Double,
+    maxTravelMinutes: Int,
+    travelMode: ScheduleTravelMode,
+): Int {
+    require(
+        travelMode in setOf(
+            ScheduleTravelMode.CAR,
+            ScheduleTravelMode.ETC,
+            ScheduleTravelMode.WALK,
+            ScheduleTravelMode.TRANSIT,
+        )
+    ) {
+        "지원하지 않는 TMAP 이동 수단입니다."
+    }
+    if (!totalTimeSeconds.isFinite() || totalTimeSeconds <= 0) {
+        error("TMAP 이동 시간은 유한한 양수여야 합니다.")
+    }
+    val minutes = ceil(totalTimeSeconds / 60.0)
+    if (!minutes.isFinite() || minutes > maxTravelMinutes) {
+        error("TMAP 이동 시간이 제품 상한을 벗어났습니다.")
+    }
+    return minutes.toInt()
 }

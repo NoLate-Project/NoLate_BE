@@ -42,9 +42,26 @@ class FallbackTrafficClientTest {
         assertTrue(result.stale)
     }
 
+    @Test
+    fun `fallback 사유의 provider 원문은 저장 가능한 안정 코드로 치환한다`() {
+        val request = trafficRequest(
+            fallbackTravelMinutes = 30,
+            selectedRouteTravelMinutes = null,
+            liveRefreshBlockedReason =
+                "GET http://provider.internal/routes?startX=127.1&startY=37.1 failed",
+        )
+
+        val result = client.getTravelMinutes(request)
+
+        assertTrue(result.failureReason.orEmpty().startsWith("ETA_FALLBACK:"))
+        assertTrue(!result.failureReason.orEmpty().contains("provider.internal"))
+        assertTrue(!result.failureReason.orEmpty().contains("127.1"))
+    }
+
     private fun trafficRequest(
         fallbackTravelMinutes: Int,
         selectedRouteTravelMinutes: Int?,
+        liveRefreshBlockedReason: String? = null,
     ) = TrafficRequest(
         originLat = 37.1,
         originLng = 127.1,
@@ -53,5 +70,6 @@ class FallbackTrafficClientTest {
         travelMode = ScheduleTravelMode.CAR,
         fallbackTravelMinutes = fallbackTravelMinutes,
         selectedRouteTravelMinutes = selectedRouteTravelMinutes,
+        liveRefreshBlockedReason = liveRefreshBlockedReason,
     )
 }

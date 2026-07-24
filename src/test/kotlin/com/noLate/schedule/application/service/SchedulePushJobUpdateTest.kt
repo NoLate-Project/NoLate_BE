@@ -145,8 +145,8 @@ class SchedulePushJobUpdateTest {
         assertEquals(firstCheckedAt.minusSeconds(2), job.lastLiveFetchedAt)
         assertEquals(TrafficSource.SELECTED_ROUTE, job.lastEtaSource)
         assertEquals(true, job.lastEtaStale)
-        assertEquals(3, job.lastTrafficChangeMinutes)
-        assertEquals(secondCheckedAt, job.lastChangedAt)
+        assertNull(job.lastTrafficChangeMinutes)
+        assertNull(job.lastChangedAt)
     }
 
     private fun enabledScheduleDto() = ScheduleDto(
