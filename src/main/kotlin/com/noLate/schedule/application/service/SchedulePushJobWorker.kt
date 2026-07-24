@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficRequest
@@ -12,6 +13,7 @@ import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
+import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
 import com.noLate.schedule.domain.TrafficSource
@@ -46,10 +48,25 @@ class SchedulePushJobWorker(
     @Value("\${schedule.push.departure-reminder-interval-minutes:5}") private val departureReminderIntervalMinutes: Int,
     @Value("\${schedule.push.departure-snooze-minutes:5}") private val departureSnoozeMinutes: Int = 5,
     @Value("\${schedule.push.processing-timeout-minutes:10}") private val processingTimeoutMinutes: Long,
+    @Value("\${schedule.traffic.max-travel-minutes:1440}")
+    private val maxTravelMinutes: Int = EtaTravelTimePolicy.DEFAULT_MAX_TRAVEL_MINUTES,
+    @Value("\${schedule.traffic.live-comparator-max-age-minutes:60}")
+    private val liveComparatorMaxAgeMinutes: Long =
+        SchedulePushJob.DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES,
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
     private val clock: Clock = Clock.systemUTC(),
 ) {
+    init {
+        EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
+        require(
+            liveComparatorMaxAgeMinutes in 1..SchedulePushJob.MAX_LIVE_COMPARATOR_AGE_MINUTES
+        ) {
+            "schedule.traffic.live-comparator-max-age-minutes는 " +
+                "1~${SchedulePushJob.MAX_LIVE_COMPARATOR_AGE_MINUTES} 사이여야 합니다."
+        }
+    }
+
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "schedule-push-${UUID.randomUUID()}"
 
@@ -137,9 +154,26 @@ class SchedulePushJobWorker(
                 objectMapper = objectMapper,
                 routeJson = route.routeJson,
                 travelMode = route.travelMode,
+                maxTravelMinutes = maxTravelMinutes,
             )
-            val fallbackMinutes = route.travelMinutes?.takeIf { it > 0 } ?: selectedRoute.travelMinutes
+            val canonicalMinutes = route.travelMinutes?.let {
+                require(EtaTravelTimePolicy.isValid(it, maxTravelMinutes)) {
+                    "저장된 이동 시간은 1~$maxTravelMinutes 사이여야 합니다."
+                }
+                it
+            }
+            val trustedSelectedMinutes = selectedRoute.travelMinutes
+                ?.takeIf { canonicalMinutes == null || it == canonicalMinutes }
+            val fallbackMinutes = canonicalMinutes ?: trustedSelectedMinutes
                 ?: error("교통 조회 fallback 이동 시간이 없습니다.")
+            val routeFingerprint = ScheduleEtaRouteFingerprint.calculate(
+                schedule = schedule,
+                travelMinutes = route.travelMinutes,
+                travelMode = route.travelMode,
+                originLat = route.originLat,
+                originLng = route.originLng,
+                routeJson = route.routeJson,
+            )
             val request = TrafficRequest(
                 originLat = requireNotNull(route.originLat) { "출발지 위도가 없습니다." },
                 originLng = requireNotNull(route.originLng) { "출발지 경도가 없습니다." },
@@ -148,15 +182,25 @@ class SchedulePushJobWorker(
                 travelMode = requireNotNull(route.travelMode) { "이동 수단이 없습니다." },
                 fallbackTravelMinutes = fallbackMinutes,
                 selectedRouteJson = route.routeJson,
-                selectedRouteTravelMinutes = selectedRoute.travelMinutes,
+                selectedRouteTravelMinutes = trustedSelectedMinutes,
                 selectedRouteOption = selectedRoute.routeOption,
                 selectedTransitItineraryJson = selectedRoute.transitItineraryJson,
+                maxTravelMinutes = maxTravelMinutes,
             )
             val trafficResult = trafficClient.getTravelMinutes(request)
             val travelMinutes = trafficResult.travelMinutes
-            val comparableLiveChange =
-                job.lastEtaSource == TrafficSource.LIVE_PROVIDER &&
-                    trafficResult.source == TrafficSource.LIVE_PROVIDER
+            require(EtaTravelTimePolicy.isValid(travelMinutes, maxTravelMinutes)) {
+                "교통 조회 결과는 1~$maxTravelMinutes 사이여야 합니다."
+            }
+            val comparableLiveTravelMinutes = trafficResult.fetchedAt
+                ?.takeIf { trafficResult.source == TrafficSource.LIVE_PROVIDER }
+                ?.let {
+                    job.comparableLiveTravelMinutes(
+                        currentLiveFetchedAt = it,
+                        maxAgeMinutes = liveComparatorMaxAgeMinutes,
+                        routeFingerprint = routeFingerprint,
+                    )
+                }
             val recommendedDepartureAt = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
             val reminderDecision = departureReminderPolicy.decide(
                 now = now,
@@ -181,7 +225,7 @@ class SchedulePushJobWorker(
                 null
             }
             val trafficChangeMinutes = trafficChangeMinutes(
-                previousTravelMinutes = job.lastTravelMinutes.takeIf { comparableLiveChange },
+                previousTravelMinutes = comparableLiveTravelMinutes,
                 currentTravelMinutes = travelMinutes,
             )
             val showDepartureActions = reminderDecision.departNowAction ||
@@ -193,7 +237,7 @@ class SchedulePushJobWorker(
             val pushSent = if (shouldPush) {
                 val message = trafficChangePolicy.createMessage(
                     scheduleTitle = schedule.title,
-                    previousTravelMinutes = job.lastTravelMinutes.takeIf { comparableLiveChange },
+                    previousTravelMinutes = comparableLiveTravelMinutes,
                     currentTravelMinutes = travelMinutes,
                     recommendedDepartureAt = recommendedDepartureAt,
                     decision = reminderDecision,
@@ -290,6 +334,8 @@ class SchedulePushJobWorker(
                 liveFetchedAt = trafficResult.fetchedAt,
                 etaStale = trafficResult.stale,
                 etaFailureReason = sanitizeTrafficFailureReason(trafficResult.failureReason),
+                etaRouteFingerprint = routeFingerprint,
+                liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
                 now = maxOf(now, Instant.now(clock), trafficResult.fetchedAt ?: now),
             )
         } catch (exception: Exception) {

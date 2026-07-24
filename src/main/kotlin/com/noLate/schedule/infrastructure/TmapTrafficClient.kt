@@ -1,6 +1,7 @@
 package com.noLate.schedule.infrastructure
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
@@ -20,7 +21,6 @@ import com.noLate.global.config.externalHttpRequestFactory
 import java.net.SocketTimeoutException
 import java.time.Clock
 import java.time.Instant
-import kotlin.math.ceil
 
 @Component
 @ConditionalOnProperty(prefix = "schedule.traffic.tmap", name = ["enabled"], havingValue = "true")
@@ -30,12 +30,10 @@ class TmapTrafficClient(
     private val clock: Clock = Clock.systemUTC(),
     requestFactory: ClientHttpRequestFactory = externalHttpRequestFactory(),
     @Value("\${schedule.traffic.max-travel-minutes:1440}")
-    private val maxTravelMinutes: Int = 1_440,
+    private val maxTravelMinutes: Int = EtaTravelTimePolicy.DEFAULT_MAX_TRAVEL_MINUTES,
 ) : TrafficClient {
     init {
-        require(maxTravelMinutes in 1..10_080) {
-            "schedule.traffic.max-travel-minutes는 1~10080분이어야 합니다."
-        }
+        EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
     }
 
     private val restClient = RestClient.builder()
@@ -45,6 +43,9 @@ class TmapTrafficClient(
         .build()
 
     override fun getTravelMinutes(request: TrafficRequest): TrafficResult {
+        require(request.maxTravelMinutes == maxTravelMinutes) {
+            "TrafficRequest와 TMAP client의 이동 시간 상한이 일치해야 합니다."
+        }
         request.liveRefreshBlockedReason?.let { return request.fallbackResult(it) }
 
         if (request.travelMode == ScheduleTravelMode.BIKE) {
@@ -154,12 +155,7 @@ internal fun validatedTmapTravelMinutes(
     ) {
         "지원하지 않는 TMAP 이동 수단입니다."
     }
-    if (!totalTimeSeconds.isFinite() || totalTimeSeconds <= 0) {
-        error("TMAP 이동 시간은 유한한 양수여야 합니다.")
-    }
-    val minutes = ceil(totalTimeSeconds / 60.0)
-    if (!minutes.isFinite() || minutes > maxTravelMinutes) {
-        error("TMAP 이동 시간이 제품 상한을 벗어났습니다.")
-    }
-    return minutes.toInt()
+    val minutes = EtaTravelTimePolicy.normalizeMinutes(totalTimeSeconds / 60.0, maxTravelMinutes)
+        ?: error("TMAP 이동 시간은 유한한 양수이며 제품 상한 이하여야 합니다.")
+    return minutes
 }

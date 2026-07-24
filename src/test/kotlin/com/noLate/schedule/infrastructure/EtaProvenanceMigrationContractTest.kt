@@ -15,9 +15,11 @@ class EtaProvenanceMigrationContractTest {
         val sql = Files.readString(migrationPath)
         val columns = listOf(
             "last_live_fetched_at",
+            "last_live_travel_minutes",
             "last_eta_source",
             "last_eta_stale",
             "last_eta_failure_reason",
+            "last_eta_route_fingerprint",
             "last_traffic_change_minutes",
             "last_changed_at",
         )
@@ -32,9 +34,22 @@ class EtaProvenanceMigrationContractTest {
                 "$column 독립 ALTER가 필요합니다.",
             )
         }
-        assertEquals(6, Regex("SET @eta_column_exists :=").findAll(sql).count())
-        assertEquals(6, Regex("PREPARE eta_stmt FROM @eta_ddl").findAll(sql).count())
-        assertEquals(6, Regex("DEALLOCATE PREPARE eta_stmt").findAll(sql).count())
+        assertEquals(8, Regex("SET @eta_column_exists :=").findAll(sql).count())
+        assertEquals(8, Regex("PREPARE eta_stmt FROM @eta_ddl").findAll(sql).count())
+        assertEquals(8, Regex("DEALLOCATE PREPARE eta_stmt").findAll(sql).count())
+        assertTrue(
+            sql.indexOf("ADD COLUMN last_eta_failure_reason") <
+                sql.indexOf("ADD COLUMN last_eta_route_fingerprint"),
+            "AFTER 대상 컬럼을 먼저 생성해야 fresh/partial schema 모두에서 적용됩니다.",
+        )
+        assertTrue(
+            sql.indexOf("ADD COLUMN last_live_travel_minutes") <
+                sql.indexOf("ADD COLUMN last_eta_source"),
+        )
+        assertTrue(
+            sql.indexOf("ADD COLUMN last_eta_route_fingerprint") <
+                sql.indexOf("ADD COLUMN last_traffic_change_minutes"),
+        )
         assertTrue(sql.contains("SELECT COUNT(*) AS expected_count"))
     }
 }

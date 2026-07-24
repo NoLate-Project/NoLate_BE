@@ -5,6 +5,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.service.SchedulePushJobWorker
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
@@ -130,6 +131,7 @@ class SchedulePushScenarioRunner(
                 ChronoUnit.MINUTES,
             )
             job.startProcessing("schedule-push-scenario")
+            val route = requireNotNull(schedule.route)
             job.finishCheck(
                 travelMinutes = previousTravelMinutes,
                 recommendedDepartureAt = previousRecommendedDepartureAt,
@@ -140,6 +142,14 @@ class SchedulePushScenarioRunner(
                 etaSource = TrafficSource.LIVE_PROVIDER,
                 liveFetchedAt = now.minus(1, ChronoUnit.MINUTES),
                 etaStale = false,
+                etaRouteFingerprint = ScheduleEtaRouteFingerprint.calculate(
+                    schedule = schedule,
+                    travelMinutes = route.travelMinutes,
+                    travelMode = route.travelMode,
+                    originLat = route.originLat,
+                    originLng = route.originLng,
+                    routeJson = route.routeJson,
+                ),
                 now = now.minus(1, ChronoUnit.MINUTES),
             )
         }

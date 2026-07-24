@@ -3,7 +3,6 @@ package com.noLate.schedule.application
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.schedule.domain.ScheduleTravelMode
-import kotlin.math.ceil
 
 /**
  * 여러 FE 버전이 저장한 선택 경로 JSON에서 provider 재조회에 필요한 최소 메타데이터를
@@ -19,20 +18,22 @@ data class SelectedRouteMetadata(
             objectMapper: ObjectMapper,
             routeJson: String?,
             travelMode: ScheduleTravelMode?,
+            maxTravelMinutes: Int = EtaTravelTimePolicy.DEFAULT_MAX_TRAVEL_MINUTES,
         ): SelectedRouteMetadata {
+            EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
             if (routeJson.isNullOrBlank()) return SelectedRouteMetadata()
 
             return runCatching {
                 val root = objectMapper.readTree(routeJson)
                 SelectedRouteMetadata(
-                    travelMinutes = extractTravelMinutes(root),
+                    travelMinutes = extractTravelMinutes(root, maxTravelMinutes),
                     routeOption = extractRouteOption(root),
                     transitItineraryJson = extractTransitItinerary(root, travelMode)?.toString(),
                 )
             }.getOrDefault(SelectedRouteMetadata())
         }
 
-        private fun extractTravelMinutes(root: JsonNode): Int? {
+        private fun extractTravelMinutes(root: JsonNode, maxTravelMinutes: Int): Int? {
             val routeInfo = root.path("routeInfo")
             return sequenceOf(
                 root.path("totalDurationMinutes"),
@@ -46,8 +47,7 @@ data class SelectedRouteMetadata(
             )
                 .firstOrNull { it.isNumber }
                 ?.asDouble()
-                ?.takeIf { it.isFinite() && it > 0 }
-                ?.let { ceil(it).toInt().coerceAtLeast(1) }
+                ?.let { EtaTravelTimePolicy.normalizeMinutes(it, maxTravelMinutes) }
         }
 
         private fun extractRouteOption(root: JsonNode): String? {

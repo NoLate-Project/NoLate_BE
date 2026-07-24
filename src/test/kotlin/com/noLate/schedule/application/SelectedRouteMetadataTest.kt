@@ -72,4 +72,42 @@ class SelectedRouteMetadataTest {
 
         assertNull(metadata.travelMinutes)
     }
+
+    @Test
+    fun `과대값과 NaN selected ETA는 제품 상한 밖이므로 거부한다`() {
+        val huge = SelectedRouteMetadata.parse(
+            objectMapper,
+            """{"minutes":2000}""",
+            ScheduleTravelMode.CAR,
+            maxTravelMinutes = 1_440,
+        )
+        val nan = SelectedRouteMetadata.parse(
+            objectMapper,
+            """{"minutes":"NaN"}""",
+            ScheduleTravelMode.CAR,
+            maxTravelMinutes = 1_440,
+        )
+
+        assertNull(huge.travelMinutes)
+        assertNull(nan.travelMinutes)
+    }
+
+    @Test
+    fun `fraction routeInfo 전체 시간은 올림하고 명시 경로만 읽는다`() {
+        val metadata = SelectedRouteMetadata.parse(
+            objectMapper,
+            """
+                {
+                  "routeInfo": {
+                    "totalDurationMinutes": 29.01,
+                    "steps": [{"durationMinutes": 999}]
+                  }
+                }
+            """.trimIndent(),
+            ScheduleTravelMode.WALK,
+            maxTravelMinutes = 1_440,
+        )
+
+        assertEquals(30, metadata.travelMinutes)
+    }
 }

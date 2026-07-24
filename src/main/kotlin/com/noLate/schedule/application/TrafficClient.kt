@@ -43,11 +43,18 @@ data class TrafficRequest(
     val selectedTransitItineraryJson: String? = null,
     /** 일정/목적지 변경처럼 live 재계산 자체를 막아야 하는 이유. */
     val liveRefreshBlockedReason: String? = null,
+    val maxTravelMinutes: Int = EtaTravelTimePolicy.DEFAULT_MAX_TRAVEL_MINUTES,
 ) {
     init {
-        require(fallbackTravelMinutes > 0) { "fallbackTravelMinutes는 0보다 커야 합니다." }
-        require(selectedRouteTravelMinutes == null || selectedRouteTravelMinutes > 0) {
-            "selectedRouteTravelMinutes는 null이거나 0보다 커야 합니다."
+        EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
+        require(EtaTravelTimePolicy.isValid(fallbackTravelMinutes, maxTravelMinutes)) {
+            "fallbackTravelMinutes는 1~$maxTravelMinutes 사이여야 합니다."
+        }
+        require(
+            selectedRouteTravelMinutes == null ||
+                EtaTravelTimePolicy.isValid(selectedRouteTravelMinutes, maxTravelMinutes)
+        ) {
+            "selectedRouteTravelMinutes는 null이거나 1~$maxTravelMinutes 사이여야 합니다."
         }
     }
 }
@@ -108,7 +115,8 @@ fun sanitizeTrafficFailureReason(reason: String?): String? {
 }
 
 fun TrafficRequest.fallbackResult(reason: String): TrafficResult {
-    val selectedMinutes = selectedRouteTravelMinutes?.takeIf { it > 0 }
+    val selectedMinutes = selectedRouteTravelMinutes
+        ?.takeIf { it == fallbackTravelMinutes }
     return TrafficResult(
         travelMinutes = selectedMinutes ?: fallbackTravelMinutes,
         source = if (selectedMinutes != null) {

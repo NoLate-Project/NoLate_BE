@@ -90,6 +90,8 @@ schedule:
   traffic:
     # provider 오응답이 과도하게 이른 출발 알림으로 승격되지 않도록 하는 제품 상한이다.
     max-travel-minutes: ${SCHEDULE_TRAFFIC_MAX_TRAVEL_MINUTES:1440}
+    # fallback 사이에도 유지하는 마지막 live 비교 기준의 최대 신선도다.
+    live-comparator-max-age-minutes: ${SCHEDULE_TRAFFIC_LIVE_COMPARATOR_MAX_AGE_MINUTES:60}
     tmap:
       enabled: ${TMAP_ENABLED:false}
       app-key: ${TMAP_APP_KEY:}

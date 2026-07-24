@@ -11,6 +11,7 @@ import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleDepartureReminderStage
+import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelMode
@@ -226,6 +227,7 @@ class SchedulePushJobWorkerTest {
             etaSource = TrafficSource.LIVE_PROVIDER,
             liveFetchedAt = previousRecommendedDepartureAt.minus(60, ChronoUnit.MINUTES),
             etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
             now = previousRecommendedDepartureAt.minus(60, ChronoUnit.MINUTES),
         )
 
@@ -278,6 +280,7 @@ class SchedulePushJobWorkerTest {
             etaSource = TrafficSource.LIVE_PROVIDER,
             liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
             etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
             now = testNow.minus(1, ChronoUnit.MINUTES),
         )
 
@@ -334,6 +337,7 @@ class SchedulePushJobWorkerTest {
             etaSource = TrafficSource.LIVE_PROVIDER,
             liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
             etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
             now = testNow.minus(1, ChronoUnit.MINUTES),
         )
         whenever(
@@ -358,12 +362,134 @@ class SchedulePushJobWorkerTest {
         assertEquals(45, job.lastTravelMinutes)
         assertEquals(TrafficSource.SAVED_FALLBACK, job.lastEtaSource)
         assertTrue(job.lastEtaStale == true)
+        assertEquals(30, job.lastLiveTravelMinutes)
+        assertEquals(testNow.minus(1, ChronoUnit.MINUTES), job.lastLiveFetchedAt)
         assertNull(job.lastTrafficChangeMinutes)
         assertNull(job.lastChangedAt)
         assertEquals(
             schedule.startAt.minus(45, ChronoUnit.MINUTES),
             job.lastRecommendedDepartureAt,
         )
+    }
+
+    @Test
+    fun `live 이후 fallback을 거쳐 복구한 live는 마지막 fresh live 대비 correction을 한 번 보낸다`() {
+        val schedule = schedule(defaultScheduleStartAt)
+        val recoveryAt = testNow.plus(20, ChronoUnit.MINUTES)
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        job.startProcessing("live-worker")
+        job.finishCheck(
+            travelMinutes = 30,
+            recommendedDepartureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
+            etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
+            now = testNow.minus(1, ChronoUnit.MINUTES),
+        )
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                recoveryAt,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = 30,
+                source = TrafficSource.SAVED_FALLBACK,
+                stale = true,
+                failureReason = "PROVIDER_TIMEOUT: 실시간 ETA 공급자 응답 시간이 초과되었습니다.",
+            ),
+            TrafficResult(
+                travelMinutes = 45,
+                source = TrafficSource.LIVE_PROVIDER,
+                fetchedAt = recoveryAt,
+                stale = false,
+            ),
+        )
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+        val worker = worker()
+
+        worker.runDueJobs(testNow)
+        assertEquals(30, job.lastLiveTravelMinutes)
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+
+        worker.runDueJobs(recoveryAt)
+
+        verify(notificationUseCase, times(1)).sendToMember(
+            memberId = eq(1L),
+            title = eq("이동 시간이 늘었어요"),
+            body = check { assertTrue(it.contains("15분 더 걸려요")) },
+            data = check { assertEquals("15", it["trafficChangeMinutes"]) },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
+        )
+        assertEquals(45, job.lastLiveTravelMinutes)
+        assertEquals(recoveryAt, job.lastLiveFetchedAt)
+        assertEquals(15, job.lastTrafficChangeMinutes)
+        assertEquals(recoveryAt, job.lastChangedAt)
+    }
+
+    @Test
+    fun `freshness가 만료된 live baseline은 correction 비교에 사용하지 않는다`() {
+        val schedule = schedule(defaultScheduleStartAt)
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(61, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        job.startProcessing("old-live-worker")
+        job.finishCheck(
+            travelMinutes = 30,
+            recommendedDepartureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = testNow.minus(61, ChronoUnit.MINUTES),
+            etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
+            now = testNow.minus(61, ChronoUnit.MINUTES),
+        )
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+            )
+        ).thenReturn(listOf(job))
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(45))
+
+        worker(liveComparatorMaxAgeMinutes = 60).runDueJobs(testNow)
+
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+        assertEquals(45, job.lastLiveTravelMinutes)
+        assertEquals(testNow, job.lastLiveFetchedAt)
+        assertNull(job.lastTrafficChangeMinutes)
+        assertNull(job.lastChangedAt)
     }
 
     @Test
@@ -447,6 +573,7 @@ class SchedulePushJobWorkerTest {
             etaSource = TrafficSource.LIVE_PROVIDER,
             liveFetchedAt = firstReminderBoundaryAt,
             etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
             now = firstReminderBoundaryAt,
         )
 
@@ -512,6 +639,7 @@ class SchedulePushJobWorkerTest {
             etaSource = TrafficSource.LIVE_PROVIDER,
             liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
             etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
             now = testNow.minus(1, ChronoUnit.MINUTES),
         )
 
@@ -923,7 +1051,7 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
-    fun `사용자가 선택한 경로의 ETA 스냅샷을 실시간 교통 조회 fallback으로 넘긴다`() {
+    fun `selected JSON ETA가 canonical과 다르면 fallback에서 canonical을 우선한다`() {
         val schedule = schedule(
             routeJson = """{"id":"selected-route","minutes":42,"source":"api","providerRouteOption":"2"}"""
         )
@@ -949,13 +1077,16 @@ class SchedulePushJobWorkerTest {
 
         verify(trafficClient).getTravelMinutes(check<TrafficRequest> {
             assertEquals(30, it.fallbackTravelMinutes)
-            assertEquals(42, it.selectedRouteTravelMinutes)
+            assertNull(it.selectedRouteTravelMinutes)
             assertEquals("2", it.selectedRouteOption)
             assertTrue(it.selectedRouteJson.orEmpty().contains("selected-route"))
         })
     }
 
-    private fun worker(accessPolicy: ScheduleAccessPolicy? = null) = SchedulePushJobWorker(
+    private fun worker(
+        accessPolicy: ScheduleAccessPolicy? = null,
+        liveComparatorMaxAgeMinutes: Long = 60,
+    ) = SchedulePushJobWorker(
         pushJobRepository = pushJobRepository,
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -969,6 +1100,7 @@ class SchedulePushJobWorkerTest {
         departureAlertLeadMinutes = departureAlertLeadMinutes,
         departureReminderIntervalMinutes = departureReminderIntervalMinutes,
         processingTimeoutMinutes = 10,
+        liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
         travelPlanRepository = travelPlanRepository,
         scheduleAccessPolicy = accessPolicy,
         clock = Clock.fixed(testNow, ZoneId.of("UTC")),
@@ -1029,6 +1161,18 @@ class SchedulePushJobWorkerTest {
         fetchedAt = testNow,
         stale = false,
     )
+
+    private fun routeFingerprint(schedule: Schedule): String {
+        val route = requireNotNull(schedule.route)
+        return ScheduleEtaRouteFingerprint.calculate(
+            schedule = schedule,
+            travelMinutes = route.travelMinutes,
+            travelMode = route.travelMode,
+            originLat = route.originLat,
+            originLng = route.originLng,
+            routeJson = route.routeJson,
+        )
+    }
 
     private fun schedule(
         startAt: Instant = defaultScheduleStartAt,

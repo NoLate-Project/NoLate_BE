@@ -23,22 +23,29 @@ This runbook is intentionally separate from the executable SQL. Apply
 ## Apply or repair
 
 Run the SQL file as one session. Every column has its own `information_schema` guard and
-`ALTER TABLE`, so a database with zero, some, or all six columns can use the same procedure.
+`ALTER TABLE`, so a database with zero, some, or all eight columns can use the same procedure.
 Do not replace the guards with one multi-column `ALTER`: that form cannot safely repair a
-partially applied upgrade.
+partially applied upgrade. The current contract has eight nullable provenance columns, including
+the trusted live comparator and ETA route fingerprint.
+
+Do not backfill `last_live_travel_minutes` from `last_travel_minutes`: the latter may be a selected
+or saved fallback. Existing rows with incomplete provenance intentionally remain nullable and the
+status API falls back to the current route until a worker writes a complete new snapshot.
 
 ## Verify
 
 The final two queries in the SQL file list the columns and return `expected_count`. Deployment
 passes only when:
 
-- `expected_count` is `6`;
-- all six columns are nullable;
+- `expected_count` is `8`;
+- all eight columns are nullable;
 - `last_live_fetched_at` and `last_changed_at` are `datetime(6)`;
+- `last_live_travel_minutes` is `int`;
 - `last_eta_source` is `varchar(30)`;
 - `last_eta_stale` is the database boolean representation;
 - `last_eta_failure_reason` is `varchar(500)`;
+- `last_eta_route_fingerprint` is `varchar(64)`;
 - `last_traffic_change_minutes` is `int`.
 
-Re-run the same SQL file if the count is below six. Existing columns are reported and left
+Re-run the same SQL file if the count is below eight. Existing columns are reported and left
 untouched; only missing columns are added.
