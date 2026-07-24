@@ -33,11 +33,16 @@ class NotificationController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: RegisterPushTokenRequest
     ): ApiResponse<Unit> {
+        val authenticated = requirePrincipal(principal)
         notificationTokenService.registerToken(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
             deviceId = request.deviceId,
             platform = request.platform,
-            token = request.token
+            token = request.token,
+            accessTokenIssuedAt = authenticated.accessTokenIssuedAt
+                ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
+            accessTokenSessionGeneration = authenticated.accessTokenSessionGeneration
+                ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
         )
         return ApiResponse.success(Unit)
     }
@@ -48,14 +53,17 @@ class NotificationController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: SendTestNotificationRequest
     ): ApiResponse<NotificationSendResult> {
-        // 테스트 API도 실제 결과를 반환해 Android 성공과 iOS 인증 실패 같은 부분 성공을 숨기지 않는다.
-        val result = notificationUseCase.sendToMember(
-            memberId = requireMemberId(principal),
+        val authenticated = requirePrincipal(principal)
+        // 인증된 공개 API는 테스트 발송도 recipient/member withdrawal fence와 frozen manifest를
+        // 통과한다. 그래야 security filter 이후 탈퇴가 commit된 요청이 token을 다시 조회해
+        // provider를 호출하거나 notification row를 재생성할 수 없다.
+        val result = notificationUseCase.sendAuthenticatedToMember(
+            memberId = authenticated.id,
+            presentedSessionGeneration = authenticated.accessTokenSessionGeneration
+                ?: throw BusinessException(ErrorCode.INVALID_TOKEN),
             title = request.title,
             body = request.body,
             data = request.data ?: emptyMap(),
-            // 진단용 발송은 제품 이벤트가 아니므로 사용자의 알림함을 오염시키지 않는다.
-            persistInInbox = false,
         )
         return ApiResponse.success(result)
     }
@@ -75,6 +83,9 @@ class NotificationController(
 
     private fun requireMemberId(principal: MemberPrincipal?): Long =
         principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+    private fun requirePrincipal(principal: MemberPrincipal?): MemberPrincipal =
+        principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
 }
 
 data class RegisterPushTokenRequest(
@@ -96,6 +107,9 @@ data class PushSendHistoryResponse(
     val deviceId: String?,
     val platform: PushPlatform,
     val scheduleId: Long?,
+    val logicalEventKey: String?,
+    val categoryId: Long?,
+    val calendarId: Long?,
     val payloadType: String?,
     val title: String,
     val body: String,
@@ -115,6 +129,9 @@ private fun PushSendHistory.toResponse(): PushSendHistoryResponse =
         deviceId = deviceId,
         platform = platform,
         scheduleId = scheduleId,
+        logicalEventKey = logicalEventKey,
+        categoryId = categoryId,
+        calendarId = calendarId,
         payloadType = payloadType,
         title = title,
         body = body,

@@ -4,16 +4,19 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.support.ensureActivePushMember
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -24,6 +27,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 @DataJpaTest
 @Import(
@@ -39,13 +43,21 @@ import java.util.concurrent.TimeUnit
         "spring.sql.init.mode=never",
     ]
 )
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AppNotificationServiceIntegrationTest @Autowired constructor(
     private val service: AppNotificationService,
     private val repository: AppNotificationRepository,
+    private val jdbcTemplate: JdbcTemplate,
 ) {
+    @BeforeEach
+    fun prepareActiveRecipients() {
+        repository.deleteAll()
+        listOf(10L, 20L, 30L, 40L, 41L, 42L, 43L).forEach {
+            ensureActivePushMember(jdbcTemplate, it)
+        }
+    }
 
     @Test
-    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun `같은 논리 알림이 동시에 기록돼도 사용자 알림은 한 건만 생성된다`() {
         val callCount = 8
         val executor = Executors.newFixedThreadPool(callCount)
@@ -97,7 +109,11 @@ class AppNotificationServiceIntegrationTest @Autowired constructor(
             )
         }
         val latest = repository.findAllByMemberIdOrderByIdDesc(20L).first()
-        service.markRead(memberId = 20L, notificationId = requireNotNull(latest.id))
+        service.markRead(
+            memberId = 20L,
+            notificationId = requireNotNull(latest.id),
+            presentedSessionGeneration = 0L,
+        )
 
         val firstPage = service.getInbox(memberId = 20L, cursorId = null, limit = 2, unreadOnly = false)
 
@@ -127,13 +143,13 @@ class AppNotificationServiceIntegrationTest @Autowired constructor(
             )
         }
         val first = repository.findAllByMemberIdOrderByIdDesc(30L).last()
-        service.markRead(30L, requireNotNull(first.id))
+        service.markRead(30L, requireNotNull(first.id), presentedSessionGeneration = 0L)
 
         val unreadPage = service.getInbox(30L, null, 20, unreadOnly = true)
         assertEquals(2, unreadPage.items.size)
         assertTrue(unreadPage.items.all { !it.isRead })
 
-        assertEquals(2, service.markAllRead(30L))
+        assertEquals(2, service.markAllRead(30L, presentedSessionGeneration = 0L))
         assertEquals(0L, service.getUnreadCount(30L))
     }
 
@@ -147,11 +163,96 @@ class AppNotificationServiceIntegrationTest @Autowired constructor(
         )
 
         val error = assertThrows(BusinessException::class.java) {
-            service.markRead(memberId = 41L, notificationId = requireNotNull(notification.id))
+            service.markRead(
+                memberId = 41L,
+                notificationId = requireNotNull(notification.id),
+                presentedSessionGeneration = 0L,
+            )
         }
 
         assertEquals(ErrorCode.NOTIFICATION_NOT_FOUND, error.errorCode)
         assertEquals(1L, service.getUnreadCount(40L))
+    }
+
+    @Test
+    fun `filter 통과 뒤 logout generation이 먼저 commit되면 단건 읽음은 row를 바꾸지 않는다`() {
+        jdbcTemplate.update("UPDATE `member` SET session_generation = 1 WHERE id = 42")
+        val notification = service.record(
+            memberId = 42L,
+            title = "세션 경계 단건",
+            body = "읽지 않음 유지",
+            data = emptyMap(),
+        )
+
+        val failure = invokeAfterGenerationAdvance(42L, nextGeneration = 2L) {
+            service.markRead(
+                memberId = 42L,
+                notificationId = requireNotNull(notification.id),
+                presentedSessionGeneration = 1L,
+            )
+        }
+
+        assertInvalidToken(failure)
+        assertNull(repository.findById(requireNotNull(notification.id)).orElseThrow().readAt)
+    }
+
+    @Test
+    fun `filter 통과 뒤 re-login generation이 먼저 commit되면 모두 읽음은 row를 바꾸지 않는다`() {
+        jdbcTemplate.update("UPDATE `member` SET session_generation = 5 WHERE id = 43")
+        repeat(2) {
+            service.record(
+                memberId = 43L,
+                title = "세션 경계 전체 $it",
+                body = "읽지 않음 유지",
+                data = emptyMap(),
+            )
+        }
+
+        val failure = invokeAfterGenerationAdvance(43L, nextGeneration = 6L) {
+            service.markAllRead(
+                memberId = 43L,
+                presentedSessionGeneration = 5L,
+            )
+        }
+
+        assertInvalidToken(failure)
+        assertEquals(2L, repository.countByMemberIdAndReadAtIsNull(43L))
+    }
+
+    private fun invokeAfterGenerationAdvance(
+        memberId: Long,
+        nextGeneration: Long,
+        mutation: () -> Unit,
+    ): Throwable? {
+        val authenticated = CountDownLatch(1)
+        val resumeMutation = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        val executor = Executors.newSingleThreadExecutor()
+        val future = executor.submit {
+            authenticated.countDown()
+            check(resumeMutation.await(10, TimeUnit.SECONDS))
+            failure.set(runCatching(mutation).exceptionOrNull())
+        }
+        try {
+            assertTrue(authenticated.await(10, TimeUnit.SECONDS))
+            jdbcTemplate.update(
+                "UPDATE `member` SET session_generation = ? WHERE id = ?",
+                nextGeneration,
+                memberId,
+            )
+            resumeMutation.countDown()
+            future.get(10, TimeUnit.SECONDS)
+            return failure.get()
+        } finally {
+            resumeMutation.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    private fun assertInvalidToken(failure: Throwable?) {
+        assertTrue(failure is BusinessException, failure?.stackTraceToString())
+        assertEquals(ErrorCode.INVALID_TOKEN, (failure as BusinessException).errorCode)
     }
 }
 

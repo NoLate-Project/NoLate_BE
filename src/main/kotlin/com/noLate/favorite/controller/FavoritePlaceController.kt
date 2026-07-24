@@ -41,8 +41,10 @@ class FavoritePlaceCategoryController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: CreateFavoritePlaceCategoryRequest,
     ): ApiResponse<FavoritePlaceCategoryDto> {
+        val authenticated = requireMemberPrincipal(principal)
         val result = favoritePlaceService.createCategory(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
             name = request.name,
             color = request.color,
             iconKey = request.iconKey,
@@ -58,8 +60,10 @@ class FavoritePlaceCategoryController(
         @PathVariable categoryId: Long,
         @RequestBody request: UpdateFavoritePlaceCategoryRequest,
     ): ApiResponse<FavoritePlaceCategoryDto> {
+        val authenticated = requireMemberPrincipal(principal)
         val result = favoritePlaceService.updateCategory(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
             categoryId = categoryId,
             name = request.name,
             color = request.color,
@@ -75,7 +79,12 @@ class FavoritePlaceCategoryController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable categoryId: Long,
     ): ApiResponse<Unit> {
-        favoritePlaceService.deleteCategory(requireMemberId(principal), categoryId)
+        val authenticated = requireMemberPrincipal(principal)
+        favoritePlaceService.deleteCategory(
+            memberId = authenticated.id,
+            categoryId = categoryId,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -85,10 +94,12 @@ class FavoritePlaceCategoryController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: ReorderFavoritePlacesRequest,
     ): ApiResponse<List<FavoritePlaceCategoryDto>> {
+        val authenticated = requireMemberPrincipal(principal)
         return ApiResponse.success(
             favoritePlaceService.reorderCategories(
-                memberId = requireMemberId(principal),
+                memberId = authenticated.id,
                 items = request.items.map { it.toServiceItem() },
+                presentedSessionGeneration = requireSessionGeneration(authenticated),
             )
         )
     }
@@ -122,8 +133,10 @@ class FavoritePlaceController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: SaveDefaultOriginRequest,
     ): ApiResponse<FavoritePlaceDto> {
+        val authenticated = requireMemberPrincipal(principal)
         val result = favoritePlaceService.saveDefaultOrigin(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
             label = request.label,
             placeName = request.placeName,
             address = request.address,
@@ -140,7 +153,11 @@ class FavoritePlaceController(
     fun clearDefaultOrigin(
         @AuthenticationPrincipal principal: MemberPrincipal?,
     ): ApiResponse<Unit> {
-        favoritePlaceService.clearDefaultOrigin(requireMemberId(principal))
+        val authenticated = requireMemberPrincipal(principal)
+        favoritePlaceService.clearDefaultOrigin(
+            memberId = authenticated.id,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -150,8 +167,10 @@ class FavoritePlaceController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: CreateFavoritePlaceRequest,
     ): ApiResponse<FavoritePlaceDto> {
+        val authenticated = requireMemberPrincipal(principal)
         val result = favoritePlaceService.createPlace(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
             categoryId = request.categoryId,
             label = request.label,
             placeName = request.placeName,
@@ -173,8 +192,10 @@ class FavoritePlaceController(
         @PathVariable placeId: Long,
         @RequestBody request: UpdateFavoritePlaceRequest,
     ): ApiResponse<FavoritePlaceDto> {
+        val authenticated = requireMemberPrincipal(principal)
         val result = favoritePlaceService.updatePlace(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
             placeId = placeId,
             categoryId = request.categoryId,
             clearCategory = request.clearCategory ?: false,
@@ -197,7 +218,12 @@ class FavoritePlaceController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable placeId: Long,
     ): ApiResponse<Unit> {
-        favoritePlaceService.deletePlace(requireMemberId(principal), placeId)
+        val authenticated = requireMemberPrincipal(principal)
+        favoritePlaceService.deletePlace(
+            memberId = authenticated.id,
+            placeId = placeId,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -207,7 +233,14 @@ class FavoritePlaceController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable placeId: Long,
     ): ApiResponse<FavoritePlaceDto> {
-        return ApiResponse.success(favoritePlaceService.setDefaultOrigin(requireMemberId(principal), placeId))
+        val authenticated = requireMemberPrincipal(principal)
+        return ApiResponse.success(
+            favoritePlaceService.setDefaultOrigin(
+                memberId = authenticated.id,
+                placeId = placeId,
+                presentedSessionGeneration = requireSessionGeneration(authenticated),
+            )
+        )
     }
 
     @Operation(summary = "즐겨찾기 장소 정렬 순서 변경")
@@ -216,10 +249,12 @@ class FavoritePlaceController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: ReorderFavoritePlacesRequest,
     ): ApiResponse<List<FavoritePlaceDto>> {
+        val authenticated = requireMemberPrincipal(principal)
         return ApiResponse.success(
             favoritePlaceService.reorderPlaces(
-                memberId = requireMemberId(principal),
+                memberId = authenticated.id,
                 items = request.items.map { it.toServiceItem() },
+                presentedSessionGeneration = requireSessionGeneration(authenticated),
             )
         )
     }
@@ -291,3 +326,9 @@ data class ReorderFavoritePlaceItemRequest(
 
 private fun requireMemberId(principal: MemberPrincipal?): Long =
     principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+private fun requireMemberPrincipal(principal: MemberPrincipal?): MemberPrincipal =
+    principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+private fun requireSessionGeneration(principal: MemberPrincipal): Long =
+    principal.accessTokenSessionGeneration ?: throw BusinessException(ErrorCode.INVALID_TOKEN)

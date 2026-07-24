@@ -16,6 +16,40 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
     fun findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId: Long): List<Schedule>
     fun findAllByMemberId(memberId: Long): List<Schedule>
 
+    /**
+     * Account withdrawal is a physical privacy cleanup, so a prior soft delete must not hide an
+     * owned schedule from the participant/job/outbox cleanup scope.
+     */
+    @Query(
+        """
+        select schedule
+        from Schedule schedule
+        where schedule.memberId = :memberId
+        order by schedule.id asc
+        """
+    )
+    fun findAllOwnedIncludingDeletedOrderByIdAsc(
+        @Param("memberId") memberId: Long,
+    ): List<Schedule>
+
+    @Query(
+        value = """
+        select distinct s.*
+        from schedules s
+        left join schedule_category_snapshots snapshot on snapshot.schedule_id = s.id
+        where s.deleted = false
+          and (
+            s.category_id = :categoryId
+            or snapshot.category_id = concat('', :categoryId)
+          )
+        order by s.id asc
+        """,
+        nativeQuery = true,
+    )
+    fun findAllByCategoryIdIncludingSnapshotAndDeletedFalseOrderByIdAsc(
+        @Param("categoryId") categoryId: Long,
+    ): List<Schedule>
+
     @Query(
         """
         select distinct s
@@ -65,6 +99,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -115,6 +155,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -168,6 +214,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -222,6 +274,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -277,6 +335,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -343,6 +407,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -380,7 +450,9 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         select s.*
         from schedules s
         join schedule_routes sr on sr.schedule_id = s.id
-        left join schedule_push_job spj on spj.schedule_id = s.id
+        left join schedule_push_job spj
+          on spj.schedule_id = s.id
+         and spj.member_id = s.member_id
         where s.deleted = false
           and sr.notification_enabled = true
           and s.start_at > :now

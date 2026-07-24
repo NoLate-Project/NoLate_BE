@@ -22,5 +22,14 @@ class InvalidPushTokenException(
     cause: Throwable? = null,
 ) : RuntimeException("유효하지 않은 푸시 토큰입니다.", cause)
 
+/**
+ * 공급자가 요청을 수락하지 않았음이 확인돼 동일 이벤트를 안전하게 재시도할 수 있는 실패다.
+ * 수락 여부가 모호한 transport 예외는 이 타입으로 감싸지 않고 DISPATCHING 상태를 유지한다.
+ */
+open class ConfirmedPushDeliveryException(
+    message: String,
+    cause: Throwable? = null,
+) : RuntimeException(message, cause)
+
 class PushProviderUnavailableException :
-    RuntimeException("푸시 공급자가 설정되지 않았습니다.")
+    ConfirmedPushDeliveryException("푸시 공급자가 설정되지 않았습니다.")

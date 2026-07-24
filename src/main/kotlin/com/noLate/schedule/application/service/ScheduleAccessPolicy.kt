@@ -14,6 +14,7 @@ import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.springframework.stereotype.Component
@@ -42,6 +43,7 @@ class ScheduleAccessPolicy(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val categoryRepository: ScheduleCategoryRepository? = null,
 ) {
 
     fun resolve(memberId: Long, schedule: Schedule): ScheduleAccessDecision {
@@ -135,6 +137,25 @@ class ScheduleAccessPolicy(
             }
         }
         return ids.toList()
+    }
+
+    /**
+     * Schedule PUT may detach or move a schedule away from its current calendar. Cleanup must
+     * freeze the whole current calendar audience, including members whose stale notification rows
+     * outlive a previous content-mode change, before it changes the schedule's calendar id.
+     */
+    fun activeCalendarMemberIds(calendarId: Long): List<Long> {
+        if (
+            calendarRepository.findByIdAndStatusAndDeletedFalse(
+                calendarId,
+                ScheduleCalendarStatus.ACTIVE,
+            ) == null
+        ) {
+            return emptyList()
+        }
+        return calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
     }
 
     /**
@@ -301,7 +322,14 @@ class ScheduleAccessPolicy(
         schedule.scheduleType == ScheduleType.ROUTE || schedule.route != null || schedule.routeSetupRequired
 
     private fun categoryId(schedule: Schedule): Long? =
-        schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+        (schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull())
+            ?.takeIf { categoryId ->
+                categoryRepository
+                    ?.findById(categoryId)
+                    ?.orElse(null)
+                    ?.takeUnless { it.deleted } != null ||
+                    categoryRepository == null
+            }
 
     private fun isActive(share: ScheduleShare): Boolean =
         !share.deleted && share.status == ScheduleShareStatus.ACTIVE

@@ -1,6 +1,7 @@
 package com.noLate.favorite.controller
 
 import com.noLate.favorite.application.service.FavoritePlaceService
+import com.noLate.favorite.domain.FavoritePlaceCategoryDto
 import com.noLate.favorite.domain.FavoritePlaceDto
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
@@ -15,6 +16,7 @@ import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 
 @ExtendWith(MockitoExtension::class)
@@ -27,6 +29,7 @@ class FavoritePlaceControllerTest {
         id = 7L,
         email = "member@nolate.test",
         name = "tester",
+        accessTokenSessionGeneration = 3L,
     )
 
     @Test
@@ -47,6 +50,7 @@ class FavoritePlaceControllerTest {
         whenever(
             favoritePlaceService.saveDefaultOrigin(
                 memberId = eq(7L),
+                presentedSessionGeneration = eq(3L),
                 label = eq("집"),
                 placeName = eq("우리 집"),
                 address = eq("서울 중구 세종대로 110"),
@@ -74,6 +78,7 @@ class FavoritePlaceControllerTest {
         assertSame(expected, response.data)
         verify(favoritePlaceService).saveDefaultOrigin(
             memberId = 7L,
+            presentedSessionGeneration = 3L,
             label = "집",
             placeName = "우리 집",
             address = "서울 중구 세종대로 110",
@@ -89,7 +94,61 @@ class FavoritePlaceControllerTest {
         val response = controller().clearDefaultOrigin(principal)
 
         assertTrue(response.success)
-        verify(favoritePlaceService).clearDefaultOrigin(7L)
+        verify(favoritePlaceService).clearDefaultOrigin(
+            memberId = 7L,
+            presentedSessionGeneration = 3L,
+        )
+    }
+
+    @Test
+    fun `category mutation forwards the signed access session generation`() {
+        val expected = FavoritePlaceCategoryDto(
+            id = 21L,
+            name = "업무",
+            color = "#5A96FF",
+            sortOrder = 0,
+        )
+        whenever(
+            favoritePlaceService.createCategory(
+                memberId = 7L,
+                presentedSessionGeneration = 3L,
+                name = "업무",
+                color = null,
+                iconKey = null,
+                sortOrder = null,
+            )
+        ).thenReturn(expected)
+
+        val response = FavoritePlaceCategoryController(favoritePlaceService).createCategory(
+            principal = principal,
+            request = CreateFavoritePlaceCategoryRequest(name = "업무"),
+        )
+
+        assertSame(expected, response.data)
+        verify(favoritePlaceService).createCategory(
+            memberId = 7L,
+            presentedSessionGeneration = 3L,
+            name = "업무",
+            color = null,
+            iconKey = null,
+            sortOrder = null,
+        )
+    }
+
+    @Test
+    fun `favorite mutation rejects a principal without a signed session generation`() {
+        val legacyPrincipal = MemberPrincipal(
+            id = 7L,
+            email = "legacy@nolate.test",
+            name = "legacy",
+        )
+
+        val exception = assertThrows<BusinessException> {
+            controller().clearDefaultOrigin(legacyPrincipal)
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, exception.errorCode)
+        verifyNoInteractions(favoritePlaceService)
     }
 
     @Test

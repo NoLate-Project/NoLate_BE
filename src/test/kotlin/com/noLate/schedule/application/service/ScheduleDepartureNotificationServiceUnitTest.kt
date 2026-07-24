@@ -2,8 +2,10 @@ package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
-import com.noLate.notification.application.useCase.NotificationSendResult
-import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.member.domain.member.Member
+import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.notification.application.service.PreparedPushEvent
+import com.noLate.notification.application.service.PushEventOutboxService
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleDepartureStatus
@@ -16,21 +18,26 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
-import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.check
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
+import org.mockito.Mockito.lenient
 import java.time.Instant
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleDepartureNotificationServiceUnitTest {
+
+    @Mock
+    lateinit var memberRepository: MemberRepository
 
     @Mock
     lateinit var scheduleRepository: ScheduleRepository
@@ -45,18 +52,32 @@ class ScheduleDepartureNotificationServiceUnitTest {
     lateinit var departureStatusRepository: ScheduleDepartureStatusRepository
 
     @Mock
-    lateinit var notificationUseCase: NotificationUseCase
+    lateinit var pushEventOutboxService: PushEventOutboxService
 
     @Mock
     lateinit var scheduleAccessPolicy: ScheduleAccessPolicy
 
+    @BeforeEach
+    fun setUpMemberLocks() {
+        lenient().whenever(memberRepository.findByIdForUpdate(any())).thenAnswer { invocation ->
+            val memberId = invocation.getArgument<Long>(0)
+            Member(
+                id = memberId,
+                name = "Member $memberId",
+                password = "Password1!",
+                email = "member-$memberId@example.com",
+            )
+        }
+    }
+
     private fun service() = ScheduleDepartureNotificationService(
+        memberRepository = memberRepository,
         scheduleRepository = scheduleRepository,
         scheduleShareRepository = scheduleShareRepository,
         categoryShareRepository = categoryShareRepository,
-        departureStatusRepository = departureStatusRepository,
-        notificationUseCase = notificationUseCase,
-    )
+            departureStatusRepository = departureStatusRepository,
+            pushEventOutboxService = pushEventOutboxService,
+        )
 
     @Test
     fun `owner can send a departure nudge to an active direct share participant`() {
@@ -66,17 +87,27 @@ class ScheduleDepartureNotificationServiceUnitTest {
             .thenReturn(scheduleShare(targetMemberId = 2L))
         whenever(departureStatusRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
             .thenReturn(null)
-        whenever(notificationUseCase.sendToMember(eq(2L), any(), any(), any(), anyOrNull(), eq(true)))
-            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+        whenever(
+            pushEventOutboxService.enqueueDurable(
+                eq(2L),
+                any(),
+                any(),
+                any(),
+                any(),
+            )
+        ).thenReturn(prepared(manifestRecipientCount = 1))
 
         val result = service().sendDepartureNudge(
             ownerMemberId = 1L,
             scheduleId = 10L,
             targetMemberId = 2L,
+            presentedSessionGeneration = 0L,
         )
 
-        assertEquals(1, result.sentCount)
-        verify(notificationUseCase).sendToMember(
+        assertEquals(1, result.requestedCount)
+        assertEquals(0, result.attemptedCount)
+        assertEquals(0, result.sentCount)
+        verify(pushEventOutboxService).enqueueDurable(
             memberId = eq(2L),
             title = eq("출발 확인 요청"),
             body = eq("'팀 회의' 일정의 출발 여부를 알려주세요."),
@@ -85,8 +116,12 @@ class ScheduleDepartureNotificationServiceUnitTest {
                 assertEquals("10", it["scheduleId"])
                 assertEquals("1", it["requestedByMemberId"])
             },
-            inboxDeduplicationKey = anyOrNull(),
-            persistInInbox = eq(true),
+            deduplicationKey = check {
+                assertEquals(
+                    true,
+                    it.startsWith("schedule-departure-nudge:10:1:2:"),
+                )
+            },
         )
     }
 
@@ -103,13 +138,26 @@ class ScheduleDepartureNotificationServiceUnitTest {
             .thenReturn(categoryShare(targetMemberId = 3L))
         whenever(departureStatusRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 3L))
             .thenReturn(null)
-        whenever(notificationUseCase.sendToMember(eq(3L), any(), any(), any(), anyOrNull(), eq(true)))
-            .thenReturn(NotificationSendResult(requestedCount = 0))
+        whenever(
+            pushEventOutboxService.enqueueDurable(
+                eq(3L),
+                any(),
+                any(),
+                any(),
+                any(),
+            )
+        ).thenReturn(prepared(manifestRecipientCount = 0))
 
-        val result = service().sendDepartureNudge(1L, 10L, 3L)
+        val result = service().sendDepartureNudge(1L, 10L, 3L, 0L)
 
         assertEquals(0, result.requestedCount)
-        verify(notificationUseCase).sendToMember(eq(3L), any(), any(), any(), anyOrNull(), eq(true))
+        verify(pushEventOutboxService).enqueueDurable(
+            eq(3L),
+            any(),
+            any(),
+            any(),
+            any(),
+        )
     }
 
     @Test
@@ -119,20 +167,29 @@ class ScheduleDepartureNotificationServiceUnitTest {
         whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L, 4L))
         whenever(departureStatusRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 4L))
             .thenReturn(null)
-        whenever(notificationUseCase.sendToMember(eq(4L), any(), any(), any(), anyOrNull(), eq(true)))
-            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+        whenever(
+            pushEventOutboxService.enqueueDurable(
+                eq(4L),
+                any(),
+                any(),
+                any(),
+                any(),
+            )
+        ).thenReturn(prepared(manifestRecipientCount = 1))
         val service = ScheduleDepartureNotificationService(
+            memberRepository = memberRepository,
             scheduleRepository = scheduleRepository,
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             departureStatusRepository = departureStatusRepository,
-            notificationUseCase = notificationUseCase,
+            pushEventOutboxService = pushEventOutboxService,
             scheduleAccessPolicy = scheduleAccessPolicy,
         )
 
-        val result = service.sendDepartureNudge(1L, 10L, 4L)
+        val result = service.sendDepartureNudge(1L, 10L, 4L, 0L)
 
-        assertEquals(1, result.sentCount)
+        assertEquals(1, result.requestedCount)
+        assertEquals(0, result.sentCount)
         verifyNoInteractions(scheduleShareRepository, categoryShareRepository)
     }
 
@@ -142,20 +199,21 @@ class ScheduleDepartureNotificationServiceUnitTest {
         whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L))
         val service = ScheduleDepartureNotificationService(
+            memberRepository = memberRepository,
             scheduleRepository = scheduleRepository,
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             departureStatusRepository = departureStatusRepository,
-            notificationUseCase = notificationUseCase,
+            pushEventOutboxService = pushEventOutboxService,
             scheduleAccessPolicy = scheduleAccessPolicy,
         )
 
         val error = assertThrows(BusinessException::class.java) {
-            service.sendDepartureNudge(1L, 10L, 4L)
+            service.sendDepartureNudge(1L, 10L, 4L, 0L)
         }
 
         assertEquals(ErrorCode.SCHEDULE_SHARE_NOT_FOUND, error.errorCode)
-        verifyNoInteractions(notificationUseCase)
+        verifyNoInteractions(pushEventOutboxService)
     }
 
     @Test
@@ -163,11 +221,11 @@ class ScheduleDepartureNotificationServiceUnitTest {
         whenever(scheduleRepository.findOwnedScheduleDetail(10L, 2L)).thenReturn(null)
 
         val error = assertThrows(BusinessException::class.java) {
-            service().sendDepartureNudge(2L, 10L, 3L)
+            service().sendDepartureNudge(2L, 10L, 3L, 0L)
         }
 
         assertEquals(ErrorCode.SCHEDULE_NOT_FOUND, error.errorCode)
-        verifyNoInteractions(notificationUseCase)
+        verifyNoInteractions(pushEventOutboxService)
     }
 
     @Test
@@ -177,11 +235,11 @@ class ScheduleDepartureNotificationServiceUnitTest {
         whenever(categoryShareRepository.findByCategoryIdAndTargetMemberId(5L, 9L)).thenReturn(null)
 
         val error = assertThrows(BusinessException::class.java) {
-            service().sendDepartureNudge(1L, 10L, 9L)
+            service().sendDepartureNudge(1L, 10L, 9L, 0L)
         }
 
         assertEquals(ErrorCode.SCHEDULE_SHARE_NOT_FOUND, error.errorCode)
-        verifyNoInteractions(notificationUseCase)
+        verifyNoInteractions(pushEventOutboxService)
     }
 
     @Test
@@ -199,11 +257,37 @@ class ScheduleDepartureNotificationServiceUnitTest {
             )
 
         val error = assertThrows(BusinessException::class.java) {
-            service().sendDepartureNudge(1L, 10L, 2L)
+            service().sendDepartureNudge(1L, 10L, 2L, 0L)
         }
 
         assertEquals(ErrorCode.INVALID_STATE, error.errorCode)
-        verifyNoInteractions(notificationUseCase)
+        verifyNoInteractions(pushEventOutboxService)
+    }
+
+    @Test
+    fun `stale owner generation cannot persist or dispatch a departure nudge`() {
+        whenever(memberRepository.findByIdForUpdate(1L)).thenReturn(
+            Member(
+                id = 1L,
+                name = "Owner",
+                password = "Password1!",
+                email = "owner@example.com",
+                sessionGeneration = 2L,
+            )
+        )
+
+        val error = assertThrows(BusinessException::class.java) {
+            service().sendDepartureNudge(
+                ownerMemberId = 1L,
+                scheduleId = 10L,
+                targetMemberId = 2L,
+                presentedSessionGeneration = 1L,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, error.errorCode)
+        verify(scheduleRepository, never()).findOwnedScheduleDetail(any(), any())
+        verifyNoInteractions(pushEventOutboxService)
     }
 
     private fun schedule(ownerMemberId: Long) = Schedule(
@@ -232,4 +316,14 @@ class ScheduleDepartureNotificationServiceUnitTest {
         permission = ScheduleSharePermission.VIEWER,
         status = ScheduleShareStatus.ACTIVE,
     )
+
+    private fun prepared(manifestRecipientCount: Int): PreparedPushEvent =
+        PreparedPushEvent(
+            snapshot = null,
+            logicalEventKey = "event:test",
+            deliveryIds = emptyList(),
+            manifestRecipientCount = manifestRecipientCount,
+            inboxCreated = true,
+            fenceAccepted = true,
+        )
 }

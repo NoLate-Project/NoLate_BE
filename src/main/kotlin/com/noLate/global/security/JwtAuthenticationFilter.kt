@@ -79,6 +79,7 @@ class JwtAuthenticationFilter(
                 val principal = memberService.getPrincipalById(
                     memberId,
                     jwtTokenProvider.getIssuedAt(token),
+                    jwtTokenProvider.getSessionGeneration(token),
                 )
                 if (principal != null) {
                     log.debug("JwtAuthenticationFilter - active member loaded")

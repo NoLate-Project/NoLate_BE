@@ -70,7 +70,7 @@ class SchedulePushJobUpdateTest {
         )
         job.snoozeUntil(originalMonitorStartAt.plus(30, ChronoUnit.MINUTES))
 
-        whenever(repository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+        whenever(repository.findByScheduleIdAndMemberIdForUpdate(10L, 1L)).thenReturn(job)
         whenever(repository.save(any<SchedulePushJob>())).thenAnswer { it.getArgument(0) }
 
         SchedulePushJobService(repository).registerFromScheduleDto(

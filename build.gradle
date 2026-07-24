@@ -110,6 +110,9 @@ allOpen {
 }
 
 tasks.named('test') {
+    // The full suite boots many distinct Spring/JPA contexts; Gradle's 512 MiB
+    // default test-worker heap can exhaust during late classpath scans.
+    maxHeapSize = '1024m'
     // 테스트가 개발/운영 MySQL 및 스케줄러/외부 공급자를 절대 사용하지 않도록
     // 모든 Gradle test 실행에 전용 profile을 강제한다.
     systemProperty 'spring.profiles.active', 'test'

@@ -96,7 +96,10 @@ class MemberController(
         return ApiResponse.success(result)
     }
 
-    @Operation(summary = "로그아웃")
+    @Operation(
+        summary = "로그아웃",
+        description = "제시한 refresh token session만 compare-and-revoke하며 stale/replay는 성공 no-op입니다.",
+    )
     @PostMapping("/auth/logout")
     fun logout(@RequestBody request: TokenLoginRequest): ApiResponse<Unit> {
         memberUseCase.logout(request.refreshToken)
@@ -117,7 +120,10 @@ class MemberController(
     fun completeCuration(
         @AuthenticationPrincipal principal: MemberPrincipal?,
     ): ApiResponse<CurationStatusResponse> {
-        val completed = memberUseCase.completeCuration(requireMemberId(principal))
+        val completed = memberUseCase.completeCuration(
+            memberId = requireMemberId(principal),
+            presentedSessionGeneration = requireSessionGeneration(principal),
+        )
         return ApiResponse.success(CurationStatusResponse(curationCompleted = completed))
     }
 
@@ -126,7 +132,10 @@ class MemberController(
     fun getMyProfile(
         @AuthenticationPrincipal principal: MemberPrincipal?,
     ): ApiResponse<MemberProfileDto> {
-        val result = memberUseCase.getMyProfile(requireMemberId(principal))
+        val result = memberUseCase.getMyProfile(
+            memberId = requireMemberId(principal),
+            presentedSessionGeneration = requireSessionGeneration(principal),
+        )
         return ApiResponse.success(result)
     }
 
@@ -145,6 +154,7 @@ class MemberController(
                 imgId = request.imgId,
                 intro = request.intro,
             ),
+            presentedSessionGeneration = requireSessionGeneration(principal),
         )
         return ApiResponse.success(result)
     }
@@ -159,11 +169,15 @@ class MemberController(
             memberId = requireMemberId(principal),
             currentPassword = request.currentPassword,
             newPassword = request.newPassword,
+            presentedSessionGeneration = requireSessionGeneration(principal),
         )
         return ApiResponse.success(Unit)
     }
 
-    @Operation(summary = "회원 탈퇴")
+    @Operation(
+        summary = "회원 탈퇴",
+        description = "현재 access token session generation을 DB lock 안에서 재검증하는 파괴적 작업입니다.",
+    )
     @DeleteMapping("/withdraw")
     fun withdraw(
         @AuthenticationPrincipal principal: MemberPrincipal?,
@@ -171,6 +185,7 @@ class MemberController(
     ): ApiResponse<Unit> {
         memberUseCase.withdraw(
             memberId = requireMemberId(principal),
+            presentedSessionGeneration = requireSessionGeneration(principal),
             passwordForCheck = request?.password,
         )
         return ApiResponse.success(Unit)
@@ -178,6 +193,12 @@ class MemberController(
 
     private fun requireMemberId(principal: MemberPrincipal?): Long =
         principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+    private fun requireSessionGeneration(principal: MemberPrincipal?): Long =
+        principal?.accessTokenSessionGeneration
+            ?: throw BusinessException(
+                if (principal == null) ErrorCode.UNAUTHORIZED else ErrorCode.INVALID_TOKEN,
+            )
 }
 
 data class SignUpRequest(

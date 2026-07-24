@@ -19,7 +19,8 @@ spring:
 
   jpa:
     # 주기적으로 실행되는 스케줄 워커의 정상 쿼리는 출력하지 않는다.
-    # 그 외 쿼리는 P6Spy 리스너가 바인딩 값을 포함해 출력하며, 실패 SQL은 항상 출력한다.
+    # 그 외 쿼리도 P6Spy 리스너가 operation/table/elapsed만 출력한다. SQL 원문과
+    # 바인딩 값은 성공/실패 모두 default-deny 하고, 실패 시 안전한 JDBC code만 추가한다.
     show-sql: false
     properties:
       hibernate:
@@ -48,7 +49,7 @@ spring:
 
 logging:
   level:
-    # SQL 출력은 P6Spy 리스너 한 곳으로 모아 중복 로그를 피한다.
+    # SQL 실행 메타데이터는 값 없는 P6Spy 리스너 한 곳으로 모아 중복 로그를 피한다.
     org.hibernate.SQL: "OFF"
     org.hibernate.orm.jdbc.bind: "OFF"
     # IDE 의존성 동기화 전에 P6Spy가 아직 없다면 Hibernate 오류 로그가 fallback이 된다.
@@ -81,9 +82,14 @@ schedule:
   push:
     enabled: ${SCHEDULE_PUSH_ENABLED:true}
     fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}
+    # 한 번의 claim transaction이 잠그는 due job 수를 제한해 backlog가 lease timeout으로
+    # 복구되는 동안 다른 인스턴스가 다음 batch를 처리할 수 있게 한다.
+    batch-size: ${SCHEDULE_PUSH_BATCH_SIZE:50}
     retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:5}
     # 푸시 공급자의 일시 장애가 지속될 때 무한 재시도를 막는 작업 단위 한도다.
     max-retry-count: ${SCHEDULE_PUSH_MAX_RETRY_COUNT:3}
+    delivery-grace-minutes: ${SCHEDULE_PUSH_DELIVERY_GRACE_MINUTES:10}
+    processing-timeout-minutes: ${SCHEDULE_PUSH_PROCESSING_TIMEOUT_MINUTES:10}
     departure-alert-lead-minutes: ${SCHEDULE_PUSH_DEPARTURE_ALERT_LEAD_MINUTES:15}
     departure-reminder-interval-minutes: ${SCHEDULE_PUSH_DEPARTURE_REMINDER_INTERVAL_MINUTES:5}
     departure-snooze-minutes: ${SCHEDULE_PUSH_DEPARTURE_SNOOZE_MINUTES:5}
@@ -143,6 +149,30 @@ firebase:
   enabled: ${FIREBASE_ENABLED:false}
   credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
   project-id: ${FIREBASE_PROJECT_ID:}
+  # strict invariant:
+  # connect+read+write < provider-max-call < dispatch-lease,
+  # firebase-admin 9.8.0 worst case ((connect+read+write)*5 + 60s*4) < dispatch-lease,
+  # dispatch-lease-wait > provider-max-call. 등호나 0/음수는 startup에서 거절한다.
+  connect-timeout-millis: ${FIREBASE_CONNECT_TIMEOUT_MILLIS:5000}
+  read-timeout-millis: ${FIREBASE_READ_TIMEOUT_MILLIS:30000}
+  write-timeout-millis: ${FIREBASE_WRITE_TIMEOUT_MILLIS:5000}
+
+notification:
+  push-token:
+    provider-max-call-seconds: ${NOTIFICATION_PUSH_PROVIDER_MAX_CALL_SECONDS:60}
+    dispatch-lease-seconds: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_SECONDS:600}
+    dispatch-lease-wait-millis: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_WAIT_MILLIS:70000}
+    dispatch-lease-poll-millis: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_POLL_MILLIS:25}
+    retirement-reaper-enabled: ${NOTIFICATION_PUSH_TOKEN_RETIREMENT_REAPER_ENABLED:true}
+    retirement-reaper-fixed-delay-millis: ${NOTIFICATION_PUSH_TOKEN_RETIREMENT_REAPER_FIXED_DELAY_MILLIS:30000}
+  push-outbox:
+    enabled: ${NOTIFICATION_PUSH_OUTBOX_ENABLED:true}
+    fixed-delay-ms: ${NOTIFICATION_PUSH_OUTBOX_FIXED_DELAY_MS:30000}
+    # provider 호출 직전에 한 건씩 claim하며 한 run의 최대 처리량만 제한한다.
+    batch-size: ${NOTIFICATION_PUSH_OUTBOX_BATCH_SIZE:50}
+    max-attempts: ${NOTIFICATION_PUSH_OUTBOX_MAX_ATTEMPTS:5}
+    retry-delay-seconds: ${NOTIFICATION_PUSH_OUTBOX_RETRY_DELAY_SECONDS:60}
+    processing-timeout-seconds: ${NOTIFICATION_PUSH_OUTBOX_PROCESSING_TIMEOUT_SECONDS:600}
 
 auth:
   social:

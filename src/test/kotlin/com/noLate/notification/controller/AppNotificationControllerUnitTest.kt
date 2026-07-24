@@ -33,6 +33,7 @@ class AppNotificationControllerUnitTest {
         id = 17L,
         email = "member@example.com",
         name = "Member",
+        accessTokenSessionGeneration = 7L,
     )
 
     @Test
@@ -74,10 +75,10 @@ class AppNotificationControllerUnitTest {
         val controller = AppNotificationController(service, objectMapper)
         val readAt = Instant.parse("2026-07-22T01:05:00Z")
         whenever(service.getUnreadCount(17L)).thenReturn(4L)
-        whenever(service.markRead(17L, 31L)).thenReturn(
+        whenever(service.markRead(17L, 31L, 7L)).thenReturn(
             notification(id = 31L, readAt = readAt)
         )
-        whenever(service.markAllRead(17L)).thenReturn(3)
+        whenever(service.markAllRead(17L, 7L)).thenReturn(3)
 
         assertEquals(4L, controller.getUnreadCount(principal).data?.unreadCount)
         assertTrue(controller.markRead(principal, 31L).data?.read ?: false)
@@ -85,8 +86,25 @@ class AppNotificationControllerUnitTest {
         assertEquals(3, controller.markAllRead(principal).data?.updatedCount)
 
         verify(service).getUnreadCount(17L)
-        verify(service, org.mockito.kotlin.times(2)).markRead(17L, 31L)
-        verify(service).markAllRead(17L)
+        verify(service, org.mockito.kotlin.times(2)).markRead(17L, 31L, 7L)
+        verify(service).markAllRead(17L, 7L)
+    }
+
+    @Test
+    fun `read mutation without signed session generation is rejected before service access`() {
+        val controller = AppNotificationController(service, objectMapper)
+        val legacyPrincipal = MemberPrincipal(
+            id = 17L,
+            email = "member@example.com",
+            name = "Member",
+        )
+
+        val error = assertThrows(BusinessException::class.java) {
+            controller.markRead(legacyPrincipal, 31L)
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, error.errorCode)
+        verifyNoInteractions(service)
     }
 
     @Test

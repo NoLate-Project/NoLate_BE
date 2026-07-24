@@ -13,11 +13,25 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
-import jakarta.transaction.Transactional
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Isolation
+import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
+
+fun interface ScheduleDepartureFenceObserver {
+    fun afterRecipientPreview(memberId: Long, scheduleId: Long)
+}
+
+data class ScheduleDepartureMemberFence(
+    val memberId: Long,
+    val scheduleId: Long,
+    /** 최초 preview에서 동결한 알림 recipient. 이후 grant는 현재 action에 추가하지 않는다. */
+    val frozenRecipientMemberIds: Set<Long>,
+    /** 같은 transaction에서 실제로 잠기고 active였던 member 전체(actor 포함). */
+    val activeLockedMemberIds: Set<Long>,
+)
 
 @Service
 class ScheduleDepartureStatusService(
@@ -29,7 +43,51 @@ class ScheduleDepartureStatusService(
     private val eventPublisher: ApplicationEventPublisher,
     private val clock: Clock = Clock.systemUTC(),
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
+    private val fenceObserver: ScheduleDepartureFenceObserver? = null,
 ) {
+    /**
+     * Security filter 이후 지연된 notification action의 account/session fence.
+     *
+     * depart-now는 한 이벤트에서 여러 recipient member를 다루므로 actor 하나를 먼저 잠그면
+     * 서로 다른 참가자의 동시 요청이 actor(20) -> recipient(10), actor(10) -> recipient(20)
+     * 순서로 교착될 수 있다. 잠금 없는 preview로 현재 recipient 집합을 찾은 뒤 항상 member id
+     * 오름차순으로 잠그고, 그 잠금 아래 signed JWT generation을 다시 검증한다.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun lockNotificationActionMembers(
+        memberId: Long,
+        scheduleId: Long,
+        presentedSessionGeneration: Long,
+    ): ScheduleDepartureMemberFence {
+        val visibleSchedule = requireVisibleTravelSchedule(memberId, scheduleId)
+        val frozenRecipientMemberIds = notificationRecipientIds(visibleSchedule, memberId).toSet()
+        val memberIds = (frozenRecipientMemberIds + memberId)
+            .distinct()
+            .sorted()
+        fenceObserver?.afterRecipientPreview(memberId, scheduleId)
+        val lockedMembers = memberRepository.findAllByIdsForUpdate(memberIds)
+        val actor = lockedMembers.firstOrNull { it.id == memberId }
+            ?.takeUnless { it.deleted }
+            ?: throw BusinessException(
+                ErrorCode.INVALID_TOKEN,
+                "종료되었거나 존재하지 않는 로그인 세션입니다.",
+            )
+        if (actor.sessionGeneration != presentedSessionGeneration) {
+            throw BusinessException(
+                ErrorCode.INVALID_TOKEN,
+                "종료된 로그인 세션입니다.",
+            )
+        }
+        return ScheduleDepartureMemberFence(
+            memberId = memberId,
+            scheduleId = scheduleId,
+            frozenRecipientMemberIds = frozenRecipientMemberIds,
+            activeLockedMemberIds = lockedMembers.asSequence()
+                .filterNot { it.deleted }
+                .mapNotNull { it.id }
+                .toSet(),
+        )
+    }
 
     /**
      * 현재 로그인 사용자의 출발 완료 상태를 기록한다.
@@ -39,14 +97,37 @@ class ScheduleDepartureStatusService(
      * (scheduleId, memberId) 상태 row를 생성/갱신한다. 같은 사용자의 중복 요청은 최초
      * departedAt만 유지한다.
      */
-    @Transactional
-    fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDepartureStatus {
-        val visibleSchedule = scheduleRepository.findScheduleDetail(scheduleId = scheduleId, memberId = memberId)
-            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
-        scheduleAccessPolicy?.resolve(memberId, visibleSchedule)?.let { access ->
-            if (!access.travelEnabled) {
-                throw BusinessException(ErrorCode.FORBIDDEN, "이 일정은 이동 기능을 공유하지 않습니다.")
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun markDeparted(
+        memberId: Long,
+        scheduleId: Long,
+        memberFence: ScheduleDepartureMemberFence? = null,
+    ): ScheduleDepartureStatus {
+        val visibleSchedule = requireVisibleTravelSchedule(memberId, scheduleId)
+
+        val previewRecipients: Set<Long>
+        val activeLockedMemberIds: Set<Long>
+        if (memberFence != null) {
+            check(memberFence.memberId == memberId && memberFence.scheduleId == scheduleId) {
+                "Departure member fence identity does not match the requested action."
             }
+            // The caller already owns these member locks in this transaction. Do not expand the
+            // set from a second READ_COMMITTED preview: a newly granted lower member id could
+            // otherwise reintroduce member-lock inversion.
+            previewRecipients = memberFence.frozenRecipientMemberIds
+            activeLockedMemberIds = memberFence.activeLockedMemberIds
+        } else {
+            // Non-action callers freeze and lock their own snapshot once.
+            previewRecipients = notificationRecipientIds(visibleSchedule, memberId).toSet()
+            activeLockedMemberIds = memberRepository.findAllByIdsForUpdate(
+                (previewRecipients + memberId).distinct().sorted(),
+            ).asSequence()
+                .filterNot { it.deleted }
+                .mapNotNull { it.id }
+                .toSet()
+        }
+        if (memberId !in activeLockedMemberIds) {
+            throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         }
 
         val schedule = scheduleRepository.findActiveForDepartureUpdate(scheduleId)
@@ -64,27 +145,47 @@ class ScheduleDepartureStatusService(
         val saved = departureStatusRepository.saveAndFlush(status)
 
         if (firstDeparture) {
-            publishParticipantDeparted(schedule, memberId)
+            val stillEligibleRecipients = notificationRecipientIds(schedule, memberId)
+            publishParticipantDeparted(
+                schedule = schedule,
+                departedMemberId = memberId,
+                recipientMemberIds = previewRecipients
+                    .filter { it in activeLockedMemberIds && it in stillEligibleRecipients },
+            )
         }
 
         return saved
     }
 
+    private fun requireVisibleTravelSchedule(
+        memberId: Long,
+        scheduleId: Long,
+    ): com.noLate.schedule.domain.Schedule {
+        val visibleSchedule = scheduleRepository.findScheduleDetail(
+            scheduleId = scheduleId,
+            memberId = memberId,
+        ) ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        scheduleAccessPolicy?.resolve(memberId, visibleSchedule)?.let { access ->
+            if (!access.travelEnabled) {
+                throw BusinessException(ErrorCode.FORBIDDEN, "이 일정은 이동 기능을 공유하지 않습니다.")
+            }
+        }
+        return visibleSchedule
+    }
+
     /**
-     * 첫 출발 전환을 다른 활성 참가자에게 알리는 커밋 후 이벤트를 만든다.
+     * 첫 출발 전환을 다른 활성 참가자에게 알리는 transaction event를 만든다.
      *
      * 개별 일정 공유와 카테고리 공유가 겹칠 수 있으므로 LinkedHashSet으로 중복을 제거한다.
      * 출발한 본인은 수신 목록에서 제외한다. 이벤트에는 엔티티 대신 푸시에 필요한 불변값만
-     * 넣어 AFTER_COMMIT 리스너가 영속성 컨텍스트 밖에서도 안전하게 처리할 수 있게 한다.
+     * 넣어 BEFORE_COMMIT listener가 같은 transaction의 durable outbox로 안전하게 옮긴다.
      */
-    private fun publishParticipantDeparted(schedule: com.noLate.schedule.domain.Schedule, departedMemberId: Long) {
+    private fun publishParticipantDeparted(
+        schedule: com.noLate.schedule.domain.Schedule,
+        departedMemberId: Long,
+        recipientMemberIds: List<Long>,
+    ) {
         val scheduleId = requireNotNull(schedule.id)
-        val recipientMemberIds = scheduleAccessPolicy
-            ?.travelMemberIds(schedule)
-            ?.toCollection(linkedSetOf())
-            ?: legacyParticipantIds(schedule)
-
-        recipientMemberIds.remove(departedMemberId)
 
         val departedMember = memberRepository.findByIdAndDeletedFalse(departedMemberId)
         val departedMemberLabel = departedMember
@@ -107,6 +208,18 @@ class ScheduleDepartureStatusService(
                 recipientMemberIds = recipientMemberIds.toList(),
             )
         )
+    }
+
+    private fun notificationRecipientIds(
+        schedule: com.noLate.schedule.domain.Schedule,
+        departedMemberId: Long,
+    ): List<Long> {
+        val recipients = scheduleAccessPolicy
+            ?.travelMemberIds(schedule)
+            ?.toCollection(linkedSetOf())
+            ?: legacyParticipantIds(schedule)
+        recipients.remove(departedMemberId)
+        return recipients.toList()
     }
 
     @Transactional

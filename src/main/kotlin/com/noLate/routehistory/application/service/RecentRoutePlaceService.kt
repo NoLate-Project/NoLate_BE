@@ -2,6 +2,7 @@ package com.noLate.routehistory.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.member.application.service.MemberService
 import com.noLate.routehistory.domain.RecentRoutePlace
 import com.noLate.routehistory.domain.RecentRoutePlaceDto
 import com.noLate.routehistory.infrastructure.RecentRoutePlaceRepository
@@ -14,6 +15,7 @@ import kotlin.math.abs
 @Service
 class RecentRoutePlaceService(
     private val recentRoutePlaceRepository: RecentRoutePlaceRepository,
+    private val memberService: MemberService,
 ) {
     private val maxRecentPlaceCount = 20
     private val coordinateEpsilon = 0.000001
@@ -33,6 +35,7 @@ class RecentRoutePlaceService(
     @Transactional
     fun saveRecentPlace(
         memberId: Long,
+        presentedSessionGeneration: Long,
         label: String?,
         placeName: String?,
         address: String?,
@@ -52,6 +55,7 @@ class RecentRoutePlaceService(
         val normalizedProvider = normalizeOptionalText(provider, maxLength = 30)?.uppercase()
         val normalizedProviderPlaceId = normalizeOptionalText(providerPlaceId, maxLength = 128)
         val now = LocalDateTime.now()
+        memberService.getActiveMemberForUpdate(memberId, presentedSessionGeneration)
         val activePlaces = recentRoutePlaceRepository
             .findByMemberIdAndDeletedFalseOrderByLastUsedAtDescIdDesc(memberId)
 
@@ -82,7 +86,12 @@ class RecentRoutePlaceService(
     }
 
     @Transactional
-    fun deleteRecentPlace(memberId: Long, recentPlaceId: Long) {
+    fun deleteRecentPlace(
+        memberId: Long,
+        recentPlaceId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        memberService.getActiveMemberForUpdate(memberId, presentedSessionGeneration)
         val entity = recentRoutePlaceRepository.findByIdAndMemberIdAndDeletedFalse(recentPlaceId, memberId)
             ?: throw BusinessException(ErrorCode.RECENT_ROUTE_PLACE_NOT_FOUND)
 

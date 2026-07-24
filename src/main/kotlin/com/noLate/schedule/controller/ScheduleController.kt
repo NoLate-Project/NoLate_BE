@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
@@ -69,7 +70,12 @@ class ScheduleController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: AddScheduleRequest,
     ): ApiResponse<ScheduleDto> {
-        val result = scheduleUseCase.addSchedule(requireMemberId(principal), request.toDto())
+        val authenticated = requirePrincipal(principal)
+        val result = scheduleUseCase.addSchedule(
+            memberId = authenticated.id,
+            scheduleDto = request.toDto(),
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
+        )
         return ApiResponse.success(result)
     }
 
@@ -83,10 +89,12 @@ class ScheduleController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: ImportCalendarScheduleRequest,
     ): ApiResponse<ScheduleImportResultDto> {
+        val authenticated = requirePrincipal(principal)
         val result = scheduleUseCase.importSchedule(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
             scheduleDto = request.schedule.toDto(),
             source = request.source.toDomain(),
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
         )
         return ApiResponse.success(result)
     }
@@ -102,7 +110,13 @@ class ScheduleController(
         @PathVariable scheduleId: Long,
         @RequestBody request: UpdateScheduleRequest,
     ): ApiResponse<ScheduleDto> {
-        val result = scheduleUseCase.updateSchedule(requireMemberId(principal), scheduleId, request.toDto())
+        val authenticated = requirePrincipal(principal)
+        val result = scheduleUseCase.updateSchedule(
+            memberId = authenticated.id,
+            scheduleId = scheduleId,
+            scheduleDto = request.toDto(),
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
+        )
         return ApiResponse.success(result)
     }
 
@@ -116,7 +130,12 @@ class ScheduleController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
     ): ApiResponse<Unit> {
-        scheduleUseCase.deleteSchedule(requireMemberId(principal), scheduleId)
+        val authenticated = requirePrincipal(principal)
+        scheduleUseCase.deleteSchedule(
+            memberId = authenticated.id,
+            scheduleId = scheduleId,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -128,8 +147,16 @@ class ScheduleController(
     fun markScheduleDeparted(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
     ): ApiResponse<ScheduleDto> {
-        val result = scheduleUseCase.markDeparted(requireMemberId(principal), scheduleId)
+        val authenticated = requirePrincipal(principal)
+        val result = scheduleUseCase.markDeparted(
+            authenticated.id,
+            scheduleId,
+            idempotencyKey,
+            authenticated.accessTokenSessionGeneration
+                ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
+        )
         return ApiResponse.success(result)
     }
 
@@ -141,8 +168,16 @@ class ScheduleController(
     fun snoozeDepartureReminder(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
     ): ApiResponse<Unit> {
-        scheduleUseCase.snoozeDepartureReminder(requireMemberId(principal), scheduleId)
+        val authenticated = requirePrincipal(principal)
+        scheduleUseCase.snoozeDepartureReminder(
+            authenticated.id,
+            scheduleId,
+            idempotencyKey,
+            authenticated.accessTokenSessionGeneration
+                ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -279,6 +314,13 @@ class ScheduleController(
     private fun requireMemberId(principal: MemberPrincipal?): Long {
         return principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
     }
+
+    private fun requirePrincipal(principal: MemberPrincipal?): MemberPrincipal =
+        principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+    private fun requireSessionGeneration(principal: MemberPrincipal): Long =
+        principal.accessTokenSessionGeneration
+            ?: throw BusinessException(ErrorCode.INVALID_TOKEN)
 }
 
 /**

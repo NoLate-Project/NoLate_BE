@@ -54,10 +54,11 @@ class ScheduleShareInvitationConcurrencyIntegrationTest @Autowired constructor(
             permission = ScheduleSharePermission.VIEWER,
             ttlHours = 24,
             maxAcceptCount = 1,
+            presentedSessionGeneration = 0L,
         )
 
         val results = runConcurrentAcceptCalls(listOf(fixture.firstTargetId, fixture.secondTargetId)) { memberId ->
-            service.acceptInvitation(memberId, invitation.token)
+            service.acceptInvitation(memberId, invitation.token, presentedSessionGeneration = 0L)
         }
 
         assertEquals(1, results.successCount)

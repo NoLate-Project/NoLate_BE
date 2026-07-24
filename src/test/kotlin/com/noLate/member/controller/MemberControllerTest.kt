@@ -20,6 +20,7 @@ import org.mockito.kotlin.check
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import org.mockito.kotlin.isNull
 
@@ -33,6 +34,7 @@ class MemberControllerTest {
         id = 1L,
         email = "user@test.com",
         name = "tester",
+        accessTokenSessionGeneration = 8L,
     )
 
     private val consentRequest = SignupConsentRequest(
@@ -153,13 +155,13 @@ class MemberControllerTest {
     @Test
     fun `completeCuration updates only the authenticated member`() {
         val controller = controller()
-        whenever(memberUseCase.completeCuration(1L)).thenReturn(true)
+        whenever(memberUseCase.completeCuration(1L, 8L)).thenReturn(true)
 
         val response = controller.completeCuration(principal)
 
         assertTrue(response.success)
         assertEquals(true, response.data?.curationCompleted)
-        verify(memberUseCase).completeCuration(1L)
+        verify(memberUseCase).completeCuration(1L, 8L)
     }
 
     @Test
@@ -172,12 +174,12 @@ class MemberControllerTest {
             nickname = "late-no-more",
             intro = "hello",
         )
-        whenever(memberUseCase.getMyProfile(1L)).thenReturn(profile)
+        whenever(memberUseCase.getMyProfile(1L, 8L)).thenReturn(profile)
 
         val response = controller.getMyProfile(principal)
 
         assertSame(profile, response.data)
-        verify(memberUseCase).getMyProfile(1L)
+        verify(memberUseCase).getMyProfile(1L, 8L)
     }
 
     @Test
@@ -191,7 +193,7 @@ class MemberControllerTest {
             imgId = 7L,
             intro = "intro",
         )
-        whenever(memberUseCase.updateMyProfile(eq(1L), org.mockito.kotlin.any()))
+        whenever(memberUseCase.updateMyProfile(eq(1L), org.mockito.kotlin.any(), eq(8L)))
             .thenReturn(updated)
 
         val response = controller.updateMyProfile(
@@ -212,6 +214,7 @@ class MemberControllerTest {
                 assertEquals(7L, it.imgId)
                 assertEquals("intro", it.intro)
             },
+            presentedSessionGeneration = eq(8L),
         )
     }
 
@@ -234,6 +237,7 @@ class MemberControllerTest {
             memberId = 1L,
             currentPassword = "old-password",
             newPassword = "new-password",
+            presentedSessionGeneration = 8L,
         )
     }
 
@@ -249,7 +253,7 @@ class MemberControllerTest {
         )
 
         assertTrue(response.success)
-        verify(memberUseCase).withdraw(1L, null)
+        verify(memberUseCase).withdraw(1L, 8L, null)
     }
 
     @Test
@@ -274,6 +278,39 @@ class MemberControllerTest {
         }
 
         assertEquals(ErrorCode.UNAUTHORIZED, exception.errorCode)
+    }
+
+    @Test
+    fun `authenticated member mutations require a signed session generation`() {
+        val controller = controller()
+        val generationless = MemberPrincipal(
+            id = 1L,
+            email = "user@test.com",
+            name = "tester",
+        )
+
+        listOf<() -> Unit>(
+            { controller.completeCuration(generationless) },
+            { controller.getMyProfile(generationless) },
+            {
+                controller.updateMyProfile(
+                    generationless,
+                    UpdateProfileRequest(nickname = "stale"),
+                )
+            },
+            {
+                controller.changePassword(
+                    generationless,
+                    ChangePasswordRequest("old-password", "new-password"),
+                )
+            },
+            { controller.withdraw(generationless, request = null) },
+        ).forEach { request ->
+            val failure = assertThrows<BusinessException> { request() }
+            assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
+        }
+
+        verifyNoInteractions(memberUseCase)
     }
 
     private fun controller() = MemberController(memberUseCase)

@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.context.annotation.Bean
 import org.springframework.test.context.event.ApplicationEvents
 import org.springframework.test.context.event.RecordApplicationEvents
 import org.springframework.test.context.TestPropertySource
@@ -28,9 +30,18 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 @DataJpaTest
-@Import(ScheduleShareService::class)
+@Import(
+    ScheduleShareService::class,
+    ScheduleCategoryService::class,
+    ScheduleCategoryDeleteCoordinator::class,
+    ScheduleCategoryDeleteWriter::class,
+    ScheduleTravelAccessCleanupService::class,
+    ScheduleAccessPolicy::class,
+    ScheduleCategoryDeleteRaceTestConfig::class,
+)
 @RecordApplicationEvents
 @TestPropertySource(
     properties = [
@@ -42,11 +53,13 @@ import java.util.concurrent.atomic.AtomicLong
 )
 class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(
     private val service: ScheduleShareService,
+    private val categoryService: ScheduleCategoryService,
     private val memberRepository: MemberRepository,
     private val scheduleRepository: ScheduleRepository,
     private val categoryRepository: ScheduleCategoryRepository,
     private val scheduleShareRepository: ScheduleShareRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
+    private val categoryDeleteObserver: BlockingScheduleCategoryDeleteObserver,
 ) {
 
     @Autowired
@@ -64,6 +77,7 @@ class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(
                 targetEmail = null,
                 targetAppId = fixture.targetId,
                 permission = ScheduleSharePermission.VIEWER,
+                presentedSessionGeneration = 0L,
             )
         }
 
@@ -92,6 +106,7 @@ class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(
                 categoryId = fixture.categoryId,
                 targetEmail = fixture.targetEmail,
                 permission = ScheduleSharePermission.EDITOR,
+                presentedSessionGeneration = 0L,
             )
         }
 
@@ -107,6 +122,76 @@ class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(
         assertEquals(1, activeShares.size)
         assertEquals(fixture.targetId, activeShares.single().targetMemberId)
         assertEquals(1L, applicationEvents.stream(ScheduleShareGrantedEvent::class.java).count())
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun `share committed during delete preview is removed by bounded fresh transaction retry`() {
+        val fixture = createFixture()
+        val gate = categoryDeleteObserver.arm()
+        val executor = Executors.newSingleThreadExecutor()
+        val deletion = executor.submit {
+            categoryService.deleteCategory(
+                memberId = fixture.ownerId,
+                categoryId = fixture.categoryId,
+                presentedSessionGeneration = 0L,
+            )
+        }
+        try {
+            assertTrue(gate.previewRead.await(5, TimeUnit.SECONDS))
+            service.shareCategory(
+                ownerMemberId = fixture.ownerId,
+                categoryId = fixture.categoryId,
+                targetEmail = fixture.targetEmail,
+                permission = ScheduleSharePermission.VIEWER,
+                presentedSessionGeneration = 0L,
+            )
+            gate.continueDelete.countDown()
+            deletion.get(10, TimeUnit.SECONDS)
+
+            assertTrue(categoryRepository.findById(fixture.categoryId).orElseThrow().deleted)
+            assertTrue(
+                categoryShareRepository
+                    .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
+                        fixture.categoryId,
+                        ScheduleShareStatus.ACTIVE,
+                    )
+                    .isEmpty()
+            )
+        } finally {
+            gate.continueDelete.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun `delete committed first rejects a later category share`() {
+        val fixture = createFixture()
+
+        categoryService.deleteCategory(
+            memberId = fixture.ownerId,
+            categoryId = fixture.categoryId,
+            presentedSessionGeneration = 0L,
+        )
+
+        org.junit.jupiter.api.assertThrows<com.noLate.global.error.BusinessException> {
+            service.shareCategory(
+                ownerMemberId = fixture.ownerId,
+                categoryId = fixture.categoryId,
+                targetEmail = fixture.targetEmail,
+                permission = ScheduleSharePermission.VIEWER,
+                presentedSessionGeneration = 0L,
+            )
+        }
+        assertTrue(
+            categoryShareRepository
+                .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
+                    fixture.categoryId,
+                    ScheduleShareStatus.ACTIVE,
+                )
+                .isEmpty()
+        )
     }
 
     private fun runConcurrentShareCalls(
@@ -205,3 +290,28 @@ private data class ConcurrentShareResult(
 )
 
 private val fixtureSequence = AtomicLong()
+
+@TestConfiguration
+class ScheduleCategoryDeleteRaceTestConfig {
+    @Bean
+    fun blockingScheduleCategoryDeleteObserver(): BlockingScheduleCategoryDeleteObserver =
+        BlockingScheduleCategoryDeleteObserver()
+}
+
+class BlockingScheduleCategoryDeleteObserver : ScheduleCategoryDeleteObserver {
+    private val armed = AtomicReference<ScheduleCategoryDeleteGate?>()
+
+    fun arm(): ScheduleCategoryDeleteGate =
+        ScheduleCategoryDeleteGate().also { check(armed.compareAndSet(null, it)) }
+
+    override fun afterSharePreview(categoryId: Long) {
+        val gate = armed.getAndSet(null) ?: return
+        gate.previewRead.countDown()
+        check(gate.continueDelete.await(10, TimeUnit.SECONDS))
+    }
+}
+
+class ScheduleCategoryDeleteGate(
+    val previewRead: CountDownLatch = CountDownLatch(1),
+    val continueDelete: CountDownLatch = CountDownLatch(1),
+)

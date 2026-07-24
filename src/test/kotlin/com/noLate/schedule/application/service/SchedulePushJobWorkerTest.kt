@@ -30,6 +30,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.check
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.never
@@ -39,6 +40,7 @@ import org.mockito.kotlin.whenever
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
@@ -94,8 +96,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
         whenever(scheduleAccessPolicy.resolve(2L, schedule)).thenReturn(
             ScheduleAccessDecision(
@@ -130,8 +133,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
         assertEquals(1, worker().runDueJobs(testNow))
@@ -186,8 +190,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
         whenever(travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
             .thenReturn(stalePlan)
@@ -235,8 +240,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(currentTravelMinutes))
         worker().runDueJobs(testNow)
@@ -288,8 +294,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(currentTravelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -312,6 +319,12 @@ class SchedulePushJobWorkerTest {
         )
         assertEquals(testNow, job.lastPushedAt)
         assertNull(job.lastNotifiedDepartureAt)
+        assertEquals(TrafficSource.LIVE_PROVIDER, job.lastEtaSource)
+        assertEquals(false, job.lastEtaStale)
+        assertEquals(testNow, job.lastLiveFetchedAt)
+        assertEquals(currentTravelMinutes, job.lastLiveTravelMinutes)
+        assertEquals(15, job.lastTrafficChangeMinutes)
+        assertEquals(testNow, job.lastChangedAt)
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
     }
 
@@ -344,8 +357,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(
             TrafficResult(
@@ -402,14 +416,16 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 recoveryAt,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(
             TrafficResult(
@@ -478,8 +494,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(45))
 
@@ -511,8 +528,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -581,8 +599,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 secondReminderAt,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -647,8 +666,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(currentTravelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -692,8 +712,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -715,6 +736,13 @@ class SchedulePushJobWorkerTest {
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(testNow, job.lastPushedAt)
         assertEquals(testNow, job.departureNoticeSentAt)
+        assertEquals(testNow, job.handledDepartureNoticeAt)
+        assertEquals(testNow, job.lastNotifiedDepartureAt)
+        assertEquals(testNow, job.lastHandledDepartureAt)
+        assertEquals(TrafficSource.LIVE_PROVIDER, job.lastEtaSource)
+        assertEquals(false, job.lastEtaStale)
+        assertEquals(testNow, job.lastLiveFetchedAt)
+        assertEquals(travelMinutes, job.lastLiveTravelMinutes)
         assertEquals(testNow.plus(3, ChronoUnit.MINUTES), job.nextCheckAt)
     }
 
@@ -841,6 +869,168 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `과거 SUCCESS 재조회는 lastPushedAt을 현재 시각으로 이동시키지 않는다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val deliveredAt = testNow.minus(2, ChronoUnit.MINUTES)
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 1,
+                    alreadyDeliveredCount = 1,
+                    alreadyDeliveredAt = deliveredAt,
+                )
+            )
+
+        worker().runDueJobs(testNow)
+
+        assertEquals(deliveredAt, job.lastPushedAt)
+        assertEquals(deliveredAt, job.departureNoticeSentAt)
+    }
+
+    @Test
+    fun `모호한 전달은 이벤트 단계만 전진시키고 confirmed success 시각은 기록하지 않는다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 1,
+                    ambiguousCount = 1,
+                )
+            )
+
+        worker().runDueJobs(testNow)
+
+        assertEquals(1, job.checkCount)
+        assertNull(job.departureNoticeSentAt)
+        assertNull(job.lastDepartureReminderStage)
+        assertEquals(testNow, job.handledDepartureNoticeAt)
+        assertEquals("DEPART_NOW", job.lastHandledDepartureReminderStage)
+        assertEquals(testNow, job.lastUncertainAt)
+        assertNull(job.lastPushedAt)
+        assertEquals(0, job.retryCount)
+        assertEquals(testNow.plus(3, ChronoUnit.MINUTES), job.nextCheckAt)
+    }
+
+    @Test
+    fun `fallback ETA의 모호한 출발 알림은 live baseline과 confirmed 지표를 오염시키지 않는다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val baselineFetchedAt = testNow.minus(1, ChronoUnit.MINUTES)
+        job.startProcessing("live-baseline-worker", baselineFetchedAt)
+        job.finishCheck(
+            travelMinutes = 30,
+            recommendedDepartureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = baselineFetchedAt,
+            etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
+            now = baselineFetchedAt,
+        )
+
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
+            )
+        ).thenReturn(listOf(job), emptyList())
+        whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = 60,
+                source = TrafficSource.SAVED_FALLBACK,
+                stale = true,
+                failureReason = "PROVIDER_TIMEOUT: fallback used",
+            )
+        )
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, ambiguousCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(job.memberId),
+            title = eq("지금 출발하세요"),
+            body = any(),
+            data = check {
+                assertEquals("SCHEDULE_DEPARTURE_REMINDER", it["type"])
+                assertEquals("0", it["trafficChangeMinutes"])
+            },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
+        )
+        assertEquals(TrafficSource.SAVED_FALLBACK, job.lastEtaSource)
+        assertEquals(true, job.lastEtaStale)
+        assertEquals(30, job.lastLiveTravelMinutes)
+        assertEquals(baselineFetchedAt, job.lastLiveFetchedAt)
+        assertNull(job.lastTrafficChangeMinutes)
+        assertNull(job.lastChangedAt)
+        assertNull(job.lastPushedAt)
+        assertNull(job.lastNotifiedDepartureAt)
+        assertNull(job.departureNoticeSentAt)
+        assertEquals(testNow, job.lastHandledDepartureAt)
+        assertEquals(testNow, job.handledDepartureNoticeAt)
+        assertEquals(testNow, job.lastUncertainAt)
+    }
+
+    @Test
+    fun `일정 reset 뒤 generation이 바뀌어 check 0 알림도 새 이벤트로 전송한다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
+            )
+        ).thenReturn(listOf(job), emptyList(), listOf(job), emptyList())
+        whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(60))
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(testNow)
+        assertEquals(1, job.checkCount)
+        assertEquals(0, job.notificationGeneration)
+
+        job.changeSchedule(
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = schedule.startAt.minus(90, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+            notificationInputFingerprint = "meaningful-edit-fingerprint",
+        )
+        assertEquals(0, job.checkCount)
+        assertEquals(1, job.notificationGeneration)
+
+        worker().runDueJobs(testNow)
+
+        val eventKeys = argumentCaptor<String>()
+        verify(notificationUseCase, times(2)).sendToMember(
+            memberId = eq(job.memberId),
+            title = any(),
+            body = any(),
+            data = any(),
+            inboxDeduplicationKey = eventKeys.capture(),
+            persistInInbox = eq(true),
+        )
+        assertEquals(2, eventKeys.allValues.distinct().size)
+        assertTrue(eventKeys.firstValue.contains(":g0:c0"))
+        assertTrue(eventKeys.secondValue.contains(":g1:c0"))
+        assertEquals(1, job.checkCount)
+    }
+
+    @Test
     fun `푸시 토큰이 없으면 원인을 기록하고 재시도한다`() {
         val schedule = schedule(shortScheduleStartAt)
         val job = dueDepartureJob(schedule)
@@ -923,8 +1113,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
 
         worker().runDueJobs(testNow)
 
@@ -967,8 +1158,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(firstJob, secondJob))
+        ).thenReturn(listOf(firstJob), listOf(secondJob), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(firstSchedule)
         whenever(scheduleRepository.findScheduleDetail(20L, 2L)).thenReturn(secondSchedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(
@@ -1013,6 +1205,78 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `느린 첫 처리 뒤 tail job은 실제 claim 시각으로 lease된다`() {
+        val advancingClock = AdvancingTestClock(testNow)
+        val later = testNow.plus(11, ChronoUnit.MINUTES)
+        val firstSchedule = schedule(
+            startAt = testNow.plus(180, ChronoUnit.MINUTES),
+            scheduleId = 31L,
+            memberId = 1L,
+        )
+        val secondSchedule = schedule(
+            startAt = testNow.plus(180, ChronoUnit.MINUTES),
+            scheduleId = 32L,
+            memberId = 2L,
+        )
+        val firstJob = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 31L,
+            scheduleAt = firstSchedule.startAt,
+            departureAt = firstSchedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minusSeconds(1),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        val secondJob = SchedulePushJob.create(
+            memberId = 2L,
+            scheduleId = 32L,
+            scheduleAt = secondSchedule.startAt,
+            departureAt = secondSchedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minusSeconds(1),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
+            )
+        ).thenReturn(listOf(firstJob))
+        whenever(
+            pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                SchedulePushJobStatus.ACTIVE,
+                later,
+                org.springframework.data.domain.PageRequest.of(0, 1),
+            )
+        ).thenReturn(listOf(secondJob), emptyList())
+        whenever(scheduleRepository.findScheduleDetail(31L, 1L)).thenReturn(firstSchedule)
+        whenever(scheduleRepository.findScheduleDetail(32L, 2L)).thenReturn(secondSchedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenAnswer {
+            if (advancingClock.instant() == testNow) {
+                advancingClock.advanceTo(later)
+            }
+            TrafficResult(
+                travelMinutes = 30,
+                source = TrafficSource.LIVE_PROVIDER,
+                fetchedAt = advancingClock.instant(),
+                stale = false,
+            )
+        }
+
+        assertEquals(2, worker(clock = advancingClock).runDueJobs(testNow))
+
+        verify(
+            pushJobRepository,
+            times(2),
+        ).findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+            SchedulePushJobStatus.ACTIVE,
+            later,
+            org.springframework.data.domain.PageRequest.of(0, 1),
+        )
+        assertEquals(later, firstJob.lastCheckedAt)
+        assertEquals(later, secondJob.lastCheckedAt)
+    }
+
+    @Test
     // Simulates a server crash or shutdown after a worker marked a job PROCESSING.
     // The next worker run should unlock stale jobs and put them back into ACTIVE so they can be retried.
     fun `PROCESSING job이 timeout을 넘으면 ACTIVE로 복구하고 즉시 재검사 대상으로 만든다`() {
@@ -1031,12 +1295,14 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
                 SchedulePushJobStatus.PROCESSING,
                 testNow.minus(10, ChronoUnit.MINUTES),
+                org.springframework.data.domain.PageRequest.of(0, 50),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
         ).thenReturn(emptyList())
 
@@ -1068,8 +1334,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(42))
 
@@ -1086,8 +1353,8 @@ class SchedulePushJobWorkerTest {
     private fun worker(
         accessPolicy: ScheduleAccessPolicy? = null,
         liveComparatorMaxAgeMinutes: Long = 60,
+        clock: Clock = Clock.fixed(testNow, ZoneOffset.UTC),
     ) = SchedulePushJobWorker(
-        pushJobRepository = pushJobRepository,
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
         trafficClient = trafficClient,
@@ -1095,6 +1362,8 @@ class SchedulePushJobWorkerTest {
         periodicPushPolicy = PeriodicPushPolicy(),
         departureReminderPolicy = DepartureReminderPolicy(),
         trafficChangePolicy = TrafficChangePolicy(),
+        pushJobCoordinator = SchedulePushJobCoordinator(pushJobRepository),
+        batchSize = 50,
         retryDelayMinutes = 5,
         maxRetryCount = 3,
         departureAlertLeadMinutes = departureAlertLeadMinutes,
@@ -1103,7 +1372,7 @@ class SchedulePushJobWorkerTest {
         liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
         travelPlanRepository = travelPlanRepository,
         scheduleAccessPolicy = accessPolicy,
-        clock = Clock.fixed(testNow, ZoneId.of("UTC")),
+        clock = clock,
     )
 
     /**
@@ -1126,8 +1395,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
     }
@@ -1208,4 +1478,18 @@ class SchedulePushJobWorkerTest {
                 notificationIntervalMinutes = notificationIntervalMinutes,
             )
         }
+}
+
+private class AdvancingTestClock(
+    private var current: Instant,
+) : Clock() {
+    override fun getZone(): ZoneId = ZoneOffset.UTC
+
+    override fun withZone(zone: ZoneId): Clock = this
+
+    override fun instant(): Instant = current
+
+    fun advanceTo(next: Instant) {
+        current = next
+    }
 }

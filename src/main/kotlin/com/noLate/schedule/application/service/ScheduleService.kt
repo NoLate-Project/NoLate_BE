@@ -162,6 +162,25 @@ class ScheduleService(
         return toVisibleDtos(memberId, listOf(savedEntity)).single()
     }
 
+    /**
+     * notification edit fence가 member와 push-job/gap을 잠근 다음 schedule row를 잠근다.
+     * 실제 mutation은 같은 outer transaction의 [updateSchedule]/[deleteSchedule]에서
+     * 권한과 active 상태를 다시 검증한다.
+     */
+    @Transactional
+    fun lockForNotificationEdit(memberId: Long, scheduleId: Long) {
+        val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        val policy = scheduleAccessPolicy
+        if (policy == null) {
+            if (schedule.memberId != memberId) {
+                throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+            }
+        } else if (!policy.resolve(memberId, schedule).canEdit) {
+            throw BusinessException(ErrorCode.FORBIDDEN, "일정을 수정할 권한이 없습니다.")
+        }
+    }
+
     @Transactional
     fun deleteSchedule(memberId: Long, scheduleId: Long) {
         val entity = findOwnedActive(memberId, scheduleId)

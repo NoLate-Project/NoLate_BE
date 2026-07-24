@@ -3,6 +3,7 @@ package com.noLate.notification.dev
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.notification.application.useCase.NotificationUseCase
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Component
 
 /**
@@ -18,8 +19,12 @@ import org.springframework.stereotype.Component
  * - 일정/교통 알림에서 사용하는 대표 payload를 같은 회원에게 순차 전송한다.
  * - BE의 NotificationUseCase, PushClient, 토큰 정리 흐름을 실제 경로로 검증한다.
  * - FE가 알림 수신, 상세 이동, 긴급 알림 표현을 처리하는지 수동 E2E로 확인하게 한다.
+ *
+ * 이 조건부 비운영 Runner만 의도적으로 ephemeral provider 점검 경로를 사용한다.
+ * 인증된 공개 notification API는 반드시 durable outbox/recipient fence를 사용한다.
  */
 @Component
+@Profile("!prod")
 @ConditionalOnProperty(
     prefix = "notification.push-scenario",
     name = ["enabled"],
@@ -37,7 +42,7 @@ class PushScenarioRunner(
                 title = scenario.title,
                 body = scenario.body,
                 data = scenario.data,
-                // 개발 시나리오는 실제 제품 이벤트가 아니므로 사용자 알림함에는 남기지 않는다.
+                // 운영에서 비활성인 수동 E2E Runner에 한해 명시적으로 허용한 ephemeral 경로다.
                 persistInInbox = false,
             )
             PushScenarioResult(

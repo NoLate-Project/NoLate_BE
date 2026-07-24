@@ -4,11 +4,23 @@ package com.noLate.notification.application
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.AppNotificationRecordResult
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.PushSendHistoryService
+import com.noLate.notification.application.service.PushDeliveryClaim
+import com.noLate.notification.application.service.PushDeliveryClaimOutcome
+import com.noLate.notification.application.service.PushDeliveryService
+import com.noLate.notification.application.service.PushEventOutboxService
+import com.noLate.notification.application.service.PushTokenProviderLeaseOutcome
+import com.noLate.notification.application.service.PushTokenProviderLeaseService
+import com.noLate.notification.application.service.PushTokenProviderSendResult
+import com.noLate.notification.application.service.PreparedPushEvent
+import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushPlatform
+import com.noLate.notification.domain.PushLogicalEventKey
 import com.noLate.notification.domain.PushSendStatus
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -17,6 +29,8 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.*
+import org.mockito.Mockito.lenient
+import java.time.Instant
 
 @ExtendWith(MockitoExtension::class)
 class NotificationUseCaseUnitTest {
@@ -33,16 +47,49 @@ class NotificationUseCaseUnitTest {
     @Mock
     lateinit var appNotificationService: AppNotificationService
 
+    @Mock
+    lateinit var pushDeliveryService: PushDeliveryService
+
+    @Mock
+    lateinit var pushEventOutboxService: PushEventOutboxService
+
+    @Mock
+    lateinit var pushTokenProviderLeaseService: PushTokenProviderLeaseService
+
     private lateinit var notificationUseCase: NotificationUseCase
 
     @BeforeEach
     fun setUp() {
         notificationUseCase = NotificationUseCase(
             notificationTokenService = notificationTokenService,
-            pushClient = pushClient,
+            pushTokenProviderLeaseService = pushTokenProviderLeaseService,
             pushSendHistoryService = pushSendHistoryService,
             appNotificationService = appNotificationService,
+            pushDeliveryService = pushDeliveryService,
+            pushEventOutboxService = pushEventOutboxService,
         )
+        lenient().whenever(
+            pushTokenProviderLeaseService.sendIfOwned(
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                anyOrNull(),
+                anyOrNull(),
+            ),
+        ).thenAnswer { invocation ->
+            val claim = invocation.getArgument<PushDeliveryClaim>(1)
+            PushTokenProviderSendResult(
+                outcome = PushTokenProviderLeaseOutcome.ACQUIRED,
+                providerResult = pushClient.sendToToken(
+                    token = requireNotNull(claim.providerToken),
+                    title = invocation.getArgument(2),
+                    body = invocation.getArgument(3),
+                    data = invocation.getArgument(4),
+                ),
+            )
+        }
     }
 
     @Test
@@ -78,38 +125,51 @@ class NotificationUseCaseUnitTest {
             memberId = memberId,
             title = title,
             body = body,
-            data = data
+            data = data,
+            persistInInbox = false,
         )
 
         verify(notificationTokenService, times(1))
             .getTokensByMember(memberId)
 
         verify(pushClient, times(1))
-            .sendToToken("token-1", title, body, data)
+            .sendToToken(
+                eq("token-1"),
+                eq(title),
+                eq(body),
+                argThat { canonicalFor(memberId, data) },
+            )
         verify(pushClient, times(1))
-            .sendToToken("token-2", title, body, data)
+            .sendToToken(
+                eq("token-2"),
+                eq(title),
+                eq(body),
+                argThat { canonicalFor(memberId, data) },
+            )
         verify(pushSendHistoryService).recordSuccess(
-            memberId = memberId,
-            token = tokens[0],
-            title = title,
-            body = body,
-            data = data,
-            fcmMessageId = "message-id",
+            memberId = eq(memberId),
+            token = eq(tokens[0]),
+            title = eq(title),
+            body = eq(body),
+            data = argThat { canonicalFor(memberId, data) },
+            fcmMessageId = eq("message-id"),
+            logicalEventKey = anyOrNull(),
+            scheduleId = isNull(),
+            categoryId = isNull(),
+            calendarId = isNull(),
         )
-        verify(appNotificationService, times(1)).record(
-            memberId = memberId,
-            title = title,
-            body = body,
-            data = data,
-            deduplicationKey = null,
-        )
+        verifyNoInteractions(appNotificationService)
         verify(pushSendHistoryService).recordSuccess(
-            memberId = memberId,
-            token = tokens[1],
-            title = title,
-            body = body,
-            data = data,
-            fcmMessageId = "message-id",
+            memberId = eq(memberId),
+            token = eq(tokens[1]),
+            title = eq(title),
+            body = eq(body),
+            data = argThat { canonicalFor(memberId, data) },
+            fcmMessageId = eq("message-id"),
+            logicalEventKey = anyOrNull(),
+            scheduleId = isNull(),
+            categoryId = isNull(),
+            calendarId = isNull(),
         )
         assertEquals(2, result.requestedCount)
         assertEquals(2, result.sentCount)
@@ -129,20 +189,42 @@ class NotificationUseCaseUnitTest {
         whenever(notificationTokenService.getTokensByMember(memberId)).thenReturn(listOf(token))
         whenever(pushClient.sendToToken(eq("invalid-token"), any(), any(), any()))
             .thenThrow(InvalidPushTokenException("invalid-token"))
+        whenever(
+            notificationTokenService.removeTokenByOwnership(
+                memberId,
+                1L,
+                token.tokenFingerprint,
+                token.ownershipVersion,
+            )
+        ).thenReturn(true)
 
-        val result = notificationUseCase.sendToMember(memberId, "제목", "내용")
+        val result = notificationUseCase.sendToMember(
+            memberId,
+            "제목",
+            "내용",
+            persistInInbox = false,
+        )
 
         verify(pushSendHistoryService).recordFailure(
-            memberId = memberId,
-            token = token,
-            title = "제목",
-            body = "내용",
-            data = emptyMap(),
-            status = PushSendStatus.INVALID_TOKEN,
-            errorCode = InvalidPushTokenException::class.java.simpleName,
-            errorMessage = "유효하지 않은 푸시 토큰입니다.",
+            memberId = eq(memberId),
+            token = eq(token),
+            title = eq("제목"),
+            body = eq("내용"),
+            data = argThat { canonicalFor(memberId, emptyMap()) },
+            status = eq(PushSendStatus.INVALID_TOKEN),
+            errorCode = eq(InvalidPushTokenException::class.java.simpleName),
+            errorMessage = eq("유효하지 않은 푸시 토큰입니다."),
+            logicalEventKey = anyOrNull(),
+            scheduleId = isNull(),
+            categoryId = isNull(),
+            calendarId = isNull(),
         )
-        verify(notificationTokenService).removeTokenValue(memberId, "invalid-token")
+        verify(notificationTokenService).removeTokenByOwnership(
+            memberId,
+            1L,
+            token.tokenFingerprint,
+            token.ownershipVersion,
+        )
         assertEquals(0, result.sentCount)
         assertEquals(1, result.failedCount)
         assertEquals(1, result.removedTokenCount)
@@ -160,21 +242,20 @@ class NotificationUseCaseUnitTest {
             title = "제목",
             body = "내용",
             data = data,
+            persistInInbox = false,
         )
 
         verify(pushSendHistoryService).recordNoToken(
-            memberId = memberId,
-            title = "제목",
-            body = "내용",
-            data = data,
+            memberId = eq(memberId),
+            title = eq("제목"),
+            body = eq("내용"),
+            data = argThat { canonicalFor(memberId, data) },
+            logicalEventKey = anyOrNull(),
+            scheduleId = eq(10L),
+            categoryId = isNull(),
+            calendarId = isNull(),
         )
-        verify(appNotificationService).record(
-            memberId = memberId,
-            title = "제목",
-            body = "내용",
-            data = data,
-            deduplicationKey = null,
-        )
+        verifyNoInteractions(appNotificationService)
         verify(pushClient, never()).sendToToken(any(), any(), any(), any())
         assertEquals(0, result.requestedCount)
         assertEquals(0, result.sentCount)
@@ -197,6 +278,54 @@ class NotificationUseCaseUnitTest {
     }
 
     @Test
+    fun `기존 inbox 이벤트이면 외부 전송도 중복 실행하지 않는다`() {
+        val memberId = 1L
+        val eventKey = PushLogicalEventKey.deterministic(memberId, "same-event")
+        whenever(
+            pushEventOutboxService.prepare(
+                memberId = memberId,
+                title = "제목",
+                body = "내용",
+                data = emptyMap(),
+                deduplicationKey = "same-event",
+                persistInInbox = true,
+                fence = null,
+            )
+        ).thenReturn(
+            PreparedPushEvent(
+                snapshot = AppNotificationSnapshot(
+                    id = 10L,
+                    logicalEventKey = eventKey,
+                    title = "제목",
+                    body = "내용",
+                    data = mapOf(
+                        "logicalEventKey" to eventKey,
+                        "recipientMemberId" to memberId.toString(),
+                    ),
+                    createdAt = Instant.parse("2026-07-24T03:00:00Z"),
+                ),
+                logicalEventKey = eventKey,
+                deliveryIds = emptyList(),
+                manifestRecipientCount = 0,
+                inboxCreated = false,
+                fenceAccepted = true,
+            )
+        )
+
+        val result = notificationUseCase.sendToMember(
+            memberId = memberId,
+            title = "제목",
+            body = "내용",
+            inboxDeduplicationKey = "same-event",
+        )
+
+        verify(pushClient, never()).sendToToken(any(), any(), any(), any())
+        assertEquals(0, result.attemptedCount)
+        assertEquals(1, result.noDeviceEventCount)
+        assertEquals(true, result.inboxDeduplicated)
+    }
+
+    @Test
     fun `sendToMembers는 각 memberId에 대해 sendToMember를 호출한다`() {
         val memberIds = listOf(1L, 2L)
         val title = "제목"
@@ -208,7 +337,8 @@ class NotificationUseCaseUnitTest {
         notificationUseCase.sendToMembers(
             memberIds = memberIds,
             title = title,
-            body = body
+            body = body,
+            persistInInbox = false,
         )
 
         verify(notificationTokenService, times(1)).getTokensByMember(1L)
@@ -239,20 +369,32 @@ class NotificationUseCaseUnitTest {
         whenever(pushClient.sendToToken(any(), any(), any(), any()))
             .thenReturn(PushSendResult("message-id"))
 
-        notificationUseCase.sendToMember(1L, "회원 1 알림", "회원 1 일정", firstData)
-        notificationUseCase.sendToMember(2L, "회원 2 알림", "회원 2 일정", secondData)
-
-        verify(pushClient).sendToToken(
-            "member-1-token",
+        notificationUseCase.sendToMember(
+            1L,
             "회원 1 알림",
             "회원 1 일정",
             firstData,
+            persistInInbox = false,
         )
-        verify(pushClient).sendToToken(
-            "member-2-token",
+        notificationUseCase.sendToMember(
+            2L,
             "회원 2 알림",
             "회원 2 일정",
             secondData,
+            persistInInbox = false,
+        )
+
+        verify(pushClient).sendToToken(
+            eq("member-1-token"),
+            eq("회원 1 알림"),
+            eq("회원 1 일정"),
+            argThat { canonicalFor(1L, firstData) },
+        )
+        verify(pushClient).sendToToken(
+            eq("member-2-token"),
+            eq("회원 2 알림"),
+            eq("회원 2 일정"),
+            argThat { canonicalFor(2L, secondData) },
         )
         verify(pushClient, never()).sendToToken(
             eq("member-1-token"),
@@ -267,4 +409,103 @@ class NotificationUseCaseUnitTest {
             eq(firstData),
         )
     }
+
+    @Test
+    fun `route action payload는 durable logical event와 recipient account binding을 포함한다`() {
+        val memberId = 77L
+        val deduplicationKey = "route-setup:77:marker-digest"
+        val expectedEventKey = PushLogicalEventKey.deterministic(memberId, deduplicationKey)
+        val token = NotificationDeviceToken(
+            id = 77L,
+            memberId = memberId,
+            deviceId = "route-device",
+            platform = PushPlatform.ANDROID,
+            token = "route-token",
+        )
+        whenever(
+            pushEventOutboxService.prepare(
+                memberId = memberId,
+                title = "경로를 설정해주세요",
+                body = "일정의 출발 경로를 확인해주세요.",
+                data = mapOf(
+                    "type" to "ROUTE_SETUP_REMINDER",
+                    "scheduleId" to "700",
+                ),
+                deduplicationKey = deduplicationKey,
+                persistInInbox = true,
+                fence = null,
+            )
+        ).thenReturn(
+            PreparedPushEvent(
+                snapshot = AppNotificationSnapshot(
+                    id = 77L,
+                    logicalEventKey = expectedEventKey,
+                    title = "경로를 설정해주세요",
+                    body = "일정의 출발 경로를 확인해주세요.",
+                    data = mapOf(
+                        "type" to "ROUTE_SETUP_REMINDER",
+                        "scheduleId" to "700",
+                        "logicalEventKey" to expectedEventKey,
+                        "recipientMemberId" to memberId.toString(),
+                    ),
+                    createdAt = Instant.parse("2026-07-24T03:00:00Z"),
+                ),
+                logicalEventKey = expectedEventKey,
+                deliveryIds = listOf(77L),
+                manifestRecipientCount = 1,
+                inboxCreated = true,
+                fenceAccepted = true,
+            )
+        )
+        whenever(
+            pushDeliveryService.claim(
+                memberId = memberId,
+                eventKey = expectedEventKey,
+                deliveryId = 77L,
+                fence = null,
+            )
+        ).thenReturn(
+            PushDeliveryClaim(
+                outcome = PushDeliveryClaimOutcome.SEND,
+                deliveryId = 77L,
+                providerToken = token.token,
+                tokenId = token.id,
+                tokenFingerprint = token.tokenFingerprint,
+                tokenOwnershipVersion = token.ownershipVersion,
+                token = token,
+            )
+        )
+        whenever(pushClient.sendToToken(any(), any(), any(), any()))
+            .thenReturn(PushSendResult("route-message"))
+
+        notificationUseCase.sendToMember(
+            memberId = memberId,
+            title = "경로를 설정해주세요",
+            body = "일정의 출발 경로를 확인해주세요.",
+            data = mapOf(
+                "type" to "ROUTE_SETUP_REMINDER",
+                "scheduleId" to "700",
+            ),
+            inboxDeduplicationKey = deduplicationKey,
+        )
+
+        verify(pushClient).sendToToken(
+            eq("route-token"),
+            any(),
+            any(),
+            argThat {
+                this["type"] == "ROUTE_SETUP_REMINDER" &&
+                    this["logicalEventKey"] == expectedEventKey &&
+                    this["recipientMemberId"] == memberId.toString()
+            },
+        )
+    }
+
+    private fun Map<String, String>.canonicalFor(
+        memberId: Long,
+        original: Map<String, String>,
+    ): Boolean =
+        entries.containsAll(original.entries) &&
+            this["recipientMemberId"] == memberId.toString() &&
+            this["logicalEventKey"]?.startsWith("event:") == true
 }

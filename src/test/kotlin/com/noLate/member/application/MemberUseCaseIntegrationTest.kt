@@ -13,6 +13,8 @@ import com.noLate.member.domain.member.MemberDto
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.member.infrastructure.MemberProfileRepository
 import com.noLate.member.infrastructure.MemberSettingRepository
+import com.noLate.schedule.domain.ScheduleRouteSetupReminder
+import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -24,6 +26,7 @@ import org.mockito.kotlin.whenever
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.test.context.junit.jupiter.SpringExtension
 import org.springframework.transaction.annotation.Transactional
+import java.time.Instant
 import java.time.LocalDateTime
 import java.util.UUID
 
@@ -36,6 +39,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     private val memberSettingRepository: MemberSettingRepository,
     private val memberProfileRepository: MemberProfileRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
+    private val routeSetupReminderRepository: ScheduleRouteSetupReminderRepository,
     private val jwtTokenProvider: JwtTokenProvider,
     private val passwordEncoder: PasswordEncoder
 ) {
@@ -268,6 +272,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         )
 
         val firstRefreshToken = loginResult.refreshToken!!
+        val firstGeneration = jwtTokenProvider.getSessionGeneration(firstRefreshToken)
         assertEquals(1, activeRefreshTokenCountFor(loginResult.id!!))
 
         // when - tokenLogin 호출
@@ -280,6 +285,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         val newRefreshToken = reLoginResult.refreshToken!!
         assertTrue(jwtTokenProvider.validateToken(newRefreshToken))
+        assertEquals(firstGeneration, jwtTokenProvider.getSessionGeneration(newRefreshToken))
 
         // 정책상 한 회원당 refreshToken 한 개만 유지한다고 가정
         assertEquals(1, activeRefreshTokenCountFor(loginResult.id!!))
@@ -304,6 +310,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         )
 
         val oldRefreshToken = loginResult.refreshToken!!
+        val oldGeneration = jwtTokenProvider.getSessionGeneration(oldRefreshToken)
         val countBefore = refreshTokenRepository.count()
 
         val refreshed = memberUseCase.refresh(oldRefreshToken)
@@ -314,6 +321,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         val newRefreshToken = refreshed.refreshToken!!
         assertTrue(jwtTokenProvider.validateToken(newRefreshToken))
+        assertEquals(oldGeneration, jwtTokenProvider.getSessionGeneration(newRefreshToken))
 
         assertEquals(countBefore, refreshTokenRepository.count())
     }
@@ -346,9 +354,51 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
             memberUseCase.tokenLogin(refreshToken)
         }
 
-        assertTrue(ex.message?.contains("리프레시 토큰") == true ||
-                ex.message?.contains("유효하지") == true ||
-                ex.message?.contains("회원 정보가 일치하지") == true)
+        assertEquals(com.noLate.global.error.ErrorCode.INVALID_TOKEN, ex.errorCode)
+    }
+
+    @Test
+    fun `g1 logout이 먼저 commit되면 다음 explicit login은 열린 g2를 즉시 사용한다`() {
+        val password = "LogoutFence1!"
+        val email = uniqueEmail("logout-generation-fence")
+        memberUseCase.signUp(
+            MemberDto(
+                email = email,
+                password = password,
+                name = "세션경계유저",
+                loginType = LoginType.COMMON,
+            ),
+            signupConsents,
+        )
+        val credentials = MemberDto(
+            email = email,
+            password = password,
+            loginType = LoginType.COMMON,
+        )
+
+        val sessionA = memberUseCase.login(credentials)
+        val refreshA = requireNotNull(sessionA.refreshToken)
+        assertEquals(1L, jwtTokenProvider.getSessionGeneration(refreshA))
+
+        // Logout이 g2를 열고 refresh row를 지운다. 다음 explicit login은 g3로 건너뛰지 않는다.
+        memberUseCase.logout(refreshA)
+        val sessionB = memberUseCase.login(credentials)
+        val accessB = requireNotNull(sessionB.accessToken)
+        val refreshB = requireNotNull(sessionB.refreshToken)
+        assertEquals(2L, jwtTokenProvider.getSessionGeneration(accessB))
+        assertEquals(2L, jwtTokenProvider.getSessionGeneration(refreshB))
+
+        // 응답 유실 retry는 모두 idempotent 성공 no-op이다.
+        assertDoesNotThrow { memberUseCase.logout(refreshA) }
+        assertDoesNotThrow { memberUseCase.logout(refreshA) }
+
+        val memberId = requireNotNull(sessionB.id)
+        assertEquals(2L, memberRepository.findById(memberId).orElseThrow().sessionGeneration)
+        assertNotNull(refreshTokenRepository.findByToken(refreshB))
+
+        // B refresh가 즉시 유효해 실제 회전까지 성공해야 한다.
+        val rotatedB = memberUseCase.refresh(refreshB)
+        assertEquals(2L, jwtTokenProvider.getSessionGeneration(requireNotNull(rotatedB.accessToken)))
     }
 
     @Test
@@ -362,8 +412,24 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         val signed = memberUseCase.signUp(signUpDto, signupConsents)
         val memberId = signed.id!!
 
-        // 비밀번호 변경
-        memberUseCase.changePassword(memberId, "OldPassword1!", "NewPassword1!")
+        val activeSession = memberUseCase.login(
+            MemberDto(
+                email = signUpDto.email,
+                password = "OldPassword1!",
+                loginType = LoginType.COMMON,
+            ),
+        )
+
+        // 비밀번호 변경은 security filter가 검증한 signed session generation을 write
+        // transaction 안에서 다시 확인한다.
+        memberUseCase.changePassword(
+            memberId = memberId,
+            currentPassword = "OldPassword1!",
+            newPassword = "NewPassword1!",
+            presentedSessionGeneration = jwtTokenProvider.getSessionGeneration(
+                requireNotNull(activeSession.accessToken),
+            ),
+        )
 
         // 새 비밀번호로 로그인 → 성공
         val loginNew = memberUseCase.login(
@@ -400,7 +466,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
         val memberId = signed.id!!
 
         // 로그인 한 번 해서 refreshToken 생성
-        memberUseCase.login(
+        val activeLogin = memberUseCase.login(
             MemberDto(
                 email = signUpDto.email,
                 password = "WithdrawPass1!",
@@ -408,12 +474,34 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
             )
         )
         assertEquals(1, activeRefreshTokenCountFor(memberId))
+        routeSetupReminderRepository.saveAndFlush(
+            ScheduleRouteSetupReminder(
+                scheduleId = 987654L,
+                memberId = memberId,
+                scheduleFingerprint = "f".repeat(64),
+                nextAttemptAt = Instant.parse("2026-07-24T00:00:00Z"),
+            )
+        )
+        assertEquals(
+            1,
+            routeSetupReminderRepository.findAll().count { it.memberId == memberId },
+        )
 
         // 탈퇴
-        memberUseCase.withdraw(memberId, "WithdrawPass1!")
+        memberUseCase.withdraw(
+            memberId = memberId,
+            presentedSessionGeneration = jwtTokenProvider.getSessionGeneration(
+                requireNotNull(activeLogin.accessToken),
+            ),
+            passwordForCheck = "WithdrawPass1!",
+        )
 
         // refreshToken 전부 삭제되었는지(혹은 soft delete 처리되었는지) 확인
         assertEquals(0, activeRefreshTokenCountFor(memberId))
+        assertEquals(
+            0,
+            routeSetupReminderRepository.findAll().count { it.memberId == memberId },
+        )
 
         // 같은 계정으로 다시 로그인 시도 → 예외
         val ex = assertThrows<BusinessException> {

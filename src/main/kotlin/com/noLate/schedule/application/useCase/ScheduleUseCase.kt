@@ -1,11 +1,14 @@
 package com.noLate.schedule.application.useCase
 
 import com.noLate.favorite.application.service.FavoritePlaceService
+import com.noLate.member.application.service.MemberService
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
+import com.noLate.schedule.application.service.ScheduleNotificationActionIdempotencyService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
+import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportResultDto
 import com.noLate.schedule.domain.ScheduleImportSource
@@ -13,9 +16,10 @@ import com.noLate.schedule.domain.ScheduleOriginSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
-import jakarta.transaction.Transactional
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
+import org.springframework.transaction.annotation.Isolation
+import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDateTime
@@ -29,8 +33,11 @@ class ScheduleUseCase(
     private val scheduleHybridParserService: ScheduleHybridParserService,
     private val scheduleDepartureStatusService: ScheduleDepartureStatusService,
     private val favoritePlaceService: FavoritePlaceService,
+    private val notificationActionIdempotencyService: ScheduleNotificationActionIdempotencyService,
+    private val memberService: MemberService,
     private val clock: Clock = Clock.systemUTC(),
     private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
+    private val scheduleTravelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
@@ -129,7 +136,13 @@ class ScheduleUseCase(
      * 일정 본문과 함께 출발지/도착지/선택 경로까지 하나의 일정으로 저장한다.
      */
     @Transactional
-    fun addSchedule(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
+    fun addSchedule(
+        memberId: Long,
+        scheduleDto: ScheduleDto,
+        presentedSessionGeneration: Long,
+    ): ScheduleDto {
+        fenceScheduleCreation(memberId, presentedSessionGeneration)
+
         // 1. 스케줄 생성
         val addSchedule = scheduleService.addSchedule(memberId, scheduleDto);
 
@@ -153,7 +166,12 @@ class ScheduleUseCase(
         memberId: Long,
         scheduleDto: ScheduleDto,
         source: ScheduleImportSource,
+        presentedSessionGeneration: Long,
     ): ScheduleImportResultDto {
+        // Idempotent import lookup도 stale authenticated request가 새 세대의 상태를 관찰하거나
+        // legacy row를 변경하기 전에 동일한 account-transition fence를 통과해야 한다.
+        fenceScheduleCreation(memberId, presentedSessionGeneration)
+
         val result = scheduleService.importSchedule(memberId, scheduleDto, source)
         if (result.created) {
             scheduleTravelPlanService?.syncOwnerTravelPlan(memberId, result.schedule)
@@ -165,21 +183,81 @@ class ScheduleUseCase(
     }
 
     /**
+     * Security filter 이후 지연된 schedule mutation과 logout/withdrawal의 순서를 member row에서
+     * 선형화한다. 모든 호출자는 security filter가 검증한 signed JWT generation을 반드시
+     * 전달해야 하므로 generation을 빠뜨린 stale authenticated mutation은 컴파일 단계에서 막힌다.
+     *
+     * 전역 lock order: member -> schedule/travel-plan -> push-job/outbox.
+     */
+    private fun fenceScheduleCreation(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        memberService.getActiveMemberForUpdate(memberId, presentedSessionGeneration)
+    }
+
+    /**
      * 일정 편집 유스케이스.
      * 시간, 카테고리, 장소, 경로 정보를 모두 같은 화면 모델 기준으로 교체한다.
      */
     @Transactional
-    fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
+    fun updateSchedule(
+        memberId: Long,
+        scheduleId: Long,
+        scheduleDto: ScheduleDto,
+        presentedSessionGeneration: Long,
+    ): ScheduleDto {
+        // 잠금 없는 상세는 actor의 접근 권한과 owner identity만 미리 확인한다. 실제 수정 권한과
+        // schedule 상태는 member -> job fence 뒤 updateSchedule에서 다시 검증한다.
+        val current = scheduleService.getScheduleDetail(memberId, scheduleId)
+        val previousOwnerMemberId = current.ownerMemberId ?: memberId
+        val previousCalendarId = current.calendarId
+        val previewCalendarAudienceMemberIds = previousCalendarId
+            ?.let { scheduleTravelPlanService?.findActiveCalendarAudienceMemberIds(it) }
+            .orEmpty()
+        val previewNotificationMemberIds =
+            scheduleTravelPlanService?.findNotificationEnabledMemberIds(scheduleId).orEmpty()
+        val editFence = schedulePushJobService.lockForScheduleEdit(
+            scheduleId = scheduleId,
+            requiredMemberIds =
+                setOf(memberId, previousOwnerMemberId) +
+                    previewCalendarAudienceMemberIds +
+                    previewNotificationMemberIds,
+            actorMemberId = memberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
+        scheduleService.lockForNotificationEdit(memberId, scheduleId)
+        scheduleTravelPlanService?.requireNotificationMembersWithinFence(
+            scheduleId,
+            editFence.lockedMemberIds,
+        )
         val updated = scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
+        val currentPreviousCalendarAudienceMemberIds = previousCalendarId
+            ?.let { scheduleTravelPlanService?.findActiveCalendarAudienceMemberIds(it) }
+            .orEmpty()
+        editFence.requireContains(currentPreviousCalendarAudienceMemberIds)
+        val accessCleanupCandidates = (
+            previewCalendarAudienceMemberIds +
+                currentPreviousCalendarAudienceMemberIds +
+                previewNotificationMemberIds
+            ) - previousOwnerMemberId
+        editFence.requireContains(accessCleanupCandidates)
+        if (accessCleanupCandidates.isNotEmpty()) {
+            scheduleTravelAccessCleanupService?.cancelRevokedForSchedule(
+                scheduleId,
+                accessCleanupCandidates,
+            )
+        }
         // 공유 EDITOR가 수정해도 평탄형 경로와 기존 오너 push job은 실제 일정 소유자 기준으로
         // 동기화한다. 요청자를 오너로 간주하면 공유 편집 직후 SCHEDULE_NOT_FOUND로 롤백된다.
         val ownerMemberId = updated.ownerMemberId ?: memberId
         scheduleTravelPlanService?.syncOwnerTravelPlan(ownerMemberId, updated)
-        scheduleTravelPlanService?.findStaleNotificationMemberIds(scheduleId)
-            .orEmpty()
-            .forEach { staleMemberId ->
+        val staleNotificationMemberIds =
+            scheduleTravelPlanService?.findStaleNotificationMemberIds(scheduleId).orEmpty()
+        editFence.requireContains(staleNotificationMemberIds)
+        staleNotificationMemberIds.forEach { staleMemberId ->
                 schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, staleMemberId)
-            }
+        }
         registerOrCancelPushJob(ownerMemberId, updated)
         return updated
     }
@@ -210,7 +288,26 @@ class ScheduleUseCase(
      * 복구 가능성을 남기기 위해 실제 삭제가 아니라 deleted flag를 변경한다.
      */
     @Transactional
-    fun deleteSchedule(memberId: Long, scheduleId: Long) {
+    fun deleteSchedule(
+        memberId: Long,
+        scheduleId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        val current = scheduleService.getScheduleDetail(memberId, scheduleId)
+        val previewNotificationMemberIds =
+            scheduleTravelPlanService?.findNotificationEnabledMemberIds(scheduleId).orEmpty()
+        val editFence = schedulePushJobService.lockForScheduleEdit(
+            scheduleId = scheduleId,
+            requiredMemberIds =
+                setOf(memberId, current.ownerMemberId ?: memberId) + previewNotificationMemberIds,
+            actorMemberId = memberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
+        scheduleService.lockForNotificationEdit(memberId, scheduleId)
+        scheduleTravelPlanService?.requireNotificationMembersWithinFence(
+            scheduleId,
+            editFence.lockedMemberIds,
+        )
         scheduleService.deleteSchedule(memberId, scheduleId)
         schedulePushJobService.cancelByScheduleId(scheduleId)
     }
@@ -218,11 +315,33 @@ class ScheduleUseCase(
     /**
      * 사용자가 푸시의 "지금 출발" 액션을 선택했을 때 더 이상의 출발 알림을 중지한다.
      */
-    @Transactional
-    fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun markDeparted(
+        memberId: Long,
+        scheduleId: Long,
+        idempotencyKey: String? = null,
+        presentedSessionGeneration: Long,
+    ): ScheduleDto {
+        if (idempotencyKey != null) {
+            return notificationActionIdempotencyService.departNow(
+                memberId,
+                scheduleId,
+                idempotencyKey,
+                presentedSessionGeneration,
+            )
+        }
+        val departureMemberFence = scheduleDepartureStatusService.lockNotificationActionMembers(
+            memberId,
+            scheduleId,
+            presentedSessionGeneration,
+        )
         val detail = scheduleService.getScheduleDetail(memberId, scheduleId)
 
-        scheduleDepartureStatusService.markDeparted(memberId, scheduleId)
+        scheduleDepartureStatusService.markDeparted(
+            memberId,
+            scheduleId,
+            departureMemberFence,
+        )
         scheduleTravelPlanService?.disableNotification(memberId, scheduleId)
         schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, memberId)
 
@@ -239,7 +358,22 @@ class ScheduleUseCase(
      * 사용자가 푸시의 "5분 뒤 다시 알림" 액션을 선택했을 때 출발 알림 job을 다시 깨운다.
      */
     @Transactional
-    fun snoozeDepartureReminder(memberId: Long, scheduleId: Long) {
+    fun snoozeDepartureReminder(
+        memberId: Long,
+        scheduleId: Long,
+        idempotencyKey: String? = null,
+        presentedSessionGeneration: Long,
+    ) {
+        if (idempotencyKey != null) {
+            notificationActionIdempotencyService.snooze(
+                memberId,
+                scheduleId,
+                idempotencyKey,
+                presentedSessionGeneration,
+            )
+            return
+        }
+        memberService.getActiveMemberForUpdate(memberId, presentedSessionGeneration)
         schedulePushJobService.snoozeDepartureReminder(memberId, scheduleId)
     }
 

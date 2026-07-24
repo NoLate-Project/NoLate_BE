@@ -1,6 +1,9 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
+import com.noLate.member.domain.member.Member
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleSharePermission
@@ -21,6 +24,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.check
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -31,11 +35,17 @@ class ScheduleCategoryServiceUnitTest {
     @Mock
     lateinit var categoryRepository: ScheduleCategoryRepository
 
+    @Mock
+    lateinit var memberRepository: MemberRepository
+
     private lateinit var service: ScheduleCategoryService
 
     @BeforeEach
     fun setUp() {
-        service = ScheduleCategoryService(categoryRepository)
+        service = ScheduleCategoryService(categoryRepository, memberRepository)
+        lenient().whenever(memberRepository.findByIdForUpdate(7L)).thenReturn(
+            Member(id = 7L, name = "Member", password = "Password1!", email = "member@example.com")
+        )
     }
 
     @Test
@@ -44,7 +54,7 @@ class ScheduleCategoryServiceUnitTest {
         val savedCategories = mutableListOf<ScheduleCategory>()
         stubStatefulRepository(memberId, savedCategories)
 
-        val result = service.getCategories(memberId)
+        val result = service.getCategories(memberId, presentedSessionGeneration = 0L)
 
         assertEquals(listOf("업무", "개인", "기타"), result.map { it.title })
         assertEquals(listOf("#f44336", "#2196f3", "#4caf50"), result.map { it.color })
@@ -58,6 +68,7 @@ class ScheduleCategoryServiceUnitTest {
         val shareRepository = mock<ScheduleCategoryShareRepository>()
         val permissionAwareService = ScheduleCategoryService(
             categoryRepository = categoryRepository,
+            memberRepository = memberRepository,
             categoryShareRepository = shareRepository,
         )
         val owned = ScheduleCategory(id = 1L, memberId = memberId, title = "내 일정")
@@ -84,7 +95,7 @@ class ScheduleCategoryServiceUnitTest {
             )
         )
 
-        val result = permissionAwareService.getCategories(memberId)
+        val result = permissionAwareService.getCategories(memberId, presentedSessionGeneration = 0L)
 
         assertEquals(false, result.first { it.id == "1" }.shared)
         assertEquals(null, result.first { it.id == "1" }.sharePermission)
@@ -107,6 +118,7 @@ class ScheduleCategoryServiceUnitTest {
             color = "#ff2d55",
             iconKey = "fitness-outline",
             sortOrder = null,
+            presentedSessionGeneration = 0L,
         )
 
         verify(categoryRepository).save(check {
@@ -143,6 +155,7 @@ class ScheduleCategoryServiceUnitTest {
             color = null,
             iconKey = null,
             sortOrder = null,
+            presentedSessionGeneration = 0L,
         )
 
         assertEquals("수정됨", result.title)
@@ -156,16 +169,71 @@ class ScheduleCategoryServiceUnitTest {
         val memberId = 7L
         val category = ScheduleCategory(id = 4L, memberId = memberId, title = "삭제 대상")
 
-        whenever(categoryRepository.findByIdAndMemberIdAndDeletedFalse(4L, memberId))
+        whenever(categoryRepository.findOwnedActiveForShareUpdate(4L, memberId))
             .thenReturn(category)
         whenever(categoryRepository.save(category)).thenReturn(category)
 
-        service.deleteCategory(memberId, 4L)
+        service.deleteCategory(memberId, 4L, presentedSessionGeneration = 0L)
 
         verify(categoryRepository).save(check {
             assertTrue(it.deleted)
             assertNotNull(it.deletedAt)
         })
+    }
+
+    @Test
+    fun `deleteCategory locks affected targets before category and cleans revoked travel state`() {
+        val shareRepository = mock<ScheduleCategoryShareRepository>()
+        val cleanupService = mock<ScheduleTravelAccessCleanupService>()
+        val deleteService = ScheduleCategoryService(
+            categoryRepository = categoryRepository,
+            memberRepository = memberRepository,
+            categoryShareRepository = shareRepository,
+            travelAccessCleanupService = cleanupService,
+        )
+        val category = ScheduleCategory(id = 4L, memberId = 7L, title = "삭제 대상")
+        val share = ScheduleCategoryShare(
+            id = 8L,
+            categoryId = 4L,
+            ownerMemberId = 7L,
+            targetMemberId = 2L,
+            permission = ScheduleSharePermission.VIEWER,
+        )
+        whenever(shareRepository.findAllByCategoryIdAndDeletedFalse(4L))
+            .thenReturn(listOf(share))
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(
+            Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com")
+        )
+        whenever(categoryRepository.findOwnedActiveForShareUpdate(4L, 7L)).thenReturn(category)
+        whenever(categoryRepository.save(category)).thenReturn(category)
+
+        deleteService.deleteCategory(7L, 4L, presentedSessionGeneration = 0L)
+
+        assertEquals(ScheduleShareStatus.REVOKED, share.status)
+        inOrder(memberRepository, categoryRepository) {
+            verify(memberRepository).findByIdForUpdate(2L)
+            verify(memberRepository).findByIdForUpdate(7L)
+            verify(categoryRepository).findOwnedActiveForShareUpdate(4L, 7L)
+        }
+        verify(cleanupService).cancelRevokedForCategory(4L, listOf(2L))
+    }
+
+    @Test
+    fun `category delete retries a participant expansion in a fresh writer transaction`() {
+        val writer = mock<ScheduleCategoryDeleteWriter>()
+        var attempts = 0
+        whenever(writer.deleteOnce(7L, 4L, 0L)).thenAnswer {
+            attempts += 1
+            if (attempts == 1) {
+                throw org.springframework.dao.ConcurrencyFailureException("new share committed")
+            }
+            Unit
+        }
+
+        ScheduleCategoryDeleteCoordinator(writer).delete(7L, 4L, 0L)
+
+        assertEquals(2, attempts)
+        verify(writer, times(2)).deleteOnce(7L, 4L, 0L)
     }
 
     @Test
@@ -183,6 +251,7 @@ class ScheduleCategoryServiceUnitTest {
                 ScheduleCategoryReorderItem(id = 1L, sortOrder = 2),
                 ScheduleCategoryReorderItem(id = 2L, sortOrder = 0),
             ),
+            presentedSessionGeneration = 0L,
         )
 
         assertEquals(listOf("개인", "업무"), result.map { it.title })
@@ -198,6 +267,7 @@ class ScheduleCategoryServiceUnitTest {
                 color = "#ff2d55",
                 iconKey = null,
                 sortOrder = null,
+                presentedSessionGeneration = 0L,
             )
         }
 
@@ -217,9 +287,31 @@ class ScheduleCategoryServiceUnitTest {
                 color = null,
                 iconKey = null,
                 sortOrder = null,
+                presentedSessionGeneration = 0L,
             )
         }
 
+        verify(categoryRepository, never()).save(any<ScheduleCategory>())
+    }
+
+    @Test
+    fun `stale category mutation generation is rejected before lazy defaults or category writes`() {
+        whenever(memberRepository.findByIdForUpdate(7L)).thenReturn(
+            Member(
+                id = 7L,
+                name = "Member",
+                password = "Password1!",
+                email = "member@example.com",
+                sessionGeneration = 2L,
+            )
+        )
+
+        val error = assertThrows<BusinessException> {
+            service.getCategories(memberId = 7L, presentedSessionGeneration = 1L)
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, error.errorCode)
+        verify(categoryRepository, never()).findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(any())
         verify(categoryRepository, never()).save(any<ScheduleCategory>())
     }
 
