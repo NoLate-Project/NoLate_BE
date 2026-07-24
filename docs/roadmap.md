@@ -21,10 +21,13 @@ MVP 1차 완료 조건:
 
 월 이동 조회 성능 개선도 완료했다. 사용자·revision·월 단위 일정 Redis 캐시와 전 사용자 공용 음력/공휴일 월 캐시를 적용했고, 일정 생성·수정·삭제와 일정/카테고리/캘린더 공유 변경은 커밋 이후 영향 회원의 revision을 올린다. 실제 Redis 검증에서 warm metadata 조회는 회원·달력 SQL 없이 반환됐다.
 
+App Store와 Google Play 동시 출시 준비는 별도 릴리스 트랙으로 관리한다. 제출 전 P0는 영구 앱 ID와 서명 산출물 확정, Apple 탈퇴 토큰 철회, Play 외부 탈퇴 웹 경로, 일정 공유 UGC 신고·차단 방향, Google Calendar OAuth 검증, 개인정보 선언 일치다.
+
 ## Area Index
 
 | Area | Source Of Truth | Status | Next Focus |
 | --- | --- | --- | --- |
+| Store Release | [`release/store-release-roadmap.md`](release/store-release-roadmap.md) | 소스·빌드·스토어 콘솔 영향 항목과 release gate 정리 | 영구 앱 ID, 서명 AAB/Archive, 탈퇴·UGC 정책 구현 |
 | Schedule / Push | [`schedule/PUSH_NOTIFICATION_STATUS.md`](schedule/PUSH_NOTIFICATION_STATUS.md) | 코드와 자동 테스트 기준 4단계 완료, 5단계 acceptance 진행 중 | iPhone TestFlight, 운영 BE, 중복 발송 방지 |
 | Schedule / Push Implementation | [`schedule/schedule-push-implementation-guide.md`](schedule/schedule-push-implementation-guide.md) | 구현/검증 가이드 | 최신 남은 작업과 실행 절차 유지 |
 | Push Scenario Runner | [`schedule/push-scenario-runner.md`](schedule/push-scenario-runner.md) | 수동 E2E 도구 완료 | 실제 일정 기반 Runner 결과 기록 |
