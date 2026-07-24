@@ -39,8 +39,8 @@ class NotificationTokenServiceUnitTest {
             token = "old-token"
         )
 
-        whenever(notificationDeviceTokenRepository.findByMemberIdAndDeviceId(memberId, deviceId))
-            .thenReturn(existing)
+        whenever(notificationDeviceTokenRepository.findAllByMemberIdAndDeviceId(memberId, deviceId))
+            .thenReturn(listOf(existing))
 
         notificationTokenService.registerToken(
             memberId = memberId,
@@ -50,7 +50,7 @@ class NotificationTokenServiceUnitTest {
         )
 
         verify(notificationDeviceTokenRepository, times(1))
-            .findByMemberIdAndDeviceId(memberId, deviceId)
+            .findAllByMemberIdAndDeviceId(memberId, deviceId)
 
         verify(notificationDeviceTokenRepository, times(1))
             .save(check {
@@ -67,8 +67,8 @@ class NotificationTokenServiceUnitTest {
         val memberId = 2L
         val deviceId = "device-2"
 
-        whenever(notificationDeviceTokenRepository.findByMemberIdAndDeviceId(memberId, deviceId))
-            .thenReturn(null)
+        whenever(notificationDeviceTokenRepository.findAllByMemberIdAndDeviceId(memberId, deviceId))
+            .thenReturn(emptyList())
 
         notificationTokenService.registerToken(
             memberId = memberId,
@@ -78,7 +78,7 @@ class NotificationTokenServiceUnitTest {
         )
 
         verify(notificationDeviceTokenRepository, times(1))
-            .findByMemberIdAndDeviceId(memberId, deviceId)
+            .findAllByMemberIdAndDeviceId(memberId, deviceId)
 
         verify(notificationDeviceTokenRepository, times(1))
             .save(check {
@@ -90,7 +90,7 @@ class NotificationTokenServiceUnitTest {
     }
 
     @Test
-    fun `deviceId가 null이면 무조건 새 엔티티를 저장한다`() {
+    fun `deviceId가 null이고 같은 token이 없으면 새 엔티티를 저장한다`() {
         val memberId = 3L
 
         notificationTokenService.registerToken(
@@ -101,7 +101,7 @@ class NotificationTokenServiceUnitTest {
         )
 
         verify(notificationDeviceTokenRepository, never())
-            .findByMemberIdAndDeviceId(any(), any())
+            .findAllByMemberIdAndDeviceId(any(), any())
 
         verify(notificationDeviceTokenRepository, times(1))
             .save(check {
@@ -110,6 +110,60 @@ class NotificationTokenServiceUnitTest {
                 assertEquals(PushPlatform.WEB, it.platform)
                 assertEquals("web-token", it.token)
             })
+    }
+
+    @Test
+    fun `legacy 중복 token과 device row는 최신 member device 한 건으로 정리한다`() {
+        val memberId = 7L
+        val deviceId = "duplicate-device"
+        val oldDeviceRow = NotificationDeviceToken(
+            id = 10L,
+            memberId = memberId,
+            deviceId = deviceId,
+            platform = PushPlatform.ANDROID,
+            token = "old-token",
+        )
+        val newestDeviceRow = NotificationDeviceToken(
+            id = 12L,
+            memberId = memberId,
+            deviceId = deviceId,
+            platform = PushPlatform.ANDROID,
+            token = "newer-token",
+        )
+        val conflictingTokenOwner = NotificationDeviceToken(
+            id = 11L,
+            memberId = 99L,
+            deviceId = "other-device",
+            platform = PushPlatform.IOS,
+            token = "registered-token",
+        )
+        whenever(notificationDeviceTokenRepository.findAllByToken("registered-token"))
+            .thenReturn(listOf(conflictingTokenOwner))
+        whenever(notificationDeviceTokenRepository.findAllByDeviceId(deviceId))
+            .thenReturn(listOf(oldDeviceRow, newestDeviceRow))
+        whenever(notificationDeviceTokenRepository.findAllByMemberIdAndDeviceId(memberId, deviceId))
+            .thenReturn(listOf(oldDeviceRow, newestDeviceRow))
+
+        notificationTokenService.registerToken(
+            memberId = memberId,
+            deviceId = deviceId,
+            platform = PushPlatform.WEB,
+            token = "registered-token",
+        )
+
+        verify(notificationDeviceTokenRepository).deleteAll(
+            check {
+                assertEquals(setOf(10L, 11L), it.map(NotificationDeviceToken::id).toSet())
+            }
+        )
+        verify(notificationDeviceTokenRepository).flush()
+        verify(notificationDeviceTokenRepository).save(
+            check {
+                assertEquals(12L, it.id)
+                assertEquals("registered-token", it.token)
+                assertEquals(PushPlatform.WEB, it.platform)
+            }
+        )
     }
 
     @Test

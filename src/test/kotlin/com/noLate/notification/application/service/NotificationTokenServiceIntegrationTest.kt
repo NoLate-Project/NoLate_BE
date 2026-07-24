@@ -84,6 +84,29 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `deviceId가 없어도 같은 token 재등록은 한 레코드로 수렴한다`() {
+        val memberId = 900_009L
+
+        notificationTokenService.registerToken(
+            memberId = memberId,
+            deviceId = null,
+            platform = PushPlatform.ANDROID,
+            token = "same-token-without-device",
+        )
+        notificationTokenService.registerToken(
+            memberId = memberId,
+            deviceId = null,
+            platform = PushPlatform.IOS,
+            token = "same-token-without-device",
+        )
+
+        val tokens = notificationDeviceTokenRepository.findAllByMemberId(memberId)
+        assertEquals(1, tokens.size)
+        assertEquals(PushPlatform.IOS, tokens.single().platform)
+        assertEquals("same-token-without-device", tokens.single().token)
+    }
+
+    @Test
     fun `removeToken은 해당 memberId와 deviceId에 해당하는 토큰만 삭제한다`() {
         // given
         val memberId = 900_003L

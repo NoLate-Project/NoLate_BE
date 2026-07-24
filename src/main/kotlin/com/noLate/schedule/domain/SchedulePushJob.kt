@@ -156,6 +156,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var retryCount: Int = 0
         protected set
 
+    @Column(name = "notification_generation", nullable = false)
+    @Comment("일정 의미 변경 시 증가하는 알림 이벤트 세대")
+    var notificationGeneration: Long = 0
+        protected set
+
     @Column(name = "locked_by", length = 100)
     @Comment("작업을 선점한 Worker 식별자")
     var lockedBy: String? = null
@@ -226,6 +231,14 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     }
 
     /**
+     * 회차가 일부 기기의 확인된 실패 때문에 끝나지 않아도 이미 확인된 성공은 운영 지표에 남긴다.
+     * reminder stage와 check count는 모든 재시도 가능 기기가 terminal이 될 때까지 건드리지 않는다.
+     */
+    fun recordConfirmedPush(at: Instant) {
+        lastPushedAt = at
+    }
+
+    /**
      * 교통상황 체크 후 이동시간, 추천 출발 시간, 푸시 발송 여부를 반영한다.
      */
     fun finishCheck(
@@ -233,6 +246,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         recommendedDepartureAt: Instant,
         pushSent: Boolean,
         notifiedDepartureAt: Instant?,
+        pushConfirmed: Boolean = pushSent,
         reminderBoundaryAt: Instant? = null,
         departureReminderStage: ScheduleDepartureReminderStage? = null,
         departureReminderBoundaryAt: Instant? = null,
@@ -249,11 +263,13 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         failureReason = null
 
         if (pushSent) {
-            lastPushedAt = now
             lastNotifiedDepartureAt = notifiedDepartureAt
             if (reminderBoundaryAt != null) {
                 lastReminderBoundaryAt = reminderBoundaryAt
             }
+        }
+        if (pushConfirmed) {
+            lastPushedAt = now
         }
 
         if (departureReminderStage != null) {
@@ -303,6 +319,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.departureAt = departureAt
         this.monitorStartAt = monitorStartAt
         this.intervalMinutes = intervalMinutes
+        this.notificationGeneration += 1
         this.nextCheckAt = monitorStartAt
         this.status = SchedulePushJobStatus.ACTIVE
         this.lastTravelMinutes = null
@@ -395,6 +412,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
                 this.nextCheckAt = monitorStartAt
                 this.checkCount = 0
                 this.retryCount = 0
+                this.notificationGeneration = 0
             }
         }
 

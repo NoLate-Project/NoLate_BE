@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
+import org.springframework.data.domain.Pageable
 import java.time.Instant
 
 
@@ -21,6 +22,13 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
     fun findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
         status: SchedulePushJobStatus,
         nextCheckAt: Instant,
+    ): List<SchedulePushJob>
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    fun findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+        status: SchedulePushJobStatus,
+        nextCheckAt: Instant,
+        pageable: Pageable,
     ): List<SchedulePushJob>
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

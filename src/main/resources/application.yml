@@ -81,9 +81,14 @@ schedule:
   push:
     enabled: ${SCHEDULE_PUSH_ENABLED:true}
     fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}
+    # 한 번의 claim transaction이 잠그는 due job 수를 제한해 backlog가 lease timeout으로
+    # 복구되는 동안 다른 인스턴스가 다음 batch를 처리할 수 있게 한다.
+    batch-size: ${SCHEDULE_PUSH_BATCH_SIZE:50}
     retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:5}
     # 푸시 공급자의 일시 장애가 지속될 때 무한 재시도를 막는 작업 단위 한도다.
     max-retry-count: ${SCHEDULE_PUSH_MAX_RETRY_COUNT:3}
+    delivery-grace-minutes: ${SCHEDULE_PUSH_DELIVERY_GRACE_MINUTES:10}
+    processing-timeout-minutes: ${SCHEDULE_PUSH_PROCESSING_TIMEOUT_MINUTES:10}
     departure-alert-lead-minutes: ${SCHEDULE_PUSH_DEPARTURE_ALERT_LEAD_MINUTES:15}
     departure-reminder-interval-minutes: ${SCHEDULE_PUSH_DEPARTURE_REMINDER_INTERVAL_MINUTES:5}
     departure-snooze-minutes: ${SCHEDULE_PUSH_DEPARTURE_SNOOZE_MINUTES:5}

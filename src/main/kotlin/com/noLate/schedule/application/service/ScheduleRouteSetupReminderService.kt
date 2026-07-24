@@ -1,6 +1,5 @@
 package com.noLate.schedule.application.service
 
-import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleRouteSetupReminder
@@ -72,7 +71,6 @@ class ScheduleRouteSetupReminderService(
     private val registrar: ScheduleRouteSetupReminderRegistrar,
     private val accessPolicy: ScheduleAccessPolicy,
     private val reminderPolicy: RouteSetupReminderPolicy,
-    private val appNotificationService: AppNotificationService,
     private val notificationUseCase: NotificationUseCase,
     @Value("\${schedule.route-setup-reminder.batch-size:50}") private val batchSize: Int,
     @Value("\${schedule.route-setup-reminder.max-attempts:3}") private val maxAttempts: Int,
@@ -153,31 +151,25 @@ class ScheduleRouteSetupReminderService(
                     "count" to scheduleIds.size.toString(),
                 )
 
-                // 논리 알림은 push 토큰과 무관하게 먼저 한 번 저장한다. marker 재시도에서는
-                // 같은 dedupe key가 기존 row로 수렴하므로 앱 알림함에 중복이 쌓이지 않는다.
-                val recordResult = appNotificationService.recordWithResult(
+                // marker id 집합의 deterministic key를 inbox와 기기별 delivery 경계에 함께
+                // 사용한다. 재시도 시 성공 기기는 건너뛰고 확인된 실패 기기만 다시 보낸다.
+                val result = notificationUseCase.sendToMember(
                     memberId = memberId,
                     title = title,
                     body = body,
                     data = payload,
-                    deduplicationKey = deduplicationKey,
+                    inboxDeduplicationKey = deduplicationKey,
                 )
-                // 알림함 row는 생겼는데 marker가 아직 attempt 0이면, 직전 worker가 push까지
-                // 보낸 뒤 DB commit 전에 종료된 경우로 본다. 이때는 at-most-once를 택해 중복
-                // push를 막는다. provider 실패를 확인해 attempts가 증가한 marker만 다시 보낸다.
-                if (recordResult.created || reminders.any { it.attempts > 0 }) {
-                    val result = notificationUseCase.sendToMember(
-                        memberId = memberId,
-                        title = title,
-                        body = body,
-                        data = payload,
-                        persistInInbox = false,
+                if (result.retryableFailedCount > 0) {
+                    throw IllegalStateException(
+                        "경로 미설정 push 재시도 필요: requested=${result.requestedCount}, " +
+                            "retryableFailed=${result.retryableFailedCount}"
                     )
-                    if (result.requestedCount > 0 && result.sentCount == 0) {
-                        throw IllegalStateException(
-                            "경로 미설정 push 발송 실패: requested=${result.requestedCount}, failed=${result.failedCount}"
-                        )
-                    }
+                }
+                if (result.requestedCount > 0 && result.durablyHandledCount == 0) {
+                    throw IllegalStateException(
+                        "경로 미설정 push 발송 실패: requested=${result.requestedCount}, failed=${result.failedCount}"
+                    )
                 }
                 reminders.forEach { it.markSent(now) }
                 sentGroups += 1

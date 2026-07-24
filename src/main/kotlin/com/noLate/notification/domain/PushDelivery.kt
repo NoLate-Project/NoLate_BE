@@ -61,8 +61,8 @@ class PushDelivery(
     val eventKey: String,
 
     /**
-     * DB token PK 기반 식별자다. 저장 전 테스트 토큰만 SHA-256 fingerprint를 사용한다.
-     * 원문 push token은 이 테이블과 로그 어느 쪽에도 기록하지 않는다.
+     * 안정 device id 또는 push token의 SHA-256 fingerprint다.
+     * token row PK가 달라도 같은 실제 기기/토큰이면 하나의 전달 경계로 수렴한다.
      */
     @Column(name = "device_key", nullable = false, length = 100)
     val deviceKey: String,
@@ -85,16 +85,16 @@ class PushDelivery(
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
-    var status: PushDeliveryStatus = PushDeliveryStatus.DISPATCHING,
+    var status: PushDeliveryStatus = PushDeliveryStatus.PENDING,
 
     @Column(name = "attempt_count", nullable = false)
-    var attemptCount: Int = 1,
+    var attemptCount: Int = 0,
 
-    @Column(name = "first_attempted_at", nullable = false)
-    val firstAttemptedAt: Instant,
+    @Column(name = "first_attempted_at")
+    var firstAttemptedAt: Instant? = null,
 
-    @Column(name = "last_attempted_at", nullable = false)
-    var lastAttemptedAt: Instant,
+    @Column(name = "last_attempted_at")
+    var lastAttemptedAt: Instant? = null,
 
     @Column(name = "delivered_at")
     var deliveredAt: Instant? = null,
@@ -109,12 +109,15 @@ class PushDelivery(
     var errorMessage: String? = null,
 ) {
 
-    fun retry(at: Instant) {
-        require(status == PushDeliveryStatus.FAILED) {
-            "확인된 실패 상태만 재시도할 수 있습니다. status=$status"
+    fun beginDispatch(at: Instant) {
+        require(status == PushDeliveryStatus.PENDING || status == PushDeliveryStatus.FAILED) {
+            "대기 또는 확인된 실패 상태만 발송할 수 있습니다. status=$status"
         }
         status = PushDeliveryStatus.DISPATCHING
         attemptCount += 1
+        if (firstAttemptedAt == null) {
+            firstAttemptedAt = at
+        }
         lastAttemptedAt = at
         errorCode = null
         errorMessage = null
@@ -150,12 +153,12 @@ class PushDelivery(
         eventKey = "",
         deviceKey = "",
         platform = PushPlatform.UNKNOWN,
-        firstAttemptedAt = Instant.EPOCH,
-        lastAttemptedAt = Instant.EPOCH,
     )
 }
 
 enum class PushDeliveryStatus {
+    /** 현재 이벤트의 기기 manifest에는 포함됐지만 아직 provider 호출 경계를 만들지 않았다. */
+    PENDING,
     /** Provider 호출 전 커밋되며, 성공 여부가 모호한 종료 뒤에는 자동 재시도하지 않는다. */
     DISPATCHING,
     SUCCESS,

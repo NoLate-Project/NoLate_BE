@@ -32,6 +32,7 @@ class SchedulePushJobWorker(
     private val departureReminderPolicy: DepartureReminderPolicy,
     private val trafficChangePolicy: TrafficChangePolicy,
     private val pushJobCoordinator: SchedulePushJobCoordinator,
+    @Value("\${schedule.push.batch-size:50}") private val batchSize: Int,
     @Value("\${schedule.push.retry-delay-minutes:5}") private val retryDelayMinutes: Long,
     @Value("\${schedule.push.max-retry-count:3}") private val maxRetryCount: Int,
     @Value("\${schedule.push.delivery-grace-minutes:10}") private val deliveryGraceMinutes: Long = 10,
@@ -65,7 +66,7 @@ class SchedulePushJobWorker(
             )
         }
 
-        val dueJobs = pushJobCoordinator.claimDueJobs(now, workerId)
+        val dueJobs = pushJobCoordinator.claimDueJobs(now, workerId, batchSize)
 
         if (dueJobs.isNotEmpty()) {
             log.info(
@@ -161,7 +162,7 @@ class SchedulePushJobWorker(
             val shouldPush = reminderDecision != DepartureReminderDecision.NONE ||
                 trafficChangeMinutes > 0
 
-            val pushSent = if (shouldPush) {
+            val pushOutcome = if (shouldPush) {
                 val message = trafficChangePolicy.createMessage(
                     scheduleTitle = schedule.title,
                     previousTravelMinutes = job.lastTravelMinutes,
@@ -193,7 +194,7 @@ class SchedulePushJobWorker(
                     inboxDeduplicationKey = schedulePushInboxDeduplicationKey(job),
                 )
                 log.info(
-                    "Schedule push handled. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, attempted={}, sent={}, alreadyDelivered={}, ambiguous={}, deduplicated={}, failed={}",
+                    "Schedule push handled. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, attempted={}, sent={}, alreadyDelivered={}, ambiguous={}, deduplicated={}, failed={}, retryableFailed={}",
                     job.id,
                     job.scheduleId,
                     reminderDecision,
@@ -205,7 +206,23 @@ class SchedulePushJobWorker(
                     sendResult.ambiguousCount,
                     sendResult.deduplicatedCount,
                     sendResult.failedCount,
+                    sendResult.retryableFailedCount,
                 )
+                if (sendResult.retryableFailedCount > 0) {
+                    // 일부 기기가 성공했더라도 같은 generation/check event를 유지해야 다음
+                    // 실행에서 SUCCESS는 건너뛰고 FAILED 기기만 다시 claim할 수 있다.
+                    if (sendResult.confirmedSuccessCount > 0) {
+                        job.recordConfirmedPush(now)
+                    }
+                    scheduleRetryAfterPushFailure(
+                        job = job,
+                        now = now,
+                        requestedCount = sendResult.requestedCount,
+                        failedCount = sendResult.retryableFailedCount,
+                    )
+                    pushJobCoordinator.persist(job, workerId)
+                    return
+                }
                 if (sendResult.durablyHandledCount == 0) {
                     // FCM/APNs가 한 기기에도 전달하지 못했다면 성공 이력을 기록하지 않는다.
                     // 특히 DEPART_NOW를 완료 처리하면 다시 보낼 방법이 없어 반드시 재시도해야 한다.
@@ -218,7 +235,10 @@ class SchedulePushJobWorker(
                     pushJobCoordinator.persist(job, workerId)
                     return
                 }
-                true
+                SchedulePushOutcome(
+                    notificationHandled = true,
+                    confirmedSuccess = sendResult.confirmedSuccessCount > 0,
+                )
             } else {
                 log.info(
                     "Schedule ETA refreshed without push. jobId={}, scheduleId={}, travelMinutes={}, recommendedDepartureAt={}",
@@ -227,7 +247,7 @@ class SchedulePushJobWorker(
                 travelMinutes,
                 recommendedDepartureAt,
             )
-                false
+                SchedulePushOutcome()
             }
 
             val nextCheckAt = nextCheckAt(
@@ -236,7 +256,7 @@ class SchedulePushJobWorker(
                 recommendedDepartureAt = recommendedDepartureAt,
                 scheduleAt = schedule.startAt,
                 effectiveDepartureNoticeSentAt = if (
-                    pushSent &&
+                    pushOutcome.notificationHandled &&
                     reminderDecision == DepartureReminderDecision.DEPART_NOW &&
                     job.departureNoticeSentAt == null
                 ) {
@@ -248,18 +268,24 @@ class SchedulePushJobWorker(
             job.finishCheck(
                 travelMinutes = travelMinutes,
                 recommendedDepartureAt = recommendedDepartureAt,
-                pushSent = pushSent,
+                pushSent = pushOutcome.notificationHandled,
+                pushConfirmed = pushOutcome.confirmedSuccess,
                 notifiedDepartureAt = recommendedDepartureAt.takeIf {
-                    pushSent && reminderDecision != DepartureReminderDecision.NONE
+                    pushOutcome.notificationHandled && reminderDecision != DepartureReminderDecision.NONE
                 },
                 reminderBoundaryAt = reminderBoundaryAt,
-                departureReminderStage = reminderDecision.stage.takeIf { pushSent },
+                departureReminderStage = reminderDecision.stage.takeIf {
+                    pushOutcome.notificationHandled
+                },
                 departureReminderBoundaryAt = departureReminderBoundaryAt(
                     decision = reminderDecision,
                     job = job,
                     recommendedDepartureAt = recommendedDepartureAt,
-                ).takeIf { pushSent && reminderDecision.stage != null },
-                clearSnooze = pushSent && reminderDecision == DepartureReminderDecision.SNOOZE,
+                ).takeIf {
+                    pushOutcome.notificationHandled && reminderDecision.stage != null
+                },
+                clearSnooze =
+                    pushOutcome.notificationHandled && reminderDecision == DepartureReminderDecision.SNOOZE,
                 nextCheckAt = nextCheckAt,
                 completeAfterCheck = nextCheckAt == null,
                 now = now,
@@ -345,7 +371,7 @@ class SchedulePushJobWorker(
         // 운영 worker가 조회한 엔티티에는 항상 id가 있다. 단위 테스트에서 사용하는 저장 전
         // 엔티티도 결정적인 키를 갖게 해 테스트가 재시도 의미를 그대로 검증할 수 있도록 한다.
         val jobIdentity = job.id?.toString() ?: "unsaved-${job.memberId}-${job.scheduleId}"
-        return "schedule-push-job:$jobIdentity:${job.checkCount}"
+        return "schedule-push-job:$jobIdentity:g${job.notificationGeneration}:c${job.checkCount}"
     }
 
     /**
@@ -485,4 +511,9 @@ private data class PushRouteSource(
     val destinationLat: Double?,
     val destinationLng: Double?,
     val routeJson: String?,
+)
+
+private data class SchedulePushOutcome(
+    val notificationHandled: Boolean = false,
+    val confirmedSuccess: Boolean = false,
 )

@@ -5,7 +5,19 @@ import com.noLate.global.common.BaseEntity
 import jakarta.persistence.*
 
 @Entity
-@Table(name = "push_device_token")
+@Table(
+    name = "push_device_token",
+    uniqueConstraints = [
+        UniqueConstraint(
+            name = "uk_push_device_token_token",
+            columnNames = ["token"],
+        ),
+        UniqueConstraint(
+            name = "uk_push_device_token_member_device",
+            columnNames = ["member_id", "device_id"],
+        ),
+    ],
+)
 class NotificationDeviceToken(
 
     @Id

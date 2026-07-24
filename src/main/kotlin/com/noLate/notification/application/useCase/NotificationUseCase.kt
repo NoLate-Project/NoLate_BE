@@ -57,9 +57,17 @@ class NotificationUseCase(
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { "key:${it.sha256()}" }
-        val allowNewDelivery = inboxRecord?.created ?: true
+        if (eventKey != null && pushDeliveryService != null) {
+            pushDeliveryService.prepareManifest(
+                memberId = memberId,
+                eventKey = eventKey,
+                tokens = tokens,
+                data = data,
+            )
+        }
         var sentCount = 0
         var failedCount = 0
+        var retryableFailedCount = 0
         var removedTokenCount = 0
         var attemptedCount = 0
         var alreadyDeliveredCount = 0
@@ -88,8 +96,6 @@ class NotificationUseCase(
                 memberId = memberId,
                 eventKey = eventKey,
                 token = tokenEntity,
-                data = data,
-                allowCreate = allowNewDelivery,
                 inboxAlreadyExisted = inboxRecord?.created == false,
             )
             when (claim.outcome) {
@@ -245,6 +251,13 @@ class NotificationUseCase(
                     )
                 }
                 failedCount += 1
+                if (retryStatePersisted) {
+                    retryableFailedCount += 1
+                } else {
+                    // provider 미수락은 확인했지만 FAILED 전이를 잃었다. 영속 상태가
+                    // DISPATCHING이므로 자동 재시도할 수 없는 ambiguous 경계로 보고한다.
+                    ambiguousCount += 1
+                }
                 // provider 예외 및 cause에는 token 원문이 포함될 수 있어 stack trace를 로그에 싣지 않는다.
                 log.warn(
                     "Push send failed. memberId={}, tokenId={}, deliveryId={}, errorCode={}, retryable={}",
@@ -294,6 +307,7 @@ class NotificationUseCase(
             attemptedCount = attemptedCount,
             sentCount = sentCount,
             failedCount = failedCount,
+            retryableFailedCount = retryableFailedCount,
             removedTokenCount = removedTokenCount,
             alreadyDeliveredCount = alreadyDeliveredCount,
             ambiguousCount = ambiguousCount,
@@ -306,8 +320,6 @@ class NotificationUseCase(
         memberId: Long,
         eventKey: String?,
         token: com.noLate.notification.domain.NotificationDeviceToken,
-        data: Map<String, String>,
-        allowCreate: Boolean,
         inboxAlreadyExisted: Boolean,
     ): PushDeliveryClaim {
         if (eventKey == null) {
@@ -323,8 +335,6 @@ class NotificationUseCase(
             memberId = memberId,
             eventKey = eventKey,
             token = token,
-            data = data,
-            allowCreate = allowCreate,
         )
     }
 
@@ -359,6 +369,8 @@ data class NotificationSendResult(
     val attemptedCount: Int = 0,
     val sentCount: Int = 0,
     val failedCount: Int = 0,
+    /** provider가 명시적으로 미수락해 동일 event/device로 재시도할 수 있는 실패 수 */
+    val retryableFailedCount: Int = 0,
     val removedTokenCount: Int = 0,
     val alreadyDeliveredCount: Int = 0,
     /** provider 호출 전 경계만 남아 성공 여부가 모호해 재전송하지 않은 기기 수 */
@@ -373,12 +385,16 @@ data class NotificationSendResult(
     val durablyHandledCount: Int
         get() = sentCount + alreadyDeliveredCount + ambiguousCount + deduplicatedCount
 
+    val confirmedSuccessCount: Int
+        get() = sentCount + alreadyDeliveredCount
+
     operator fun plus(other: NotificationSendResult): NotificationSendResult =
         NotificationSendResult(
             requestedCount = requestedCount + other.requestedCount,
             attemptedCount = attemptedCount + other.attemptedCount,
             sentCount = sentCount + other.sentCount,
             failedCount = failedCount + other.failedCount,
+            retryableFailedCount = retryableFailedCount + other.retryableFailedCount,
             removedTokenCount = removedTokenCount + other.removedTokenCount,
             alreadyDeliveredCount = alreadyDeliveredCount + other.alreadyDeliveredCount,
             ambiguousCount = ambiguousCount + other.ambiguousCount,

@@ -60,7 +60,7 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
                 ready.countDown()
                 start.await()
                 try {
-                    claims += workerId to coordinator.claimDueJobs(now, workerId).size
+                    claims += workerId to coordinator.claimDueJobs(now, workerId, 50).size
                 } catch (error: Throwable) {
                     failures += error
                 } finally {
@@ -86,7 +86,7 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
     @Test
     fun `timeout을 넘은 PROCESSING lease만 ACTIVE로 복구해 다음 worker가 다시 claim한다`() {
         repository.saveAndFlush(createJob())
-        assertEquals(1, coordinator.claimDueJobs(now, "worker-a").size)
+        assertEquals(1, coordinator.claimDueJobs(now, "worker-a", 50).size)
 
         val recoveredAt = now.plus(11, ChronoUnit.MINUTES)
         assertEquals(
@@ -105,7 +105,7 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
         assertNull(recovered.lockedBy)
         assertNull(recovered.lockedAt)
 
-        assertEquals(1, coordinator.claimDueJobs(recoveredAt, "worker-b").size)
+        assertEquals(1, coordinator.claimDueJobs(recoveredAt, "worker-b", 50).size)
         val reclaimed = repository.findAll().single()
         assertEquals(SchedulePushJobStatus.PROCESSING, reclaimed.status)
         assertEquals("worker-b", reclaimed.lockedBy)
@@ -114,14 +114,14 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
     @Test
     fun `stale 복구 뒤 이전 worker는 새 owner의 상태를 덮어쓸 수 없다`() {
         repository.saveAndFlush(createJob())
-        val staleClaim = coordinator.claimDueJobs(now, "worker-a").single()
+        val staleClaim = coordinator.claimDueJobs(now, "worker-a", 50).single()
         val recoveredAt = now.plus(11, ChronoUnit.MINUTES)
         coordinator.recoverStaleProcessingJobs(
             now = recoveredAt,
             processingTimeoutMinutes = 10,
             deliveryGraceMinutes = 10,
         )
-        coordinator.claimDueJobs(recoveredAt, "worker-b")
+        coordinator.claimDueJobs(recoveredAt, "worker-b", 50)
 
         staleClaim.cancel()
 
@@ -133,10 +133,25 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
         assertEquals("worker-b", current.lockedBy)
     }
 
-    private fun createJob(): SchedulePushJob =
+    @Test
+    fun `claim은 설정된 batch 크기만 잠그고 backlog를 다음 worker에 남긴다`() {
+        repository.saveAndFlush(createJob(scheduleId = 901L))
+        repository.saveAndFlush(createJob(scheduleId = 902L))
+        repository.saveAndFlush(createJob(scheduleId = 903L))
+
+        val firstBatch = coordinator.claimDueJobs(now, "worker-a", 2)
+        val secondBatch = coordinator.claimDueJobs(now, "worker-b", 2)
+
+        assertEquals(2, firstBatch.size)
+        assertEquals(1, secondBatch.size)
+        assertTrue(firstBatch.map { it.scheduleId }.toSet().intersect(secondBatch.map { it.scheduleId }.toSet()).isEmpty())
+        assertEquals(setOf(901L, 902L, 903L), (firstBatch + secondBatch).map { it.scheduleId }.toSet())
+    }
+
+    private fun createJob(scheduleId: Long = 901L): SchedulePushJob =
         SchedulePushJob.create(
             memberId = 1L,
-            scheduleId = 901L,
+            scheduleId = scheduleId,
             scheduleAt = now.plus(3, ChronoUnit.HOURS),
             departureAt = now.plus(2, ChronoUnit.HOURS),
             monitorStartAt = now.minus(1, ChronoUnit.MINUTES),

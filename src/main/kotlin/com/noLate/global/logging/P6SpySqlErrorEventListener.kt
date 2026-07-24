@@ -39,11 +39,13 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
         }
 
         log.error(
-            "SQL execution failed. connectionId={}, elapsedMs={}, sql={}",
+            "SQL execution failed. connectionId={}, elapsedMs={}, sqlState={}, vendorCode={}, exceptionClass={}, sql={}",
             statementInformation.connectionInformation.connectionId,
             elapsedMs,
+            sqlException.sqlState,
+            sqlException.errorCode,
+            sqlException.javaClass.simpleName,
             safeSql,
-            sqlException,
         )
     }
 

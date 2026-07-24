@@ -12,6 +12,7 @@ import com.noLate.notification.application.service.NotificationTokenService
 import com.noLate.notification.application.service.PushDeliveryService
 import com.noLate.notification.application.service.PushDeliveryWriter
 import com.noLate.notification.application.service.PushSendHistoryService
+import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushDeliveryStatus
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.domain.PushSendStatus
@@ -22,8 +23,11 @@ import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.boot.test.context.TestConfiguration
@@ -69,6 +73,9 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     private val historyRepository: PushSendHistoryRepository,
     private val pushClient: RecordingReliabilityPushClient,
     private val transactionManager: PlatformTransactionManager,
+    private val appNotificationService: AppNotificationService,
+    private val pushDeliveryService: PushDeliveryService,
+    private val pushSendHistoryService: PushSendHistoryService,
 ) {
 
     @BeforeEach
@@ -126,6 +133,120 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
             deliveries(memberId).sortedBy { it.deviceId }.map { it.attemptCount },
         )
         assertEquals(setOf(PushDeliveryStatus.SUCCESS), deliveries(memberId).map { it.status }.toSet())
+    }
+
+    @Test
+    fun `manifest 생성 후 첫 claim 전에 종료되어도 모든 PENDING 기기를 다음 실행이 보낸다`() {
+        val memberId = 507L
+        register(memberId, "device-1", "pending-token-1")
+        register(memberId, "device-2", "pending-token-2")
+        val data = pushData()
+        val inbox = appNotificationService.recordWithResult(
+            memberId = memberId,
+            title = "출발 시간 안내",
+            body = "이동을 준비해주세요.",
+            data = data,
+            deduplicationKey = "manifest-before-claim-event",
+        )
+        val eventKey = "inbox:${requireNotNull(inbox.notification.id)}"
+
+        pushDeliveryService.prepareManifest(
+            memberId = memberId,
+            eventKey = eventKey,
+            tokens = tokenRepository.findAllByMemberId(memberId),
+            data = data,
+        )
+
+        val pending = deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(memberId, eventKey)
+        assertEquals(2, pending.size)
+        assertTrue(pending.all { it.status == PushDeliveryStatus.PENDING })
+        assertTrue(pending.all { it.attemptCount == 0 && it.firstAttemptedAt == null })
+
+        val resumed = send(memberId, "manifest-before-claim-event")
+
+        assertEquals(2, resumed.sentCount)
+        assertEquals(2, resumed.attemptedCount)
+        assertEquals(1, pushClient.attempts("pending-token-1"))
+        assertEquals(1, pushClient.attempts("pending-token-2"))
+        assertTrue(deliveries(memberId).all { it.status == PushDeliveryStatus.SUCCESS })
+    }
+
+    @Test
+    fun `첫 기기 호출 뒤 종료되면 DISPATCHING은 억제하고 남은 PENDING 기기만 보낸다`() {
+        val memberId = 508L
+        val firstToken = "accepted-first-token"
+        val secondToken = "not-yet-attempted-token"
+        register(memberId, "device-1", firstToken)
+        register(memberId, "device-2", secondToken)
+        pushClient.crashAfterAcceptedOnce(firstToken)
+
+        assertThrows(SimulatedProcessExit::class.java) {
+            send(memberId, "between-devices-event")
+        }
+        assertEquals(
+            setOf(PushDeliveryStatus.DISPATCHING, PushDeliveryStatus.PENDING),
+            deliveries(memberId).map { it.status }.toSet(),
+        )
+        assertEquals(1, pushClient.attempts(firstToken))
+        assertEquals(0, pushClient.attempts(secondToken))
+
+        val resumed = send(memberId, "between-devices-event")
+
+        assertEquals(1, resumed.sentCount)
+        assertEquals(1, resumed.ambiguousCount)
+        assertEquals(1, resumed.attemptedCount)
+        assertEquals(1, pushClient.attempts(firstToken))
+        assertEquals(1, pushClient.attempts(secondToken))
+        assertEquals(
+            setOf(PushDeliveryStatus.DISPATCHING, PushDeliveryStatus.SUCCESS),
+            deliveries(memberId).map { it.status }.toSet(),
+        )
+    }
+
+    @Test
+    fun `같은 실제 deviceId의 중복 token row는 provider를 한 번만 호출한다`() {
+        val memberId = 509L
+        val duplicateTokenService = mock<NotificationTokenService>()
+        whenever(duplicateTokenService.getTokensByMember(memberId)).thenReturn(
+            listOf(
+                NotificationDeviceToken(
+                    id = 1001L,
+                    memberId = memberId,
+                    deviceId = "same-device",
+                    platform = PushPlatform.ANDROID,
+                    token = "legacy-token-a",
+                ),
+                NotificationDeviceToken(
+                    id = 1002L,
+                    memberId = memberId,
+                    deviceId = "same-device",
+                    platform = PushPlatform.ANDROID,
+                    token = "legacy-token-b",
+                ),
+            )
+        )
+        val useCase = NotificationUseCase(
+            notificationTokenService = duplicateTokenService,
+            pushClient = pushClient,
+            pushSendHistoryService = pushSendHistoryService,
+            appNotificationService = appNotificationService,
+            pushDeliveryService = pushDeliveryService,
+        )
+
+        val result = useCase.sendToMember(
+            memberId = memberId,
+            title = "출발 시간 안내",
+            body = "이동을 준비해주세요.",
+            data = pushData(),
+            inboxDeduplicationKey = "duplicate-device-event",
+        )
+
+        assertEquals(2, result.requestedCount)
+        assertEquals(1, result.attemptedCount)
+        assertEquals(1, result.sentCount)
+        assertEquals(1, result.alreadyDeliveredCount)
+        assertEquals(1, pushClient.attempts("legacy-token-a") + pushClient.attempts("legacy-token-b"))
+        assertEquals(1, deliveries(memberId).size)
     }
 
     @Test
@@ -217,12 +338,14 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
             memberId = memberId,
             title = "출발 시간 안내",
             body = "이동을 준비해주세요.",
-            data = mapOf(
-                "type" to "SCHEDULE_DEPARTURE_REMINDER",
-                "scheduleId" to "7001",
-            ),
+            data = pushData(),
             inboxDeduplicationKey = key,
         )
+
+    private fun pushData() = mapOf(
+        "type" to "SCHEDULE_DEPARTURE_REMINDER",
+        "scheduleId" to "7001",
+    )
 
     private fun register(memberId: Long, deviceId: String, token: String) {
         tokenService.registerToken(

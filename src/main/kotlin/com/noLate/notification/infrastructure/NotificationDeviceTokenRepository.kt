@@ -7,6 +7,8 @@ interface NotificationDeviceTokenRepository : JpaRepository<NotificationDeviceTo
 
     fun findByMemberIdAndDeviceId(memberId: Long, deviceId: String): NotificationDeviceToken?
 
+    fun findAllByMemberIdAndDeviceId(memberId: Long, deviceId: String): List<NotificationDeviceToken>
+
     fun findAllByMemberId(memberId: Long): List<NotificationDeviceToken>
 
     fun findAllByToken(token: String): List<NotificationDeviceToken>

@@ -6,6 +6,7 @@ import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.data.domain.PageRequest
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -22,11 +23,12 @@ class SchedulePushJobCoordinator(
 ) {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun claimDueJobs(now: Instant, workerId: String): List<SchedulePushJob> {
+    fun claimDueJobs(now: Instant, workerId: String, batchSize: Int): List<SchedulePushJob> {
         val dueJobs = repository
             .findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 now,
+                PageRequest.of(0, batchSize.coerceIn(1, 200)),
             )
         dueJobs.forEach { it.startProcessing(workerId, now) }
         repository.flush()

@@ -19,5 +19,11 @@ interface PushDeliveryRepository : JpaRepository<PushDelivery, Long> {
         eventKey: String,
     ): List<PushDelivery>
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    fun findAllByMemberIdAndEventKey(
+        memberId: Long,
+        eventKey: String,
+    ): List<PushDelivery>
+
     fun deleteAllByMemberId(memberId: Long)
 }

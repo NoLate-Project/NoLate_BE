@@ -87,6 +87,34 @@ class P6SpySqlErrorEventListenerTest {
         assertTrue(message.contains("[REDACTED]"))
     }
 
+    @Test
+    fun `SQLException message와 stack trace에 token이 있어도 구조화된 오류 정보만 기록한다`() {
+        val rawToken = "secret-token-from-driver-error"
+        val sqlException = SQLException(
+            "constraint failed for token=$rawToken",
+            "23000",
+            1062,
+        )
+
+        listener.onAfterAnyExecute(
+            statementInformation(
+                "insert into push_device_token(token, device_id) values ('$rawToken', 'private-device')"
+            ),
+            2_000_000,
+            sqlException,
+        )
+
+        val event = appender.list.single()
+        val message = event.formattedMessage
+        assertFalse(message.contains(rawToken))
+        assertFalse(message.contains("constraint failed"))
+        assertFalse(message.contains("private-device"))
+        assertTrue(message.contains("sqlState=23000"))
+        assertTrue(message.contains("vendorCode=1062"))
+        assertTrue(message.contains("exceptionClass=SQLException"))
+        assertEquals(null, event.throwableProxy)
+    }
+
     private fun statementInformation(sqlWithValues: String): StatementInformation {
         val connectionInformation = mock<ConnectionInformation>()
         whenever(connectionInformation.connectionId).thenReturn(1)

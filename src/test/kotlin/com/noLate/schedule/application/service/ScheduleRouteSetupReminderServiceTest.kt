@@ -1,10 +1,7 @@
 package com.noLate.schedule.application.service
 
-import com.noLate.notification.application.service.AppNotificationRecordResult
-import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.notification.application.useCase.NotificationUseCase
-import com.noLate.notification.domain.AppNotification
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleRouteSetupReminder
 import com.noLate.schedule.domain.ScheduleRouteSetupReminderStatus
@@ -22,7 +19,6 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.check
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
-import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import java.time.Instant
 import java.util.Optional
@@ -34,7 +30,6 @@ class ScheduleRouteSetupReminderServiceTest {
     @Mock lateinit var reminderRepository: ScheduleRouteSetupReminderRepository
     @Mock lateinit var registrar: ScheduleRouteSetupReminderRegistrar
     @Mock lateinit var accessPolicy: ScheduleAccessPolicy
-    @Mock lateinit var appNotificationService: AppNotificationService
     @Mock lateinit var notificationUseCase: NotificationUseCase
 
     private val reminderPolicy = RouteSetupReminderPolicy()
@@ -63,21 +58,7 @@ class ScheduleRouteSetupReminderServiceTest {
             whenever(travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(requireNotNull(schedule.id), 2L))
                 .thenReturn(null)
         }
-        whenever(appNotificationService.recordWithResult(eq(2L), any(), any(), any(), any()))
-            .thenReturn(
-                AppNotificationRecordResult(
-                    notification = AppNotification(
-                        memberId = 2L,
-                        type = "ROUTE_SETUP_REMINDER",
-                        title = "경로를 설정해주세요",
-                        body = "",
-                        dataJson = "{}",
-                        createdAt = now,
-                    ),
-                    created = true,
-                )
-            )
-        whenever(notificationUseCase.sendToMember(eq(2L), any(), any(), any(), eq(null), eq(false)))
+        whenever(notificationUseCase.sendToMember(eq(2L), any(), any(), any(), any(), eq(true)))
             .thenReturn(NotificationSendResult(requestedCount = 0))
         val service = service()
 
@@ -95,13 +76,13 @@ class ScheduleRouteSetupReminderServiceTest {
                 assertEquals("10,11", it["scheduleIds"])
                 assertEquals("2", it["count"])
             },
-            inboxDeduplicationKey = eq(null),
-            persistInInbox = eq(false),
+            inboxDeduplicationKey = check { assertEquals(true, it.startsWith("route-setup:2:")) },
+            persistInInbox = eq(true),
         )
     }
 
     @Test
-    fun `dispatch does not resend push when the logical notification already exists without a failed attempt`() {
+    fun `dispatch delegates an existing logical notification to per-device dedupe`() {
         val schedule = routeSchedule(10L, "병원", now.plusSeconds(60 * 60))
         val marker = reminder(101L, schedule)
         whenever(reminderRepository.findDueForUpdate(eq(ScheduleRouteSetupReminderStatus.PENDING), eq(now), any()))
@@ -118,26 +99,14 @@ class ScheduleRouteSetupReminderServiceTest {
         whenever(accessPolicy.routeReminderEnabled(2L, schedule)).thenReturn(true)
         whenever(travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
             .thenReturn(null)
-        whenever(appNotificationService.recordWithResult(eq(2L), any(), any(), any(), any()))
-            .thenReturn(
-                AppNotificationRecordResult(
-                    notification = AppNotification(
-                        memberId = 2L,
-                        type = "ROUTE_SETUP_REMINDER",
-                        title = "경로를 설정해주세요",
-                        body = "",
-                        dataJson = "{}",
-                        createdAt = now,
-                    ),
-                    created = false,
-                )
-            )
+        whenever(notificationUseCase.sendToMember(eq(2L), any(), any(), any(), any(), eq(true)))
+            .thenReturn(NotificationSendResult(requestedCount = 1, deduplicatedCount = 1))
 
         val sentGroups = service().dispatch(now)
 
         assertEquals(1, sentGroups)
         assertEquals(ScheduleRouteSetupReminderStatus.SENT, marker.status)
-        verifyNoInteractions(notificationUseCase)
+        verify(notificationUseCase).sendToMember(eq(2L), any(), any(), any(), any(), eq(true))
     }
 
     @Test
@@ -165,28 +134,14 @@ class ScheduleRouteSetupReminderServiceTest {
         whenever(accessPolicy.routeReminderEnabled(2L, schedule)).thenReturn(true)
         whenever(travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
             .thenReturn(null)
-        whenever(appNotificationService.recordWithResult(eq(2L), any(), any(), any(), any()))
-            .thenReturn(
-                AppNotificationRecordResult(
-                    notification = AppNotification(
-                        memberId = 2L,
-                        type = "ROUTE_SETUP_REMINDER",
-                        title = "경로를 설정해주세요",
-                        body = "",
-                        dataJson = "{}",
-                        createdAt = now,
-                    ),
-                    created = false,
-                )
-            )
-        whenever(notificationUseCase.sendToMember(eq(2L), any(), any(), any(), eq(null), eq(false)))
-            .thenReturn(NotificationSendResult(requestedCount = 0))
+        whenever(notificationUseCase.sendToMember(eq(2L), any(), any(), any(), any(), eq(true)))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         val sentGroups = service().dispatch(now)
 
         assertEquals(1, sentGroups)
         assertEquals(ScheduleRouteSetupReminderStatus.SENT, marker.status)
-        verify(notificationUseCase).sendToMember(eq(2L), any(), any(), any(), eq(null), eq(false))
+        verify(notificationUseCase).sendToMember(eq(2L), any(), any(), any(), any(), eq(true))
     }
 
     private fun service() = ScheduleRouteSetupReminderService(
@@ -196,7 +151,6 @@ class ScheduleRouteSetupReminderServiceTest {
         registrar = registrar,
         accessPolicy = accessPolicy,
         reminderPolicy = reminderPolicy,
-        appNotificationService = appNotificationService,
         notificationUseCase = notificationUseCase,
         batchSize = 50,
         maxAttempts = 3,

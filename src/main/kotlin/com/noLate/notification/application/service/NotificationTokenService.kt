@@ -17,8 +17,9 @@ class NotificationTokenService (
      * FCM/APNs/Expo 등에서 받은 토큰 등록/갱신
      *
      * - 같은 (memberId + deviceId) 조합이 있으면 → token / platform 갱신
-     * - 같은 token 또는 deviceId가 다른 회원에게 남아 있으면 → 이전 소유권 제거
-     * - deviceId 가 없으면 → 새 row insert (한 회원에 여러 기기 토큰 허용)
+     * - 같은 token 또는 deviceId의 중복 row는 현재 등록 한 건으로 수렴
+     * - 같은 token/device가 다른 회원에게 남아 있으면 이전 소유권 제거
+     * - deviceId가 없어도 동일 token은 한 row만 유지
      */
     @Transactional
     fun registerToken(
@@ -27,39 +28,47 @@ class NotificationTokenService (
         platform: PushPlatform,
         token: String
     ) {
-        val tokensOwnedByOtherMembers = buildList {
-            addAll(notificationRepository.findAllByToken(token))
-            if (!deviceId.isNullOrBlank()) {
-                addAll(notificationRepository.findAllByDeviceId(deviceId))
-            }
+        val normalizedDeviceId = deviceId?.trim()?.takeIf { it.isNotEmpty() }
+        val tokenMatches = notificationRepository.findAllByToken(token)
+        val deviceMatches = normalizedDeviceId
+            ?.let(notificationRepository::findAllByDeviceId)
+            .orEmpty()
+        val preferred = if (normalizedDeviceId != null) {
+            notificationRepository
+                .findAllByMemberIdAndDeviceId(memberId, normalizedDeviceId)
+                .maxByOrNull { it.id ?: Long.MIN_VALUE }
+        } else {
+            tokenMatches
+                .filter { it.memberId == memberId }
+                .maxByOrNull { it.id ?: Long.MIN_VALUE }
         }
-            .distinctBy { it.id }
-            .filter { it.memberId != memberId }
+        val duplicates = (tokenMatches + deviceMatches)
+            .distinctBy { it.id ?: System.identityHashCode(it).toLong() }
+            .filterNot { it === preferred || (it.id != null && it.id == preferred?.id) }
 
-        if (tokensOwnedByOtherMembers.isNotEmpty()) {
-            notificationRepository.deleteAll(tokensOwnedByOtherMembers)
+        if (duplicates.isNotEmpty()) {
+            notificationRepository.deleteAll(duplicates)
             notificationRepository.flush()
         }
 
-        if (!deviceId.isNullOrBlank()) {
-            val existing = notificationRepository.findByMemberIdAndDeviceId(memberId, deviceId)
-            if (existing != null) {
-                existing.token = token
-                existing.platform = platform
-                notificationRepository.save(existing)
-                logRegistration(memberId, deviceId, platform, tokensOwnedByOtherMembers.size, "updated")
-                return
-            }
+        if (preferred != null) {
+            preferred.memberId = memberId
+            preferred.deviceId = normalizedDeviceId ?: preferred.deviceId
+            preferred.token = token
+            preferred.platform = platform
+            notificationRepository.save(preferred)
+            logRegistration(memberId, normalizedDeviceId, platform, duplicates.size, "updated")
+            return
         }
 
         val entity = NotificationDeviceToken(
             memberId = memberId,
-            deviceId = deviceId,
+            deviceId = normalizedDeviceId,
             platform = platform,
             token = token
         )
         notificationRepository.save(entity)
-        logRegistration(memberId, deviceId, platform, tokensOwnedByOtherMembers.size, "created")
+        logRegistration(memberId, normalizedDeviceId, platform, duplicates.size, "created")
     }
 
     private fun logRegistration(

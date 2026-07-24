@@ -59,41 +59,50 @@ class FirebasePushConfiguration {
 
     @Bean
     fun firebasePushClient(firebaseMessaging: FirebaseMessaging): PushClient =
-        object : PushClient {
-            override fun sendToToken(
-                token: String,
-                title: String,
-                body: String,
-                data: Map<String, String>,
-            ): PushSendResult {
-                val scheduleReminderAction = data.isScheduleDepartureReminder()
-                val messageData = data.withNotificationActionCategory(scheduleReminderAction)
-                val message = Message.builder()
-                    .setToken(token)
-                    .setNotification(Notification.builder().setTitle(title).setBody(body).build())
-                    .setAndroidConfig(createAndroidConfig())
-                    .setApnsConfig(createApnsConfig(title, body, scheduleReminderAction))
-                    .putAllData(messageData)
-                    .build()
-                return try {
-                    PushSendResult(messageId = firebaseMessaging.send(message))
-                } catch (exception: FirebaseMessagingException) {
-                    if (exception.isInvalidPushToken()) {
-                        throw InvalidPushTokenException(token, exception)
-                    }
-                    exception.messagingErrorCode?.let { errorCode ->
-                        // FCM이 명시적인 오류 응답을 준 경우에만 안전한 재시도 대상으로 분류한다.
-                        throw ConfirmedPushDeliveryException(
-                            message = "푸시 공급자가 전송을 거절했습니다. code=$errorCode",
-                            cause = exception,
-                        )
-                    }
-                    // message id도 명시적 오류 코드도 없는 transport 실패는 수락 여부가 모호하다.
-                    // 원래 예외를 유지하면 NotificationUseCase가 DISPATCHING으로 억제한다.
+        FirebasePushClient(firebaseMessaging)
+}
+
+internal class FirebasePushClient(
+    private val firebaseMessaging: FirebaseMessaging,
+) : PushClient {
+    override fun sendToToken(
+        token: String,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+    ): PushSendResult {
+        val scheduleReminderAction = data.isScheduleDepartureReminder()
+        val messageData = data.withNotificationActionCategory(scheduleReminderAction)
+        val message = Message.builder()
+            .setToken(token)
+            .setNotification(Notification.builder().setTitle(title).setBody(body).build())
+            .setAndroidConfig(createAndroidConfig())
+            .setApnsConfig(createApnsConfig(title, body, scheduleReminderAction))
+            .putAllData(messageData)
+            .build()
+        return try {
+            PushSendResult(messageId = firebaseMessaging.send(message))
+        } catch (exception: FirebaseMessagingException) {
+            when (
+                classifyFirebaseFailure(
+                    errorCode = exception.messagingErrorCode,
+                    badEnvironmentKey = exception.containsBadEnvironmentKeyInToken(),
+                )
+            ) {
+                FirebaseFailureKind.INVALID_TOKEN ->
+                    throw InvalidPushTokenException(token, exception)
+                FirebaseFailureKind.CONFIRMED_REJECTION ->
+                    throw ConfirmedPushDeliveryException(
+                        message =
+                            "푸시 공급자가 전송을 거절했습니다. code=${exception.messagingErrorCode}",
+                        cause = exception,
+                    )
+                FirebaseFailureKind.UNKNOWN ->
+                    // INTERNAL/UNAVAILABLE/코드 없음은 수락 여부가 모호하다.
                     throw exception
-                }
             }
         }
+    }
 
     private fun createAndroidConfig(): AndroidConfig =
         AndroidConfig.builder()
@@ -145,14 +154,35 @@ private fun Map<String, String>.withNotificationActionCategory(
     )
 }
 
-private fun FirebaseMessagingException.isInvalidPushToken(): Boolean =
-    messagingErrorCode == MessagingErrorCode.UNREGISTERED ||
-        messagingErrorCode == MessagingErrorCode.INVALID_ARGUMENT ||
-        containsBadEnvironmentKeyInToken()
-
 private fun FirebaseMessagingException.containsBadEnvironmentKeyInToken(): Boolean =
     generateSequence(this as Throwable?) { it.cause }
         .any { it.message?.contains("BadEnvironmentKeyInToken") == true }
+
+internal enum class FirebaseFailureKind {
+    INVALID_TOKEN,
+    CONFIRMED_REJECTION,
+    UNKNOWN,
+}
+
+internal fun classifyFirebaseFailure(
+    errorCode: MessagingErrorCode?,
+    badEnvironmentKey: Boolean = false,
+): FirebaseFailureKind =
+    when {
+        errorCode == MessagingErrorCode.UNREGISTERED || badEnvironmentKey ->
+            FirebaseFailureKind.INVALID_TOKEN
+        errorCode in CONFIRMED_REJECTION_CODES ->
+            FirebaseFailureKind.CONFIRMED_REJECTION
+        else ->
+            FirebaseFailureKind.UNKNOWN
+    }
+
+private val CONFIRMED_REJECTION_CODES = setOf(
+    MessagingErrorCode.INVALID_ARGUMENT,
+    MessagingErrorCode.SENDER_ID_MISMATCH,
+    MessagingErrorCode.THIRD_PARTY_AUTH_ERROR,
+    MessagingErrorCode.QUOTA_EXCEEDED,
+)
 
 @ConfigurationProperties("firebase")
 data class FirebaseProperties(

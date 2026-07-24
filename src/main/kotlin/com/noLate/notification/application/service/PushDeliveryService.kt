@@ -39,28 +39,34 @@ class PushDeliveryService(
     private val writer: PushDeliveryWriter,
 ) {
 
+    /**
+     * provider loop 전에 현재 대상 기기 전체를 한 transaction에서 PENDING으로 만든다.
+     * inbox가 이미 존재해도 누락 row를 보충하므로 manifest 직전 crash를 다음 실행이 복구한다.
+     */
+    fun prepareManifest(
+        memberId: Long,
+        eventKey: String,
+        tokens: List<NotificationDeviceToken>,
+        data: Map<String, String>,
+    ) {
+        if (tokens.isEmpty()) return
+        val normalizedEventKey = eventKey.take(100)
+        try {
+            writer.prepareManifest(memberId, normalizedEventKey, tokens, data)
+        } catch (_: DataIntegrityViolationException) {
+            // 동시 manifest 생성의 unique 충돌 transaction이 끝난 뒤 누락분을 다시 보충한다.
+            writer.prepareManifest(memberId, normalizedEventKey, tokens, data)
+        }
+    }
+
     fun claim(
         memberId: Long,
         eventKey: String,
         token: NotificationDeviceToken,
-        data: Map<String, String>,
-        allowCreate: Boolean,
     ): PushDeliveryClaim {
-        val deviceKey = token.deliveryDeviceKey()
+        val deviceKey = token.deliveryDeviceKey(memberId)
         val normalizedEventKey = eventKey.take(100)
-        return try {
-            writer.claim(
-                memberId = memberId,
-                eventKey = normalizedEventKey,
-                deviceKey = deviceKey,
-                token = token,
-                data = data,
-                allowCreate = allowCreate,
-            )
-        } catch (_: DataIntegrityViolationException) {
-            // 두 caller가 inbox 없이 같은 명시적 key를 사용한 경우 유니크 제약이 최종 경계다.
-            writer.observe(memberId, normalizedEventKey, deviceKey)
-        }
+        return writer.claim(memberId, normalizedEventKey, deviceKey)
     }
 
     fun markSuccess(deliveryId: Long, providerMessageId: String) {
@@ -83,62 +89,40 @@ class PushDeliveryWriter(
 ) {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun prepareManifest(
+        memberId: Long,
+        eventKey: String,
+        tokens: List<NotificationDeviceToken>,
+        data: Map<String, String>,
+    ) {
+        val existingDeviceKeys = repository.findAllByMemberIdAndEventKey(memberId, eventKey)
+            .mapTo(mutableSetOf()) { it.deviceKey }
+        val missing = tokens
+            .distinctBy { it.deliveryDeviceKey(memberId) }
+            .filter { existingDeviceKeys.add(it.deliveryDeviceKey(memberId)) }
+            .map { token ->
+                PushDelivery(
+                    memberId = memberId,
+                    eventKey = eventKey,
+                    deviceKey = token.deliveryDeviceKey(memberId),
+                    deviceTokenId = token.id,
+                    deviceId = token.deviceId?.take(100),
+                    platform = token.platform,
+                    scheduleId = data["scheduleId"]?.toLongOrNull(),
+                    payloadType = data["type"]?.take(80),
+                )
+            }
+        if (missing.isNotEmpty()) {
+            repository.saveAllAndFlush(missing)
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun claim(
         memberId: Long,
         eventKey: String,
         deviceKey: String,
-        token: NotificationDeviceToken,
-        data: Map<String, String>,
-        allowCreate: Boolean,
     ): PushDeliveryClaim {
-        val existing = repository.findByMemberIdAndEventKeyAndDeviceKey(
-            memberId,
-            eventKey,
-            deviceKey,
-        )
-        if (existing != null) {
-            return when (existing.status) {
-                PushDeliveryStatus.SUCCESS ->
-                    PushDeliveryClaim(PushDeliveryClaimOutcome.ALREADY_SUCCESS, existing.id)
-
-                PushDeliveryStatus.DISPATCHING ->
-                    PushDeliveryClaim(PushDeliveryClaimOutcome.AMBIGUOUS, existing.id)
-
-                PushDeliveryStatus.INVALID_TOKEN ->
-                    PushDeliveryClaim(PushDeliveryClaimOutcome.INVALID_TOKEN, existing.id)
-
-                PushDeliveryStatus.FAILED -> {
-                    existing.retry(Instant.now(clock))
-                    repository.saveAndFlush(existing)
-                    PushDeliveryClaim(PushDeliveryClaimOutcome.SEND, requireNotNull(existing.id))
-                }
-            }
-        }
-
-        if (!allowCreate) {
-            return PushDeliveryClaim(PushDeliveryClaimOutcome.DEDUPLICATED)
-        }
-
-        val now = Instant.now(clock)
-        val created = repository.saveAndFlush(
-            PushDelivery(
-                memberId = memberId,
-                eventKey = eventKey,
-                deviceKey = deviceKey,
-                deviceTokenId = token.id,
-                deviceId = token.deviceId?.take(100),
-                platform = token.platform,
-                scheduleId = data["scheduleId"]?.toLongOrNull(),
-                payloadType = data["type"]?.take(80),
-                firstAttemptedAt = now,
-                lastAttemptedAt = now,
-            )
-        )
-        return PushDeliveryClaim(PushDeliveryClaimOutcome.SEND, requireNotNull(created.id))
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun observe(memberId: Long, eventKey: String, deviceKey: String): PushDeliveryClaim {
         val existing = repository.findByMemberIdAndEventKeyAndDeviceKey(
             memberId,
             eventKey,
@@ -147,12 +131,19 @@ class PushDeliveryWriter(
         return when (existing.status) {
             PushDeliveryStatus.SUCCESS ->
                 PushDeliveryClaim(PushDeliveryClaimOutcome.ALREADY_SUCCESS, existing.id)
+
+            PushDeliveryStatus.DISPATCHING ->
+                PushDeliveryClaim(PushDeliveryClaimOutcome.AMBIGUOUS, existing.id)
+
             PushDeliveryStatus.INVALID_TOKEN ->
                 PushDeliveryClaim(PushDeliveryClaimOutcome.INVALID_TOKEN, existing.id)
-            PushDeliveryStatus.DISPATCHING,
-            PushDeliveryStatus.FAILED ->
-                // 유니크 경합 caller는 소유권을 얻지 못했으므로 FAILED여도 보내지 않는다.
-                PushDeliveryClaim(PushDeliveryClaimOutcome.AMBIGUOUS, existing.id)
+
+            PushDeliveryStatus.PENDING,
+            PushDeliveryStatus.FAILED -> {
+                existing.beginDispatch(Instant.now(clock))
+                repository.saveAndFlush(existing)
+                PushDeliveryClaim(PushDeliveryClaimOutcome.SEND, requireNotNull(existing.id))
+            }
         }
     }
 
@@ -175,9 +166,14 @@ class PushDeliveryWriter(
     }
 }
 
-private fun NotificationDeviceToken.deliveryDeviceKey(): String =
-    id?.let { "token-id:$it" }
-        ?: "token-sha256:${token.sha256()}"
+internal fun NotificationDeviceToken.deliveryDeviceKey(memberId: Long): String {
+    val stableDeviceId = deviceId?.trim()?.takeIf { it.isNotEmpty() }
+    return if (stableDeviceId != null) {
+        "device-sha256:${"$memberId:${platform.name}:$stableDeviceId".sha256()}"
+    } else {
+        "token-sha256:${token.sha256()}"
+    }
+}
 
 private fun String.sha256(): String =
     MessageDigest.getInstance("SHA-256")
