@@ -30,6 +30,7 @@ class TmapTrafficClientTest {
         val bike = client.getTravelMinutes(
             request(
                 mode = ScheduleTravelMode.BIKE,
+                fallbackTravelMinutes = 24,
                 selectedRouteJson = """{"minutes":24}""",
                 selectedRouteTravelMinutes = 24,
             )
@@ -72,6 +73,7 @@ class TmapTrafficClientTest {
         val result = client.getTravelMinutes(
             request(
                 mode = ScheduleTravelMode.TRANSIT,
+                fallbackTravelMinutes = 37,
                 selectedRouteJson = """{"minutes":37,"itinerary":{"legs":[{"mode":"BUS"}]}}""",
                 selectedRouteTravelMinutes = 37,
                 selectedTransitItineraryJson = """{"legs":[{"mode":"BUS"}]}""",
@@ -104,6 +106,7 @@ class TmapTrafficClientTest {
         val result = client.getTravelMinutes(
             request(
                 mode = ScheduleTravelMode.WALK,
+                fallbackTravelMinutes = 21,
                 selectedRouteJson = """{"id":"walk-selected","minutes":21}""",
                 selectedRouteTravelMinutes = 21,
             )
@@ -133,6 +136,7 @@ class TmapTrafficClientTest {
             val result = client.getTravelMinutes(
                 request(
                     mode = ScheduleTravelMode.WALK,
+                    fallbackTravelMinutes = 25,
                     selectedRouteJson = """{"minutes":25,"providerRouteOption":"4"}""",
                     selectedRouteTravelMinutes = 25,
                     selectedRouteOption = "4",
@@ -171,6 +175,7 @@ class TmapTrafficClientTest {
             val result = client.getTravelMinutes(
                 request(
                     mode = ScheduleTravelMode.CAR,
+                    fallbackTravelMinutes = 32,
                     selectedRouteJson = """{"minutes":32,"searchOption":"2"}""",
                     selectedRouteTravelMinutes = 32,
                     selectedRouteOption = "2",
@@ -230,9 +235,11 @@ class TmapTrafficClientTest {
             ).getTravelMinutes(
                 request(
                     mode = ScheduleTravelMode.WALK,
+                    fallbackTravelMinutes = 25,
                     selectedRouteJson = """{"minutes":25,"searchOption":"4"}""",
                     selectedRouteTravelMinutes = 25,
                     selectedRouteOption = "4",
+                    maxTravelMinutes = 120,
                 )
             )
 
@@ -268,21 +275,24 @@ class TmapTrafficClientTest {
 
     private fun request(
         mode: ScheduleTravelMode,
+        fallbackTravelMinutes: Int = 30,
         selectedRouteJson: String? = null,
         selectedRouteTravelMinutes: Int? = null,
         selectedRouteOption: String? = null,
         selectedTransitItineraryJson: String? = null,
+        maxTravelMinutes: Int = 1_440,
     ) = TrafficRequest(
         originLat = 37.1,
         originLng = 127.1,
         destinationLat = 37.2,
         destinationLng = 127.2,
         travelMode = mode,
-        fallbackTravelMinutes = 30,
+        fallbackTravelMinutes = fallbackTravelMinutes,
         selectedRouteJson = selectedRouteJson,
         selectedRouteTravelMinutes = selectedRouteTravelMinutes,
         selectedRouteOption = selectedRouteOption,
         selectedTransitItineraryJson = selectedTransitItineraryJson,
+        maxTravelMinutes = maxTravelMinutes,
     )
 
     private fun httpServer(handler: (com.sun.net.httpserver.HttpExchange) -> Unit): HttpServer =

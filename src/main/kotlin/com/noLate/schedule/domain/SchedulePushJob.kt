@@ -13,6 +13,7 @@ import jakarta.persistence.Table
 import jakarta.persistence.UniqueConstraint
 import jakarta.persistence.Version
 import org.hibernate.annotations.Comment
+import java.time.Duration
 import java.time.Instant
 
 @Entity
@@ -126,6 +127,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var lastLiveFetchedAt: Instant? = null
         protected set
 
+    @Column(name = "last_live_travel_minutes")
+    @Comment("마지막 신뢰 가능한 실시간 provider 이동 시간")
+    var lastLiveTravelMinutes: Int? = null
+        protected set
+
     @Enumerated(EnumType.STRING)
     @Column(name = "last_eta_source", length = 30)
     @Comment("마지막 ETA 출처")
@@ -140,6 +146,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     @Column(name = "last_eta_failure_reason", length = 500)
     @Comment("마지막 ETA fallback 안정 reason code와 안전 메시지")
     var lastEtaFailureReason: String? = null
+        protected set
+
+    @Column(name = "last_eta_route_fingerprint", length = 64)
+    @Comment("마지막 ETA snapshot을 계산한 회원 경로 지문")
+    var lastEtaRouteFingerprint: String? = null
         protected set
 
     @Column(name = "last_traffic_change_minutes")
@@ -224,6 +235,8 @@ class SchedulePushJob protected constructor() : BaseEntity() {
      */
     fun cancel() {
         status = SchedulePushJobStatus.CANCELED
+        clearLiveComparatorChain()
+        lastEtaRouteFingerprint = null
         clearLock()
     }
 
@@ -274,6 +287,8 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         liveFetchedAt: Instant? = null,
         etaStale: Boolean = true,
         etaFailureReason: String? = null,
+        etaRouteFingerprint: String? = null,
+        liveComparatorMaxAgeMinutes: Long = DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES,
         now: Instant = Instant.now()
     ) {
         if (etaSource == TrafficSource.LIVE_PROVIDER) {
@@ -281,24 +296,36 @@ class SchedulePushJob protected constructor() : BaseEntity() {
                 "LIVE_PROVIDER ETA에는 provider 취득 시각이 필요합니다."
             }
         }
+        if (etaRouteFingerprint != null && etaRouteFingerprint != lastEtaRouteFingerprint) {
+            clearLiveComparatorChain()
+        }
         val evaluatedAt = maxOf(now, liveFetchedAt ?: now)
-        if (lastEtaSource == TrafficSource.LIVE_PROVIDER && etaSource == TrafficSource.LIVE_PROVIDER) {
-            lastTravelMinutes?.let { previousTravelMinutes ->
-                if (previousTravelMinutes != travelMinutes) {
-                    lastTrafficChangeMinutes = travelMinutes - previousTravelMinutes
-                    lastChangedAt = evaluatedAt
-                }
+        val comparableLiveTravelMinutes = liveFetchedAt
+            ?.takeIf { etaSource == TrafficSource.LIVE_PROVIDER }
+            ?.let {
+                comparableLiveTravelMinutes(
+                    currentLiveFetchedAt = it,
+                    maxAgeMinutes = liveComparatorMaxAgeMinutes,
+                    routeFingerprint = etaRouteFingerprint,
+                )
+            }
+        comparableLiveTravelMinutes?.let { previousTravelMinutes ->
+            if (previousTravelMinutes != travelMinutes) {
+                lastTrafficChangeMinutes = travelMinutes - previousTravelMinutes
+                lastChangedAt = evaluatedAt
             }
         }
         lastTravelMinutes = travelMinutes
         lastRecommendedDepartureAt = recommendedDepartureAt
         lastCheckedAt = evaluatedAt
-        if (liveFetchedAt != null) {
+        if (etaSource == TrafficSource.LIVE_PROVIDER) {
+            lastLiveTravelMinutes = travelMinutes
             lastLiveFetchedAt = liveFetchedAt
         }
         lastEtaSource = etaSource
         lastEtaStale = etaStale
         lastEtaFailureReason = etaFailureReason
+        lastEtaRouteFingerprint = etaRouteFingerprint
         checkCount += 1
         retryCount = 0
         failureReason = null
@@ -366,9 +393,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.lastReminderBoundaryAt = null
         this.lastCheckedAt = null
         this.lastLiveFetchedAt = null
+        this.lastLiveTravelMinutes = null
         this.lastEtaSource = null
         this.lastEtaStale = null
         this.lastEtaFailureReason = null
+        this.lastEtaRouteFingerprint = null
         this.lastTrafficChangeMinutes = null
         this.lastChangedAt = null
         this.lastPushedAt = null
@@ -411,6 +440,29 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         return now.isAfter(scheduleAt.plusSeconds(graceMinutes * 60))
     }
 
+    fun comparableLiveTravelMinutes(
+        currentLiveFetchedAt: Instant,
+        maxAgeMinutes: Long,
+        routeFingerprint: String? = null,
+    ): Int? {
+        require(maxAgeMinutes in 1..MAX_LIVE_COMPARATOR_AGE_MINUTES) {
+            "live comparator freshness는 1~$MAX_LIVE_COMPARATOR_AGE_MINUTES 사이여야 합니다."
+        }
+        if (routeFingerprint != null && routeFingerprint != lastEtaRouteFingerprint) return null
+        val baselineMinutes = lastLiveTravelMinutes ?: return null
+        val baselineFetchedAt = lastLiveFetchedAt ?: return null
+        val age = Duration.between(baselineFetchedAt, currentLiveFetchedAt)
+        if (age.isNegative || age > Duration.ofMinutes(maxAgeMinutes)) return null
+        return baselineMinutes
+    }
+
+    private fun clearLiveComparatorChain() {
+        lastLiveFetchedAt = null
+        lastLiveTravelMinutes = null
+        lastTrafficChangeMinutes = null
+        lastChangedAt = null
+    }
+
     private fun clearLock() {
         lockedBy = null
         lockedAt = null
@@ -418,6 +470,8 @@ class SchedulePushJob protected constructor() : BaseEntity() {
 
     companion object {
         private val ALLOWED_INTERVALS = setOf(10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60)
+        const val DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES = 60L
+        const val MAX_LIVE_COMPARATOR_AGE_MINUTES = 10_080L
 
         /**
          * SchedulePushJob을 생성한다.

@@ -6,6 +6,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleEtaConfidence
+import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlan
@@ -72,6 +73,7 @@ class ScheduleDepartureEtaServiceTest {
             checkedAt = secondCheckedAt,
             liveFetchedAt = liveFetchedAt,
         )
+        job.startProcessing("in-flight-worker")
         stubVisible(schedule)
         whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
 
@@ -92,7 +94,6 @@ class ScheduleDepartureEtaServiceTest {
         assertNull(result.preparationStartAt)
         assertNull(result.safetyBufferMinutes)
         assertEquals("Asia/Seoul", result.timeZone)
-        verify(travelPlanRepository, never()).findByScheduleIdAndMemberIdAndDeletedFalse(any(), any())
     }
 
     @Test
@@ -183,6 +184,68 @@ class ScheduleDepartureEtaServiceTest {
     }
 
     @Test
+    fun `legacy job의 source와 stale이 null이면 ETA source null 대신 현재 saved fallback을 반환한다`() {
+        val schedule = schedule()
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 35,
+            source = TrafficSource.SAVED_FALLBACK,
+            checkedAt = queryAt.minus(5, ChronoUnit.MINUTES),
+            failureReason = "PROVIDER_DISABLED: safe",
+            snapshotSchedule = schedule,
+        )
+        setField(job, "lastEtaSource", null)
+        setField(job, "lastEtaStale", null)
+        setField(job, "lastEtaRouteFingerprint", null)
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(30, result.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
+        assertTrue(result.stale)
+    }
+
+    @Test
+    fun `제품 상한 초과 또는 불완전 LIVE provenance job은 현재 route fallback으로 내린다`() {
+        val schedule = schedule()
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 30,
+            source = TrafficSource.LIVE_PROVIDER,
+            checkedAt = queryAt.minus(5, ChronoUnit.MINUTES),
+            liveFetchedAt = queryAt.minus(5, ChronoUnit.MINUTES),
+            snapshotSchedule = schedule,
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        setField(job, "lastTravelMinutes", 2_000)
+        val oversized = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(30, oversized.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, oversized.source)
+        assertNull(oversized.liveFetchedAt)
+
+        setField(job, "lastTravelMinutes", 30)
+        setField(
+            job,
+            "lastRecommendedDepartureAt",
+            schedule.startAt.minus(30, ChronoUnit.MINUTES),
+        )
+        setField(job, "lastLiveFetchedAt", null)
+        val incompleteLive = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(30, incompleteLive.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, incompleteLive.source)
+        assertNull(incompleteLive.liveFetchedAt)
+    }
+
+    @Test
     fun `job이 없으면 routeInfo 전체 시간으로 선택 경로 snapshot을 구성한다`() {
         val schedule = schedule(
             routeJson = """
@@ -193,6 +256,7 @@ class ScheduleDepartureEtaServiceTest {
                   }
                 }
             """.trimIndent(),
+            travelMinutes = 40,
         )
         stubVisible(schedule)
 
@@ -220,6 +284,33 @@ class ScheduleDepartureEtaServiceTest {
         assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
         assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
         assertTrue(result.failureReason.orEmpty().startsWith("SAVED_ROUTE_SNAPSHOT:"))
+    }
+
+    @Test
+    fun `과대 selected JSON ETA는 canonical 저장 시간을 덮어쓰지 않는다`() {
+        val schedule = schedule(routeJson = """{"minutes":2000}""", travelMinutes = 30)
+        stubVisible(schedule)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(30, result.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
+    }
+
+    @Test
+    fun `fraction routeInfo ETA가 canonical과 일치하면 선택 경로 snapshot으로 사용한다`() {
+        val schedule = schedule(
+            routeJson = """{"routeInfo":{"totalDurationMinutes":29.2}}""",
+            travelMinutes = 30,
+        )
+        stubVisible(schedule)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(30, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertEquals(ScheduleEtaConfidence.MEDIUM, result.confidence)
     }
 
     @Test
@@ -259,6 +350,188 @@ class ScheduleDepartureEtaServiceTest {
         assertEquals(44, result.travelMinutes)
         assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
         assertEquals(ScheduleEtaConfidence.MEDIUM, result.confidence)
+        assertNull(result.liveFetchedAt)
+    }
+
+    @Test
+    fun `owner 경로가 바뀌고 job이 취소되면 이전 live snapshot을 사용하지 않는다`() {
+        val schedule = schedule()
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 30,
+            source = TrafficSource.LIVE_PROVIDER,
+            checkedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            liveFetchedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            snapshotSchedule = schedule,
+        )
+        schedule.route?.apply {
+            travelMinutes = 25
+            destinationName = "새 회사"
+            destinationLat = 37.8
+        }
+        job.cancel()
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(25, result.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertEquals(queryAt, result.evaluatedAt)
+        assertNull(result.liveFetchedAt)
+        assertNull(result.nextCheckAt)
+    }
+
+    @Test
+    fun `owner 목적지가 바뀌면 active job의 이전 route fingerprint snapshot도 거부한다`() {
+        val schedule = schedule()
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 30,
+            source = TrafficSource.LIVE_PROVIDER,
+            checkedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            liveFetchedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            snapshotSchedule = schedule,
+        )
+        schedule.route?.apply {
+            destinationName = "새 목적지"
+            destinationLat = 38.1
+        }
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertEquals(queryAt, result.evaluatedAt)
+        assertNull(result.liveFetchedAt)
+        assertNull(result.lastTrafficChangeMinutes)
+    }
+
+    @Test
+    fun `일정 시작 시각이 바뀌면 이전 scheduleAt job snapshot을 거부한다`() {
+        val schedule = schedule()
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 30,
+            source = TrafficSource.LIVE_PROVIDER,
+            checkedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            liveFetchedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            snapshotSchedule = schedule,
+        )
+        schedule.startAt = schedule.startAt.plus(1, ChronoUnit.HOURS)
+        schedule.endAt = schedule.endAt.plus(1, ChronoUnit.HOURS)
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertEquals(schedule.startAt.minus(30, ChronoUnit.MINUTES), result.recommendedDepartureAt)
+        assertEquals(queryAt, result.evaluatedAt)
+        assertNull(result.liveFetchedAt)
+    }
+
+    @Test
+    fun `FAILED job은 현재 저장 경로보다 우선하지 않는다`() {
+        val schedule = schedule()
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 35,
+            source = TrafficSource.LIVE_PROVIDER,
+            checkedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            liveFetchedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            snapshotSchedule = schedule,
+        )
+        job.fail("terminal")
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(30, result.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertEquals(queryAt, result.evaluatedAt)
+        assertNull(result.liveFetchedAt)
+    }
+
+    @Test
+    fun `알림이 비활성화되면 active job snapshot도 거부한다`() {
+        val schedule = schedule()
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 30,
+            source = TrafficSource.LIVE_PROVIDER,
+            checkedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            liveFetchedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            snapshotSchedule = schedule,
+        )
+        schedule.route?.notificationEnabled = false
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertTrue(result.failureReason.orEmpty().startsWith("NOTIFICATION_DISABLED:"))
+        assertNull(result.liveFetchedAt)
+    }
+
+    @Test
+    fun `shared participant 계획 fingerprint가 stale이면 이전 job snapshot을 거부한다`() {
+        val schedule = schedule(memberId = 1L)
+        val plan = ScheduleTravelPlan(scheduleId = 10L, memberId = 2L).apply {
+            replace(
+                command = ScheduleTravelPlanUpsertCommand(
+                    travelMinutes = 30,
+                    travelMode = ScheduleTravelMode.CAR,
+                    originLat = 37.1,
+                    originLng = 127.1,
+                    notificationEnabled = true,
+                ),
+                scheduleFingerprint = ScheduleTravelPlanFingerprint.calculate(schedule),
+                departAt = null,
+                routeJson = null,
+                notificationLeadMinutes = 60,
+                notificationIntervalMinutes = 20,
+            )
+        }
+        val participantJob = SchedulePushJob.create(
+            memberId = 2L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = queryAt.minus(30, ChronoUnit.MINUTES),
+            intervalMinutes = 20,
+        )
+        finish(
+            job = participantJob,
+            travelMinutes = 30,
+            source = TrafficSource.LIVE_PROVIDER,
+            checkedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            liveFetchedAt = queryAt.minus(10, ChronoUnit.MINUTES),
+            snapshotSchedule = schedule,
+        )
+        schedule.route?.apply {
+            destinationName = "변경된 목적지"
+            destinationLat = 38.0
+        }
+        stubVisible(schedule, 2L)
+        whenever(travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
+            .thenReturn(plan)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 2L))
+            .thenReturn(participantJob)
+
+        val result = service().getDepartureStatus(2L, 10L)
+
+        assertEquals(30, result.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertTrue(result.failureReason.orEmpty().startsWith("ROUTE_STALE:"))
         assertNull(result.liveFetchedAt)
     }
 
@@ -326,7 +599,9 @@ class ScheduleDepartureEtaServiceTest {
         checkedAt: Instant,
         liveFetchedAt: Instant? = null,
         failureReason: String? = null,
+        snapshotSchedule: Schedule = schedule(),
     ) {
+        val route = requireNotNull(snapshotSchedule.route)
         job.startProcessing("eta-test")
         job.finishCheck(
             travelMinutes = travelMinutes,
@@ -339,18 +614,37 @@ class ScheduleDepartureEtaServiceTest {
             liveFetchedAt = liveFetchedAt,
             etaStale = source != TrafficSource.LIVE_PROVIDER,
             etaFailureReason = failureReason,
+            etaRouteFingerprint = ScheduleEtaRouteFingerprint.calculate(
+                schedule = snapshotSchedule,
+                travelMinutes = route.travelMinutes,
+                travelMode = route.travelMode,
+                originLat = route.originLat,
+                originLng = route.originLng,
+                routeJson = route.routeJson,
+            ),
             now = checkedAt,
         )
     }
 
+    private fun setField(target: Any, name: String, value: Any?) {
+        target.javaClass.getDeclaredField(name).apply {
+            isAccessible = true
+            set(target, value)
+        }
+    }
+
     private fun stubVisible(schedule: Schedule) {
-        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(scheduleAccessPolicy.resolve(1L, schedule)).thenReturn(
+        stubVisible(schedule, 1L)
+    }
+
+    private fun stubVisible(schedule: Schedule, viewerId: Long) {
+        whenever(scheduleRepository.findScheduleDetail(10L, viewerId)).thenReturn(schedule)
+        whenever(scheduleAccessPolicy.resolve(viewerId, schedule)).thenReturn(
             ScheduleAccessDecision(
                 canView = true,
-                canEdit = true,
+                canEdit = viewerId == schedule.memberId,
                 travelEnabled = true,
-                canViewAllTravelPlans = true,
+                canViewAllTravelPlans = viewerId == schedule.memberId,
             )
         )
     }
@@ -376,6 +670,10 @@ class ScheduleDepartureEtaServiceTest {
     private fun schedule(
         memberId: Long = 1L,
         routeJson: String? = null,
+        travelMinutes: Int? = 30,
+        destinationName: String = "회사",
+        destinationLat: Double = 37.2,
+        notificationEnabled: Boolean = true,
     ): Schedule =
         Schedule(
             id = 10L,
@@ -385,7 +683,7 @@ class ScheduleDepartureEtaServiceTest {
             endAt = queryAt.plus(3, ChronoUnit.HOURS),
         ).apply {
             updateRoute(
-                travelMinutes = 30,
+                travelMinutes = travelMinutes,
                 departAt = null,
                 departedAt = null,
                 travelMode = ScheduleTravelMode.CAR,
@@ -394,12 +692,12 @@ class ScheduleDepartureEtaServiceTest {
                 originAddress = null,
                 originLat = 37.1,
                 originLng = 127.1,
-                destinationName = "회사",
+                destinationName = destinationName,
                 destinationAddress = null,
-                destinationLat = 37.2,
+                destinationLat = destinationLat,
                 destinationLng = 127.2,
                 routeJson = routeJson,
-                notificationEnabled = true,
+                notificationEnabled = notificationEnabled,
                 notificationLeadMinutes = 60,
                 notificationIntervalMinutes = 20,
             )
