@@ -175,7 +175,12 @@ class PushTokenProviderLeaseWriter(
                         memberId,
                         deliveryIdentity.eventKey,
                     )
-                    ?: return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
+                    ?: return supersedeFencedDelivery(
+                        memberId,
+                        deliveryIdentity,
+                        "Immutable push source disappeared before provider dispatch.",
+                        "PUSH_SOURCE_MISSING",
+                    )
                 val lockedDelivery = deliveryRepository.findByIdForUpdate(
                     requireNotNull(deliveryId),
                 ) ?: return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
@@ -186,7 +191,7 @@ class PushTokenProviderLeaseWriter(
                 ) {
                     return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
                 }
-                if (
+                val authorizationRevoked =
                     recipientAuthorizationValidator?.canDispatch(
                         memberId = memberId,
                         scheduleId = source.scheduleId ?: lockedDelivery.scheduleId,
@@ -194,12 +199,21 @@ class PushTokenProviderLeaseWriter(
                         payloadType = source.type,
                         calendarId = source.calendarId ?: lockedDelivery.calendarId,
                     ) == false
-                        ||
-                        sourceFreshnessValidator?.isFresh(source.toFrozenPushSource()) == false
-                ) {
-                    lockedDelivery.markDispatchOwnershipSuperseded(
+                val sourceStale =
+                    sourceFreshnessValidator?.isFresh(source.toFrozenPushSource()) == false
+                if (authorizationRevoked || sourceStale) {
+                    lockedDelivery.markDispatchSuperseded(
                         Instant.now(clock),
-                        "Recipient access changed after delivery claim and before provider dispatch.",
+                        if (authorizationRevoked) {
+                            "RECIPIENT_ACCESS_REVOKED"
+                        } else {
+                            "PUSH_SOURCE_STALE"
+                        },
+                        if (authorizationRevoked) {
+                            "Recipient access changed after delivery claim and before provider dispatch."
+                        } else {
+                            "Immutable push source became stale before provider dispatch."
+                        },
                     )
                     deliveryRepository.saveAndFlush(lockedDelivery)
                     return PushTokenProviderLease(PushTokenProviderLeaseOutcome.SUPERSEDED)
@@ -268,8 +282,9 @@ class PushTokenProviderLeaseWriter(
     private fun supersedeDelivery(
         delivery: com.noLate.notification.domain.PushDelivery?,
     ): PushTokenProviderLease {
-        if (delivery?.markDispatchOwnershipSuperseded(
+        if (delivery?.markDispatchSuperseded(
                 Instant.now(clock),
+                "TOKEN_OWNERSHIP_CHANGED",
                 "Token ownership changed after delivery claim and before provider dispatch.",
             ) == true
         ) {
@@ -298,8 +313,9 @@ class PushTokenProviderLeaseWriter(
             delivery != null &&
             delivery.memberId == memberId &&
             delivery.eventKey == deliveryIdentity.eventKey &&
-            delivery.markDispatchOwnershipSuperseded(
+            delivery.markDispatchSuperseded(
                 Instant.now(clock),
+                sourceReason,
                 deliveryReason,
             )
         ) {

@@ -190,11 +190,15 @@ class PushDelivery(
         return true
     }
 
-    fun markDispatchOwnershipSuperseded(at: Instant, reason: String): Boolean {
+    fun markDispatchSuperseded(
+        at: Instant,
+        code: String,
+        reason: String,
+    ): Boolean {
         if (status != PushDeliveryStatus.DISPATCHING) return false
         status = PushDeliveryStatus.SUPERSEDED
         lastAttemptedAt = at
-        errorCode = "TOKEN_OWNERSHIP_CHANGED"
+        errorCode = code.take(120)
         errorMessage = reason.take(1000)
         return true
     }
@@ -207,11 +211,15 @@ class PushDelivery(
         errorMessage = message?.take(1000)
     }
 
-    fun markSuperseded(at: Instant, reason: String) {
+    fun markSuperseded(
+        at: Instant,
+        code: String,
+        reason: String,
+    ) {
         if (status != PushDeliveryStatus.PENDING && status != PushDeliveryStatus.FAILED) return
         status = PushDeliveryStatus.SUPERSEDED
         lastAttemptedAt = at
-        errorCode = "TOKEN_OWNERSHIP_CHANGED"
+        errorCode = code.take(120)
         errorMessage = reason.take(1000)
     }
 

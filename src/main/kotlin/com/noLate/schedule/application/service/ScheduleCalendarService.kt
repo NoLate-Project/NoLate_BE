@@ -169,9 +169,11 @@ class ScheduleCalendarService(
         authenticatedActorMemberId: Long,
         presentedSessionGeneration: Long,
     ): ScheduleCalendarMemberDto {
-        // Actor와 recipient를 함께 정렬 잠금한 뒤 calendar/membership/outbox로 진행한다.
-        val target = findTargetMember(targetEmail, targetAppId)
-        val targetMemberId = requireNotNull(target.id)
+        // 잠금 전에 target 엔티티를 persistence context에 올리면 lock 대기 중 withdrawal이
+        // commit된 뒤에도 stale deleted=false 상태를 재사용할 수 있다. ID만 해석한 뒤
+        // actor와 recipient를 함께 정렬 잠금하고, 잠긴 fresh Member로 상태를 검증한다.
+        val targetMemberId = resolveTargetMemberId(targetEmail, targetAppId)
+        mutationFenceObserver?.afterMembershipPreview(calendarId)
         val lockedMembers = lockCalendarMembers(
             memberIds = listOf(ownerMemberId, targetMemberId, authenticatedActorMemberId),
             actorMemberId = authenticatedActorMemberId,
@@ -501,21 +503,20 @@ class ScheduleCalendarService(
             ScheduleCalendarMemberStatus.ACTIVE,
         ) ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
 
-    private fun findTargetMember(targetEmail: String?, targetAppId: Long?): Member {
+    private fun resolveTargetMemberId(targetEmail: String?, targetAppId: Long?): Long {
         val normalizedEmail = targetEmail?.trim()?.lowercase()?.takeIf(String::isNotBlank)
         val hasEmail = normalizedEmail != null
         val hasAppId = targetAppId != null
         if (hasEmail == hasAppId) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "targetEmail과 targetAppId 중 하나만 입력해야 합니다.")
         }
-        val target = if (hasAppId) {
-            val id = targetAppId?.takeIf { it > 0L }
+        return if (hasAppId) {
+            targetAppId?.takeIf { it > 0L }
                 ?: throw BusinessException(ErrorCode.INVALID_INPUT, "targetAppId는 양수여야 합니다.")
-            memberRepository.findByIdAndDeletedFalse(id)
         } else {
-            memberRepository.findByEmailAndDeletedFalse(requireNotNull(normalizedEmail))
-        } ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
-        return target
+            memberRepository.findIdByEmailAndDeletedFalse(requireNotNull(normalizedEmail))
+                ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
+        }
     }
 
     private fun validateGrantableRole(role: ScheduleCalendarRole) {

@@ -30,6 +30,8 @@ class PushDeliveryAuthorizationFenceTest {
     @Mock lateinit var notificationRepository: AppNotificationRepository
     @Mock lateinit var memberRepository: MemberRepository
     @Mock lateinit var authorizationValidator: PushRecipientAuthorizationValidator
+    @Mock lateinit var freshnessValidator: PushSourceFreshnessValidator
+    @Mock lateinit var dispatchFenceValidator: PushDispatchFenceValidator
 
     @Test
     fun `revoked immutable source is terminal before token or provider boundary`() {
@@ -80,6 +82,7 @@ class PushDeliveryAuthorizationFenceTest {
 
         assertEquals(PushDeliveryClaimOutcome.SUPERSEDED, result.outcome)
         assertEquals(PushDeliveryStatus.SUPERSEDED, delivery.status)
+        assertEquals("RECIPIENT_ACCESS_REVOKED", delivery.errorCode)
         verify(tokenRepository, never()).findByIdForUpdate(22L)
     }
 
@@ -135,6 +138,7 @@ class PushDeliveryAuthorizationFenceTest {
 
         assertEquals(PushDeliveryClaimOutcome.SUPERSEDED, result.outcome)
         assertEquals(PushDeliveryStatus.SUPERSEDED, delivery.status)
+        assertEquals("RECIPIENT_ACCESS_REVOKED", delivery.errorCode)
         verify(authorizationValidator).canDispatch(
             memberId = 2L,
             scheduleId = null,
@@ -145,12 +149,143 @@ class PushDeliveryAuthorizationFenceTest {
         verify(tokenRepository, never()).findByIdForUpdate(55L)
     }
 
+    @Test
+    fun `stale immutable source records freshness supersede reason`() {
+        val delivery = PushDelivery(
+            id = 77L,
+            memberId = 2L,
+            eventKey = "logical:stale",
+            deviceKey = "device-sha256:stale",
+            deviceTokenId = 88L,
+            tokenFingerprint = "c".repeat(64),
+            tokenOwnershipVersion = 1L,
+            platform = PushPlatform.ANDROID,
+            scheduleId = 10L,
+        )
+        val source = AppNotification(
+            id = 99L,
+            memberId = 2L,
+            logicalEventKey = delivery.eventKey,
+            type = "ROUTE_SETUP_REMINDER",
+            scheduleId = 10L,
+            title = "stale",
+            body = "stale",
+            dataJson = "{}",
+            createdAt = Instant.parse("2026-07-24T00:00:00Z"),
+        )
+        whenever(memberRepository.findActiveNotificationRecipientForUpdate(2L)).thenReturn(
+            Member(id = 2L, email = "recipient@example.com", password = "Password1!", name = "recipient")
+        )
+        whenever(deliveryRepository.findByIdAndMemberIdAndEventKey(77L, 2L, delivery.eventKey))
+            .thenReturn(delivery)
+        whenever(notificationRepository.findByMemberIdAndLogicalEventKey(2L, delivery.eventKey))
+            .thenReturn(source)
+        whenever(
+            authorizationValidator.canDispatch(
+                memberId = 2L,
+                scheduleId = 10L,
+                categoryId = null,
+                payloadType = source.type,
+                calendarId = null,
+            )
+        ).thenReturn(true)
+        whenever(freshnessValidator.isFresh(source.toFrozenPushSource())).thenReturn(false)
+
+        val result = writer().claim(
+            memberId = 2L,
+            eventKey = delivery.eventKey,
+            deliveryId = 77L,
+        )
+
+        assertEquals(PushDeliveryClaimOutcome.SUPERSEDED, result.outcome)
+        assertEquals("PUSH_SOURCE_STALE", delivery.errorCode)
+        verify(tokenRepository, never()).findByIdForUpdate(88L)
+    }
+
+    @Test
+    fun `stale authenticated session records generation supersede reason`() {
+        val delivery = PushDelivery(
+            id = 101L,
+            memberId = 2L,
+            eventKey = "logical:old-session",
+            deviceKey = "device-sha256:old-session",
+            tokenFingerprint = "d".repeat(64),
+            tokenOwnershipVersion = 1L,
+            platform = PushPlatform.ANDROID,
+        )
+        whenever(memberRepository.findActiveNotificationRecipientForUpdate(2L)).thenReturn(
+            Member(
+                id = 2L,
+                email = "recipient@example.com",
+                password = "Password1!",
+                name = "recipient",
+                sessionGeneration = 2L,
+            )
+        )
+        whenever(deliveryRepository.findByIdAndMemberIdAndEventKey(101L, 2L, delivery.eventKey))
+            .thenReturn(delivery)
+
+        val result = writer().claim(
+            memberId = 2L,
+            eventKey = delivery.eventKey,
+            deliveryId = 101L,
+            sessionFence = AuthenticatedPushSessionFence(
+                memberId = 2L,
+                sessionGeneration = 1L,
+            ),
+        )
+
+        assertEquals(PushDeliveryClaimOutcome.SUPERSEDED, result.outcome)
+        assertEquals("AUTHENTICATED_SESSION_GENERATION_CHANGED", delivery.errorCode)
+    }
+
+    @Test
+    fun `terminal persisted schedule fence records source fence reason`() {
+        val delivery = PushDelivery(
+            id = 111L,
+            memberId = 2L,
+            eventKey = "logical:old-generation",
+            deviceKey = "device-sha256:old-generation",
+            tokenFingerprint = "e".repeat(64),
+            tokenOwnershipVersion = 1L,
+            platform = PushPlatform.ANDROID,
+            scheduleId = 10L,
+        )
+        val fence = PushDispatchFence(
+            jobId = 12L,
+            workerId = "safety",
+            jobVersion = 3L,
+            notificationGeneration = 4L,
+            notificationInputFingerprint = "old",
+            requireWorkerLease = false,
+        )
+        whenever(memberRepository.findActiveNotificationRecipientForUpdate(2L)).thenReturn(
+            Member(id = 2L, email = "recipient@example.com", password = "Password1!", name = "recipient")
+        )
+        whenever(dispatchFenceValidator.evaluate(fence))
+            .thenReturn(PushDispatchFenceDecision.REJECT_TERMINAL)
+        whenever(deliveryRepository.findByIdAndMemberIdAndEventKey(111L, 2L, delivery.eventKey))
+            .thenReturn(delivery)
+
+        val result = writer().claim(
+            memberId = 2L,
+            eventKey = delivery.eventKey,
+            deliveryId = 111L,
+            fence = fence,
+        )
+
+        assertEquals(PushDeliveryClaimOutcome.SUPERSEDED, result.outcome)
+        assertEquals("SCHEDULE_SOURCE_FENCE_CHANGED", delivery.errorCode)
+    }
+
     private fun writer() = PushDeliveryWriter(
         repository = deliveryRepository,
         tokenRepository = tokenRepository,
         appNotificationRepository = notificationRepository,
         memberRepository = memberRepository,
         clock = Clock.fixed(Instant.parse("2026-07-24T00:00:00Z"), ZoneOffset.UTC),
+        fenceValidator = dispatchFenceValidator,
         recipientAuthorizationValidator = authorizationValidator,
+        sourceFreshnessValidator = freshnessValidator,
     )
 }

@@ -31,6 +31,9 @@ interface MemberRepository : JpaRepository<Member, Long> {
 
     fun findByEmailAndDeletedFalse(email: String): Member?
 
+    @Query("select member.id from Member member where member.email = :email and member.deleted = false")
+    fun findIdByEmailAndDeletedFalse(@Param("email") email: String): Long?
+
     fun findByIdAndDeletedFalse(id: Long): Member?
 
 }

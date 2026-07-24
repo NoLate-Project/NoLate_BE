@@ -94,7 +94,7 @@ class SchedulePushRecipientAccessValidator(
             memberId = memberId,
             scheduleId = scheduleId,
             categoryId = null,
-            payloadType = SCHEDULE_PUSH_PAYLOAD_TYPE,
+            payloadType = SchedulePushPayloadAccessPolicy.SCHEDULE_PUSH_PAYLOAD_TYPE,
             calendarId = null,
         )
     }
@@ -152,27 +152,10 @@ class SchedulePushRecipientAccessValidator(
             ?: return false
         if (schedule.memberId == memberId) return true
         val access = accessPolicy.resolve(memberId, schedule)
-        return if (payloadType in TRAVEL_REQUIRED_PAYLOAD_TYPES) {
-            access.travelEnabled
-        } else {
-            access.canView
-        }
+        return SchedulePushPayloadAccessPolicy.canDispatch(access, payloadType)
     }
 
     private companion object {
-        const val SCHEDULE_PUSH_PAYLOAD_TYPE = "SCHEDULE_PUSH"
         const val CALENDAR_SHARE_RECEIVED_PAYLOAD_TYPE = "CALENDAR_SHARE_RECEIVED"
-        val TRAVEL_REQUIRED_PAYLOAD_TYPES = setOf(
-            SCHEDULE_PUSH_PAYLOAD_TYPE,
-            "ROUTE_SETUP_REMINDER",
-            "SCHEDULE_PARTICIPANT_DEPARTED",
-            "SCHEDULE_DEPARTURE_NUDGE",
-            "SCHEDULE_DEPARTURE_REMINDER",
-            "SCHEDULE_TRAFFIC",
-            "DEPARTURE_ADVANCE_NOTICE",
-            "DEPARTURE_NOW",
-            "DEPARTURE_REMINDER",
-            "TRAFFIC_CHANGE",
-        )
     }
 }

@@ -16,6 +16,22 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
     fun findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId: Long): List<Schedule>
     fun findAllByMemberId(memberId: Long): List<Schedule>
 
+    /**
+     * Account withdrawal is a physical privacy cleanup, so a prior soft delete must not hide an
+     * owned schedule from the participant/job/outbox cleanup scope.
+     */
+    @Query(
+        """
+        select schedule
+        from Schedule schedule
+        where schedule.memberId = :memberId
+        order by schedule.id asc
+        """
+    )
+    fun findAllOwnedIncludingDeletedOrderByIdAsc(
+        @Param("memberId") memberId: Long,
+    ): List<Schedule>
+
     @Query(
         value = """
         select distinct s.*

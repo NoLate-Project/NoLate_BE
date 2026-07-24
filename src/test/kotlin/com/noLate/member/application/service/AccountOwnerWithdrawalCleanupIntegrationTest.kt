@@ -23,8 +23,12 @@ import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCalendarStatus
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryShare
+import com.noLate.schedule.domain.ScheduleDepartureStatus
+import com.noLate.schedule.domain.ScheduleNotificationActionReceipt
+import com.noLate.schedule.domain.ScheduleNotificationActionType
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.ScheduleRouteSetupReminder
+import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleTravelPlan
@@ -32,9 +36,12 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
+import com.noLate.schedule.infrastructure.ScheduleNotificationActionReceiptRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
+import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -92,6 +99,9 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
     private val categoryRepository: ScheduleCategoryRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
+    private val scheduleShareRepository: ScheduleShareRepository,
+    private val departureStatusRepository: ScheduleDepartureStatusRepository,
+    private val actionReceiptRepository: ScheduleNotificationActionReceiptRepository,
     private val transactionManager: PlatformTransactionManager,
 ) {
 
@@ -202,6 +212,105 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
                 scheduleId,
                 org.springframework.data.domain.PageRequest.of(0, 10),
             ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `owner withdrawal purges participant artifacts for a previously soft deleted shared schedule`() {
+        val participant = member("soft-deleted-schedule-participant")
+        val owner = member("soft-deleted-schedule-owner", sessionGeneration = 10L)
+        val participantId = requireNotNull(participant.id)
+        val ownerId = requireNotNull(owner.id)
+        val startAt = Instant.parse("2099-08-03T01:00:00Z")
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = ownerId,
+                title = "withdrawal-private-soft-deleted-schedule",
+                startAt = startAt,
+                endAt = startAt.plusSeconds(3_600),
+            ),
+        )
+        val scheduleId = requireNotNull(schedule.id)
+        scheduleShareRepository.saveAndFlush(
+            ScheduleShare(
+                scheduleId = scheduleId,
+                ownerMemberId = ownerId,
+                targetMemberId = participantId,
+                permission = ScheduleSharePermission.VIEWER,
+                status = ScheduleShareStatus.ACTIVE,
+            ),
+        )
+        seedScheduleArtifacts(
+            scheduleId = scheduleId,
+            memberId = participantId,
+            key = "soft-deleted-owner-withdrawal",
+            startAt = startAt,
+        )
+        departureStatusRepository.saveAndFlush(
+            ScheduleDepartureStatus(
+                scheduleId = scheduleId,
+                memberId = participantId,
+                departedAt = Instant.parse("2026-07-24T00:00:00Z"),
+            ),
+        )
+        actionReceiptRepository.saveAndFlush(
+            ScheduleNotificationActionReceipt(
+                keyFingerprint = "e".repeat(64),
+                memberId = participantId,
+                scheduleId = scheduleId,
+                actionType = ScheduleNotificationActionType.DEPART_NOW,
+                resultDepartedAt = Instant.parse("2026-07-24T00:00:00Z"),
+                completedAt = Instant.parse("2026-07-24T00:00:00Z"),
+                createdAt = Instant.parse("2026-07-24T00:00:00Z"),
+            ),
+        )
+
+        schedule.softDelete()
+        scheduleRepository.saveAndFlush(schedule)
+        jobRepository.findByScheduleIdAndMemberId(scheduleId, participantId)
+            ?.also {
+                it.cancel()
+                jobRepository.saveAndFlush(it)
+            }
+            ?: error("participant push job missing before withdrawal")
+
+        cleanupService.withdraw(owner)
+
+        assertTrue(memberRepository.findById(ownerId).orElseThrow().deleted)
+        assertFalse(memberRepository.findById(participantId).orElseThrow().deleted)
+        assertTrue(scheduleRepository.findById(scheduleId).isEmpty)
+        assertTrue(
+            scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, participantId) == null,
+        )
+        assertNoScheduleArtifacts(scheduleId, participantId)
+        assertTrue(
+            departureStatusRepository.findAllByScheduleIdAndDeletedFalse(scheduleId).isEmpty(),
+        )
+        assertTrue(
+            actionReceiptRepository.findAll()
+                .none { it.scheduleId == scheduleId && it.memberId == participantId },
+        )
+        assertTrue(
+            notificationRepository.findAll()
+                .none {
+                    it.scheduleId == scheduleId &&
+                        (
+                            it.title.contains("private") ||
+                                it.body.contains("private") ||
+                                it.dataJson.contains("private")
+                            )
+                },
+        )
+        assertTrue(
+            historyRepository.findAll()
+                .none {
+                    it.scheduleId == scheduleId &&
+                        (
+                            it.title.contains("private") ||
+                                it.body.contains("private") ||
+                                it.dataJson.contains("private")
+                            )
+                },
         )
     }
 

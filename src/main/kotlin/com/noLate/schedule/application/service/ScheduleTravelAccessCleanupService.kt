@@ -142,12 +142,23 @@ class ScheduleTravelAccessCleanupService(
 
         // resolveAll은 회원 한 명당 grant 저장소를 종류별 한 번만 조회한다. 캘린더에 일정이
         // 많아도 각 일정마다 직접/카테고리/캘린더 쿼리를 반복하지 않는다.
-        val revokedPairs = normalizedMemberIds.flatMapTo(linkedSetOf()) { memberId ->
+        val accessByPair = linkedMapOf<Pair<Long, Long>, ScheduleAccessDecision>()
+        normalizedMemberIds.forEach { memberId ->
             val decisions = accessPolicy.resolveAll(memberId, schedules)
-            scheduleIds.mapNotNull { scheduleId ->
-                if (decisions[scheduleId]?.travelEnabled == true) null else scheduleId to memberId
+            scheduleIds.forEach { scheduleId ->
+                accessByPair[scheduleId to memberId] =
+                    decisions[scheduleId] ?: ScheduleAccessDecision(
+                        canView = false,
+                        canEdit = false,
+                        travelEnabled = false,
+                        canViewAllTravelPlans = false,
+                    )
             }
         }
+        val revokedPairs = accessByPair
+            .filterValues { !it.canView || !it.travelEnabled }
+            .keys
+            .toCollection(linkedSetOf())
         if (revokedPairs.isEmpty()) return emptySet()
 
         pushJobRepository.findAllByScheduleIdInAndMemberIdIn(scheduleIds, normalizedMemberIds)
@@ -174,18 +185,45 @@ class ScheduleTravelAccessCleanupService(
         val sources = appNotificationRepository
             .findAllByScheduleIdInAndMemberIdIn(revokedScheduleIds, revokedMemberIds)
             .filter { it.scheduleId to it.memberId in revokedPairs }
+            .filter {
+                shouldDeleteSchedulePayload(
+                    accessByPair,
+                    it.scheduleId,
+                    it.memberId,
+                    it.type,
+                )
+            }
         val histories = pushSendHistoryRepository
             .findAllByScheduleIdInAndMemberIdIn(revokedScheduleIds, revokedMemberIds)
             .filter { it.scheduleId to it.memberId in revokedPairs }
+            .filter {
+                shouldDeleteSchedulePayload(
+                    accessByPair,
+                    it.scheduleId,
+                    it.memberId,
+                    it.payloadType,
+                )
+            }
         deleteNotificationSources(
             sources = sources,
             memberIds = revokedMemberIds,
             resourceHistories = histories,
+            scheduleAccessByPair = accessByPair,
         )
 
+        val sourceEventKeys = sources.mapTo(hashSetOf()) { it.logicalEventKey }
         val orphanDeliveries = pushDeliveryRepository
             .findAllByScheduleIdInAndMemberIdIn(revokedScheduleIds, revokedMemberIds)
             .filter { it.scheduleId to it.memberId in revokedPairs }
+            .filter { it.eventKey !in sourceEventKeys }
+            .filter {
+                shouldDeleteSchedulePayload(
+                    accessByPair,
+                    it.scheduleId,
+                    it.memberId,
+                    it.payloadType,
+                )
+            }
         if (orphanDeliveries.isNotEmpty()) {
             pushDeliveryRepository.deleteAll(orphanDeliveries)
         }
@@ -196,14 +234,41 @@ class ScheduleTravelAccessCleanupService(
         sources: Collection<com.noLate.notification.domain.AppNotification>,
         memberIds: Collection<Long>,
         resourceHistories: Collection<com.noLate.notification.domain.PushSendHistory> = emptyList(),
+        scheduleAccessByPair: Map<Pair<Long, Long>, ScheduleAccessDecision>? = null,
     ) {
         val eventKeys = sources.map { it.logicalEventKey }
+        val sourceByEventKey = sources.associateBy { it.logicalEventKey }
         val eventHistories = if (eventKeys.isEmpty()) {
             emptyList()
         } else {
             pushSendHistoryRepository.findAllByMemberIdInAndLogicalEventKeyIn(memberIds, eventKeys)
+                .filter {
+                    val source = it.logicalEventKey?.let(sourceByEventKey::get)
+                    scheduleAccessByPair == null ||
+                        shouldDeleteSchedulePayload(
+                            scheduleAccessByPair,
+                            it.scheduleId,
+                            it.memberId,
+                            it.payloadType,
+                            fallbackScheduleId = source?.scheduleId,
+                            fallbackPayloadType = source?.type,
+                        )
+                }
         }
-        val histories = (resourceHistories + eventHistories).distinct()
+        val histories = (resourceHistories + eventHistories)
+            .distinct()
+            .filter {
+                val source = it.logicalEventKey?.let(sourceByEventKey::get)
+                scheduleAccessByPair == null ||
+                    shouldDeleteSchedulePayload(
+                        scheduleAccessByPair,
+                        it.scheduleId,
+                        it.memberId,
+                        it.payloadType,
+                        fallbackScheduleId = source?.scheduleId,
+                        fallbackPayloadType = source?.type,
+                    )
+            }
         if (histories.isNotEmpty()) {
             // Provider evidence contains the same private title/body/data as the source. Remove it
             // first so no successful source delete can leave resource-revoked payload history.
@@ -212,9 +277,38 @@ class ScheduleTravelAccessCleanupService(
         if (sources.isEmpty()) return
         val deliveries =
             pushDeliveryRepository.findAllByMemberIdInAndEventKeyIn(memberIds, eventKeys)
+                .filter {
+                    val source = sourceByEventKey[it.eventKey]
+                    scheduleAccessByPair == null ||
+                        shouldDeleteSchedulePayload(
+                            scheduleAccessByPair,
+                            it.scheduleId,
+                            it.memberId,
+                            it.payloadType,
+                            fallbackScheduleId = source?.scheduleId,
+                            fallbackPayloadType = source?.type,
+                        )
+                }
         if (deliveries.isNotEmpty()) {
             pushDeliveryRepository.deleteAll(deliveries)
         }
         appNotificationRepository.deleteAll(sources)
+    }
+
+    private fun shouldDeleteSchedulePayload(
+        accessByPair: Map<Pair<Long, Long>, ScheduleAccessDecision>,
+        scheduleId: Long?,
+        memberId: Long,
+        payloadType: String?,
+        fallbackScheduleId: Long? = null,
+        fallbackPayloadType: String? = null,
+    ): Boolean {
+        val access = (scheduleId ?: fallbackScheduleId)
+            ?.let { accessByPair[it to memberId] }
+            ?: return false
+        return SchedulePushPayloadAccessPolicy.shouldDelete(
+            access,
+            payloadType ?: fallbackPayloadType,
+        )
     }
 }

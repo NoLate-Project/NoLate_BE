@@ -16,6 +16,7 @@ import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.schedule.application.service.ScheduleCalendarService
+import com.noLate.schedule.application.service.ScheduleCalendarMutationFenceObserver
 import com.noLate.schedule.application.service.ScheduleShareService
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
@@ -43,6 +44,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Import
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Propagation
@@ -70,6 +74,7 @@ import java.util.concurrent.atomic.AtomicReference
         "notification.push-outbox.enabled=false",
     ],
 )
+@Import(MemberAuthenticatedMutationFenceTestConfig::class)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired constructor(
     private val memberUseCase: MemberUseCase,
@@ -91,6 +96,7 @@ class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired construc
     private val appNotificationRepository: AppNotificationRepository,
     private val pushDeliveryRepository: PushDeliveryRepository,
     private val tokenRepository: NotificationDeviceTokenRepository,
+    private val calendarMutationFenceObserver: BlockingCalendarTargetPreviewObserver,
     transactionManager: PlatformTransactionManager,
 ) {
     private val transactions = TransactionTemplate(transactionManager)
@@ -472,8 +478,10 @@ class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired construc
             presentedSessionGeneration = owner.sessionGeneration,
         )
 
-        val (addFailure, withdrawalFailure) = runConcurrently(
-            first = {
+        val gate = calendarMutationFenceObserver.arm(calendar.id)
+        val executor = Executors.newSingleThreadExecutor()
+        val addFuture = executor.submit<Throwable?> {
+            runCatching {
                 calendarService.addMember(
                     ownerMemberId = owner.memberId,
                     calendarId = calendar.id,
@@ -483,20 +491,30 @@ class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired construc
                     authenticatedActorMemberId = owner.memberId,
                     presentedSessionGeneration = owner.sessionGeneration,
                 )
-            },
-            second = {
+            }.exceptionOrNull()
+        }
+        val addFailure: Throwable?
+        val withdrawalFailure: Throwable?
+        try {
+            assertTrue(gate.previewed.await(10, TimeUnit.SECONDS))
+            withdrawalFailure = runCatching {
                 memberUseCase.withdraw(
                     memberId = target.memberId,
                     presentedSessionGeneration = target.sessionGeneration,
                     passwordForCheck = target.password,
                 )
-            },
-        )
+            }.exceptionOrNull()
+            gate.resume.countDown()
+            addFailure = addFuture.get(10, TimeUnit.SECONDS)
+        } finally {
+            gate.resume.countDown()
+            calendarMutationFenceObserver.reset()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
 
         assertNull(withdrawalFailure, withdrawalFailure?.stackTraceToString())
-        if (addFailure != null) {
-            assertBusinessError(addFailure, ErrorCode.MEMBER_NOT_FOUND)
-        }
+        assertBusinessError(addFailure, ErrorCode.MEMBER_NOT_FOUND)
         assertTrue(memberRepository.findById(target.memberId).orElseThrow().deleted)
         calendarMemberRepository
             .findByCalendarIdAndMemberId(calendar.id, target.memberId)
@@ -735,3 +753,35 @@ class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired construc
         val password: String,
     )
 }
+
+@TestConfiguration
+class MemberAuthenticatedMutationFenceTestConfig {
+    @Bean
+    fun blockingCalendarTargetPreviewObserver() = BlockingCalendarTargetPreviewObserver()
+}
+
+class BlockingCalendarTargetPreviewObserver : ScheduleCalendarMutationFenceObserver {
+    private val armed = AtomicReference<CalendarTargetPreviewGate?>()
+
+    fun arm(calendarId: Long): CalendarTargetPreviewGate =
+        CalendarTargetPreviewGate(calendarId).also {
+            check(armed.compareAndSet(null, it))
+        }
+
+    fun reset() {
+        armed.getAndSet(null)?.resume?.countDown()
+    }
+
+    override fun afterMembershipPreview(calendarId: Long) {
+        val gate = armed.get() ?: return
+        if (gate.calendarId != calendarId || !armed.compareAndSet(gate, null)) return
+        gate.previewed.countDown()
+        check(gate.resume.await(10, TimeUnit.SECONDS))
+    }
+}
+
+class CalendarTargetPreviewGate(
+    val calendarId: Long,
+    val previewed: CountDownLatch = CountDownLatch(1),
+    val resume: CountDownLatch = CountDownLatch(1),
+)

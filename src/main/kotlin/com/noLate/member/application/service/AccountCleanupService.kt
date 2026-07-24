@@ -214,7 +214,9 @@ class AccountCleanupService(
         travelPlanRepository.deleteAllByMemberId(memberId)
         invitationRepository.deleteAllByOwnerMemberId(memberId)
 
-        scheduleRepository.deleteAll(scheduleRepository.findAllByMemberId(memberId))
+        scheduleRepository.deleteAll(
+            scheduleRepository.findAllOwnedIncludingDeletedOrderByIdAsc(memberId)
+        )
         categoryRepository.deleteAll(categoryRepository.findAllByMemberId(memberId))
         favoriteRepository.deleteAll(favoriteRepository.findAllByMemberId(memberId))
         favoriteCategoryRepository.deleteAll(favoriteCategoryRepository.findAllByMemberId(memberId))
@@ -288,11 +290,15 @@ class AccountCleanupService(
         // to the withdrawing owner. The category is still the disappearing access boundary, so
         // every schedule linked to an owned category must be included in the notification cleanup
         // scope even though the editor's schedule row itself remains their data.
-        val schedules = (
-            scheduleRepository.findAllByMemberId(memberId)
-                .filterNot { it.deleted } +
-                categorySchedules
-            )
+        // Account deletion is stronger than the ordinary active-schedule view. A schedule that
+        // was soft-deleted earlier can still have participant jobs, action/departure rows and
+        // immutable notification payload/history. Include every physically owned row so those
+        // recipients are part of the frozen member fence and all dependent data is removed before
+        // the owner schedule is physically deleted. Category-linked editor schedules keep the
+        // existing active-only policy because their schedule row survives this withdrawal.
+        val ownedSchedules =
+            scheduleRepository.findAllOwnedIncludingDeletedOrderByIdAsc(memberId)
+        val schedules = (ownedSchedules + categorySchedules)
             .distinctBy { it.id }
             .sortedBy { it.id }
         val scheduleIds = schedules.mapNotNull { it.id }.toSortedSet()

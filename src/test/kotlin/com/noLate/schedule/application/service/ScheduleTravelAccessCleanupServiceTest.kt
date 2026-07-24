@@ -67,6 +67,126 @@ class ScheduleTravelAccessCleanupServiceTest {
     }
 
     @Test
+    fun `schedule-only downgrade preserves share notification state and removes travel state`() {
+        val schedule = schedule()
+        val travelSource = appNotification(
+            id = 51L,
+            eventKey = "logical:travel",
+            type = "SCHEDULE_DEPARTURE_REMINDER",
+        )
+        val shareSource = appNotification(
+            id = 52L,
+            eventKey = "logical:share",
+            type = "SCHEDULE_SHARE_RECEIVED",
+        )
+        val travelHistory = pushHistory(
+            id = 71L,
+            eventKey = travelSource.logicalEventKey,
+            type = travelSource.type,
+        )
+        val shareHistory = pushHistory(
+            id = 72L,
+            eventKey = shareSource.logicalEventKey,
+            type = shareSource.type,
+        )
+        val travelSourceDelivery = pushDelivery(
+            id = 61L,
+            eventKey = travelSource.logicalEventKey,
+            type = travelSource.type,
+        )
+        val travelOrphanDelivery = pushDelivery(
+            id = 62L,
+            eventKey = "logical:travel-orphan",
+            type = "ROUTE_SETUP_REMINDER",
+        )
+        val shareDelivery = pushDelivery(
+            id = 63L,
+            eventKey = shareSource.logicalEventKey,
+            type = shareSource.type,
+        )
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(accessPolicy.resolveAll(2L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(canView = true, travelEnabled = false))
+        )
+        whenever(appNotificationRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
+            .thenReturn(listOf(travelSource, shareSource))
+        whenever(pushSendHistoryRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
+            .thenReturn(listOf(travelHistory, shareHistory))
+        whenever(
+            pushSendHistoryRepository.findAllByMemberIdInAndLogicalEventKeyIn(
+                setOf(2L),
+                listOf(travelSource.logicalEventKey),
+            )
+        ).thenReturn(listOf(travelHistory))
+        whenever(
+            pushDeliveryRepository.findAllByMemberIdInAndEventKeyIn(
+                setOf(2L),
+                listOf(travelSource.logicalEventKey),
+            )
+        ).thenReturn(listOf(travelSourceDelivery))
+        whenever(pushDeliveryRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
+            .thenReturn(listOf(travelOrphanDelivery, shareDelivery))
+
+        service().cancelRevokedForSchedule(10L, listOf(2L))
+
+        verify(appNotificationRepository).deleteAll(listOf(travelSource))
+        verify(pushSendHistoryRepository).deleteAll(listOf(travelHistory))
+        verify(pushDeliveryRepository).deleteAll(listOf(travelSourceDelivery))
+        verify(pushDeliveryRepository).deleteAll(listOf(travelOrphanDelivery))
+        verify(appNotificationRepository, never()).deleteAll(listOf(shareSource))
+        verify(pushSendHistoryRepository, never()).deleteAll(listOf(shareHistory))
+        verify(pushDeliveryRepository, never()).deleteAll(listOf(shareDelivery))
+    }
+
+    @Test
+    fun `schedule view revoke removes share notification state too`() {
+        val schedule = schedule()
+        val shareSource = appNotification(
+            id = 53L,
+            eventKey = "logical:revoked-share",
+            type = "SCHEDULE_SHARE_RECEIVED",
+        )
+        val shareHistory = pushHistory(
+            id = 73L,
+            eventKey = shareSource.logicalEventKey,
+            type = shareSource.type,
+        )
+        val shareDelivery = pushDelivery(
+            id = 64L,
+            eventKey = shareSource.logicalEventKey,
+            type = shareSource.type,
+        )
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(accessPolicy.resolveAll(2L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(canView = false, travelEnabled = false))
+        )
+        whenever(appNotificationRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
+            .thenReturn(listOf(shareSource))
+        whenever(pushSendHistoryRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
+            .thenReturn(listOf(shareHistory))
+        whenever(
+            pushSendHistoryRepository.findAllByMemberIdInAndLogicalEventKeyIn(
+                setOf(2L),
+                listOf(shareSource.logicalEventKey),
+            )
+        ).thenReturn(listOf(shareHistory))
+        whenever(
+            pushDeliveryRepository.findAllByMemberIdInAndEventKeyIn(
+                setOf(2L),
+                listOf(shareSource.logicalEventKey),
+            )
+        ).thenReturn(listOf(shareDelivery))
+        whenever(pushDeliveryRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
+            .thenReturn(emptyList())
+
+        service().cancelRevokedForSchedule(10L, listOf(2L))
+
+        verify(appNotificationRepository).deleteAll(listOf(shareSource))
+        verify(pushSendHistoryRepository).deleteAll(listOf(shareHistory))
+        verify(pushDeliveryRepository).deleteAll(listOf(shareDelivery))
+    }
+
+    @Test
     fun `overlapping travel grant keeps the existing push job active`() {
         val schedule = schedule()
         whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
@@ -297,8 +417,11 @@ class ScheduleTravelAccessCleanupServiceTest {
         calendarMemberRepository = calendarMemberRepository,
     )
 
-    private fun decision(travelEnabled: Boolean) = ScheduleAccessDecision(
-        canView = true,
+    private fun decision(
+        travelEnabled: Boolean,
+        canView: Boolean = true,
+    ) = ScheduleAccessDecision(
+        canView = canView,
         canEdit = false,
         travelEnabled = travelEnabled,
         canViewAllTravelPlans = false,
@@ -319,5 +442,54 @@ class ScheduleTravelAccessCleanupServiceTest {
         departureAt = Instant.parse("2026-07-25T00:30:00Z"),
         monitorStartAt = Instant.parse("2026-07-24T23:30:00Z"),
         intervalMinutes = 20,
+    )
+
+    private fun appNotification(
+        id: Long,
+        eventKey: String,
+        type: String,
+    ) = AppNotification(
+        id = id,
+        memberId = 2L,
+        logicalEventKey = eventKey,
+        type = type,
+        scheduleId = 10L,
+        title = "private title",
+        body = "private body",
+        dataJson = "{}",
+        createdAt = Instant.parse("2026-07-24T23:00:00Z"),
+    )
+
+    private fun pushHistory(
+        id: Long,
+        eventKey: String,
+        type: String,
+    ) = PushSendHistory(
+        id = id,
+        memberId = 2L,
+        logicalEventKey = eventKey,
+        scheduleId = 10L,
+        payloadType = type,
+        title = "private title",
+        body = "private body",
+        dataJson = "{}",
+        status = PushSendStatus.FAILED,
+        sentAt = Instant.parse("2026-07-24T23:00:00Z"),
+    )
+
+    private fun pushDelivery(
+        id: Long,
+        eventKey: String,
+        type: String,
+    ) = PushDelivery(
+        id = id,
+        memberId = 2L,
+        eventKey = eventKey,
+        deviceKey = "device-sha256:$id",
+        tokenFingerprint = id.toString().padStart(64, '0'),
+        tokenOwnershipVersion = 1L,
+        platform = PushPlatform.ANDROID,
+        scheduleId = 10L,
+        payloadType = type,
     )
 }

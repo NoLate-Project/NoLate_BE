@@ -145,7 +145,13 @@ class PushDeliveryWriter(
                     return if (decision == PushDispatchFenceDecision.RETRY_LATER) {
                         PushDeliveryClaim(PushDeliveryClaimOutcome.DEFERRED, deliveryId)
                     } else {
-                        terminalizeRejectedPersistedClaim(memberId, eventKey, deliveryId)
+                        terminalizeRejectedPersistedClaim(
+                            memberId = memberId,
+                            eventKey = eventKey,
+                            deliveryId = deliveryId,
+                            errorCode = "SCHEDULE_SOURCE_FENCE_CHANGED",
+                            reason = "Persisted source identity changed before safety dispatch.",
+                        )
                     }
                 }
                 return PushDeliveryClaim(PushDeliveryClaimOutcome.FENCE_REJECTED)
@@ -157,8 +163,9 @@ class PushDeliveryWriter(
             eventKey,
         ) ?: return PushDeliveryClaim(PushDeliveryClaimOutcome.DEDUPLICATED)
         val source = appNotificationRepository.findByMemberIdAndLogicalEventKey(memberId, eventKey)
-        if (
-            source == null ||
+        val sourceRejection = if (source == null) {
+            "PUSH_SOURCE_MISSING" to "Immutable push source no longer exists."
+        } else if (
             recipientAuthorizationValidator?.canDispatch(
                 memberId = memberId,
                 scheduleId = source.scheduleId ?: existing.scheduleId,
@@ -166,16 +173,26 @@ class PushDeliveryWriter(
                 payloadType = source.type,
                 calendarId = source.calendarId ?: existing.calendarId,
             ) == false
-                ||
-                sourceFreshnessValidator?.isFresh(source.toFrozenPushSource()) == false
         ) {
+            "RECIPIENT_ACCESS_REVOKED" to
+                "Recipient no longer has access to the immutable push source."
+        } else if (
+            sourceFreshnessValidator?.isFresh(source.toFrozenPushSource()) == false
+        ) {
+            "PUSH_SOURCE_STALE" to
+                "Immutable push source is no longer current enough for provider dispatch."
+        } else {
+            null
+        }
+        if (sourceRejection != null) {
             if (
                 existing.status == PushDeliveryStatus.PENDING ||
                 existing.status == PushDeliveryStatus.FAILED
             ) {
                 existing.markSuperseded(
                     Instant.now(clock),
-                    "Recipient no longer has access to the immutable push source.",
+                    sourceRejection.first,
+                    sourceRejection.second,
                 )
                 repository.saveAndFlush(existing)
             }
@@ -231,6 +248,7 @@ class PushDeliveryWriter(
         if (verifiedToken == null) {
             existing.markSuperseded(
                 Instant.now(clock),
+                "TOKEN_OWNERSHIP_CHANGED",
                 "Token ownership snapshot changed before provider dispatch.",
             )
             repository.saveAndFlush(existing)
@@ -253,6 +271,8 @@ class PushDeliveryWriter(
         memberId: Long,
         eventKey: String,
         deliveryId: Long,
+        errorCode: String,
+        reason: String,
     ): PushDeliveryClaim {
         val delivery = repository.findByIdAndMemberIdAndEventKey(
             deliveryId,
@@ -264,7 +284,8 @@ class PushDeliveryWriter(
             PushDeliveryStatus.FAILED -> {
                 delivery.markSuperseded(
                     Instant.now(clock),
-                    "Persisted source identity changed before safety dispatch.",
+                    errorCode,
+                    reason,
                 )
                 repository.saveAndFlush(delivery)
                 PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED, delivery.id)
@@ -300,7 +321,13 @@ class PushDeliveryWriter(
             memberId,
             eventKey,
         )
-        val result = terminalizeRejectedPersistedClaim(memberId, eventKey, deliveryId)
+        val result = terminalizeRejectedPersistedClaim(
+            memberId = memberId,
+            eventKey = eventKey,
+            deliveryId = deliveryId,
+            errorCode = "AUTHENTICATED_SESSION_GENERATION_CHANGED",
+            reason = "Authenticated session changed before provider dispatch.",
+        )
         source?.completeSupersededDispatch(
             Instant.now(clock),
             "AUTHENTICATED_SESSION_GENERATION_CHANGED",
@@ -460,8 +487,9 @@ class PushDeliveryWriter(
         if (delivery.memberId != identity.memberId || delivery.eventKey != identity.eventKey) {
             return false
         }
-        val changed = delivery.markDispatchOwnershipSuperseded(
+        val changed = delivery.markDispatchSuperseded(
             Instant.now(clock),
+            "TOKEN_OWNERSHIP_CHANGED",
             "Token ownership changed after delivery claim and before provider dispatch.",
         )
         if (changed) {
