@@ -22,6 +22,7 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
         sqlException: SQLException?,
     ) {
         val elapsedMs = TimeUnit.NANOSECONDS.toMillis(timeElapsedNanos)
+        val safeSql = statementInformation.sqlWithValues.redactPushTokenValues()
 
         if (sqlException == null) {
             if (Thread.currentThread().name.startsWith(SCHEDULER_THREAD_PREFIX)) {
@@ -32,7 +33,7 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
                 "SQL executed. connectionId={}, elapsedMs={}, sql={}",
                 statementInformation.connectionInformation.connectionId,
                 elapsedMs,
-                statementInformation.sqlWithValues,
+                safeSql,
             )
             return
         }
@@ -41,7 +42,7 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
             "SQL execution failed. connectionId={}, elapsedMs={}, sql={}",
             statementInformation.connectionInformation.connectionId,
             elapsedMs,
-            statementInformation.sqlWithValues,
+            safeSql,
             sqlException,
         )
     }
@@ -50,3 +51,15 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
         const val SCHEDULER_THREAD_PREFIX = "scheduling-"
     }
 }
+
+/**
+ * P6Spy의 sqlWithValues는 push token까지 문자열 literal로 치환한다. token column의 위치를
+ * SQL 종류별로 추론하면 insert/update/select 변형에서 누락될 수 있으므로, token 테이블을
+ * 다루는 문장은 모든 문자열 literal을 가려 원문 token이 로그에 들어갈 가능성을 닫는다.
+ */
+private fun String.redactPushTokenValues(): String {
+    if (!contains("push_device_token", ignoreCase = true)) return this
+    return replace(SQL_STRING_LITERAL, "'[REDACTED]'")
+}
+
+private val SQL_STRING_LITERAL = Regex("'(?:''|[^'])*'")

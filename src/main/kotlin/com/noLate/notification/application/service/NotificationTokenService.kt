@@ -97,9 +97,21 @@ class NotificationTokenService (
         notificationRepository.deleteAllByMemberId(memberId)
     }
 
-    @Transactional
+    @org.springframework.transaction.annotation.Transactional(
+        propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW
+    )
     fun removeTokenValue(memberId: Long, token: String) {
         notificationRepository.deleteByMemberIdAndToken(memberId, token)
+    }
+
+    /**
+     * 무효 토큰 처리에서는 P6Spy SQL에도 원문 token이 바인딩되지 않도록 PK로 제거한다.
+     */
+    @org.springframework.transaction.annotation.Transactional(
+        propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW
+    )
+    fun removeTokenById(memberId: Long, tokenId: Long) {
+        notificationRepository.deleteByIdAndMemberId(tokenId, memberId)
     }
 
     /**

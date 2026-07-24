@@ -8,6 +8,8 @@ import com.noLate.notification.domain.PushSendStatus
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Propagation
+import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
 
@@ -18,6 +20,7 @@ class PushSendHistoryService(
     private val clock: Clock,
 ) {
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun recordSuccess(
         memberId: Long,
         token: NotificationDeviceToken,
@@ -35,6 +38,7 @@ class PushSendHistoryService(
         fcmMessageId = fcmMessageId,
     )
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun recordFailure(
         memberId: Long,
         token: NotificationDeviceToken,
@@ -52,9 +56,10 @@ class PushSendHistoryService(
         data = data,
         status = status,
         errorCode = errorCode,
-        errorMessage = errorMessage,
+        errorMessage = errorMessage?.redact(token.token),
     )
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun recordNoToken(
         memberId: Long,
         title: String,
@@ -107,3 +112,6 @@ class PushSendHistoryService(
         return repository.save(history)
     }
 }
+
+private fun String.redact(secret: String): String =
+    if (secret.isEmpty()) take(1000) else replace(secret, "[REDACTED]").take(1000)

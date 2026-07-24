@@ -4,9 +4,11 @@ package com.noLate.notification.application
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.AppNotificationRecordResult
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.domain.PushSendStatus
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.*
+import java.time.Instant
 
 @ExtendWith(MockitoExtension::class)
 class NotificationUseCaseUnitTest {
@@ -96,7 +99,7 @@ class NotificationUseCaseUnitTest {
             data = data,
             fcmMessageId = "message-id",
         )
-        verify(appNotificationService, times(1)).record(
+        verify(appNotificationService, times(1)).recordWithResult(
             memberId = memberId,
             title = title,
             body = body,
@@ -142,7 +145,7 @@ class NotificationUseCaseUnitTest {
             errorCode = InvalidPushTokenException::class.java.simpleName,
             errorMessage = "유효하지 않은 푸시 토큰입니다.",
         )
-        verify(notificationTokenService).removeTokenValue(memberId, "invalid-token")
+        verify(notificationTokenService).removeTokenById(memberId, 1L)
         assertEquals(0, result.sentCount)
         assertEquals(1, result.failedCount)
         assertEquals(1, result.removedTokenCount)
@@ -168,7 +171,7 @@ class NotificationUseCaseUnitTest {
             body = "내용",
             data = data,
         )
-        verify(appNotificationService).record(
+        verify(appNotificationService).recordWithResult(
             memberId = memberId,
             title = "제목",
             body = "내용",
@@ -194,6 +197,54 @@ class NotificationUseCaseUnitTest {
         )
 
         verifyNoInteractions(appNotificationService)
+    }
+
+    @Test
+    fun `기존 inbox 이벤트이면 외부 전송도 중복 실행하지 않는다`() {
+        val memberId = 1L
+        val token = NotificationDeviceToken(
+            id = 1L,
+            memberId = memberId,
+            deviceId = "d1",
+            platform = PushPlatform.ANDROID,
+            token = "must-not-send",
+        )
+        whenever(notificationTokenService.getTokensByMember(memberId)).thenReturn(listOf(token))
+        whenever(
+            appNotificationService.recordWithResult(
+                memberId = memberId,
+                title = "제목",
+                body = "내용",
+                data = emptyMap(),
+                deduplicationKey = "same-event",
+            )
+        ).thenReturn(
+            AppNotificationRecordResult(
+                notification = AppNotification(
+                    id = 10L,
+                    memberId = memberId,
+                    deduplicationKey = "same-event",
+                    type = "GENERAL",
+                    title = "제목",
+                    body = "내용",
+                    dataJson = "{}",
+                    createdAt = Instant.parse("2026-07-24T03:00:00Z"),
+                ),
+                created = false,
+            )
+        )
+
+        val result = notificationUseCase.sendToMember(
+            memberId = memberId,
+            title = "제목",
+            body = "내용",
+            inboxDeduplicationKey = "same-event",
+        )
+
+        verify(pushClient, never()).sendToToken(any(), any(), any(), any())
+        assertEquals(0, result.attemptedCount)
+        assertEquals(1, result.deduplicatedCount)
+        assertEquals(true, result.inboxDeduplicated)
     }
 
     @Test

@@ -14,6 +14,7 @@ import com.google.firebase.messaging.MessagingErrorCode
 import com.google.firebase.messaging.Message
 import com.google.firebase.messaging.Notification
 import com.noLate.notification.application.InvalidPushTokenException
+import com.noLate.notification.application.ConfirmedPushDeliveryException
 import com.noLate.notification.application.PushClient
 import com.noLate.notification.application.PushSendResult
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -80,6 +81,15 @@ class FirebasePushConfiguration {
                     if (exception.isInvalidPushToken()) {
                         throw InvalidPushTokenException(token, exception)
                     }
+                    exception.messagingErrorCode?.let { errorCode ->
+                        // FCM이 명시적인 오류 응답을 준 경우에만 안전한 재시도 대상으로 분류한다.
+                        throw ConfirmedPushDeliveryException(
+                            message = "푸시 공급자가 전송을 거절했습니다. code=$errorCode",
+                            cause = exception,
+                        )
+                    }
+                    // message id도 명시적 오류 코드도 없는 transport 실패는 수락 여부가 모호하다.
+                    // 원래 예외를 유지하면 NotificationUseCase가 DISPATCHING으로 억제한다.
                     throw exception
                 }
             }

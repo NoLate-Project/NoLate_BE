@@ -79,6 +79,8 @@ class PushSendHistory(
 enum class PushSendStatus {
     SUCCESS,
     FAILED,
+    /** Provider 수락 여부를 확인할 수 없어 자동 재전송하지 않는 결과 */
+    UNKNOWN,
     INVALID_TOKEN,
     NO_TOKEN,
 }

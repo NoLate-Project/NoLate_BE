@@ -9,13 +9,10 @@ import com.noLate.schedule.application.service.policy.DepartureReminderDecision
 import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
 import com.noLate.schedule.domain.SchedulePushJob
-import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
-import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
-import jakarta.transaction.Transactional
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.scheduling.annotation.Scheduled
@@ -27,7 +24,6 @@ import java.util.UUID
 
 @Component
 class SchedulePushJobWorker(
-    private val pushJobRepository: SchedulePushJobRepository,
     private val scheduleRepository: ScheduleRepository,
     private val objectMapper: ObjectMapper,
     private val trafficClient: TrafficClient,
@@ -35,6 +31,7 @@ class SchedulePushJobWorker(
     private val periodicPushPolicy: PeriodicPushPolicy,
     private val departureReminderPolicy: DepartureReminderPolicy,
     private val trafficChangePolicy: TrafficChangePolicy,
+    private val pushJobCoordinator: SchedulePushJobCoordinator,
     @Value("\${schedule.push.retry-delay-minutes:5}") private val retryDelayMinutes: Long,
     @Value("\${schedule.push.max-retry-count:3}") private val maxRetryCount: Int,
     @Value("\${schedule.push.delivery-grace-minutes:10}") private val deliveryGraceMinutes: Long = 10,
@@ -49,68 +46,54 @@ class SchedulePushJobWorker(
     private val workerId = "schedule-push-${UUID.randomUUID()}"
 
     @Scheduled(fixedDelayString = "\${schedule.push.fixed-delay-ms:60000}")
-    @Transactional
     fun runDueJobs() {
         runDueJobs(Instant.now())
     }
 
     fun runDueJobs(now: Instant): Int {
-        recoverStaleProcessingJobs(now)
-
-        val dueJobs = pushJobRepository
-            .findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
-                SchedulePushJobStatus.ACTIVE,
+        val recoveredCount = pushJobCoordinator.recoverStaleProcessingJobs(
+            now = now,
+            processingTimeoutMinutes = processingTimeoutMinutes,
+            deliveryGraceMinutes = deliveryGraceMinutes,
+        )
+        if (recoveredCount > 0) {
+            log.warn(
+                "Recovered stale schedule push jobs. count={}, timeoutMinutes={}, checkedAt={}",
+                recoveredCount,
+                processingTimeoutMinutes,
                 now,
             )
+        }
+
+        val dueJobs = pushJobCoordinator.claimDueJobs(now, workerId)
 
         if (dueJobs.isNotEmpty()) {
-            log.info("Detected schedule push jobs. count={}, checkedAt={}", dueJobs.size, now)
+            log.info(
+                "Claimed schedule push jobs. count={}, workerId={}, checkedAt={}",
+                dueJobs.size,
+                workerId,
+                now,
+            )
         }
-        dueJobs.forEach { process(it, now) }
+        dueJobs.forEach { job ->
+            pushJobCoordinator.execute { process(job, now) }
+        }
         return dueJobs.size
     }
 
-    private fun recoverStaleProcessingJobs(now: Instant) {
-        val timeoutBoundary = now.minus(processingTimeoutMinutes, ChronoUnit.MINUTES)
-        val staleJobs = pushJobRepository
-            .findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
-                SchedulePushJobStatus.PROCESSING,
-                timeoutBoundary,
-            )
-
-        if (staleJobs.isNotEmpty()) {
-            log.warn(
-                "Recovering stale schedule push jobs. count={}, timeoutBoundary={}",
-                staleJobs.size,
-                timeoutBoundary,
-            )
-        }
-
-        staleJobs.forEach { job ->
-            if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
-                job.complete()
-            } else {
-                job.recoverProcessingTimeout(
-                    reason = "Processing timeout. lockedBy=${job.lockedBy}, lockedAt=${job.lockedAt}",
-                    nextCheckAt = now,
-                )
-            }
-        }
-    }
-
     private fun process(job: SchedulePushJob, now: Instant) {
-        job.startProcessing(workerId)
-
         try {
             // 일정이 시작된 뒤에는 "출발" 알림의 의미가 사라지므로 남은 후속 푸시를 종료한다.
             if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
                 job.complete()
+                pushJobCoordinator.persist(job, workerId)
                 return
             }
 
             val schedule = scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)
                 ?: run {
                     job.cancel()
+                    pushJobCoordinator.persist(job, workerId)
                     return
                 }
             // 공유 범위 축소와 이미 선점된 worker가 경합해도 발송 직전 유효 이동 권한을 다시
@@ -120,11 +103,13 @@ class SchedulePushJobWorker(
                 scheduleAccessPolicy?.resolve(job.memberId, schedule)?.travelEnabled == false
             ) {
                 job.cancel()
+                pushJobCoordinator.persist(job, workerId)
                 return
             }
             val route = resolveRouteSource(schedule, job.memberId)
                 ?: run {
                     job.cancel()
+                    pushJobCoordinator.persist(job, workerId)
                     return
                 }
 
@@ -208,16 +193,20 @@ class SchedulePushJobWorker(
                     inboxDeduplicationKey = schedulePushInboxDeduplicationKey(job),
                 )
                 log.info(
-                    "Schedule push sent. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, sent={}, failed={}",
+                    "Schedule push handled. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, attempted={}, sent={}, alreadyDelivered={}, ambiguous={}, deduplicated={}, failed={}",
                     job.id,
                     job.scheduleId,
                     reminderDecision,
                     travelMinutes,
                     sendResult.requestedCount,
+                    sendResult.attemptedCount,
                     sendResult.sentCount,
+                    sendResult.alreadyDeliveredCount,
+                    sendResult.ambiguousCount,
+                    sendResult.deduplicatedCount,
                     sendResult.failedCount,
                 )
-                if (sendResult.sentCount == 0) {
+                if (sendResult.durablyHandledCount == 0) {
                     // FCM/APNs가 한 기기에도 전달하지 못했다면 성공 이력을 기록하지 않는다.
                     // 특히 DEPART_NOW를 완료 처리하면 다시 보낼 방법이 없어 반드시 재시도해야 한다.
                     scheduleRetryAfterPushFailure(
@@ -226,6 +215,7 @@ class SchedulePushJobWorker(
                         requestedCount = sendResult.requestedCount,
                         failedCount = sendResult.failedCount,
                     )
+                    pushJobCoordinator.persist(job, workerId)
                     return
                 }
                 true
@@ -274,13 +264,30 @@ class SchedulePushJobWorker(
                 completeAfterCheck = nextCheckAt == null,
                 now = now,
             )
+            pushJobCoordinator.persist(job, workerId)
         } catch (exception: Exception) {
-            log.warn("Schedule push job failed. jobId={}", job.id, exception)
+            log.warn(
+                "Schedule push job failed. jobId={}, scheduleId={}, workerId={}, errorCode={}",
+                job.id,
+                job.scheduleId,
+                workerId,
+                exception.javaClass.simpleName,
+            )
             retryOrFail(
                 job = job,
                 now = now,
                 reason = exception.message?.take(500) ?: exception.javaClass.simpleName,
             )
+            runCatching { pushJobCoordinator.persist(job, workerId) }
+                .onFailure {
+                    log.error(
+                        "Schedule push failure transition persistence failed. jobId={}, scheduleId={}, workerId={}, errorCode={}",
+                        job.id,
+                        job.scheduleId,
+                        workerId,
+                        it.javaClass.simpleName,
+                    )
+                }
         }
     }
 

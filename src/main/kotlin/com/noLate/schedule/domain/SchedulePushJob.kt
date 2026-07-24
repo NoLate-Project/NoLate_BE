@@ -174,10 +174,10 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     /**
      * Scheduler 또는 Worker가 작업을 처리하기 시작할 때 호출한다.
      */
-    fun startProcessing(workerId: String) {
+    fun startProcessing(workerId: String, now: Instant = Instant.now()) {
         status = SchedulePushJobStatus.PROCESSING
         lockedBy = workerId
-        lockedAt = Instant.now()
+        lockedAt = now
     }
 
     /**

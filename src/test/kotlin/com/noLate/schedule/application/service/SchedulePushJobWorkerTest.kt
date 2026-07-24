@@ -881,7 +881,6 @@ class SchedulePushJobWorkerTest {
     }
 
     private fun worker(accessPolicy: ScheduleAccessPolicy? = null) = SchedulePushJobWorker(
-        pushJobRepository = pushJobRepository,
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
         trafficClient = trafficClient,
@@ -889,6 +888,7 @@ class SchedulePushJobWorkerTest {
         periodicPushPolicy = PeriodicPushPolicy(),
         departureReminderPolicy = DepartureReminderPolicy(),
         trafficChangePolicy = TrafficChangePolicy(),
+        pushJobCoordinator = SchedulePushJobCoordinator(pushJobRepository),
         retryDelayMinutes = 5,
         maxRetryCount = 3,
         departureAlertLeadMinutes = departureAlertLeadMinutes,

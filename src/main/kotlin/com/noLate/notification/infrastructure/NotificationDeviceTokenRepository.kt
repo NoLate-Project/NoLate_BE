@@ -19,4 +19,6 @@ interface NotificationDeviceTokenRepository : JpaRepository<NotificationDeviceTo
 
     fun deleteByMemberIdAndToken(memberId: Long, token: String)
 
+    fun deleteByIdAndMemberId(id: Long, memberId: Long)
+
 }

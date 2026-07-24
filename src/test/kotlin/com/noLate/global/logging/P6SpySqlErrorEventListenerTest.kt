@@ -8,6 +8,7 @@ import com.p6spy.engine.common.ConnectionInformation
 import com.p6spy.engine.common.StatementInformation
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -69,6 +70,21 @@ class P6SpySqlErrorEventListenerTest {
 
         assertEquals(1, appender.list.size)
         assertTrue(appender.list.single().formattedMessage.contains("status = 'FAILED'"))
+    }
+
+    @Test
+    fun `push token 테이블 SQL은 문자열 값을 가려 원문 token을 기록하지 않는다`() {
+        val rawToken = "secret-fcm-token"
+        val statementInformation = statementInformation(
+            "update push_device_token set token = '$rawToken' where device_id = 'device-1'"
+        )
+
+        listener.onAfterAnyExecute(statementInformation, 1_000_000, null)
+
+        val message = appender.list.single().formattedMessage
+        assertFalse(message.contains(rawToken))
+        assertFalse(message.contains("device-1"))
+        assertTrue(message.contains("[REDACTED]"))
     }
 
     private fun statementInformation(sqlWithValues: String): StatementInformation {

@@ -326,6 +326,32 @@ CREATE TABLE IF NOT EXISTS app_notifications (
 ALTER TABLE app_notifications
     MODIFY COLUMN data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON';
 
+CREATE TABLE IF NOT EXISTS push_deliveries (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Per-device logical push delivery primary key',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    member_id BIGINT NOT NULL COMMENT 'Notification recipient member id',
+    event_key VARCHAR(100) NOT NULL COMMENT 'Durable logical event identifier',
+    device_key VARCHAR(100) NOT NULL COMMENT 'Token row identity or one-way token fingerprint',
+    device_token_id BIGINT NULL COMMENT 'Token row id at dispatch time; no foreign key so invalid-token removal keeps evidence',
+    device_id VARCHAR(100) NULL COMMENT 'Non-secret client device id when supplied',
+    platform VARCHAR(20) NOT NULL COMMENT 'Push platform',
+    schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
+    payload_type VARCHAR(80) NULL COMMENT 'Push payload type',
+    status VARCHAR(30) NOT NULL COMMENT 'DISPATCHING, SUCCESS, FAILED, or INVALID_TOKEN',
+    attempt_count INT NOT NULL DEFAULT 1 COMMENT 'Provider call attempt count',
+    first_attempted_at DATETIME(6) NOT NULL COMMENT 'First provider call boundary creation time',
+    last_attempted_at DATETIME(6) NOT NULL COMMENT 'Most recent provider call boundary time',
+    delivered_at DATETIME(6) NULL COMMENT 'Provider success response time',
+    provider_message_id VARCHAR(300) NULL COMMENT 'Provider message id after confirmed success',
+    error_code VARCHAR(120) NULL COMMENT 'Provider or local transition failure class/code',
+    error_message VARCHAR(1000) NULL COMMENT 'Sanitized failure detail without raw push token',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_push_deliveries_member_event_device (member_id, event_key, device_key),
+    INDEX idx_push_deliveries_member_event (member_id, event_key),
+    INDEX idx_push_deliveries_status_attempted_at (status, last_attempted_at),
+    INDEX idx_push_deliveries_schedule_id (schedule_id)
+) COMMENT='Durable at-most-once per-device push delivery boundary';
+
 CREATE TABLE IF NOT EXISTS favorite_place_categories (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Favorite place category primary key',
     member_id BIGINT NOT NULL COMMENT 'Owner member id',

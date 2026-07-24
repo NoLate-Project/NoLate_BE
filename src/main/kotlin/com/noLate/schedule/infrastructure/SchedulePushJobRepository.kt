@@ -5,11 +5,18 @@ import com.noLate.schedule.domain.SchedulePushJobStatus
 import jakarta.persistence.LockModeType
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock
+import org.springframework.data.jpa.repository.Query
+import org.springframework.data.repository.query.Param
 import java.time.Instant
 
 
 interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
     fun deleteAllByMemberId(memberId: Long)
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select job from SchedulePushJob job where job.id = :id")
+    fun findByIdForUpdate(@Param("id") id: Long): SchedulePushJob?
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     fun findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
         status: SchedulePushJobStatus,
