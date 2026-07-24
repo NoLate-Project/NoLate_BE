@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
@@ -128,10 +129,13 @@ class SchedulePushJobWorker(
                     return
                 }
 
-            val fallbackMinutes = requireNotNull(route.travelMinutes) {
-                "교통 조회 fallback 이동 시간이 없습니다."
-            }
-            val selectedRouteTravelMinutes = parseSelectedRouteTravelMinutes(route.routeJson)
+            val selectedRoute = SelectedRouteMetadata.parse(
+                objectMapper = objectMapper,
+                routeJson = route.routeJson,
+                travelMode = route.travelMode,
+            )
+            val fallbackMinutes = route.travelMinutes?.takeIf { it > 0 } ?: selectedRoute.travelMinutes
+                ?: error("교통 조회 fallback 이동 시간이 없습니다.")
             val request = TrafficRequest(
                 originLat = requireNotNull(route.originLat) { "출발지 위도가 없습니다." },
                 originLng = requireNotNull(route.originLng) { "출발지 경도가 없습니다." },
@@ -140,9 +144,12 @@ class SchedulePushJobWorker(
                 travelMode = requireNotNull(route.travelMode) { "이동 수단이 없습니다." },
                 fallbackTravelMinutes = fallbackMinutes,
                 selectedRouteJson = route.routeJson,
-                selectedRouteTravelMinutes = selectedRouteTravelMinutes,
+                selectedRouteTravelMinutes = selectedRoute.travelMinutes,
+                selectedRouteOption = selectedRoute.routeOption,
+                selectedTransitItineraryJson = selectedRoute.transitItineraryJson,
             )
-            val travelMinutes = trafficClient.getTravelMinutes(request)
+            val trafficResult = trafficClient.getTravelMinutes(request)
+            val travelMinutes = trafficResult.travelMinutes
             val recommendedDepartureAt = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
             val reminderDecision = departureReminderPolicy.decide(
                 now = now,
@@ -272,6 +279,10 @@ class SchedulePushJobWorker(
                 clearSnooze = pushSent && reminderDecision == DepartureReminderDecision.SNOOZE,
                 nextCheckAt = nextCheckAt,
                 completeAfterCheck = nextCheckAt == null,
+                etaSource = trafficResult.source,
+                liveFetchedAt = trafficResult.fetchedAt,
+                etaStale = trafficResult.stale,
+                etaFailureReason = trafficResult.failureReason,
                 now = now,
             )
         } catch (exception: Exception) {
@@ -378,28 +389,6 @@ class SchedulePushJobWorker(
             destinationLng = legacy.destinationLng,
             routeJson = legacy.routeJson,
         )
-    }
-
-    private fun parseSelectedRouteTravelMinutes(routeJson: String?): Int? {
-        if (routeJson.isNullOrBlank()) return null
-
-        // FE 경로 후보 payload가 버전별로 다른 필드명을 썼던 이력을 흡수한다.
-        return runCatching {
-            val root = objectMapper.readTree(routeJson)
-            sequenceOf(
-                root.path("minutes"),
-                root.path("travelMinutes"),
-                root.path("durationMinutes"),
-            )
-                .firstOrNull { it.isNumber }
-                ?.asDouble()
-                ?.let { ceilToPositiveMinutes(it) }
-        }.getOrNull()
-    }
-
-    private fun ceilToPositiveMinutes(value: Double): Int? {
-        if (!value.isFinite() || value <= 0) return null
-        return kotlin.math.ceil(value).toInt().coerceAtLeast(1)
     }
 
     private fun pushPayloadType(decision: DepartureReminderDecision, showDepartureActions: Boolean): String =

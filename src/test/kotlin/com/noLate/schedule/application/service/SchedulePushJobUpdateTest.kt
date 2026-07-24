@@ -7,6 +7,7 @@ import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -85,12 +86,67 @@ class SchedulePushJobUpdateTest {
         assertNull(job.lastRecommendedDepartureAt)
         assertNull(job.lastNotifiedDepartureAt)
         assertNull(job.lastCheckedAt)
+        assertNull(job.lastLiveFetchedAt)
+        assertNull(job.lastEtaSource)
+        assertNull(job.lastEtaStale)
+        assertNull(job.lastEtaFailureReason)
+        assertNull(job.lastTrafficChangeMinutes)
+        assertNull(job.lastChangedAt)
         assertNull(job.lastPushedAt)
         assertNull(job.departureNoticeSentAt)
         assertNull(job.lastDepartureReminderStage)
         assertNull(job.lastDepartureReminderBoundaryAt)
         assertNull(job.snoozedUntil)
         assertNull(job.failureReason)
+    }
+
+    @Test
+    fun `fallback 평가 시각과 마지막 live provider 취득 시각을 구분한다`() {
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = originalScheduleAt,
+            departureAt = originalDepartureAt,
+            monitorStartAt = originalMonitorStartAt,
+            intervalMinutes = 20,
+        )
+        val firstCheckedAt = originalMonitorStartAt
+        val secondCheckedAt = firstCheckedAt.plus(20, ChronoUnit.MINUTES)
+
+        job.startProcessing("live-worker")
+        job.finishCheck(
+            travelMinutes = 35,
+            recommendedDepartureAt = originalScheduleAt.minus(35, ChronoUnit.MINUTES),
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = secondCheckedAt,
+            completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = firstCheckedAt.minusSeconds(2),
+            etaStale = false,
+            now = firstCheckedAt,
+        )
+        job.startProcessing("fallback-worker")
+        job.finishCheck(
+            travelMinutes = 38,
+            recommendedDepartureAt = originalScheduleAt.minus(38, ChronoUnit.MINUTES),
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = secondCheckedAt.plus(20, ChronoUnit.MINUTES),
+            completeAfterCheck = false,
+            etaSource = TrafficSource.SELECTED_ROUTE,
+            liveFetchedAt = null,
+            etaStale = true,
+            etaFailureReason = "PROVIDER_TIMEOUT: 실시간 ETA 공급자 응답 시간이 초과되었습니다.",
+            now = secondCheckedAt,
+        )
+
+        assertEquals(secondCheckedAt, job.lastCheckedAt)
+        assertEquals(firstCheckedAt.minusSeconds(2), job.lastLiveFetchedAt)
+        assertEquals(TrafficSource.SELECTED_ROUTE, job.lastEtaSource)
+        assertEquals(true, job.lastEtaStale)
+        assertEquals(3, job.lastTrafficChangeMinutes)
+        assertEquals(secondCheckedAt, job.lastChangedAt)
     }
 
     private fun enabledScheduleDto() = ScheduleDto(
