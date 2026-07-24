@@ -328,6 +328,22 @@ class ScheduleUseCaseUnitTest {
     }
 
     @Test
+    fun `공유 편집자의 일정 수정은 실제 오너의 경로와 push job을 갱신한다`() {
+        val ownerMemberId = 1L
+        val editorMemberId = 2L
+        val scheduleId = 10L
+        val request = scheduleDto(title = "공유 편집")
+        val updated = request.copy(id = scheduleId, ownerMemberId = ownerMemberId)
+        whenever(scheduleService.updateSchedule(editorMemberId, scheduleId, request)).thenReturn(updated)
+
+        scheduleUseCase.updateSchedule(editorMemberId, scheduleId, request)
+
+        verify(scheduleTravelPlanService).syncOwnerTravelPlan(ownerMemberId, updated)
+        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, ownerMemberId)
+        verify(schedulePushJobService, never()).cancelByScheduleIdAndMemberId(scheduleId, editorMemberId)
+    }
+
+    @Test
     fun `일정을 과거 시간으로 옮기면 저장은 허용하고 남아 있던 출발 알림은 취소한다`() {
         // 사용자가 일정 기록을 과거로 정정하는 것은 허용한다.
         // 다만 기존 PushJob이 계속 살아 있으면 뒤늦은 알림이 나갈 수 있으므로 반드시 취소한다.

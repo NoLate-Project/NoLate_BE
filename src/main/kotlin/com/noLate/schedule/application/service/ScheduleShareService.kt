@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.ScheduleCategoryShare
@@ -330,6 +331,9 @@ class ScheduleShareService(
             resourceId = scheduleId,
             resourceTitle = schedule.title,
         )
+        if (!grant.newlyActivated) {
+            publishCalendarCacheInvalidation(grant.share.targetMemberId, "schedule-share-updated")
+        }
         return grant.share
     }
 
@@ -353,6 +357,7 @@ class ScheduleShareService(
 
         share.activate(normalizedPermission, contentMode ?: share.contentMode)
         val saved = scheduleShareRepository.saveAndFlush(share)
+        publishCalendarCacheInvalidation(share.targetMemberId, "schedule-share-updated")
         travelAccessCleanupService?.cancelRevokedForSchedule(scheduleId, listOf(share.targetMemberId))
         return saved
             .toDto(targetEmail = memberRepository.findByIdAndDeletedFalse(share.targetMemberId)?.email)
@@ -371,6 +376,7 @@ class ScheduleShareService(
 
         share.revoke()
         scheduleShareRepository.saveAndFlush(share)
+        publishCalendarCacheInvalidation(share.targetMemberId, "schedule-share-revoked")
         travelAccessCleanupService?.cancelRevokedForSchedule(scheduleId, listOf(share.targetMemberId))
     }
 
@@ -418,6 +424,9 @@ class ScheduleShareService(
             resourceId = categoryId,
             resourceTitle = category.title,
         )
+        if (!grant.newlyActivated) {
+            publishCalendarCacheInvalidation(grant.share.targetMemberId, "category-share-updated")
+        }
         return grant.share
     }
 
@@ -439,7 +448,9 @@ class ScheduleShareService(
         }
 
         share.activate(normalizedPermission)
-        return categoryShareRepository.saveAndFlush(share)
+        val saved = categoryShareRepository.saveAndFlush(share)
+        publishCalendarCacheInvalidation(share.targetMemberId, "category-share-updated")
+        return saved
             .toDto(targetEmail = memberRepository.findByIdAndDeletedFalse(share.targetMemberId)?.email)
     }
 
@@ -456,6 +467,7 @@ class ScheduleShareService(
 
         share.revoke()
         categoryShareRepository.saveAndFlush(share)
+        publishCalendarCacheInvalidation(share.targetMemberId, "category-share-revoked")
     }
 
     @Transactional
@@ -695,6 +707,11 @@ class ScheduleShareService(
             acceptedAt = Instant.now(clock),
         )
         val savedInvitation = invitationRepository.saveAndFlush(invitation)
+        // 캘린더 수락은 addMember가 ScheduleShareGrantedEvent를 발행한다.
+        // 직접 일정/카테고리 링크 수락만 여기서 별도 무효화한다.
+        if (invitation.resourceType != ScheduleShareResourceType.CALENDAR) {
+            publishCalendarCacheInvalidation(currentMemberId, "share-invitation-accepted")
+        }
 
         return ScheduleShareInvitationAcceptDto(
             invitation = savedInvitation.toDto(),
@@ -814,9 +831,9 @@ class ScheduleShareService(
             status = ScheduleShareStatus.ACTIVE,
         )
 
+        val saved = categoryShareRepository.saveAndFlush(share)
         return ShareGrantResult(
-            share = categoryShareRepository.saveAndFlush(share)
-                .toDto(targetEmail = targetMember.email),
+            share = saved.toDto(targetEmail = targetMember.email),
             newlyActivated = newlyActivated,
         )
     }
@@ -840,6 +857,15 @@ class ScheduleShareService(
                 resourceType = resourceType,
                 resourceId = resourceId,
                 resourceTitle = resourceTitle,
+            )
+        )
+    }
+
+    private fun publishCalendarCacheInvalidation(targetMemberId: Long, reason: String) {
+        eventPublisher.publishEvent(
+            ScheduleCalendarCacheInvalidationEvent(
+                memberIds = setOf(targetMemberId),
+                reason = reason,
             )
         )
     }

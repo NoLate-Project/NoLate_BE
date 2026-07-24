@@ -171,13 +171,16 @@ class ScheduleUseCase(
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
         val updated = scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
-        scheduleTravelPlanService?.syncOwnerTravelPlan(memberId, updated)
+        // 공유 EDITOR가 수정해도 평탄형 경로와 기존 오너 push job은 실제 일정 소유자 기준으로
+        // 동기화한다. 요청자를 오너로 간주하면 공유 편집 직후 SCHEDULE_NOT_FOUND로 롤백된다.
+        val ownerMemberId = updated.ownerMemberId ?: memberId
+        scheduleTravelPlanService?.syncOwnerTravelPlan(ownerMemberId, updated)
         scheduleTravelPlanService?.findStaleNotificationMemberIds(scheduleId)
             .orEmpty()
             .forEach { staleMemberId ->
                 schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, staleMemberId)
             }
-        registerOrCancelPushJob(memberId, updated)
+        registerOrCancelPushJob(ownerMemberId, updated)
         return updated
     }
 
@@ -267,6 +270,9 @@ class ScheduleUseCase(
     fun getCalendarScheduleList(memberId: Long, startAt: String, endAt: String): List<ScheduleDto> {
         return scheduleService.getCalendarScheduleList(memberId, startAt, endAt)
     }
+
+    fun getCalendarCacheRevision(memberId: Long): Long =
+        scheduleService.getCalendarCacheRevision(memberId)
 
     /**
      * 하루 일정 조회 유스케이스.

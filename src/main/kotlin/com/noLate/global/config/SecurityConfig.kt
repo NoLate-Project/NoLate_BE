@@ -112,6 +112,7 @@ class SecurityConfig(
                         "/",
                         "/robots.txt",
                         "/api/member/auth/**",
+                        "/api/calendar/days",
                         "/api/legal/**",
                         "/legal/**",
                         "/v3/api-docs/**",

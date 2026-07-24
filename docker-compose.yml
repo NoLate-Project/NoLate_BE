@@ -14,8 +14,30 @@ services:
       # 운영 푸시 클라이언트가 해당 파일을 사용하도록 명시한다.
       FIREBASE_ENABLED: "true"
       FIREBASE_CREDENTIALS_PATH: /config/firebase.json
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-nolate-local-redis}
+      SCHEDULE_CALENDAR_CACHE_ENABLED: "true"
     volumes:
       - ${NOLATE_ENV_FILE:-./env.local.properties}:/config/env.properties:ro
       - ${NOLATE_FIREBASE_CREDENTIALS_FILE:?Set NOLATE_FIREBASE_CREDENTIALS_FILE}:/config/firebase.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    container_name: nolate-redis
+    build:
+      context: ./docker/redis
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-nolate-local-redis}
+    ports:
+      - "6379:6379"
+    volumes:
+      - nolate-redis-data:/data
+
+volumes:
+  nolate-redis-data:
