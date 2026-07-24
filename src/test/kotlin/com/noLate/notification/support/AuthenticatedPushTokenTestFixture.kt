@@ -19,6 +19,21 @@ fun registerAuthenticatedPushToken(
     platform: PushPlatform,
     token: String,
 ) {
+    ensureActivePushMember(jdbcTemplate, memberId)
+    tokenService.registerToken(
+        memberId = memberId,
+        deviceId = deviceId,
+        platform = platform,
+        token = token,
+        accessTokenIssuedAt = FIXTURE_ISSUED_AT,
+        accessTokenSessionGeneration = 0,
+    )
+}
+
+fun ensureActivePushMember(
+    jdbcTemplate: JdbcTemplate,
+    memberId: Long,
+) {
     val exists = jdbcTemplate.queryForObject(
         "SELECT COUNT(*) FROM `member` WHERE id = ?",
         Long::class.java,
@@ -38,12 +53,4 @@ fun registerAuthenticatedPushToken(
             "push-fixture-$memberId@example.com",
         )
     }
-    tokenService.registerToken(
-        memberId = memberId,
-        deviceId = deviceId,
-        platform = platform,
-        token = token,
-        accessTokenIssuedAt = FIXTURE_ISSUED_AT,
-        accessTokenSessionGeneration = 0,
-    )
 }

@@ -499,7 +499,10 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     }
 
     /**
-     * 사용자가 "5분 뒤 다시 알림"을 선택했을 때 완료된 작업도 일정 시작 전이면 다시 깨울 수 있게 한다.
+     * 사용자가 "5분 뒤 다시 알림"을 선택하면 현재 frozen event generation을 폐기한다.
+     *
+     * 이미 provider에 전달된 성공은 보존하지만, in-flight/FAILED 기기의 old pre-snooze
+     * payload는 persisted safety outbox가 generation mismatch로 terminal 처리한다.
      */
     fun snoozeUntil(nextCheckAt: Instant) {
         require(nextCheckAt.isBefore(scheduleAt)) {
@@ -507,6 +510,8 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         }
 
         status = SchedulePushJobStatus.ACTIVE
+        notificationGeneration = Math.addExact(notificationGeneration, 1)
+        checkCount = 0
         this.nextCheckAt = nextCheckAt
         this.snoozedUntil = nextCheckAt
         failureReason = null

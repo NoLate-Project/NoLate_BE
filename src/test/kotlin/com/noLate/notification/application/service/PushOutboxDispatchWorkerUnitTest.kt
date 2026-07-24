@@ -111,7 +111,7 @@ class PushOutboxDispatchWorkerUnitTest {
 
     @Test
     fun `redrive exception reaches bounded max attempts and becomes failed`() {
-        val lease = lease(attempt = 2)
+        val lease = lease(attempt = 2, failureCount = 1)
         whenever(coordinator.recoverStale(any(), any(), any())).thenReturn(0)
         whenever(coordinator.claimNextDue(any(), any())).thenReturn(lease, null)
         whenever(notificationUseCase.redrivePersistedEvent(any(), any(), any()))
@@ -201,6 +201,7 @@ class PushOutboxDispatchWorkerUnitTest {
         notificationId: Long = 10,
         eventKey: String = "event:durable",
         attempt: Int = 1,
+        failureCount: Int = 0,
         recipientCount: Int = 1,
     ): PushOutboxDispatchLease =
         PushOutboxDispatchLease(
@@ -209,6 +210,7 @@ class PushOutboxDispatchWorkerUnitTest {
             logicalEventKey = eventKey,
             manifestRecipientCount = recipientCount,
             attemptCount = attempt,
+            failureCount = failureCount,
             workerId = "test-worker",
         )
 }

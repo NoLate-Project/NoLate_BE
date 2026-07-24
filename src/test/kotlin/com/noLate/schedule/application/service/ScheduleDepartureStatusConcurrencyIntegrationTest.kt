@@ -14,12 +14,14 @@ import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
@@ -30,6 +32,9 @@ import org.springframework.context.event.EventListener
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.TransactionDefinition
+import org.springframework.transaction.support.TransactionTemplate
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -64,7 +69,14 @@ class ScheduleDepartureStatusConcurrencyIntegrationTest @Autowired constructor(
     private val appNotificationRepository: AppNotificationRepository,
     private val pushDeliveryRepository: PushDeliveryRepository,
     private val eventRecorder: ScheduleDepartureEventRecorder,
+    private val fenceObserver: ScheduleDepartureFenceTestObserver,
+    private val transactionManager: PlatformTransactionManager,
 ) {
+    @BeforeEach
+    fun resetObserver() {
+        eventRecorder.events.clear()
+        fenceObserver.reset()
+    }
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -129,6 +141,80 @@ class ScheduleDepartureStatusConcurrencyIntegrationTest @Autowired constructor(
         )
     }
 
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun `share revoke committed after preview is observed before departure mutation`() {
+        val fixture = createFixture()
+        fenceObserver.blockNext()
+        val executor = Executors.newSingleThreadExecutor()
+        val departure = executor.submit<Throwable?> {
+            runCatching {
+                TransactionTemplate(transactionManager).apply {
+                    isolationLevel = TransactionDefinition.ISOLATION_READ_COMMITTED
+                }.executeWithoutResult {
+                    val memberFence = service.lockNotificationActionMembers(
+                        memberId = fixture.targetMemberId,
+                        scheduleId = fixture.scheduleId,
+                        presentedSessionGeneration = 0L,
+                    )
+                    service.markDeparted(
+                        fixture.targetMemberId,
+                        fixture.scheduleId,
+                        memberFence,
+                    )
+                }
+            }.exceptionOrNull()
+        }
+
+        assertTrue(
+            fenceObserver.previewed.await(5, TimeUnit.SECONDS),
+            "departure action must stop after its non-locking recipient preview",
+        )
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            memberRepository.findByIdForUpdate(fixture.targetMemberId)
+            val share = requireNotNull(
+                shareRepository.findByScheduleIdAndTargetMemberId(
+                    fixture.scheduleId,
+                    fixture.targetMemberId,
+                )
+            )
+            share.revoke()
+            shareRepository.saveAndFlush(share)
+        }
+        fenceObserver.release.countDown()
+
+        val failure = departure.get(10, TimeUnit.SECONDS)
+        executor.shutdownNow()
+
+        assertTrue(failure is com.noLate.global.error.BusinessException)
+        assertEquals(
+            com.noLate.global.error.ErrorCode.SCHEDULE_NOT_FOUND,
+            (failure as com.noLate.global.error.BusinessException).errorCode,
+        )
+        assertTrue(
+            departureStatusRepository
+                .findAllByScheduleIdAndDeletedFalse(fixture.scheduleId)
+                .isEmpty(),
+        )
+        assertTrue(
+            eventRecorder.events.none { it.scheduleId == fixture.scheduleId },
+        )
+        assertTrue(
+            appNotificationRepository
+                .findAllByMemberIdOrderByIdDesc(fixture.ownerMemberId)
+                .none { it.scheduleId == fixture.scheduleId },
+        )
+        assertEquals(
+            ScheduleShareStatus.REVOKED,
+            requireNotNull(
+                shareRepository.findByScheduleIdAndTargetMemberId(
+                    fixture.scheduleId,
+                    fixture.targetMemberId,
+                )
+            ).status,
+        )
+    }
+
     private fun createFixture(): DepartureConcurrencyFixture {
         val suffix = System.nanoTime()
         val owner = memberRepository.saveAndFlush(
@@ -184,6 +270,10 @@ class ScheduleDepartureConcurrencyTestConfig {
     fun departureEventRecorder(): ScheduleDepartureEventRecorder = ScheduleDepartureEventRecorder()
 
     @Bean
+    fun departureFenceObserver(): ScheduleDepartureFenceTestObserver =
+        ScheduleDepartureFenceTestObserver()
+
+    @Bean
     fun departureObjectMapper(): ObjectMapper = jacksonObjectMapper()
 }
 
@@ -193,6 +283,32 @@ class ScheduleDepartureEventRecorder {
     @EventListener
     fun record(event: ScheduleParticipantDepartedEvent) {
         events.add(event)
+    }
+}
+
+class ScheduleDepartureFenceTestObserver : ScheduleDepartureFenceObserver {
+    @Volatile
+    var previewed = CountDownLatch(0)
+
+    @Volatile
+    var release = CountDownLatch(0)
+
+    fun reset() {
+        previewed = CountDownLatch(0)
+        release = CountDownLatch(0)
+    }
+
+    fun blockNext() {
+        previewed = CountDownLatch(1)
+        release = CountDownLatch(1)
+    }
+
+    override fun afterRecipientPreview(memberId: Long, scheduleId: Long) {
+        if (previewed.count == 0L) return
+        previewed.countDown()
+        check(release.await(5, TimeUnit.SECONDS)) {
+            "Timed out waiting for the revoke transaction."
+        }
     }
 }
 

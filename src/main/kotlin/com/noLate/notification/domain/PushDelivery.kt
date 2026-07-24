@@ -148,6 +148,15 @@ class PushDelivery(
         return true
     }
 
+    fun markConfirmedFailureSuperseded(at: Instant, reason: String): Boolean {
+        if (status != PushDeliveryStatus.DISPATCHING) return false
+        status = PushDeliveryStatus.SUPERSEDED
+        lastAttemptedAt = at
+        errorCode = "SCHEDULE_SOURCE_TERMINAL"
+        errorMessage = reason.take(1000)
+        return true
+    }
+
     fun markInvalidToken(at: Instant, code: String, message: String?) {
         if (status != PushDeliveryStatus.DISPATCHING) return
         status = PushDeliveryStatus.INVALID_TOKEN
@@ -162,6 +171,14 @@ class PushDelivery(
         lastAttemptedAt = at
         errorCode = "TOKEN_OWNERSHIP_CHANGED"
         errorMessage = reason.take(1000)
+    }
+
+    fun markExhausted(at: Instant, maxAttempts: Int) {
+        if (status != PushDeliveryStatus.FAILED || attemptCount < maxAttempts) return
+        status = PushDeliveryStatus.EXHAUSTED
+        lastAttemptedAt = at
+        errorCode = "DELIVERY_ATTEMPT_LIMIT_REACHED"
+        errorMessage = "Push delivery reached the per-device retry limit."
     }
 
     protected constructor() : this(
@@ -183,6 +200,8 @@ enum class PushDeliveryStatus {
     /** Provider가 실패를 명시적으로 반환해 안전하게 재시도할 수 있다. */
     FAILED,
     INVALID_TOKEN,
+    /** 확인된 실패 재시도 횟수를 모두 사용해 더 이상 provider를 호출하지 않는 terminal 상태 */
+    EXHAUSTED,
     /** Manifest 이후 token/member/device ownership이 바뀌어 stale snapshot을 보내지 않았다. */
     SUPERSEDED,
 }

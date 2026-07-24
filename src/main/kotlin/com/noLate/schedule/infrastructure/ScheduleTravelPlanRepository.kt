@@ -17,6 +17,20 @@ interface ScheduleTravelPlanRepository : JpaRepository<ScheduleTravelPlan, Long>
 
     fun findAllByScheduleIdAndDeletedFalse(scheduleId: Long): List<ScheduleTravelPlan>
 
+    @Query(
+        """
+        select plan.memberId
+        from ScheduleTravelPlan plan
+        where plan.scheduleId = :scheduleId
+          and plan.deleted = false
+          and plan.notificationEnabled = true
+        order by plan.memberId asc
+        """
+    )
+    fun findNotificationEnabledMemberIdsByScheduleId(
+        @Param("scheduleId") scheduleId: Long,
+    ): List<Long>
+
     fun findAllByMemberIdAndScheduleIdInAndDeletedFalse(
         memberId: Long,
         scheduleIds: Collection<Long>,

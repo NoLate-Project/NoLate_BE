@@ -179,7 +179,7 @@ WHERE table_schema = DATABASE()
       OR
       (table_name = 'app_notifications' AND column_name IN (
           'manifest_state', 'manifest_recipient_count', 'manifest_frozen_at',
-          'dispatch_status', 'dispatch_attempt_count', 'next_dispatch_at',
+          'dispatch_status', 'dispatch_attempt_count', 'dispatch_failure_count', 'next_dispatch_at',
           'dispatch_locked_by', 'dispatch_locked_at', 'dispatch_completed_at',
           'dispatch_failure_reason', 'version'
       ))
@@ -214,7 +214,10 @@ binding object로 정규화한다.
    모두 0인지 확인한다. prod 기본값도 fail-safe `false`지만 배포 선언에 값을 명시한다.
 2. worker-off 상태로 새 애플리케이션 한 인스턴스를 배포한다. `ApplicationReadyEvent`
    startup backfill은 scheduler와 별개로 실행되므로 future owner와 participant travel-plan
-   job이 full runtime fingerprint로 재구성됐는지 count를 확인한다.
+   job이 full runtime fingerprint로 재구성됐는지 count를 확인한다. Backfill은 scan 전체를
+   감싼 장기 transaction이 아니라 candidate별 `REQUIRES_NEW(member → schedule/plan → job)`
+   commit이므로, 처리 중 member/job lock이 다음 candidate까지 누적되지 않는지도 staging의
+   lock-wait/deadlock 지표로 확인한다.
 3. Hibernate `validate`와 `ProductionSchemaVersionGuard` 통과를 확인한다. marker를 설정으로
    우회하거나 운영에서 `ddl-auto=update`로 바꾸지 않는다.
 4. worker-off 인스턴스의 smoke test에서 로그인 후 새 generation JWT로 token을 재등록한다.
@@ -229,8 +232,11 @@ binding object로 정규화한다.
    backlog/lease/error 지표가 안정된 뒤 나머지 새 인스턴스를 올린다.
 
 Docker가 없는 개발 환경에서 MySQL Testcontainers 테스트가 skip될 수 있다. 실제 MySQL 8에서
-3개 script, global fingerprint 경합, lock timeout/deadlock bounded retry를 실행한 결과를
-staging promotion gate로 남긴다. H2/단위 테스트만으로 이 gate를 대체하지 않는다.
+3개 script, global fingerprint 경합, 다중 인스턴스 claim, schedule edit/backfill의
+member→job gap→schedule 잠금, lock timeout/deadlock bounded retry를 실행한 결과를 staging
+promotion gate로 남긴다. 느린 실제 provider를 사용한 lease recovery/confirmed failure
+reconciliation과 FCM 응답 분류도 같은 gate에서 확인한다. H2/단위 테스트만으로 이 gate를
+대체하지 않는다.
 
 ## 6. Rollback policy
 

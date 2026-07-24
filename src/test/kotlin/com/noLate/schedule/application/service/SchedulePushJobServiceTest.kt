@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePlaceDto
@@ -9,13 +10,17 @@ import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
 import org.mockito.kotlin.check
+import org.mockito.kotlin.inOrder
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.dao.ConcurrencyFailureException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -25,6 +30,61 @@ class SchedulePushJobServiceTest {
 
     @Mock
     lateinit var repository: SchedulePushJobRepository
+
+    @Mock
+    lateinit var memberRepository: MemberRepository
+
+    @Test
+    fun `job이 없어도 actor와 owner member를 먼저 잠근 뒤 schedule job gap을 잠근다`() {
+        whenever(repository.findMemberIdsByScheduleId(10L)).thenReturn(emptyList())
+        whenever(repository.findAllByScheduleIdOrderByIdAsc(10L)).thenReturn(emptyList())
+        val service = SchedulePushJobService(repository, memberRepository)
+
+        service.lockForScheduleEdit(
+            scheduleId = 10L,
+            requiredMemberIds = listOf(9L, 2L),
+        )
+
+        inOrder(repository, memberRepository) {
+            verify(repository).findMemberIdsByScheduleId(10L)
+            verify(memberRepository).findAllByIdsForUpdate(listOf(2L, 9L))
+            verify(repository).findAllByScheduleIdOrderByIdAsc(10L)
+        }
+    }
+
+    @Test
+    fun `편집 fence는 required member와 기존 job member를 합쳐 정렬 잠금한다`() {
+        whenever(repository.findMemberIdsByScheduleId(10L))
+            .thenReturn(listOf(7L, 2L, 7L))
+        whenever(repository.findAllByScheduleIdOrderByIdAsc(10L)).thenReturn(emptyList())
+        val service = SchedulePushJobService(repository, memberRepository)
+
+        service.lockForScheduleEdit(
+            scheduleId = 10L,
+            requiredMemberIds = listOf(5L, 2L, 9L),
+        )
+
+        verify(memberRepository).findAllByIdsForUpdate(listOf(2L, 5L, 7L, 9L))
+    }
+
+    @Test
+    fun `job gap 뒤 새 member job이 보이면 뒤늦은 member lock 없이 edit을 재시도시킨다`() {
+        whenever(repository.findMemberIdsByScheduleId(10L))
+            .thenReturn(listOf(2L), listOf(2L, 8L))
+        whenever(repository.findAllByScheduleIdOrderByIdAsc(10L)).thenReturn(emptyList())
+        val service = SchedulePushJobService(repository, memberRepository)
+
+        assertThrows(ConcurrencyFailureException::class.java) {
+            service.lockForScheduleEdit(
+                scheduleId = 10L,
+                requiredMemberIds = listOf(5L),
+            )
+        }
+
+        verify(memberRepository).findAllByIdsForUpdate(listOf(2L, 5L))
+        verify(memberRepository, org.mockito.kotlin.never())
+            .findByIdForUpdate(8L)
+    }
 
     @Test
     fun `알림이 활성화된 저장 일정은 monitor start 시각으로 push job을 등록한다`() {

@@ -10,7 +10,14 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.time.Instant
 
+interface ScheduleRouteSetupReminderCandidate {
+    val id: Long
+    val memberId: Long
+}
+
 interface ScheduleRouteSetupReminderRepository : JpaRepository<ScheduleRouteSetupReminder, Long> {
+
+    fun deleteAllByMemberId(memberId: Long)
 
     fun findByScheduleIdAndMemberIdAndScheduleFingerprint(
         scheduleId: Long,
@@ -18,19 +25,32 @@ interface ScheduleRouteSetupReminderRepository : JpaRepository<ScheduleRouteSetu
         scheduleFingerprint: String,
     ): ScheduleRouteSetupReminder?
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    /**
+     * Non-locking candidate peek. The dispatch writer locks recipient member first, then this
+     * marker by ID and revalidates status/time before creating the durable outbox.
+     */
     @Query(
         """
-        select reminder
+        select reminder.id as id, reminder.memberId as memberId
         from ScheduleRouteSetupReminder reminder
         where reminder.status = :status
           and reminder.nextAttemptAt <= :now
         order by reminder.id asc
         """
     )
-    fun findDueForUpdate(
+    fun findDueCandidates(
         @Param("status") status: ScheduleRouteSetupReminderStatus,
         @Param("now") now: Instant,
         pageable: Pageable,
-    ): List<ScheduleRouteSetupReminder>
+    ): List<ScheduleRouteSetupReminderCandidate>
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select reminder
+        from ScheduleRouteSetupReminder reminder
+        where reminder.id = :id
+        """
+    )
+    fun findByIdForUpdate(@Param("id") id: Long): ScheduleRouteSetupReminder?
 }

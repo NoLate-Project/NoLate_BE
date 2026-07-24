@@ -3,6 +3,8 @@ package com.noLate.schedule.application.service
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.notification.domain.OpaquePushIdentifier
+import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.notification.application.service.findActiveNotificationRecipientForUpdate
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleNotificationActionReceipt
 import com.noLate.schedule.domain.ScheduleNotificationActionType
@@ -12,6 +14,7 @@ import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.dao.TransientDataAccessException
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -63,10 +66,11 @@ class ScheduleNotificationActionIdempotencyService(
         memberId: Long,
         scheduleId: Long,
         rawKey: String,
+        presentedSessionGeneration: Long,
     ): ScheduleDto {
         val key = ScheduleNotificationActionKeyValidator.validate(rawKey)
         return retryUniqueRace {
-            writer.departNow(memberId, scheduleId, key)
+            writer.departNow(memberId, scheduleId, key, presentedSessionGeneration)
         }
     }
 
@@ -74,10 +78,11 @@ class ScheduleNotificationActionIdempotencyService(
         memberId: Long,
         scheduleId: Long,
         rawKey: String,
+        presentedSessionGeneration: Long,
     ): Instant? {
         val key = ScheduleNotificationActionKeyValidator.validate(rawKey)
         return retryUniqueRace {
-            writer.snooze(memberId, scheduleId, key)
+            writer.snooze(memberId, scheduleId, key, presentedSessionGeneration)
         }
     }
 
@@ -124,6 +129,7 @@ private const val ACTION_RECEIPT_UNIQUE_CONSTRAINT =
 
 @Service
 class ScheduleNotificationActionIdempotencyWriter(
+    private val memberRepository: MemberRepository,
     private val receiptRepository: ScheduleNotificationActionReceiptRepository,
     private val scheduleService: ScheduleService,
     private val departureStatusService: ScheduleDepartureStatusService,
@@ -135,12 +141,31 @@ class ScheduleNotificationActionIdempotencyWriter(
      * receipt insert를 먼저 flush해 concurrent winner를 하나로 정하지만, receipt 완료와
      * mutation은 같은 transaction에서만 commit된다. 중간 예외/프로세스 종료는 둘 다 rollback한다.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional(
+        propagation = Propagation.REQUIRES_NEW,
+        isolation = Isolation.READ_COMMITTED,
+    )
     fun departNow(
         memberId: Long,
         scheduleId: Long,
         key: ValidatedScheduleNotificationActionKey,
+        presentedSessionGeneration: Long,
     ): ScheduleDto {
+        prevalidateCommittedScope(
+            memberId,
+            scheduleId,
+            ScheduleNotificationActionType.DEPART_NOW,
+            key,
+        )
+        val departureMemberFence = departureStatusService.lockNotificationActionMembers(
+            memberId,
+            scheduleId,
+            presentedSessionGeneration,
+        )
+        // The departure service owns the sorted multi-recipient lock order. Re-reading the actor
+        // under that same transaction keeps the session check authoritative even when the
+        // departure collaborator is decorated/proxied.
+        requireActiveRecipient(memberId, presentedSessionGeneration)
         val existing = receiptRepository.findByKeyFingerprintForUpdate(key.fingerprint)
         if (existing != null) {
             validateScope(existing, memberId, scheduleId, ScheduleNotificationActionType.DEPART_NOW)
@@ -159,7 +184,11 @@ class ScheduleNotificationActionIdempotencyWriter(
         )
 
         val detail = scheduleService.getScheduleDetail(memberId, scheduleId)
-        val departureStatus = departureStatusService.markDeparted(memberId, scheduleId)
+        val departureStatus = departureStatusService.markDeparted(
+            memberId,
+            scheduleId,
+            departureMemberFence,
+        )
         travelPlanService?.disableNotification(memberId, scheduleId)
         pushJobService.cancelByScheduleIdAndMemberId(scheduleId, memberId)
         val updated = if (detail.ownerMemberId == memberId) {
@@ -180,7 +209,15 @@ class ScheduleNotificationActionIdempotencyWriter(
         memberId: Long,
         scheduleId: Long,
         key: ValidatedScheduleNotificationActionKey,
+        presentedSessionGeneration: Long,
     ): Instant? {
+        prevalidateCommittedScope(
+            memberId,
+            scheduleId,
+            ScheduleNotificationActionType.SNOOZE,
+            key,
+        )
+        requireActiveRecipient(memberId, presentedSessionGeneration)
         val existing = receiptRepository.findByKeyFingerprintForUpdate(key.fingerprint)
         if (existing != null) {
             validateScope(existing, memberId, scheduleId, ScheduleNotificationActionType.SNOOZE)
@@ -203,6 +240,33 @@ class ScheduleNotificationActionIdempotencyWriter(
             snoozedUntil = snoozedUntil,
         )
         return snoozedUntil
+    }
+
+    private fun requireActiveRecipient(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        val member = memberRepository.findActiveNotificationRecipientForUpdate(memberId)
+        if (member == null || member.sessionGeneration != presentedSessionGeneration) {
+            throw BusinessException(ErrorCode.INVALID_TOKEN)
+        }
+    }
+
+    /**
+     * Reject a global key collision with a non-locking read before entering the mutation lock
+     * order. The authoritative receipt is re-read FOR UPDATE only after the member fence.
+     */
+    private fun prevalidateCommittedScope(
+        memberId: Long,
+        scheduleId: Long,
+        actionType: ScheduleNotificationActionType,
+        key: ValidatedScheduleNotificationActionKey,
+    ) {
+        receiptRepository.findByKeyFingerprint(key.fingerprint)?.let {
+            if (!it.belongsTo(memberId, scheduleId, actionType)) {
+                throw BusinessException(ErrorCode.IDEMPOTENCY_KEY_CONFLICT)
+            }
+        }
     }
 
     private fun currentDepartedResult(memberId: Long, scheduleId: Long): ScheduleDto =

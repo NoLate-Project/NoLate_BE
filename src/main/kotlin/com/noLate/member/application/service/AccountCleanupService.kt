@@ -5,6 +5,7 @@ import com.noLate.favorite.infrastructure.FavoritePlaceRepository
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberConsentRepository
 import com.noLate.member.infrastructure.MemberProfileRepository
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.member.infrastructure.MemberSettingRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.AppNotificationRepository
@@ -17,6 +18,7 @@ import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleNotificationActionReceiptRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
@@ -27,11 +29,13 @@ import java.util.UUID
 /** 계정 경계를 넘을 수 있는 인증/기기/사용자 데이터를 한 트랜잭션에서 정리한다. */
 @Service
 class AccountCleanupService(
+    private val memberRepository: MemberRepository,
     private val deviceTokenRepository: NotificationDeviceTokenRepository,
     private val pushDeliveryRepository: PushDeliveryRepository,
     private val pushHistoryRepository: PushSendHistoryRepository,
     private val appNotificationRepository: AppNotificationRepository,
     private val pushJobRepository: SchedulePushJobRepository,
+    private val routeSetupReminderRepository: ScheduleRouteSetupReminderRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
     private val scheduleShareRepository: ScheduleShareRepository,
@@ -50,11 +54,15 @@ class AccountCleanupService(
     @Transactional
     fun withdraw(member: Member) {
         val memberId = requireNotNull(member.id)
+        val lockedMember = memberRepository.findByIdForUpdate(memberId)
+            ?.takeUnless { it.deleted }
+            ?: return
 
-        // Provider worker와 동일한 lock 방향을 유지한다:
-        // schedule job -> immutable source -> delivery/history -> device ownership.
-        // MemberSessionFenceService가 member lock과 refresh revoke를 이미 완료했다.
+        // 호출자가 이미 잠갔더라도 서비스 자체에서 member-first 경계를 다시 보장한다.
+        // 이후 전역 순서는 member -> schedule source -> immutable source ->
+        // delivery/history -> device ownership이다.
         pushJobRepository.deleteAllByMemberId(memberId)
+        routeSetupReminderRepository.deleteAllByMemberId(memberId)
         appNotificationRepository.deleteAllByMemberId(memberId)
         pushDeliveryRepository.deleteAllByMemberId(memberId)
         pushHistoryRepository.deleteAllByMemberId(memberId)
@@ -76,11 +84,11 @@ class AccountCleanupService(
         deviceTokenRepository.deleteAllByMemberId(memberId)
 
         // 회원 row는 감사/참조 안정성을 위해 남기되 재식별 정보를 제거하고 인증을 차단한다.
-        member.name = "탈퇴 회원"
-        member.email = "deleted-$memberId-${UUID.randomUUID()}@deleted.invalid"
-        member.password = ""
-        member.snsId = null
-        member.tokensValidAfter = java.time.Instant.now()
-        member.softDelete()
+        lockedMember.name = "탈퇴 회원"
+        lockedMember.email = "deleted-$memberId-${UUID.randomUUID()}@deleted.invalid"
+        lockedMember.password = ""
+        lockedMember.snsId = null
+        lockedMember.tokensValidAfter = java.time.Instant.now()
+        lockedMember.softDelete()
     }
 }

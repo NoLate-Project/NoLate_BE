@@ -53,14 +53,15 @@ class NotificationController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: SendTestNotificationRequest
     ): ApiResponse<NotificationSendResult> {
-        // 테스트 API도 실제 결과를 반환해 Android 성공과 iOS 인증 실패 같은 부분 성공을 숨기지 않는다.
+        // 인증된 공개 API는 테스트 발송도 recipient/member withdrawal fence와 frozen manifest를
+        // 통과한다. 그래야 security filter 이후 탈퇴가 commit된 요청이 token을 다시 조회해
+        // provider를 호출하거나 notification row를 재생성할 수 없다.
         val result = notificationUseCase.sendToMember(
             memberId = requireMemberId(principal),
             title = request.title,
             body = request.body,
             data = request.data ?: emptyMap(),
-            // 진단용 발송은 제품 이벤트가 아니므로 사용자의 알림함을 오염시키지 않는다.
-            persistInInbox = false,
+            persistInInbox = true,
         )
         return ApiResponse.success(result)
     }

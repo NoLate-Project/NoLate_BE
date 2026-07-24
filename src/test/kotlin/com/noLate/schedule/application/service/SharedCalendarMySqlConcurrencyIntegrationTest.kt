@@ -102,13 +102,14 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun `reminder unique key makes concurrent MySQL scanners elect one creator`() {
+        val recipientMemberId = requireNotNull(member("mysql-reminder-recipient").id)
         val created = ConcurrentLinkedQueue<Boolean>()
         runConcurrently(
             {
                 created.add(
                     registrar.register(
                         scheduleId = 100L,
-                        memberId = 200L,
+                        memberId = recipientMemberId,
                         fingerprint = "b".repeat(64),
                         now = Instant.parse("2026-07-23T00:00:00Z"),
                     )
@@ -118,7 +119,7 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
                 created.add(
                     registrar.register(
                         scheduleId = 100L,
-                        memberId = 200L,
+                        memberId = recipientMemberId,
                         fingerprint = "b".repeat(64),
                         now = Instant.parse("2026-07-23T00:00:00Z"),
                     )

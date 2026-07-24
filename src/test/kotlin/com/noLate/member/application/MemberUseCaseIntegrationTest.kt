@@ -13,6 +13,8 @@ import com.noLate.member.domain.member.MemberDto
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.member.infrastructure.MemberProfileRepository
 import com.noLate.member.infrastructure.MemberSettingRepository
+import com.noLate.schedule.domain.ScheduleRouteSetupReminder
+import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -24,6 +26,7 @@ import org.mockito.kotlin.whenever
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.test.context.junit.jupiter.SpringExtension
 import org.springframework.transaction.annotation.Transactional
+import java.time.Instant
 import java.time.LocalDateTime
 import java.util.UUID
 
@@ -36,6 +39,7 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
     private val memberSettingRepository: MemberSettingRepository,
     private val memberProfileRepository: MemberProfileRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
+    private val routeSetupReminderRepository: ScheduleRouteSetupReminderRepository,
     private val jwtTokenProvider: JwtTokenProvider,
     private val passwordEncoder: PasswordEncoder
 ) {
@@ -454,6 +458,18 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
             )
         )
         assertEquals(1, activeRefreshTokenCountFor(memberId))
+        routeSetupReminderRepository.saveAndFlush(
+            ScheduleRouteSetupReminder(
+                scheduleId = 987654L,
+                memberId = memberId,
+                scheduleFingerprint = "f".repeat(64),
+                nextAttemptAt = Instant.parse("2026-07-24T00:00:00Z"),
+            )
+        )
+        assertEquals(
+            1,
+            routeSetupReminderRepository.findAll().count { it.memberId == memberId },
+        )
 
         // 탈퇴
         memberUseCase.withdraw(
@@ -466,6 +482,10 @@ class MemberUseCaseIntegrationTest @Autowired constructor(
 
         // refreshToken 전부 삭제되었는지(혹은 soft delete 처리되었는지) 확인
         assertEquals(0, activeRefreshTokenCountFor(memberId))
+        assertEquals(
+            0,
+            routeSetupReminderRepository.findAll().count { it.memberId == memberId },
+        )
 
         // 같은 계정으로 다시 로그인 시도 → 예외
         val ex = assertThrows<BusinessException> {

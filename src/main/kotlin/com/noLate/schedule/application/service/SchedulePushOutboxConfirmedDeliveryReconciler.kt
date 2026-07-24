@@ -4,6 +4,7 @@ import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.service.PersistedPushDispatchFenceFactory
 import com.noLate.notification.application.service.PushDispatchFence
 import com.noLate.notification.application.service.PushOutboxConfirmedDeliveryReconciler
+import com.noLate.notification.application.service.PushOutboxDeferralException
 import com.noLate.schedule.application.service.policy.DepartureReminderDecision
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
@@ -118,7 +119,7 @@ private val SCHEDULE_PUSH_EVENT_PATTERN =
     Regex("""^schedule-push-job:(\d+):g(\d+):c(\d+)$""")
 
 private class SchedulePushSourceStillProcessingException :
-    RuntimeException("Schedule push source transition is still processing.")
+    PushOutboxDeferralException("Schedule push source transition is still processing.")
 
 private const val SCHEDULE_PUSH_EVENT_PREFIX = "schedule-push-job:"
 private const val INVALID_JOB_ID = -1L

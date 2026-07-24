@@ -1,6 +1,7 @@
 package com.noLate.notification.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.PushDelivery
 import com.noLate.notification.domain.PushLogicalEventKey
@@ -27,6 +28,8 @@ data class PreparedPushEvent(
     val manifestRecipientCount: Int,
     val inboxCreated: Boolean,
     val fenceAccepted: Boolean,
+    /** false이면 withdrawal이 먼저 linearize되어 source/manifest를 만들지 않은 terminal no-op이다. */
+    val recipientActive: Boolean = true,
 ) {
     val emptyManifest: Boolean
         get() = manifestRecipientCount == 0
@@ -133,6 +136,7 @@ class PushEventOutboxWriter(
     private val appNotificationRepository: AppNotificationRepository,
     private val pushDeliveryRepository: PushDeliveryRepository,
     private val tokenRepository: NotificationDeviceTokenRepository,
+    private val memberRepository: MemberRepository,
     private val objectMapper: ObjectMapper,
     private val clock: Clock,
     private val fenceValidator: PushDispatchFenceValidator? = null,
@@ -197,6 +201,11 @@ class PushEventOutboxWriter(
         fence: PushDispatchFence?,
         durableDispatch: Boolean,
     ): PreparedPushEvent {
+        // Global notification/withdrawal lock order starts with the recipient member. The active
+        // check and every source/manifest write below are committed under this same row lock.
+        if (memberRepository.findActiveNotificationRecipientForUpdate(memberId) == null) {
+            return inactiveRecipient()
+        }
         if (fence != null && fenceValidator?.validate(fence) != true) {
             return PreparedPushEvent(
                 snapshot = null,
@@ -205,6 +214,7 @@ class PushEventOutboxWriter(
                 manifestRecipientCount = 0,
                 inboxCreated = false,
                 fenceAccepted = false,
+                recipientActive = true,
             )
         }
 
@@ -332,8 +342,20 @@ class PushEventOutboxWriter(
             manifestRecipientCount = expectedCount,
             inboxCreated = inboxCreated,
             fenceAccepted = fenceAccepted,
+            recipientActive = true,
         )
     }
+
+    private fun inactiveRecipient(): PreparedPushEvent =
+        PreparedPushEvent(
+            snapshot = null,
+            logicalEventKey = "",
+            deliveryIds = emptyList(),
+            manifestRecipientCount = 0,
+            inboxCreated = false,
+            fenceAccepted = true,
+            recipientActive = false,
+        )
 }
 
 private fun normalizeDeduplicationKey(value: String?): String? =

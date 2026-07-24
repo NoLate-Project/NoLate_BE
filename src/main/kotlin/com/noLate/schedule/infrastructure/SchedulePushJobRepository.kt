@@ -11,6 +11,10 @@ import org.springframework.data.repository.query.Param
 import org.springframework.data.domain.Pageable
 import java.time.Instant
 
+interface SchedulePushJobCandidate {
+    val id: Long
+    val memberId: Long
+}
 
 interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
     fun deleteAllByMemberId(memberId: Long)
@@ -25,6 +29,20 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
         nextCheckAt: Instant,
     ): List<SchedulePushJob>
 
+    @Query(
+        """
+        select job.id as id, job.memberId as memberId from SchedulePushJob job
+        where job.status = :status
+          and job.nextCheckAt <= :nextCheckAt
+        order by job.nextCheckAt asc, job.id asc
+        """
+    )
+    fun findDueCandidates(
+        @Param("status") status: SchedulePushJobStatus,
+        @Param("nextCheckAt") nextCheckAt: Instant,
+        pageable: Pageable,
+    ): List<SchedulePushJobCandidate>
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     fun findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
         status: SchedulePushJobStatus,
@@ -38,6 +56,20 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
         lockedAt: Instant,
     ): List<SchedulePushJob>
 
+    @Query(
+        """
+        select job.id as id, job.memberId as memberId from SchedulePushJob job
+        where job.status = :status
+          and job.lockedAt <= :lockedAt
+        order by job.lockedAt asc, job.id asc
+        """
+    )
+    fun findStaleCandidates(
+        @Param("status") status: SchedulePushJobStatus,
+        @Param("lockedAt") lockedAt: Instant,
+        pageable: Pageable,
+    ): List<SchedulePushJobCandidate>
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     fun findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
         status: SchedulePushJobStatus,
@@ -46,6 +78,17 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
     ): List<SchedulePushJob>
 
     fun findAllByScheduleId(scheduleId: Long): List<SchedulePushJob>
+
+    @Query(
+        """
+        select job.memberId from SchedulePushJob job
+        where job.scheduleId = :scheduleId
+        order by job.memberId asc
+        """
+    )
+    fun findMemberIdsByScheduleId(
+        @Param("scheduleId") scheduleId: Long,
+    ): List<Long>
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     fun findAllByScheduleIdOrderByIdAsc(scheduleId: Long): List<SchedulePushJob>

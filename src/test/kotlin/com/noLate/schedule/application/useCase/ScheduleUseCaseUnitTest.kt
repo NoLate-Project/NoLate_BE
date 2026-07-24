@@ -2,8 +2,11 @@ package com.noLate.schedule.application.useCase
 
 import com.noLate.favorite.application.service.FavoritePlaceService
 import com.noLate.favorite.domain.FavoritePlaceDto
+import com.noLate.member.application.service.MemberService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
+import com.noLate.schedule.application.service.ScheduleDepartureMemberFence
 import com.noLate.schedule.application.service.ScheduleDepartureStatusService
+import com.noLate.schedule.application.service.ScheduleEditMemberFence
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleNotificationActionIdempotencyService
 import com.noLate.schedule.application.service.ScheduleService
@@ -20,16 +23,19 @@ import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.ScheduleTravelMode
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.dao.ConcurrencyFailureException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -58,6 +64,9 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var notificationActionIdempotencyService: ScheduleNotificationActionIdempotencyService
 
+    @Mock
+    lateinit var memberService: MemberService
+
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
 
     private lateinit var scheduleUseCase: ScheduleUseCase
@@ -73,6 +82,7 @@ class ScheduleUseCaseUnitTest {
             clock = clock,
             scheduleTravelPlanService = scheduleTravelPlanService,
             notificationActionIdempotencyService = notificationActionIdempotencyService,
+            memberService = memberService,
         )
     }
 
@@ -228,7 +238,7 @@ class ScheduleUseCaseUnitTest {
         val saved = request.copy(id = 10L)
         whenever(scheduleService.addSchedule(memberId, request)).thenReturn(saved)
 
-        val result = scheduleUseCase.addSchedule(memberId, request)
+        val result = scheduleUseCase.addSchedule(memberId, request, 11L)
 
         verify(scheduleService, times(1)).addSchedule(memberId, request)
         verify(schedulePushJobService, times(1)).registerFromScheduleDto(memberId, saved)
@@ -253,8 +263,8 @@ class ScheduleUseCaseUnitTest {
                 ScheduleImportResultDto(schedule = saved, created = false),
             )
 
-        val first = scheduleUseCase.importSchedule(memberId, request, source)
-        val repeated = scheduleUseCase.importSchedule(memberId, request, source)
+        val first = scheduleUseCase.importSchedule(memberId, request, source, 11L)
+        val repeated = scheduleUseCase.importSchedule(memberId, request, source, 11L)
 
         assertEquals(true, first.created)
         assertEquals(false, repeated.created)
@@ -273,7 +283,7 @@ class ScheduleUseCaseUnitTest {
         val saved = request.copy(id = 20L)
         whenever(scheduleService.addSchedule(memberId, request)).thenReturn(saved)
 
-        val result = scheduleUseCase.addSchedule(memberId, request)
+        val result = scheduleUseCase.addSchedule(memberId, request, 11L)
 
         assertEquals(20L, result.id)
         verify(scheduleService).addSchedule(memberId, request)
@@ -287,6 +297,7 @@ class ScheduleUseCaseUnitTest {
         val memberId = 1L
         val scheduleId = 10L
         val request = scheduleDto(title = "수정된 회의")
+        stubCurrentSchedule(memberId, scheduleId)
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(request.copy(id = scheduleId))
 
         val result = scheduleUseCase.updateSchedule(memberId, scheduleId, request)
@@ -307,6 +318,7 @@ class ScheduleUseCaseUnitTest {
             notificationIntervalMinutes = 20,
         )
         val updated = request.copy(id = scheduleId)
+        stubCurrentSchedule(memberId, scheduleId)
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
 
         scheduleUseCase.updateSchedule(memberId, scheduleId, request)
@@ -321,15 +333,51 @@ class ScheduleUseCaseUnitTest {
         val scheduleId = 10L
         val request = scheduleDto(notificationEnabled = true)
         val updated = request.copy(id = scheduleId)
+        stubCurrentSchedule(
+            actorMemberId = memberId,
+            scheduleId = scheduleId,
+            notificationMemberIds = setOf(2L, 3L),
+        )
+        val editFence = ScheduleEditMemberFence(setOf(memberId, 2L, 3L))
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
         whenever(scheduleTravelPlanService.findStaleNotificationMemberIds(scheduleId))
             .thenReturn(setOf(2L, 3L))
 
         scheduleUseCase.updateSchedule(memberId, scheduleId, request)
 
+        verify(scheduleService).lockForNotificationEdit(memberId, scheduleId)
+        verify(scheduleTravelPlanService).requireNotificationMembersWithinFence(
+            scheduleId,
+            editFence.lockedMemberIds,
+        )
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, 2L)
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, 3L)
         verify(schedulePushJobService).registerFromScheduleDto(memberId, updated)
+    }
+
+    @Test
+    fun `schedule lock 뒤 새 알림 plan 회원이 보이면 mutation 전에 fail closed한다`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val request = scheduleDto(notificationEnabled = true)
+        stubCurrentSchedule(memberId, scheduleId)
+        whenever(
+            scheduleTravelPlanService.requireNotificationMembersWithinFence(
+                scheduleId,
+                setOf(memberId),
+            )
+        ).thenThrow(
+            ConcurrencyFailureException(
+                "Schedule notification participants changed while the edit fence was being acquired.",
+            ),
+        )
+
+        assertThrows(ConcurrencyFailureException::class.java) {
+            scheduleUseCase.updateSchedule(memberId, scheduleId, request)
+        }
+
+        verify(scheduleService).lockForNotificationEdit(memberId, scheduleId)
+        verify(scheduleService, never()).updateSchedule(memberId, scheduleId, request)
     }
 
     @Test
@@ -339,10 +387,19 @@ class ScheduleUseCaseUnitTest {
         val scheduleId = 10L
         val request = scheduleDto(title = "공유 편집")
         val updated = request.copy(id = scheduleId, ownerMemberId = ownerMemberId)
+        stubCurrentSchedule(editorMemberId, scheduleId, ownerMemberId)
         whenever(scheduleService.updateSchedule(editorMemberId, scheduleId, request)).thenReturn(updated)
 
         scheduleUseCase.updateSchedule(editorMemberId, scheduleId, request)
 
+        inOrder(scheduleService, schedulePushJobService) {
+            verify(scheduleService).getScheduleDetail(editorMemberId, scheduleId)
+            verify(schedulePushJobService).lockForScheduleEdit(
+                scheduleId,
+                setOf(editorMemberId, ownerMemberId),
+            )
+            verify(scheduleService).updateSchedule(editorMemberId, scheduleId, request)
+        }
         verify(scheduleTravelPlanService).syncOwnerTravelPlan(ownerMemberId, updated)
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, ownerMemberId)
         verify(schedulePushJobService, never()).cancelByScheduleIdAndMemberId(scheduleId, editorMemberId)
@@ -360,6 +417,7 @@ class ScheduleUseCaseUnitTest {
             notificationEnabled = true,
         )
         val updated = request.copy(id = scheduleId)
+        stubCurrentSchedule(memberId, scheduleId)
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
 
         val result = scheduleUseCase.updateSchedule(memberId, scheduleId, request)
@@ -370,20 +428,72 @@ class ScheduleUseCaseUnitTest {
     }
 
     @Test
+    fun `일정 삭제도 current detail 뒤 actor와 owner fence를 거쳐 job을 취소한다`() {
+        val memberId = 4L
+        val scheduleId = 40L
+        stubCurrentSchedule(memberId, scheduleId)
+
+        scheduleUseCase.deleteSchedule(memberId, scheduleId)
+
+        inOrder(scheduleService, schedulePushJobService) {
+            verify(scheduleService).getScheduleDetail(memberId, scheduleId)
+            verify(schedulePushJobService).lockForScheduleEdit(
+                scheduleId,
+                setOf(memberId),
+            )
+            verify(scheduleService).deleteSchedule(memberId, scheduleId)
+            verify(schedulePushJobService).cancelByScheduleId(scheduleId)
+        }
+    }
+
+    @Test
     fun `출발 처리는 일정 알림을 끄고 남아 있는 push job을 취소한다`() {
         val memberId = 1L
         val scheduleId = 10L
+        val sessionGeneration = 7L
         val before = scheduleDto(notificationEnabled = true).copy(id = scheduleId, ownerMemberId = memberId)
         val updated = scheduleDto(notificationEnabled = false).copy(id = scheduleId, ownerMemberId = memberId)
+        val departureMemberFence = ScheduleDepartureMemberFence(
+            memberId = memberId,
+            scheduleId = scheduleId,
+            frozenRecipientMemberIds = emptySet(),
+            activeLockedMemberIds = setOf(memberId),
+        )
         whenever(scheduleService.getScheduleDetail(memberId, scheduleId)).thenReturn(before)
-        whenever(scheduleDepartureStatusService.markDeparted(memberId, scheduleId))
+        whenever(
+            scheduleDepartureStatusService.lockNotificationActionMembers(
+                memberId,
+                scheduleId,
+                sessionGeneration,
+            )
+        ).thenReturn(departureMemberFence)
+        whenever(
+            scheduleDepartureStatusService.markDeparted(
+                memberId,
+                scheduleId,
+                departureMemberFence,
+            )
+        )
             .thenReturn(ScheduleDepartureStatus(scheduleId = scheduleId, memberId = memberId, departedAt = Instant.parse("2026-06-01T00:00:00Z")))
         whenever(scheduleService.markDeparted(memberId, scheduleId)).thenReturn(updated)
         whenever(scheduleDepartureStatusService.attachDepartureParticipants(memberId, updated)).thenReturn(updated)
 
-        val result = scheduleUseCase.markDeparted(memberId, scheduleId)
+        val result = scheduleUseCase.markDeparted(
+            memberId,
+            scheduleId,
+            presentedSessionGeneration = sessionGeneration,
+        )
 
-        verify(scheduleDepartureStatusService).markDeparted(memberId, scheduleId)
+        verify(scheduleDepartureStatusService).lockNotificationActionMembers(
+            memberId,
+            scheduleId,
+            sessionGeneration,
+        )
+        verify(scheduleDepartureStatusService).markDeparted(
+            memberId,
+            scheduleId,
+            departureMemberFence,
+        )
         verify(scheduleService).markDeparted(memberId, scheduleId)
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, memberId)
         verify(schedulePushJobService, never()).registerFromScheduleDto(eq(memberId), org.mockito.kotlin.any())
@@ -395,16 +505,49 @@ class ScheduleUseCaseUnitTest {
         val ownerMemberId = 1L
         val sharedMemberId = 2L
         val scheduleId = 10L
+        val sessionGeneration = 8L
         val detail = scheduleDto(notificationEnabled = true).copy(id = scheduleId, ownerMemberId = ownerMemberId)
         val decorated = detail.copy(myDepartedAt = "2026-06-01T00:00:00Z")
+        val departureMemberFence = ScheduleDepartureMemberFence(
+            memberId = sharedMemberId,
+            scheduleId = scheduleId,
+            frozenRecipientMemberIds = setOf(ownerMemberId),
+            activeLockedMemberIds = setOf(ownerMemberId, sharedMemberId),
+        )
         whenever(scheduleService.getScheduleDetail(sharedMemberId, scheduleId)).thenReturn(detail)
-        whenever(scheduleDepartureStatusService.markDeparted(sharedMemberId, scheduleId))
+        whenever(
+            scheduleDepartureStatusService.lockNotificationActionMembers(
+                sharedMemberId,
+                scheduleId,
+                sessionGeneration,
+            )
+        ).thenReturn(departureMemberFence)
+        whenever(
+            scheduleDepartureStatusService.markDeparted(
+                sharedMemberId,
+                scheduleId,
+                departureMemberFence,
+            )
+        )
             .thenReturn(ScheduleDepartureStatus(scheduleId = scheduleId, memberId = sharedMemberId, departedAt = Instant.parse("2026-06-01T00:00:00Z")))
         whenever(scheduleDepartureStatusService.attachDepartureParticipants(sharedMemberId, detail)).thenReturn(decorated)
 
-        val result = scheduleUseCase.markDeparted(sharedMemberId, scheduleId)
+        val result = scheduleUseCase.markDeparted(
+            sharedMemberId,
+            scheduleId,
+            presentedSessionGeneration = sessionGeneration,
+        )
 
-        verify(scheduleDepartureStatusService).markDeparted(sharedMemberId, scheduleId)
+        verify(scheduleDepartureStatusService).lockNotificationActionMembers(
+            sharedMemberId,
+            scheduleId,
+            sessionGeneration,
+        )
+        verify(scheduleDepartureStatusService).markDeparted(
+            sharedMemberId,
+            scheduleId,
+            departureMemberFence,
+        )
         verify(scheduleService, never()).markDeparted(sharedMemberId, scheduleId)
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, sharedMemberId)
         verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
@@ -417,8 +560,10 @@ class ScheduleUseCaseUnitTest {
             memberId = 1L,
             scheduleId = 10L,
             idempotencyKey = null,
+            presentedSessionGeneration = 9L,
         )
 
+        verify(memberService).getActiveMemberForUpdate(1L, 9L)
         verify(schedulePushJobService).snoozeDepartureReminder(1L, 10L)
     }
 
@@ -428,15 +573,41 @@ class ScheduleUseCaseUnitTest {
         val departKey = "departNow:$logicalKey"
         val snoozeKey = "snooze:$logicalKey"
         val result = scheduleDto().copy(id = 10L, ownerMemberId = 1L)
-        whenever(notificationActionIdempotencyService.departNow(1L, 10L, departKey))
+        val sessionGeneration = 10L
+        whenever(
+            notificationActionIdempotencyService.departNow(
+                1L,
+                10L,
+                departKey,
+                sessionGeneration,
+            )
+        )
             .thenReturn(result)
 
-        assertEquals(result, scheduleUseCase.markDeparted(1L, 10L, departKey))
-        scheduleUseCase.snoozeDepartureReminder(1L, 10L, snoozeKey)
+        assertEquals(
+            result,
+            scheduleUseCase.markDeparted(1L, 10L, departKey, sessionGeneration),
+        )
+        scheduleUseCase.snoozeDepartureReminder(1L, 10L, snoozeKey, sessionGeneration)
 
-        verify(notificationActionIdempotencyService).departNow(1L, 10L, departKey)
-        verify(notificationActionIdempotencyService).snooze(1L, 10L, snoozeKey)
-        verify(scheduleDepartureStatusService, never()).markDeparted(1L, 10L)
+        verify(notificationActionIdempotencyService).departNow(
+            1L,
+            10L,
+            departKey,
+            sessionGeneration,
+        )
+        verify(notificationActionIdempotencyService).snooze(
+            1L,
+            10L,
+            snoozeKey,
+            sessionGeneration,
+        )
+        verify(memberService, never()).getActiveMemberForUpdate(1L, sessionGeneration)
+        verify(scheduleDepartureStatusService, never()).markDeparted(
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.anyOrNull(),
+        )
         verify(schedulePushJobService, never()).snoozeDepartureReminder(1L, 10L)
     }
 
@@ -543,4 +714,29 @@ class ScheduleUseCaseUnitTest {
             category = ScheduleCategoryDto(id = "1", title = "업무", color = "#f44336"),
             notificationEnabled = notificationEnabled,
         )
+
+    private fun stubCurrentSchedule(
+        actorMemberId: Long,
+        scheduleId: Long,
+        ownerMemberId: Long = actorMemberId,
+        notificationMemberIds: Set<Long> = emptySet(),
+    ) {
+        whenever(scheduleService.getScheduleDetail(actorMemberId, scheduleId))
+            .thenReturn(
+                scheduleDto().copy(
+                    id = scheduleId,
+                    ownerMemberId = ownerMemberId,
+                ),
+            )
+        whenever(scheduleTravelPlanService.findNotificationEnabledMemberIds(scheduleId))
+            .thenReturn(notificationMemberIds)
+        val lockedMemberIds =
+            setOf(actorMemberId, ownerMemberId) + notificationMemberIds
+        whenever(
+            schedulePushJobService.lockForScheduleEdit(
+                scheduleId,
+                lockedMemberIds,
+            )
+        ).thenReturn(ScheduleEditMemberFence(lockedMemberIds))
+    }
 }

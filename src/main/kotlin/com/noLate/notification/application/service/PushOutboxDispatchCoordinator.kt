@@ -1,5 +1,6 @@
 package com.noLate.notification.application.service
 
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.PushOutboxDispatchStatus
 import com.noLate.notification.infrastructure.AppNotificationRepository
@@ -21,6 +22,7 @@ data class PushOutboxDispatchLease(
     val logicalEventKey: String,
     val manifestRecipientCount: Int,
     val attemptCount: Int,
+    val failureCount: Int = 0,
     val workerId: String,
 )
 
@@ -65,22 +67,41 @@ class PushOutboxDispatchCoordinator(
         reason: String,
     ): Boolean =
         writer.fail(lease, now, reason)
+
+    fun defer(
+        lease: PushOutboxDispatchLease,
+        nextAt: Instant,
+        reason: String,
+    ): Boolean =
+        writer.defer(lease, nextAt, reason)
 }
 
 @Service
 class PushOutboxDispatchWriter(
     private val repository: AppNotificationRepository,
+    private val memberRepository: MemberRepository,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun claimNextDue(now: Instant, workerId: String): PushOutboxDispatchLease? {
-        val notification = repository
-            .findAllByDispatchStatusAndNextDispatchAtLessThanEqualOrderByNextDispatchAtAscIdAsc(
+        val candidate = repository
+            .findDueDispatchCandidates(
                 PushOutboxDispatchStatus.PENDING,
                 now,
                 PageRequest.of(0, 1),
             )
             .singleOrNull()
             ?: return null
+        val notificationId = candidate.id
+        if (memberRepository.findActiveNotificationRecipientForUpdate(candidate.memberId) == null) {
+            return null
+        }
+        val notification = repository.findByIdForUpdate(notificationId) ?: return null
+        if (notification.memberId != candidate.memberId ||
+            notification.dispatchStatus != PushOutboxDispatchStatus.PENDING ||
+            notification.nextDispatchAt?.isAfter(now) != false
+        ) {
+            return null
+        }
         if (!notification.claimDispatch(workerId, now)) {
             return null
         }
@@ -94,12 +115,33 @@ class PushOutboxDispatchWriter(
         staleBefore: Instant,
         batchSize: Int,
     ): Int {
-        val stale = repository
-            .findAllByDispatchStatusAndDispatchLockedAtLessThanEqualOrderByDispatchLockedAtAscIdAsc(
+        // Candidate reads take no lock. All member rows are then locked in ascending order before
+        // source IDs, matching withdrawal's member -> source direction.
+        val candidates = repository
+            .findStaleDispatchCandidates(
                 PushOutboxDispatchStatus.PROCESSING,
                 staleBefore,
                 PageRequest.of(0, batchSize.coerceIn(1, 200)),
             )
+        if (candidates.isEmpty()) return 0
+        val activeMemberIds = memberRepository.findAllByIdsForUpdate(
+            candidates.map { it.memberId }.distinct().sorted(),
+        ).asSequence()
+            .filterNot { it.deleted }
+            .map { it.id }
+            .toSet()
+        val sourceIds = candidates.asSequence()
+            .filter { it.memberId in activeMemberIds }
+            .mapNotNull { it.id }
+            .sorted()
+            .toList()
+        if (sourceIds.isEmpty()) return 0
+        val stale = repository.findAllByIdsForUpdate(sourceIds)
+            .filter {
+                it.memberId in activeMemberIds &&
+                    it.dispatchStatus == PushOutboxDispatchStatus.PROCESSING &&
+                    it.dispatchLockedAt?.isAfter(staleBefore) == false
+            }
         val recovered = stale.count { it.recoverStaleDispatch(staleBefore, now) }
         repository.flush()
         return recovered
@@ -107,6 +149,9 @@ class PushOutboxDispatchWriter(
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun complete(lease: PushOutboxDispatchLease, now: Instant): Boolean {
+        if (memberRepository.findActiveNotificationRecipientForUpdate(lease.memberId) == null) {
+            return false
+        }
         val current = findOwnedLease(lease) ?: return false
         current.completeDispatch(lease.workerId, now)
         repository.flush()
@@ -119,6 +164,9 @@ class PushOutboxDispatchWriter(
         nextAt: Instant,
         reason: String,
     ): Boolean {
+        if (memberRepository.findActiveNotificationRecipientForUpdate(lease.memberId) == null) {
+            return false
+        }
         val current = findOwnedLease(lease) ?: return false
         current.retryDispatch(lease.workerId, nextAt, reason.sanitizedDispatchReason())
         repository.flush()
@@ -131,8 +179,26 @@ class PushOutboxDispatchWriter(
         now: Instant,
         reason: String,
     ): Boolean {
+        if (memberRepository.findActiveNotificationRecipientForUpdate(lease.memberId) == null) {
+            return false
+        }
         val current = findOwnedLease(lease) ?: return false
         current.failDispatch(lease.workerId, now, reason.sanitizedDispatchReason())
+        repository.flush()
+        return true
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun defer(
+        lease: PushOutboxDispatchLease,
+        nextAt: Instant,
+        reason: String,
+    ): Boolean {
+        if (memberRepository.findActiveNotificationRecipientForUpdate(lease.memberId) == null) {
+            return false
+        }
+        val current = findOwnedLease(lease) ?: return false
+        current.deferDispatch(lease.workerId, nextAt, reason.sanitizedDispatchReason())
         repository.flush()
         return true
     }
@@ -158,6 +224,7 @@ private fun AppNotification.toLease(workerId: String): PushOutboxDispatchLease =
         logicalEventKey = logicalEventKey,
         manifestRecipientCount = manifestRecipientCount,
         attemptCount = dispatchAttemptCount,
+        failureCount = dispatchFailureCount,
         workerId = workerId,
     )
 

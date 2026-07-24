@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobDto
@@ -8,7 +9,9 @@ import com.noLate.schedule.domain.ScheduleNotificationInputFingerprint
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import jakarta.transaction.Transactional
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.stereotype.Service
 import java.time.Clock
 import java.time.Instant
@@ -17,26 +20,89 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
+data class ScheduleEditMemberFence(
+    val lockedMemberIds: Set<Long>,
+) {
+    fun requireContains(memberIds: Collection<Long>) {
+        if (memberIds.any { it !in lockedMemberIds }) {
+            throw ConcurrencyFailureException(
+                "Schedule notification participants changed while the edit fence was being acquired.",
+            )
+        }
+    }
+}
+
 @Service
-class SchedulePushJobService(
+class SchedulePushJobService private constructor(
     private val schedulePushJobRepository: SchedulePushJobRepository,
-    @Value("\${schedule.push.departure-snooze-minutes:5}")
+    private val memberRepository: MemberRepository?,
     private val departureSnoozeMinutes: Long = 5,
     private val clock: Clock = Clock.systemUTC(),
+    @Suppress("UNUSED_PARAMETER") legacyTestBoundary: Boolean,
 ) {
+    @Autowired
+    constructor(
+        schedulePushJobRepository: SchedulePushJobRepository,
+        memberRepository: MemberRepository,
+        @Value("\${schedule.push.departure-snooze-minutes:5}")
+        departureSnoozeMinutes: Long = 5,
+        clock: Clock = Clock.systemUTC(),
+    ) : this(
+        schedulePushJobRepository,
+        memberRepository,
+        departureSnoozeMinutes,
+        clock,
+        false,
+    )
+
+    /** Unit/backfill fixture constructor. Runtime wiring always uses the member-fenced overload. */
+    internal constructor(
+        schedulePushJobRepository: SchedulePushJobRepository,
+        departureSnoozeMinutes: Long = 5,
+        clock: Clock = Clock.systemUTC(),
+    ) : this(
+        schedulePushJobRepository,
+        null,
+        departureSnoozeMinutes,
+        clock,
+        true,
+    )
 
     /**
-     * 일정/개인 경로 의미 입력을 수정하기 전에 worker와 같은 job row를 먼저 잠근다.
-     * 이 lock이 먼저면 기존 generation의 provider fence가 거절되고, provider fence가
-     * 먼저면 기존 immutable event가 논리적으로 먼저 발송된 뒤 편집이 새 generation을 연다.
+     * 일정/개인 경로 의미 입력을 수정하기 전에 관련 member를 정렬 잠금하고, 이어서
+     * worker와 같은 job row/gap을 잠근다. 편집의 job lock이 먼저면 기존 generation의
+     * provider fence가 거절되고, provider fence가 먼저면 기존 immutable event가 논리적으로
+     * 먼저 발송된 뒤 편집이 새 generation을 연다.
+     *
+     * 현재 job이 하나도 없어도 요청자, 일정 소유자, 알림 활성 travel-plan 회원을 먼저 잠근 뒤
+     * schedule_id 범위의 job row/gap을 잠근다. gap을 얻은 뒤 job 회원 집합을 재검증하며,
+     * 선조회 뒤 새 회원 job이 나타났다면 gap 뒤에서 그 member를 추가로 잠그지 않고 전체
+     * transaction을 재시도 가능 오류로 되돌린다. 따라서 withdrawal/backfill의 member -> job
+     * 순서와 반대로 빈 job gap을 먼저 잡는 경로를 만들지 않는다.
      */
     @Transactional
-    fun lockForScheduleEdit(scheduleId: Long) {
+    fun lockForScheduleEdit(
+        scheduleId: Long,
+        requiredMemberIds: Collection<Long>,
+    ): ScheduleEditMemberFence {
+        val memberIds = (
+            requiredMemberIds +
+                schedulePushJobRepository.findMemberIdsByScheduleId(scheduleId)
+            )
+            .distinct()
+            .sorted()
+        if (memberIds.isNotEmpty()) {
+            memberRepository?.findAllByIdsForUpdate(memberIds)
+        }
         schedulePushJobRepository.findAllByScheduleIdOrderByIdAsc(scheduleId)
+        val fence = ScheduleEditMemberFence(memberIds.toSet())
+        fence.requireContains(schedulePushJobRepository.findMemberIdsByScheduleId(scheduleId))
+        return fence
     }
 
     @Transactional
     fun lockForTravelPlanEdit(scheduleId: Long, memberId: Long) {
+        memberRepository?.findByIdForUpdate(memberId)
         schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
     }
 
@@ -112,7 +178,12 @@ class SchedulePushJobService(
         monitorStartAt: Instant,
         intervalMinutes: Int,
         notificationInputFingerprint: String,
-    ): SchedulePushJobDto {
+    ): SchedulePushJobDto? {
+        if (memberRepository != null &&
+            memberRepository.findByIdForUpdate(memberId)?.deleted != false
+        ) {
+            return null
+        }
         val pushJob = schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
             ?.apply {
                 changeSchedule(
@@ -139,16 +210,29 @@ class SchedulePushJobService(
 
     @Transactional
     fun cancelByScheduleId(scheduleId: Long) {
+        val memberIds = schedulePushJobRepository.findAllByScheduleId(scheduleId)
+            .map { it.memberId }
+            .distinct()
+            .sorted()
+        if (memberIds.isNotEmpty()) {
+            memberRepository?.findAllByIdsForUpdate(memberIds)
+        }
         schedulePushJobRepository.findAllByScheduleIdOrderByIdAsc(scheduleId).forEach { it.cancel() }
     }
 
     @Transactional
     fun cancelByScheduleIdAndMemberId(scheduleId: Long, memberId: Long) {
+        if (memberRepository != null &&
+            memberRepository.findByIdForUpdate(memberId)?.deleted != false
+        ) return
         schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)?.cancel()
     }
 
     @Transactional
     fun snoozeDepartureReminder(memberId: Long, scheduleId: Long): Instant? {
+        if (memberRepository != null &&
+            memberRepository.findByIdForUpdate(memberId)?.deleted != false
+        ) return null
         val pushJob = schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
             ?: return null
         val now = Instant.now(clock)

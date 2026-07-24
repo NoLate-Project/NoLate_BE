@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.noLate.notification.support.ensureActivePushMember
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleNotificationInputFingerprint
 import com.noLate.schedule.domain.SchedulePushJob
@@ -18,12 +19,27 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
+import org.springframework.transaction.annotation.Propagation
+import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.support.TransactionTemplate
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 
 @DataJpaTest
+@Import(
+    SchedulePushJobBackfillCandidateReader::class,
+    SchedulePushJobBackfillPairWriter::class,
+    SchedulePushJobBackfill::class,
+    SchedulePushJobService::class,
+    SchedulePushJobBackfillTestConfig::class,
+)
 @TestPropertySource(
     properties = [
         "spring.datasource.url=jdbc:h2:mem:schedule-push-backfill;MODE=MySQL;DB_CLOSE_DELAY=-1",
@@ -32,16 +48,24 @@ import java.time.ZoneOffset
         "spring.sql.init.mode=never",
     ],
 )
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
     private val scheduleRepository: ScheduleRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
     private val pushJobRepository: SchedulePushJobRepository,
+    private val jdbcTemplate: JdbcTemplate,
+    private val backfill: SchedulePushJobBackfill,
+    private val service: SchedulePushJobService,
+    private val objectMapper: ObjectMapper,
+    private val transactionManager: PlatformTransactionManager,
 ) {
     private val now = Instant.parse("2026-07-24T00:00:00Z")
-    private val objectMapper: ObjectMapper = jacksonObjectMapper()
 
     @Test
     fun `legacy drain rebuilds exact owner and current participant pairs with runtime fingerprints`() {
+        listOf(1L, 2L, 3L, 4L, 5L, 6L, 10L, 11L, 20L, 21L).forEach {
+            ensureActivePushMember(jdbcTemplate, it)
+        }
         val schedule = schedule(
             ownerMemberId = 1L,
             title = "공유 회의",
@@ -87,17 +111,7 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
         )
         pushJobRepository.saveAndFlush(existingJob(scheduleId, memberId = 4L))
 
-        val service = SchedulePushJobService(
-            schedulePushJobRepository = pushJobRepository,
-            clock = Clock.fixed(now, ZoneOffset.UTC),
-        )
-        SchedulePushJobBackfill(
-            scheduleRepository = scheduleRepository,
-            travelPlanRepository = travelPlanRepository,
-            schedulePushJobService = service,
-            objectMapper = objectMapper,
-            clock = Clock.fixed(now, ZoneOffset.UTC),
-        ).registerMissingJobs()
+        backfill.registerMissingJobs()
 
         val jobs = pushJobRepository.findAllByScheduleId(scheduleId)
             .associateBy(SchedulePushJob::memberId)
@@ -132,23 +146,27 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
         // The first identical PUT after the controlled legacy drain must not look like a semantic
         // migration edit. Existing progress survives; an actual notification-title edit opens the
         // next generation and resets only then.
-        jobs.getValue(1L).apply {
-            startProcessing("post-backfill-test", now)
-            finishCheck(
-                travelMinutes = 30,
-                recommendedDepartureAt = schedule.startAt.minusSeconds(1_800),
-                pushSent = false,
-                notifiedDepartureAt = null,
-                nextCheckAt = now.plusSeconds(60),
-                completeAfterCheck = false,
-                now = now,
-            )
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            requireNotNull(
+                pushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, 1L),
+            ).apply {
+                startProcessing("post-backfill-test", now)
+                finishCheck(
+                    travelMinutes = 30,
+                    recommendedDepartureAt = schedule.startAt.minusSeconds(1_800),
+                    pushSent = false,
+                    notifiedDepartureAt = null,
+                    nextCheckAt = now.plusSeconds(60),
+                    completeAfterCheck = false,
+                    now = now,
+                )
+            }
+            pushJobRepository.flush()
         }
-        pushJobRepository.flush()
 
         service.registerFromScheduleDto(1L, scheduleDto)
         val afterNoOp = requireNotNull(
-            pushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, 1L),
+            pushJobRepository.findByScheduleIdAndMemberId(scheduleId, 1L),
         )
         assertEquals(0L, afterNoOp.notificationGeneration)
         assertEquals(1, afterNoOp.checkCount)
@@ -158,7 +176,7 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
             scheduleDto.copy(title = "실제 알림 의미가 바뀐 회의"),
         )
         val afterMeaningfulEdit = requireNotNull(
-            pushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, 1L),
+            pushJobRepository.findByScheduleIdAndMemberId(scheduleId, 1L),
         )
         assertEquals(1L, afterMeaningfulEdit.notificationGeneration)
         assertEquals(0, afterMeaningfulEdit.checkCount)
@@ -249,4 +267,14 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
         )
+}
+
+@TestConfiguration
+class SchedulePushJobBackfillTestConfig {
+    @Bean
+    fun schedulePushJobBackfillClock(): Clock =
+        Clock.fixed(Instant.parse("2026-07-24T00:00:00Z"), ZoneOffset.UTC)
+
+    @Bean
+    fun schedulePushJobBackfillObjectMapper(): ObjectMapper = jacksonObjectMapper()
 }

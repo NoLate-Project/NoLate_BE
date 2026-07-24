@@ -117,7 +117,7 @@ class ScheduleShareInvitationServiceUnitTest {
             .thenReturn(invitation)
         whenever(invitationRepository.findActiveByTokenHashForUpdate(invitation.tokenHash))
             .thenReturn(invitation)
-        whenever(memberRepository.findByIdAndDeletedFalse(2L))
+        whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
         whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L))
             .thenReturn(schedule(10L, 1L))
@@ -160,7 +160,7 @@ class ScheduleShareInvitationServiceUnitTest {
             .thenReturn(invitation)
         whenever(invitationRepository.findActiveByTokenHashForUpdate(invitation.tokenHash))
             .thenReturn(invitation)
-        whenever(memberRepository.findByIdAndDeletedFalse(2L))
+        whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
 
         assertThrows<BusinessException> {

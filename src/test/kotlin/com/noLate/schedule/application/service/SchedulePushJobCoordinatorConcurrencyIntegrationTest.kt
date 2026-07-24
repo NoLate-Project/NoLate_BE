@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.notification.support.ensureActivePushMember
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -36,6 +38,7 @@ import java.util.concurrent.TimeUnit
 class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructor(
     private val coordinator: SchedulePushJobCoordinator,
     private val repository: SchedulePushJobRepository,
+    private val jdbcTemplate: JdbcTemplate,
 ) {
 
     private val now = Instant.parse("2026-07-24T03:00:00Z")
@@ -43,6 +46,7 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
     @BeforeEach
     fun clean() {
         repository.deleteAll()
+        ensureActivePushMember(jdbcTemplate, MEMBER_ID)
     }
 
     @Test
@@ -184,11 +188,15 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
 
     private fun createJob(scheduleId: Long = 901L): SchedulePushJob =
         SchedulePushJob.create(
-            memberId = 1L,
+            memberId = MEMBER_ID,
             scheduleId = scheduleId,
             scheduleAt = now.plus(3, ChronoUnit.HOURS),
             departureAt = now.plus(2, ChronoUnit.HOURS),
             monitorStartAt = now.minus(1, ChronoUnit.MINUTES),
             intervalMinutes = 20,
         )
+
+    companion object {
+        private const val MEMBER_ID = 1L
+    }
 }

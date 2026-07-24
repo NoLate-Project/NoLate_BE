@@ -89,6 +89,7 @@ class ScheduleShareServiceUnitTest {
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
         whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com"))
             .thenReturn(target)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L))
             .thenReturn(null)
         whenever(scheduleShareRepository.saveAndFlush(any<com.noLate.schedule.domain.ScheduleShare>()))
@@ -129,6 +130,7 @@ class ScheduleShareServiceUnitTest {
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
         whenever(memberRepository.findByIdAndDeletedFalse(2L)).thenReturn(target)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(null)
         whenever(scheduleShareRepository.saveAndFlush(any<ScheduleShare>()))
             .thenAnswer { invocation -> invocation.getArgument<ScheduleShare>(0).apply { id = 101L } }
@@ -178,6 +180,7 @@ class ScheduleShareServiceUnitTest {
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
         whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com")).thenReturn(target)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(existing)
         whenever(scheduleShareRepository.saveAndFlush(existing)).thenReturn(existing)
 
@@ -206,6 +209,7 @@ class ScheduleShareServiceUnitTest {
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, 1L))
             .thenReturn(schedule(id = 10L, ownerId = 1L))
         whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com")).thenReturn(target)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(existing)
         whenever(scheduleShareRepository.saveAndFlush(existing)).thenReturn(existing)
 
@@ -229,6 +233,8 @@ class ScheduleShareServiceUnitTest {
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
         whenever(memberRepository.findByEmailAndDeletedFalse("owner@example.com"))
+            .thenReturn(member(id = ownerId, email = "owner@example.com"))
+        whenever(memberRepository.findByIdForUpdate(ownerId))
             .thenReturn(member(id = ownerId, email = "owner@example.com"))
 
         assertThrows<BusinessException> {
@@ -260,6 +266,7 @@ class ScheduleShareServiceUnitTest {
             .thenReturn(ScheduleCategory(id = 7L, memberId = ownerId, title = "팀"))
         whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com"))
             .thenReturn(target)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(categoryShareRepository.findByCategoryIdAndTargetMemberId(7L, 2L))
             .thenReturn(existing)
         whenever(categoryShareRepository.saveAndFlush(existing)).thenReturn(existing)

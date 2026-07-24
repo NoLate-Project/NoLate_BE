@@ -4,16 +4,19 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.support.ensureActivePushMember
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -39,13 +42,21 @@ import java.util.concurrent.TimeUnit
         "spring.sql.init.mode=never",
     ]
 )
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AppNotificationServiceIntegrationTest @Autowired constructor(
     private val service: AppNotificationService,
     private val repository: AppNotificationRepository,
+    private val jdbcTemplate: JdbcTemplate,
 ) {
+    @BeforeEach
+    fun prepareActiveRecipients() {
+        repository.deleteAll()
+        listOf(10L, 20L, 30L, 40L).forEach {
+            ensureActivePushMember(jdbcTemplate, it)
+        }
+    }
 
     @Test
-    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun `같은 논리 알림이 동시에 기록돼도 사용자 알림은 한 건만 생성된다`() {
         val callCount = 8
         val executor = Executors.newFixedThreadPool(callCount)

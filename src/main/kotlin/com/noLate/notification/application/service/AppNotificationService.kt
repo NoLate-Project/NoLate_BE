@@ -3,6 +3,7 @@ package com.noLate.notification.application.service
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.PushLogicalEventKey
 import com.noLate.notification.domain.withPushAccountBinding
@@ -206,10 +207,14 @@ internal fun AppNotification.toSnapshot(objectMapper: ObjectMapper): AppNotifica
 @Service
 class AppNotificationWriter(
     private val repository: AppNotificationRepository,
+    private val memberRepository: MemberRepository,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun insert(notification: AppNotification): AppNotification =
-        repository.saveAndFlush(notification)
+    fun insert(notification: AppNotification): AppNotification {
+        memberRepository.findActiveNotificationRecipientForUpdate(notification.memberId)
+            ?: throw InactiveNotificationRecipientException(notification.memberId)
+        return repository.saveAndFlush(notification)
+    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun find(memberId: Long, deduplicationKey: String): AppNotification? =

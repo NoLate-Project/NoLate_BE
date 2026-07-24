@@ -346,6 +346,9 @@ class ScheduleShareService(
         contentMode: ScheduleShareContentMode? = null,
     ): ScheduleShareDto {
         val normalizedPermission = validateGrantablePermission(permission)
+        val preview = scheduleShareRepository.findByIdAndScheduleIdAndDeletedFalse(shareId, scheduleId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_NOT_FOUND)
+        lockActiveShareTarget(preview.targetMemberId)
         scheduleRepository.findOwnedActiveForShareUpdate(scheduleId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
@@ -365,6 +368,9 @@ class ScheduleShareService(
 
     @Transactional
     fun revokeScheduleShare(ownerMemberId: Long, scheduleId: Long, shareId: Long) {
+        val preview = scheduleShareRepository.findByIdAndScheduleIdAndDeletedFalse(shareId, scheduleId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_NOT_FOUND)
+        lockActiveShareTarget(preview.targetMemberId)
         scheduleRepository.findOwnedActiveForShareUpdate(scheduleId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
@@ -438,6 +444,9 @@ class ScheduleShareService(
         permission: ScheduleSharePermission,
     ): ScheduleShareDto {
         val normalizedPermission = validateGrantablePermission(permission)
+        val preview = categoryShareRepository.findByIdAndCategoryIdAndDeletedFalse(shareId, categoryId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_SHARE_NOT_FOUND)
+        lockActiveShareTarget(preview.targetMemberId)
         categoryRepository.findOwnedActiveForShareUpdate(categoryId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
 
@@ -456,6 +465,9 @@ class ScheduleShareService(
 
     @Transactional
     fun revokeCategoryShare(ownerMemberId: Long, categoryId: Long, shareId: Long) {
+        val preview = categoryShareRepository.findByIdAndCategoryIdAndDeletedFalse(shareId, categoryId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_SHARE_NOT_FOUND)
+        lockActiveShareTarget(preview.targetMemberId)
         categoryRepository.findOwnedActiveForShareUpdate(categoryId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
 
@@ -630,7 +642,10 @@ class ScheduleShareService(
      */
     @Transactional
     fun acceptInvitation(currentMemberId: Long, token: String?): ScheduleShareInvitationAcceptDto {
-        val targetMember = memberRepository.findByIdAndDeletedFalse(currentMemberId)
+        // Recipient member is the first write lock. BEFORE_COMMIT outbox and withdrawal reuse
+        // this lock before invitation/calendar/share rows, preventing domain -> member inversion.
+        val targetMember = memberRepository.findByIdForUpdate(currentMemberId)
+            ?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         val tokenHash = hashInvitationToken(normalizeToken(token))
         val preview = invitationRepository.findByTokenHashAndDeletedFalse(tokenHash)
@@ -733,18 +748,26 @@ class ScheduleShareService(
             )
         }
 
-        if (hasAppId) {
+        val target = if (hasAppId) {
             val normalizedAppId = targetAppId
                 ?.takeIf { it > 0L }
                 ?: throw BusinessException(ErrorCode.INVALID_INPUT, "targetAppId must be a positive number.")
-            return memberRepository.findByIdAndDeletedFalse(normalizedAppId)
+            memberRepository.findByIdAndDeletedFalse(normalizedAppId)
+                ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
+        } else {
+            val normalizedEmail = normalizeEmail(targetEmail)
+            memberRepository.findByEmailAndDeletedFalse(normalizedEmail)
                 ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         }
-
-        val normalizedEmail = normalizeEmail(targetEmail)
-        return memberRepository.findByEmailAndDeletedFalse(normalizedEmail)
+        return memberRepository.findByIdForUpdate(requireNotNull(target.id))
+            ?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
     }
+
+    private fun lockActiveShareTarget(targetMemberId: Long): Member =
+        memberRepository.findByIdForUpdate(targetMemberId)
+            ?.takeUnless { it.deleted }
+            ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
 
     private fun createInvitation(
         ownerMemberId: Long,

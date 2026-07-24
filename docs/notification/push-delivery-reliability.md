@@ -16,6 +16,8 @@ at-most-once를 우선한다.
 - `FAILED`: provider가 예외를 명시적으로 반환한 확인된 실패다. 이 상태의 기기만 다음 실행에서
   다시 `DISPATCHING`으로 선점해 재시도한다.
 - `INVALID_TOKEN`: 토큰을 제거하고 같은 이벤트에는 다시 보내지 않는다.
+- `EXHAUSTED`: 확인 실패가 기기별 최대 provider attempt 수에 도달한 terminal 상태다.
+  다른 저시도 기기의 늦은 실패가 source를 깨워도 이 기기는 다시 claim하지 않는다.
 - `SUPERSEDED`: manifest가 저장한 token id/fingerprint/ownership version과 현재 소유권이
   달라 provider를 호출하지 않고 종료한 상태다. 계정 전환 뒤 이전 회원의 알림이 새 소유자
   token으로 전송되는 것을 막는다.
@@ -53,11 +55,13 @@ lease를 다시 잡는 ABA 상황에서도 이전 attempt가 새 lease를 덮어
 
 provider 호출이 event lease timeout보다 오래 걸리면 replacement worker는 남은
 `DISPATCHING`을 ambiguous terminal로 관측할 수 있다. 이후 원 provider 호출이 확정 미수락으로
-돌아오는 경우에는 `delivery=FAILED`와 frozen `app_notifications`의 safety outbox 재활성화를
-같은 transaction에서 commit한다. 이 전이는 stale `PROCESSING`/`COMPLETED` lease를
-`PENDING`으로 바꾸고 기존 owner를 무효화한다. 따라서 일정 job이 이미 ambiguous로 회차를
-진행했거나 outbox replacement owner가 완료했어도 같은 immutable event의 실패 기기만 bounded
-drainer가 재시도한다. 이 규칙은 성공 가능성이 모호한 transport 예외에는 적용하지 않는다.
+돌아오는 경우에는 authoritative schedule state를 다시 잠가 판단한다. 같은 generation/input의
+`ACTIVE` job만 `delivery=FAILED`와 frozen safety outbox `PENDING`을 같은 transaction에서
+재개방한다. `PROCESSING`은 현재 source worker가 끝날 때까지 failure budget 없이 defer하고,
+`COMPLETED/FAILED/CANCELED`, missing job, generation/fingerprint mismatch는 delivery를
+`SUPERSEDED`, outbox를 `COMPLETED`로 즉시 닫는다. 따라서 snooze/편집/terminal job의 오래된
+알림은 late failure로 되살아나지 않는다. 이 규칙은 성공 가능성이 모호한 transport 예외에는
+적용하지 않는다.
 schedule generation/fingerprint safety fence는 event identity만 증명하고 outbox lease 소유권은
 증명하지 않는다. provider 결과 전이는 locked source row의
 `notificationId + workerId + dispatchAttemptCount`까지 별도로 비교한다. 현재 attempt가
@@ -87,6 +91,11 @@ PK 하나가 `route-setup:<member>:marker:<id>` 하나에 영구 대응한다. A
 발송한다. 이 선택은 회원별 묶음 알림 대신 marker별 알림을 만들지만 성공 기기의 과거 reminder
 중복을 막는다.
 
+marker scheduler는 비잠금 후보 조회 뒤 `member → marker → immutable outbox`만 짧은
+transaction에서 수행하고 marker를 `SENT`(durable enqueue 완료 의미)로 닫는다. provider I/O는
+공용 outbox drainer가 transaction 밖에서 수행하므로 느린 FCM 호출이 route/ETA marker lock을
+유지하지 않는다.
+
 ## 알림 action idempotency
 
 `depart-now`와 `snooze`는 선택적인 `Idempotency-Key`를 받는다. 알림 action에서 FE는
@@ -104,6 +113,50 @@ transaction에서 commit된다. 예외나 프로세스 종료가 있으면 둘 �
 `PENDING` 또는 mutation-only 창이 없다. 같은 snooze key 재시도는 저장된
 `result_snoozed_until`을 반환하고 시간을 다시 뒤로 밀지 않는다. depart-now 재시도도
 출발 mutation/이벤트를 반복하지 않고 현재 authoritative schedule 결과를 반환한다.
+security filter가 검증한 signed `sessionGeneration`은 header 유무와 관계없이 controller에서
+실제 action transaction까지 전달한다. depart-now는 잠금 없는 recipient preview 뒤 actor를
+포함한 전체 member id를 오름차순으로 잠그고 actor active/generation을 재검증한 다음
+receipt와 schedule/job을 처리한다. 서로 다른 참가자가 동시에 action을 보내도
+`actor → 다른 recipient` 역순을 만들지 않는다. snooze도 같은 generation을 member lock
+안에서 검증한다. 최초 preview의 recipient 집합은 action fence에 동결한다. 잠금 뒤 revoke된
+수신자는 최신 권한과의 교집합에서 제외하지만, preview 뒤 새로 grant된 낮은 ID 회원은 이번
+action에 편입하거나 두 번째 member lock으로 획득하지 않는다.
+
+MySQL action transaction은 `READ_COMMITTED`로 실행한다. 권한 회수가 recipient member lock을
+먼저 얻었다면 대기 중이던 departure가 schedule/share grant를 최신 statement에서 다시 읽어
+회수된 recipient 상태나 outbox를 만들지 않는다. action이 전체 member lock을 먼저 얻었다면
+논리적 departure가 먼저이고 revoke가 그 뒤 cleanup한다. receipt의 authoritative lock 순서는
+`sorted recipient members → receipt → schedule/share/job`이다. withdrawal이 먼저면 action
+writer는 401로 종료해 receipt/job을 재생성하지 않고, action이 먼저면 withdrawal이 기다렸다가
+같은 transaction 결과를 모두 정리한다.
+
+## 운영 SQL 로그 비밀 경계
+
+P6Spy listener는 성공 SQL과 SQLException 모두 `sqlWithValues`, SQL 원문, driver message,
+stack trace를 출력하지 않는다. 테이블별 redact 목록은 신규 테이블을 놓치므로 사용하지 않고,
+parameterless SQL에서 문자열 literal과 주석을 제외해 분류한 bounded `operation/table`만
+허용한다. 분류가 실패해도 값이 있는 SQL로 fallback하지 않고 `UNKNOWN/unknown`으로 닫는다.
+오류 관측에는 SQLState, vendor code, exception class만 추가한다.
+
+따라서 `app_notifications`의 title/body/data JSON/logical key, refresh JWT, push token/device,
+회원 password/social identifier뿐 아니라 이후 추가되는 테이블의 값도 기본적으로 로그에
+들어가지 않는다. event 단위 운영 상관관계가 필요하면 raw logical event key가 아니라 별도의
+bounded fingerprint만 사용한다. 운영에서는 Hibernate `SqlExceptionHelper`도 끄므로 JDBC
+duplicate/deadlock 원문이 우회 출력되지 않는다.
+
+## Ephemeral 진단 경로
+
+인증된 공개 `POST /api/notifications/test/send`도 제품의 다른 사용자 대상 발송과 동일하게
+`persistInInbox=true`인 durable outbox/frozen manifest 경로를 사용한다. security filter를
+통과한 뒤 withdrawal이 먼저 commit되면 recipient fence가 provider 호출과 notification row
+재생성을 막고, 발송 claim이 먼저 linearize된 경우에만 이미 시작된 provider 호출 residual이
+남는다.
+
+`persistInInbox=false`인 ephemeral 전송은 조건부 `/api/dev/push-scenarios` 수동 E2E Runner만
+사용한다. 이 Runner는 `notification.push-scenario.enabled=true`를 명시한 비운영 환경에서만
+bean과 endpoint가 생긴다. Runner와 controller 모두 `!prod` profile 경계를 가지므로 운영
+환경변수/CLI가 property를 `true`로 덮어써도 bean이 생성되지 않으며, prod 설정도 해당 값을
+`false`로 고정한다. 따라서 운영 공개 API가 current-token 직접 전송 경계를 우회할 수 없다.
 
 ## 세션과 push token 등록 fence
 
@@ -143,7 +196,10 @@ endpoint별 계약은 다음과 같다.
   계정 데이터를 절대 삭제하지 않는다. 성공한 withdrawal만 generation을 증가시키고 모든
   refresh/device token과 계정 데이터를 같은 transaction에서 정리한다. withdrawal fence는
   member generation과 refresh만 먼저 닫고, provider 관련 정리는 worker와 같은
-  `schedule job → immutable source → delivery/history → device token` lock 방향으로 수행한다.
+  `member → schedule job → immutable source → delivery/history → device token` lock 방향으로
+  수행한다. provider가 이미 진행 중이면 외부 호출 자체는 취소할 수 없지만, 늦은
+  SUCCESS/FAILED/INVALID/UNKNOWN 결과 writer가 member active fence에서 멈추므로 cleanup 뒤
+  source/delivery/history/token row를 재생성하지 않는다.
   일반 logout의 `member → refresh → device token` 단축 경로와 섞지 않는다.
 
 register가 먼저 선형화되면 뒤의 같은-generation logout이 방금 등록된 token을 삭제하고,
@@ -193,6 +249,40 @@ worker는 한 run에서 최대 `schedule.push.batch-size`건을 처리하지만,
 않으므로 다른 인스턴스가 남은 backlog를 처리할 수 있고 tail lease timeout도 발생하지
 않는다. stale recovery도 같은 batch bound를 사용한다. provider 직전 fence heartbeat는
 detached worker snapshot의 optimistic version을 바꾸지 않고 lease 시각만 갱신한다.
+공용 outbox도 `dispatch_attempt_count`(lease epoch)와
+`dispatch_failure_count`(실제 실패 예산)를 분리한다. authoritative schedule job이
+`PROCESSING`인 정상 대기는 attempt epoch만 진행하고 failure budget을 소비하지 않아 600초
+source recovery보다 먼저 outbox가 영구 `FAILED`가 되지 않는다.
+
+## Schedule/account transition fence
+
+`POST /api/schedules`와 `/api/schedules/import`는 security filter가 검증한 signed
+`sessionGeneration`을 controller에서 버리지 않고 use case로 전달한다. outer schedule write
+transaction의 첫 DB 연산은 `member FOR UPDATE + active/deleted + generation` 재검증이며,
+그 lock을 schedule, owner travel plan, push job commit까지 유지한다. 생성이 먼저면
+withdrawal이 기다린 뒤 방금 만든 schedule/job/outbox까지 삭제하고, withdrawal/logout이 먼저면
+filter를 이미 통과한 stale create/import도 `INVALID_TOKEN`으로 끝나 어떤 row도 재생성하지
+않는다. 전역 순서는 `member → schedule/travel-plan → push-job/outbox`다.
+
+일정 update/delete fence는 잠금 없는 상세 조회로 actor/owner identity, 기존 job member와
+알림 활성 travel-plan member를 미리 찾고 그 전체를 정렬 잠근 뒤 schedule별 push-job
+row/gap을 잠근다. gap 획득 직후 job member를 다시 읽어 선잠금 집합 밖 회원이 보이면 gap
+뒤에서 새 member lock을 잡지 않고 transaction을 재시도 가능 오류로 rollback한다. 이어
+schedule row를 잠근 뒤 알림 활성 plan member도 같은 부분집합 조건으로 재검증한 다음에만
+mutation한다. 따라서 아직 job이 없는 participant plan도 edit과 register/backfill 사이에서
+`member → job → schedule` 순서를 뒤집지 않는다. 공유/calendar 권한 회수도 대상 member들을
+resource/share보다 먼저 잠그고 그 뒤 revoked travel push-job을 취소한다.
+
+startup legacy drain은 전체 후보를 하나의 transaction으로 처리하지 않는다. 짧은 read-only
+scan은 불변 `(memberId, scheduleId, travelPlanId)`만 정렬해 반환하고, 후보별
+`REQUIRES_NEW` writer가 `member → current schedule/plan 재검증 → push-job` 순서로 하나씩
+commit한다. 다중 인스턴스가 같은 후보를 읽어도 member/job lock에서 수렴하며, scan 뒤
+withdrawal/edit가 먼저 끝난 stale 후보는 새 job을 만들지 않는다.
+
+Snooze는 단순히 `next_check_at`만 이동하지 않고 `notification_generation`을 증가시키고
+check/stage를 reset한다. 이미 `SUCCESS`인 old delivery는 감사 결과로 보존하지만 old
+`PENDING/FAILED/DISPATCHING`은 새 generation 전에 provider로 재전송되지 않고 terminal
+`SUPERSEDED`로 수렴한다. snooze 만료 뒤에만 새 generation/event key가 만들어질 수 있다.
 
 ## 운영 복구
 

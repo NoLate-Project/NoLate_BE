@@ -1,6 +1,7 @@
 package com.noLate.notification.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.domain.PushSendHistory
@@ -16,6 +17,7 @@ import java.time.Instant
 @Service
 class PushSendHistoryService(
     private val repository: PushSendHistoryRepository,
+    private val memberRepository: MemberRepository,
     private val objectMapper: ObjectMapper,
     private val clock: Clock,
 ) {
@@ -28,7 +30,7 @@ class PushSendHistoryService(
         body: String,
         data: Map<String, String>,
         fcmMessageId: String,
-    ): PushSendHistory = save(
+    ): PushSendHistory? = save(
         memberId = memberId,
         token = token,
         title = title,
@@ -48,7 +50,7 @@ class PushSendHistoryService(
         status: PushSendStatus,
         errorCode: String,
         errorMessage: String?,
-    ): PushSendHistory = save(
+    ): PushSendHistory? = save(
         memberId = memberId,
         token = token,
         title = title,
@@ -65,7 +67,7 @@ class PushSendHistoryService(
         title: String,
         body: String,
         data: Map<String, String>,
-    ): PushSendHistory = save(
+    ): PushSendHistory? = save(
         memberId = memberId,
         token = null,
         title = title,
@@ -92,7 +94,10 @@ class PushSendHistoryService(
         fcmMessageId: String? = null,
         errorCode: String? = null,
         errorMessage: String? = null,
-    ): PushSendHistory {
+    ): PushSendHistory? {
+        // member is the first lock in both notification writers and withdrawal. A provider result
+        // that returns after account cleanup therefore cannot recreate private history payloads.
+        memberRepository.findActiveNotificationRecipientForUpdate(memberId) ?: return null
         val history = PushSendHistory(
             memberId = memberId,
             deviceTokenId = token?.id,

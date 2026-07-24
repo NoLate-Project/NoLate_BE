@@ -1,6 +1,8 @@
 package com.noLate.schedule.application.service
 
-import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.notification.application.service.PushEventOutboxService
+import com.noLate.notification.application.service.findActiveNotificationRecipientForUpdate
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleRouteSetupReminder
 import com.noLate.schedule.domain.ScheduleRouteSetupReminderStatus
@@ -24,10 +26,13 @@ import java.time.Instant
 @Service
 class ScheduleRouteSetupReminderWriter(
     private val repository: ScheduleRouteSetupReminderRepository,
+    private val memberRepository: MemberRepository,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun insert(reminder: ScheduleRouteSetupReminder): ScheduleRouteSetupReminder =
-        repository.saveAndFlush(reminder)
+    fun insert(reminder: ScheduleRouteSetupReminder): ScheduleRouteSetupReminder? {
+        memberRepository.findActiveNotificationRecipientForUpdate(reminder.memberId) ?: return null
+        return repository.saveAndFlush(reminder)
+    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun find(scheduleId: Long, memberId: Long, fingerprint: String): ScheduleRouteSetupReminder? =
@@ -53,10 +58,101 @@ class ScheduleRouteSetupReminderRegistrar(
                     scheduleFingerprint = fingerprint,
                     nextAttemptAt = now,
                 )
-            )
-            true
+            ) != null
         } catch (_: DataIntegrityViolationException) {
             false
+        }
+    }
+}
+
+internal enum class RouteSetupOutboxEnqueueOutcome {
+    ENQUEUED,
+    SKIPPED,
+    NONE,
+}
+
+/**
+ * One marker is linearized in a short transaction:
+ * member -> marker -> immutable outbox/manifest.
+ *
+ * Provider I/O is intentionally absent. The common PushOutboxDispatchWorker sends only after this
+ * transaction commits, so a slow provider cannot hold route marker or business locks.
+ */
+@Service
+class ScheduleRouteSetupReminderDispatchWriter(
+    private val reminderRepository: ScheduleRouteSetupReminderRepository,
+    private val memberRepository: MemberRepository,
+    private val scheduleRepository: ScheduleRepository,
+    private val travelPlanRepository: ScheduleTravelPlanRepository,
+    private val accessPolicy: ScheduleAccessPolicy,
+    private val reminderPolicy: RouteSetupReminderPolicy,
+    private val pushEventOutboxService: PushEventOutboxService,
+) {
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    internal fun enqueueNext(now: Instant): RouteSetupOutboxEnqueueOutcome {
+        val candidate = reminderRepository.findDueCandidates(
+            status = ScheduleRouteSetupReminderStatus.PENDING,
+            now = now,
+            pageable = PageRequest.of(0, 1),
+        ).singleOrNull() ?: return RouteSetupOutboxEnqueueOutcome.NONE
+
+        val recipientActive =
+            memberRepository.findActiveNotificationRecipientForUpdate(candidate.memberId) != null
+        val marker = reminderRepository.findByIdForUpdate(candidate.id)
+            ?: return RouteSetupOutboxEnqueueOutcome.SKIPPED
+        if (marker.status != ScheduleRouteSetupReminderStatus.PENDING ||
+            marker.nextAttemptAt.isAfter(now)
+        ) {
+            return RouteSetupOutboxEnqueueOutcome.SKIPPED
+        }
+        if (!recipientActive) {
+            marker.cancel()
+            return RouteSetupOutboxEnqueueOutcome.SKIPPED
+        }
+
+        val schedule = scheduleRepository.findById(marker.scheduleId).orElse(null)
+        if (!isStillRequired(marker, schedule, now)) {
+            marker.cancel()
+            return RouteSetupOutboxEnqueueOutcome.SKIPPED
+        }
+        val validSchedule = requireNotNull(schedule)
+        val scheduleId = requireNotNull(validSchedule.id)
+        val memberId = marker.memberId
+        pushEventOutboxService.enqueueDurable(
+            memberId = memberId,
+            title = "경로를 설정해주세요",
+            body = "'${validSchedule.title}' 일정이 3일 안에 시작돼요. 내 출발 경로를 확인해주세요.",
+            data = mapOf(
+                "type" to "ROUTE_SETUP_REMINDER",
+                "scheduleId" to scheduleId.toString(),
+                "scheduleIds" to scheduleId.toString(),
+                "count" to "1",
+            ),
+            deduplicationKey = "route-setup:$memberId:marker:${requireNotNull(marker.id)}",
+        )
+        // SENT means the durable logical outbox is committed with this marker transaction.
+        // Provider delivery is tracked independently by app_notifications/push_deliveries.
+        marker.markSent(now)
+        return RouteSetupOutboxEnqueueOutcome.ENQUEUED
+    }
+
+    private fun isStillRequired(
+        reminder: ScheduleRouteSetupReminder,
+        schedule: Schedule?,
+        now: Instant,
+    ): Boolean {
+        if (schedule == null || schedule.deleted || schedule.id == null) return false
+        if (ScheduleTravelPlanFingerprint.calculate(schedule) != reminder.scheduleFingerprint) return false
+        val access = accessPolicy.resolve(reminder.memberId, schedule)
+        if (!access.travelEnabled || !accessPolicy.routeReminderEnabled(reminder.memberId, schedule)) return false
+        val plan = travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(
+            requireNotNull(schedule.id),
+            reminder.memberId,
+        )
+        return if (reminder.memberId == schedule.memberId) {
+            reminderPolicy.requiresOwnerSetup(schedule, true, plan, now)
+        } else {
+            reminderPolicy.requiresSetup(schedule, true, plan, now)
         }
     }
 }
@@ -65,14 +161,11 @@ class ScheduleRouteSetupReminderRegistrar(
 class ScheduleRouteSetupReminderService(
     private val scheduleRepository: ScheduleRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
-    private val reminderRepository: ScheduleRouteSetupReminderRepository,
     private val registrar: ScheduleRouteSetupReminderRegistrar,
     private val accessPolicy: ScheduleAccessPolicy,
     private val reminderPolicy: RouteSetupReminderPolicy,
-    private val notificationUseCase: NotificationUseCase,
+    private val dispatchWriter: ScheduleRouteSetupReminderDispatchWriter,
     @Value("\${schedule.route-setup-reminder.batch-size:50}") private val batchSize: Int,
-    @Value("\${schedule.route-setup-reminder.max-attempts:3}") private val maxAttempts: Int,
-    @Value("\${schedule.route-setup-reminder.retry-delay-seconds:300}") private val retryDelaySeconds: Long,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -109,119 +202,30 @@ class ScheduleRouteSetupReminderService(
     }
 
     /**
-     * due marker를 비관적 락으로 선점한 뒤 marker별 immutable event로 발송한다.
-     *
-     * 여러 marker를 현재 batch 구성으로 묶으면 A의 부분 실패 뒤 B가 새로 due된 재시도에서
-     * event key가 A -> A+B로 바뀌어 A의 성공 기기까지 다시 호출될 수 있다. marker PK 하나를
-     * logical event 하나로 고정해 retry batch가 달라져도 payload와 per-device 경계를 보존한다.
-     * 발송 직전에는 공유 회수, 캘린더 알림 opt-out, 경로 저장, 일정 변경을 다시 확인한다.
+     * 한 번에 최대 batchSize marker를 각각 독립된 짧은 transaction으로 durable enqueue한다.
+     * 실제 provider 호출은 공용 outbox drainer가 transaction 밖에서 수행한다.
      */
-    @Transactional
     fun dispatch(now: Instant): Int {
-        val locked = reminderRepository.findDueForUpdate(
-            status = ScheduleRouteSetupReminderStatus.PENDING,
-            now = now,
-            pageable = PageRequest.of(0, batchSize.coerceIn(1, 200)),
-        )
-        val valid = locked.mapNotNull { reminder ->
-            val schedule = scheduleRepository.findById(reminder.scheduleId).orElse(null)
-            if (!isStillRequired(reminder, schedule, now)) {
-                reminder.cancel()
-                null
-            } else {
-                reminder to requireNotNull(schedule)
-            }
-        }
-
-        var sentEvents = 0
-        valid.sortedBy { requireNotNull(it.first.id) }.forEach { (reminder, schedule) ->
-            val memberId = reminder.memberId
-            try {
-                val title = "경로를 설정해주세요"
-                val body =
-                    "'${schedule.title}' 일정이 3일 안에 시작돼요. 내 출발 경로를 확인해주세요."
-                val scheduleId = requireNotNull(schedule.id)
-                val deduplicationKey = dispatchDeduplicationKey(memberId, reminder)
-                val payload = mapOf(
-                    "type" to "ROUTE_SETUP_REMINDER",
-                    "scheduleId" to scheduleId.toString(),
-                    "scheduleIds" to scheduleId.toString(),
-                    "count" to "1",
-                )
-
-                // marker PK의 deterministic key를 inbox와 기기별 delivery 경계에 함께
-                // 사용한다. 재시도 batch에 다른 marker가 합류해도 이 event는 변하지 않는다.
-                val result = notificationUseCase.sendToMember(
-                    memberId = memberId,
-                    title = title,
-                    body = body,
-                    data = payload,
-                    inboxDeduplicationKey = deduplicationKey,
-                )
-                if (result.retryableFailedCount > 0) {
-                    throw RouteSetupPushDispatchException(
-                        "경로 미설정 push 재시도 필요: requested=${result.requestedCount}, " +
-                            "retryableFailed=${result.retryableFailedCount}"
-                    )
-                }
-                if (result.requestedCount > 0 && result.durablyHandledCount == 0) {
-                    throw RouteSetupPushDispatchException(
-                        "경로 미설정 push 발송 실패: requested=${result.requestedCount}, failed=${result.failedCount}"
-                    )
-                }
-                reminder.markSent(now)
-                sentEvents += 1
+        var enqueued = 0
+        repeat(batchSize.coerceIn(1, 200)) {
+            val outcome = try {
+                dispatchWriter.enqueueNext(now)
             } catch (error: Exception) {
-                val failureReason = when (error) {
-                    is RouteSetupPushDispatchException -> requireNotNull(error.message)
-                    else -> error.javaClass.simpleName
-                }
-                reminder.retryOrFail(
-                    now = now,
-                    reason = failureReason,
-                    maxAttempts = maxAttempts.coerceAtLeast(1),
-                    retryDelaySeconds = retryDelaySeconds.coerceAtLeast(1),
-                )
                 log.warn(
-                    "Route setup reminder dispatch failed. memberId={}, scheduleId={}, markerId={}, errorCode={}",
-                    memberId,
-                    reminder.scheduleId,
-                    reminder.id,
+                    "Route setup reminder enqueue failed. errorCode={}",
                     error.javaClass.simpleName,
                 )
+                return enqueued
+            }
+            when (outcome) {
+                RouteSetupOutboxEnqueueOutcome.ENQUEUED -> enqueued += 1
+                RouteSetupOutboxEnqueueOutcome.SKIPPED -> Unit
+                RouteSetupOutboxEnqueueOutcome.NONE -> return enqueued
             }
         }
-        return sentEvents
+        return enqueued
     }
-
-    private fun isStillRequired(
-        reminder: ScheduleRouteSetupReminder,
-        schedule: Schedule?,
-        now: Instant,
-    ): Boolean {
-        if (schedule == null || schedule.deleted || schedule.id == null) return false
-        if (ScheduleTravelPlanFingerprint.calculate(schedule) != reminder.scheduleFingerprint) return false
-        val access = accessPolicy.resolve(reminder.memberId, schedule)
-        if (!access.travelEnabled || !accessPolicy.routeReminderEnabled(reminder.memberId, schedule)) return false
-        val plan = travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(
-            requireNotNull(schedule.id),
-            reminder.memberId,
-        )
-        return if (reminder.memberId == schedule.memberId) {
-            reminderPolicy.requiresOwnerSetup(schedule, true, plan, now)
-        } else {
-            reminderPolicy.requiresSetup(schedule, true, plan, now)
-        }
-    }
-
-    private fun dispatchDeduplicationKey(
-        memberId: Long,
-        reminder: ScheduleRouteSetupReminder,
-    ): String =
-        "route-setup:$memberId:marker:${requireNotNull(reminder.id)}"
 }
-
-private class RouteSetupPushDispatchException(message: String) : RuntimeException(message)
 
 @Component
 class ScheduleRouteSetupReminderWorker(

@@ -11,7 +11,27 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.time.Instant
 
+interface AppNotificationDispatchCandidate {
+    val id: Long
+    val memberId: Long
+}
+
 interface AppNotificationRepository : JpaRepository<AppNotification, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select notification from AppNotification notification where notification.id = :id")
+    fun findByIdForUpdate(@Param("id") id: Long): AppNotification?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select notification
+        from AppNotification notification
+        where notification.id in :ids
+        order by notification.id
+        """
+    )
+    fun findAllByIdsForUpdate(@Param("ids") ids: Collection<Long>): List<AppNotification>
 
     fun findByMemberIdAndDeduplicationKey(
         memberId: Long,
@@ -51,19 +71,39 @@ interface AppNotificationRepository : JpaRepository<AppNotification, Long> {
         @Param("logicalEventKey") logicalEventKey: String,
     ): AppNotification?
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    fun findAllByDispatchStatusAndNextDispatchAtLessThanEqualOrderByNextDispatchAtAscIdAsc(
-        dispatchStatus: PushOutboxDispatchStatus,
-        nextDispatchAt: Instant,
+    /**
+     * Non-locking candidate peek. The writer must lock the recipient member first and then lock
+     * the selected source by ID before rechecking status/time and transitioning it.
+     */
+    @Query(
+        """
+        select notification.id as id, notification.memberId as memberId
+        from AppNotification notification
+        where notification.dispatchStatus = :dispatchStatus
+          and notification.nextDispatchAt <= :nextDispatchAt
+        order by notification.nextDispatchAt asc, notification.id asc
+        """
+    )
+    fun findDueDispatchCandidates(
+        @Param("dispatchStatus") dispatchStatus: PushOutboxDispatchStatus,
+        @Param("nextDispatchAt") nextDispatchAt: Instant,
         pageable: Pageable,
-    ): List<AppNotification>
+    ): List<AppNotificationDispatchCandidate>
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    fun findAllByDispatchStatusAndDispatchLockedAtLessThanEqualOrderByDispatchLockedAtAscIdAsc(
-        dispatchStatus: PushOutboxDispatchStatus,
-        dispatchLockedAt: Instant,
+    @Query(
+        """
+        select notification.id as id, notification.memberId as memberId
+        from AppNotification notification
+        where notification.dispatchStatus = :dispatchStatus
+          and notification.dispatchLockedAt <= :dispatchLockedAt
+        order by notification.dispatchLockedAt asc, notification.id asc
+        """
+    )
+    fun findStaleDispatchCandidates(
+        @Param("dispatchStatus") dispatchStatus: PushOutboxDispatchStatus,
+        @Param("dispatchLockedAt") dispatchLockedAt: Instant,
         pageable: Pageable,
-    ): List<AppNotification>
+    ): List<AppNotificationDispatchCandidate>
 
     fun findByIdAndMemberId(id: Long, memberId: Long): AppNotification?
 

@@ -165,9 +165,12 @@ ALTER TABLE app_notifications
         COMMENT 'NOT_REQUIRED, PENDING, PROCESSING, COMPLETED, or FAILED'
         AFTER manifest_frozen_at,
     ADD COLUMN dispatch_attempt_count INT NOT NULL DEFAULT 0
-        COMMENT 'Durable outbox drainer claims' AFTER dispatch_status,
+        COMMENT 'Monotonic durable outbox lease epochs' AFTER dispatch_status,
+    ADD COLUMN dispatch_failure_count INT NOT NULL DEFAULT 0
+        COMMENT 'Actual retry-budget failures; expected deferrals do not increment'
+        AFTER dispatch_attempt_count,
     ADD COLUMN next_dispatch_at DATETIME(6) NULL
-        COMMENT 'Next bounded drainer eligibility time' AFTER dispatch_attempt_count,
+        COMMENT 'Next bounded drainer eligibility time' AFTER dispatch_failure_count,
     ADD COLUMN dispatch_locked_by VARCHAR(100) NULL
         COMMENT 'Outbox drainer lease owner' AFTER next_dispatch_at,
     ADD COLUMN dispatch_locked_at DATETIME(6) NULL
@@ -376,6 +379,8 @@ BEGIN
         WHERE manifest_state NOT IN ('INBOX_ONLY', 'OPEN', 'FROZEN')
            OR dispatch_status NOT IN ('NOT_REQUIRED', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')
            OR manifest_recipient_count < 0
+           OR dispatch_attempt_count < 0
+           OR dispatch_failure_count < 0
         LIMIT 1
     ) THEN
         SIGNAL SQLSTATE '45000'

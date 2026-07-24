@@ -2,6 +2,8 @@ package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.noLate.member.application.service.AccountCleanupService
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.application.ConfirmedPushDeliveryException
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.PushClient
@@ -28,12 +30,15 @@ import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.notification.support.registerAuthenticatedPushToken
+import com.noLate.notification.support.ensureActivePushMember
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.EnumSource
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.ApplicationEventPublisher
@@ -47,6 +52,7 @@ import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.transaction.support.TransactionTemplate
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -72,6 +78,7 @@ import java.util.concurrent.atomic.AtomicInteger
     PushOutboxDispatchCoordinator::class,
     PushOutboxDispatchWriter::class,
     PushOutboxDispatchWorker::class,
+    AccountCleanupService::class,
     ScheduleSharePushNotificationListener::class,
     ScheduleDeparturePushNotificationListener::class,
     DurableScheduleNotificationOutboxTestConfig::class,
@@ -106,6 +113,8 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
     private val clock: Clock,
     private val objectMapper: ObjectMapper,
     private val jdbcTemplate: JdbcTemplate,
+    private val accountCleanupService: AccountCleanupService,
+    private val memberRepository: MemberRepository,
 ) {
     @BeforeEach
     fun clean() {
@@ -114,6 +123,9 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
         historyRepository.deleteAll()
         notificationRepository.deleteAll()
         tokenRepository.deleteAll()
+        listOf(71L, 73L, 74L, 75L, 85L).forEach {
+            ensureActivePushMember(jdbcTemplate, it)
+        }
     }
 
     @Test
@@ -435,6 +447,73 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
         assertEquals(PushOutboxDispatchStatus.COMPLETED, event.dispatchStatus)
     }
 
+    @ParameterizedTest
+    @EnumSource(DurableLateProviderOutcome::class)
+    fun `provider result가 탈퇴 뒤 늦게 돌아와도 notification rows를 재생성하지 않는다`(
+        outcome: DurableLateProviderOutcome,
+    ) {
+        val memberId = 9_100L + outcome.ordinal
+        val token = "withdrawal-late-${outcome.name.lowercase()}-token"
+        register(memberId, "withdrawal-late-${outcome.name.lowercase()}-device", token)
+        publishShare(memberId, "withdrawal-late-${outcome.name.lowercase()}")
+        val providerGate = pushClient.blockThen(token, outcome)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        executor.submit {
+            runCatching { dispatchWorker.runDueEvents(NOW) }
+                .onFailure(failures::add)
+        }
+        assertTrue(providerGate.entered.await(5, TimeUnit.SECONDS))
+        assertEquals(PushDeliveryStatus.DISPATCHING, deliveryRepository.findAll().single().status)
+
+        accountCleanupService.withdraw(memberRepository.findById(memberId).orElseThrow())
+        assertNotificationRowsAbsent(memberId)
+
+        providerGate.release.countDown()
+        executor.shutdown()
+        assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
+        assertEquals(1, pushClient.attempts(token))
+        assertNotificationRowsAbsent(memberId)
+        assertEquals(0, dispatchWorker.runDueEvents(NOW.plusSeconds(1)))
+    }
+
+    @Test
+    fun `withdrawal first prevents durable source manifest and provider creation`() {
+        val memberId = 9_110L
+        val token = "withdrawal-first-outbox-token"
+        register(memberId, "withdrawal-first-outbox-device", token)
+        accountCleanupService.withdraw(memberRepository.findById(memberId).orElseThrow())
+
+        publishShare(memberId, "withdrawal-first-outbox")
+
+        assertNotificationRowsAbsent(memberId)
+        assertEquals(0, pushClient.attempts(token))
+        assertEquals(0, dispatchWorker.runDueEvents(NOW))
+    }
+
+    @Test
+    fun `zero-device source prepared before withdrawal cannot recreate no-token history`() {
+        val memberId = 9_111L
+        ensureActivePushMember(jdbcTemplate, memberId)
+        publishShare(memberId, "zero-device-withdrawal-window")
+        assertEquals(1, notificationRepository.findAllByMemberIdOrderByIdDesc(memberId).size)
+
+        accountCleanupService.withdraw(memberRepository.findById(memberId).orElseThrow())
+
+        assertNotificationRowsAbsent(memberId)
+        assertEquals(0, dispatchWorker.runDueEvents(NOW))
+        assertNotificationRowsAbsent(memberId)
+    }
+
+    private fun assertNotificationRowsAbsent(memberId: Long) {
+        assertTrue(notificationRepository.findAllByMemberIdOrderByIdDesc(memberId).isEmpty())
+        assertTrue(deliveryRepository.findAll().none { it.memberId == memberId })
+        assertTrue(historyRepository.findAll().none { it.memberId == memberId })
+        assertTrue(tokenRepository.findAllByMemberId(memberId).isEmpty())
+    }
+
     private fun register(memberId: Long, deviceId: String, token: String) {
         registerAuthenticatedPushToken(
             jdbcTemplate = jdbcTemplate,
@@ -447,6 +526,7 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
     }
 
     private fun publishShare(memberId: Long, eventId: String) {
+        ensureActivePushMember(jdbcTemplate, memberId)
         TransactionTemplate(transactionManager).executeWithoutResult {
             publisher.publishEvent(
                 ScheduleShareGrantedEvent(
@@ -504,6 +584,7 @@ class DurableOutboxRecordingPushClient : PushClient {
     private val failOnce = ConcurrentHashMap.newKeySet<String>()
     private val invalid = ConcurrentHashMap.newKeySet<String>()
     private val blockingFailures = ConcurrentHashMap<String, DurableBlockingProviderFailure>()
+    private val blockingOutcomes = ConcurrentHashMap<String, DurableBlockingProviderOutcome>()
 
     fun reset() {
         attemptCounts.clear()
@@ -512,6 +593,8 @@ class DurableOutboxRecordingPushClient : PushClient {
         invalid.clear()
         blockingFailures.values.forEach { it.release.countDown() }
         blockingFailures.clear()
+        blockingOutcomes.values.forEach { it.release.countDown() }
+        blockingOutcomes.clear()
     }
 
     fun failOnce(token: String) {
@@ -524,6 +607,12 @@ class DurableOutboxRecordingPushClient : PushClient {
 
     fun blockThenFailOnce(token: String): DurableBlockingProviderFailure =
         DurableBlockingProviderFailure().also { blockingFailures[token] = it }
+
+    fun blockThen(
+        token: String,
+        outcome: DurableLateProviderOutcome,
+    ): DurableBlockingProviderOutcome =
+        DurableBlockingProviderOutcome(outcome).also { blockingOutcomes[token] = it }
 
     fun attempts(token: String): Int = attemptCounts[token]?.get() ?: 0
 
@@ -538,12 +627,31 @@ class DurableOutboxRecordingPushClient : PushClient {
         body: String,
         data: Map<String, String>,
     ): PushSendResult {
+        check(!TransactionSynchronizationManager.isActualTransactionActive()) {
+            "Push provider I/O must run outside a database transaction."
+        }
         val attempt = attemptCounts.computeIfAbsent(token) { AtomicInteger() }.incrementAndGet()
         recordedCalls.computeIfAbsent(token) {
             java.util.Collections.synchronizedList(mutableListOf())
         }.add(DurableOutboxPushCall(title, body, LinkedHashMap(data)))
         if (invalid.contains(token)) {
             throw InvalidPushTokenException(token)
+        }
+        blockingOutcomes.remove(token)?.let { gate ->
+            gate.entered.countDown()
+            check(gate.release.await(10, TimeUnit.SECONDS)) {
+                "Timed out waiting to release the deterministic provider result."
+            }
+            return when (gate.outcome) {
+                DurableLateProviderOutcome.SUCCESS ->
+                    PushSendResult("durable-late-$attempt")
+                DurableLateProviderOutcome.CONFIRMED_FAILURE ->
+                    throw ConfirmedPushDeliveryException("provider rejected")
+                DurableLateProviderOutcome.INVALID_TOKEN ->
+                    throw InvalidPushTokenException(token)
+                DurableLateProviderOutcome.UNKNOWN ->
+                    throw IllegalStateException("ambiguous provider transport")
+            }
         }
         blockingFailures.remove(token)?.let { gate ->
             gate.entered.countDown()
@@ -560,6 +668,20 @@ class DurableOutboxRecordingPushClient : PushClient {
 }
 
 class DurableBlockingProviderFailure {
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+}
+
+enum class DurableLateProviderOutcome {
+    SUCCESS,
+    CONFIRMED_FAILURE,
+    INVALID_TOKEN,
+    UNKNOWN,
+}
+
+class DurableBlockingProviderOutcome(
+    val outcome: DurableLateProviderOutcome,
+) {
     val entered = CountDownLatch(1)
     val release = CountDownLatch(1)
 }

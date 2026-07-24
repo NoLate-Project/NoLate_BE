@@ -18,6 +18,9 @@ fun interface PushOutboxConfirmedDeliveryReconciler {
     fun reconcile(snapshot: AppNotificationSnapshot, confirmedAt: Instant)
 }
 
+/** Expected authoritative-source wait; retry without consuming the outbox failure budget. */
+open class PushOutboxDeferralException(message: String) : RuntimeException(message)
+
 /**
  * business transaction이 만든 immutable notification outbox를 비운다.
  *
@@ -119,6 +122,13 @@ class PushOutboxDispatchWorker(
                 confirmedDeliveryReconcilers.forEach {
                     it.reconcile(result.eventSnapshot, confirmedAt)
                 }
+            } catch (deferred: PushOutboxDeferralException) {
+                deferWithoutFailureBudget(
+                    lease = lease,
+                    now = currentAtOrAfter(notBefore),
+                    reason = "AUTHORITATIVE_SOURCE_PROCESSING",
+                )
+                return
             } catch (failure: Exception) {
                 transitionAfterFailure(
                     lease = lease,
@@ -138,6 +148,14 @@ class PushOutboxDispatchWorker(
         }
 
         when {
+            result.deferredCount > 0 -> {
+                deferWithoutFailureBudget(
+                    lease = lease,
+                    now = currentAtOrAfter(notBefore),
+                    reason = "AUTHORITATIVE_SOURCE_PROCESSING",
+                )
+            }
+
             result.retryableFailedCount > 0 -> {
                 transitionAfterFailure(
                     lease,
@@ -150,7 +168,7 @@ class PushOutboxDispatchWorker(
                 val persisted = coordinator.complete(lease, currentAtOrAfter(notBefore))
                 log.info(
                     "Push outbox terminal. notificationId={}, memberId={}, attempt={}, persisted={}, " +
-                        "sent={}, existingSuccess={}, ambiguous={}, invalid={}, superseded={}",
+                        "sent={}, existingSuccess={}, ambiguous={}, invalid={}, exhausted={}, superseded={}",
                     lease.notificationId,
                     lease.memberId,
                     lease.attemptCount,
@@ -159,6 +177,7 @@ class PushOutboxDispatchWorker(
                     result.alreadyDeliveredCount,
                     result.ambiguousCount,
                     result.invalidTokenCount,
+                    result.exhaustedCount,
                     result.supersededCount,
                 )
             }
@@ -188,7 +207,8 @@ class PushOutboxDispatchWorker(
         now: Instant,
         reason: String,
     ) {
-        val persisted = if (lease.attemptCount >= maxAttempts.coerceAtLeast(1)) {
+        val terminal = lease.failureCount + 1 >= maxAttempts.coerceAtLeast(1)
+        val persisted = if (terminal) {
             coordinator.fail(lease, now, reason)
         } else {
             coordinator.retry(
@@ -203,7 +223,29 @@ class PushOutboxDispatchWorker(
             lease.notificationId,
             lease.memberId,
             lease.attemptCount,
-            lease.attemptCount >= maxAttempts.coerceAtLeast(1),
+            terminal,
+            persisted,
+            reason,
+        )
+    }
+
+    private fun deferWithoutFailureBudget(
+        lease: PushOutboxDispatchLease,
+        now: Instant,
+        reason: String,
+    ) {
+        val persisted = coordinator.defer(
+            lease = lease,
+            nextAt = now.plusSeconds(retryDelaySeconds.coerceAtLeast(1)),
+            reason = reason,
+        )
+        log.info(
+            "Push outbox deferred. notificationId={}, memberId={}, attempt={}, " +
+                "failureCount={}, persisted={}, reason={}",
+            lease.notificationId,
+            lease.memberId,
+            lease.attemptCount,
+            lease.failureCount,
             persisted,
             reason,
         )

@@ -23,6 +23,25 @@ data class PushDispatchFence(
  */
 interface PushDispatchFenceValidator {
     fun validate(fence: PushDispatchFence): Boolean
+
+    /**
+     * Persisted safety dispatch distinguishes a live source lease from a terminally stale event.
+     * Existing validators retain the historical boolean contract as terminal accept/reject.
+     */
+    fun evaluate(fence: PushDispatchFence): PushDispatchFenceDecision =
+        if (validate(fence)) {
+            PushDispatchFenceDecision.ACCEPT
+        } else {
+            PushDispatchFenceDecision.REJECT_TERMINAL
+        }
+}
+
+enum class PushDispatchFenceDecision {
+    ACCEPT,
+    /** Authoritative source worker still owns PROCESSING; retry without consuming failure budget. */
+    RETRY_LATER,
+    /** Source identity/state can never become valid again; old deliveries must converge terminal. */
+    REJECT_TERMINAL,
 }
 
 /**

@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.notification.application.service.PushDispatchFence
+import com.noLate.notification.support.ensureActivePushMember
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePlaceDto
@@ -10,6 +11,7 @@ import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -18,6 +20,7 @@ import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Propagation
@@ -51,6 +54,7 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
     private val repository: SchedulePushJobRepository,
     private val jobService: SchedulePushJobService,
     private val validator: SchedulePushDispatchFenceValidator,
+    private val jdbcTemplate: JdbcTemplate,
     transactionManager: PlatformTransactionManager,
 ) {
     private val transactions = TransactionTemplate(transactionManager)
@@ -60,11 +64,94 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
     @BeforeEach
     fun clean() {
         repository.deleteAll()
+        ensureActivePushMember(jdbcTemplate, MEMBER_ID)
     }
 
     @AfterEach
     fun stopExecutor() {
         executor.shutdownNow()
+    }
+
+    @Test
+    fun `job 없는 공유 편집도 actor와 owner를 잠가 새 job 등록보다 먼저 linearize된다`() {
+        ensureActivePushMember(jdbcTemplate, EDITOR_MEMBER_ID)
+        val scheduleId = 20L
+        val editLocked = CountDownLatch(1)
+        val releaseEdit = CountDownLatch(1)
+        val registrationStarted = CountDownLatch(1)
+        val registrationCompleted = CountDownLatch(1)
+
+        val edit = executor.submit {
+            transactions.executeWithoutResult {
+                jobService.lockForScheduleEdit(
+                    scheduleId = scheduleId,
+                    requiredMemberIds = listOf(EDITOR_MEMBER_ID, MEMBER_ID),
+                )
+                editLocked.countDown()
+                check(releaseEdit.await(5, TimeUnit.SECONDS))
+            }
+        }
+        assertTrue(editLocked.await(5, TimeUnit.SECONDS))
+
+        val registration = executor.submit {
+            registrationStarted.countDown()
+            try {
+                jobService.registerFromScheduleDto(
+                    MEMBER_ID,
+                    originalDto().copy(id = scheduleId),
+                )
+            } finally {
+                registrationCompleted.countDown()
+            }
+        }
+        assertTrue(registrationStarted.await(5, TimeUnit.SECONDS))
+        assertFalse(registrationCompleted.await(250, TimeUnit.MILLISECONDS))
+
+        releaseEdit.countDown()
+        edit.get(5, TimeUnit.SECONDS)
+        registration.get(5, TimeUnit.SECONDS)
+
+        assertEquals(1L, repository.count())
+        assertEquals(MEMBER_ID, repository.findAll().single().memberId)
+    }
+
+    @Test
+    fun `job 없는 알림 travel plan 회원도 edit gap 전에 잠가 backfill 등록과 직렬화한다`() {
+        ensureActivePushMember(jdbcTemplate, PLAN_MEMBER_ID)
+        val scheduleId = 21L
+        val editLocked = CountDownLatch(1)
+        val releaseEdit = CountDownLatch(1)
+        val registrationCompleted = CountDownLatch(1)
+
+        val edit = executor.submit {
+            transactions.executeWithoutResult {
+                jobService.lockForScheduleEdit(
+                    scheduleId = scheduleId,
+                    requiredMemberIds = listOf(MEMBER_ID, PLAN_MEMBER_ID),
+                )
+                editLocked.countDown()
+                check(releaseEdit.await(5, TimeUnit.SECONDS))
+            }
+        }
+        assertTrue(editLocked.await(5, TimeUnit.SECONDS))
+
+        val registration = executor.submit {
+            try {
+                jobService.registerFromScheduleDto(
+                    PLAN_MEMBER_ID,
+                    originalDto().copy(id = scheduleId),
+                )
+            } finally {
+                registrationCompleted.countDown()
+            }
+        }
+        assertFalse(registrationCompleted.await(250, TimeUnit.MILLISECONDS))
+
+        releaseEdit.countDown()
+        edit.get(5, TimeUnit.SECONDS)
+        registration.get(5, TimeUnit.SECONDS)
+
+        assertEquals(PLAN_MEMBER_ID, repository.findAll().single().memberId)
     }
 
     @Test
@@ -77,9 +164,9 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
 
         val edit = executor.submit {
             transactions.executeWithoutResult {
-                jobService.lockForScheduleEdit(10L)
+                jobService.lockForScheduleEdit(10L, listOf(MEMBER_ID))
                 jobService.registerFromScheduleDto(
-                    1L,
+                    MEMBER_ID,
                     original.copy(startAt = "2026-07-24T05:05:00Z"),
                 )
                 editLocked.countDown()
@@ -123,7 +210,7 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
         check(fenceValidated.await(5, TimeUnit.SECONDS))
         val edit = executor.submit {
             jobService.registerFromScheduleDto(
-                1L,
+                MEMBER_ID,
                 original.copy(startAt = "2026-07-24T05:05:00Z"),
             )
         }
@@ -165,7 +252,7 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
     }
 
     private fun createClaimedJob(dto: ScheduleDto): Long {
-        val created = requireNotNull(jobService.registerFromScheduleDto(1L, dto))
+        val created = requireNotNull(jobService.registerFromScheduleDto(MEMBER_ID, dto))
         val jobId = requireNotNull(created.id)
         transactions.executeWithoutResult {
             val job = requireNotNull(repository.findByIdForUpdate(jobId))
@@ -214,6 +301,9 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
         )
 
     companion object {
+        private const val MEMBER_ID = 1L
+        private const val EDITOR_MEMBER_ID = 2L
+        private const val PLAN_MEMBER_ID = 3L
         private val NOW = Instant.parse("2026-07-24T03:00:00Z")
     }
 }

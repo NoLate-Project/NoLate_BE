@@ -1,11 +1,14 @@
 package com.noLate.schedule.controller
 
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.schedule.application.useCase.ScheduleUseCase
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
@@ -17,7 +20,13 @@ class ScheduleNotificationActionControllerUnitTest {
     @Mock
     lateinit var scheduleUseCase: ScheduleUseCase
 
-    private val principal = MemberPrincipal(7L, "member@example.com", "member")
+    private val sessionGeneration = 9L
+    private val principal = MemberPrincipal(
+        id = 7L,
+        email = "member@example.com",
+        name = "member",
+        accessTokenSessionGeneration = sessionGeneration,
+    )
     private val schedule = ScheduleDto(
         id = 71L,
         ownerMemberId = 7L,
@@ -29,13 +38,13 @@ class ScheduleNotificationActionControllerUnitTest {
     @Test
     fun `depart-now forwards action-specific Idempotency-Key`() {
         val key = "departNow:key:" + "c".repeat(64)
-        whenever(scheduleUseCase.markDeparted(7L, 71L, key)).thenReturn(schedule)
+        whenever(scheduleUseCase.markDeparted(7L, 71L, key, sessionGeneration)).thenReturn(schedule)
         val controller = ScheduleController(scheduleUseCase)
 
         val response = controller.markScheduleDeparted(principal, 71L, key)
 
         assertEquals(schedule, response.data)
-        verify(scheduleUseCase).markDeparted(7L, 71L, key)
+        verify(scheduleUseCase).markDeparted(7L, 71L, key, sessionGeneration)
     }
 
     @Test
@@ -46,7 +55,19 @@ class ScheduleNotificationActionControllerUnitTest {
         controller.snoozeDepartureReminder(principal, 71L, key)
         controller.snoozeDepartureReminder(principal, 71L, null)
 
-        verify(scheduleUseCase).snoozeDepartureReminder(7L, 71L, key)
-        verify(scheduleUseCase).snoozeDepartureReminder(7L, 71L, null)
+        verify(scheduleUseCase).snoozeDepartureReminder(7L, 71L, key, sessionGeneration)
+        verify(scheduleUseCase).snoozeDepartureReminder(7L, 71L, null, sessionGeneration)
+    }
+
+    @Test
+    fun `notification action rejects a principal without signed session generation`() {
+        val legacyPrincipal = MemberPrincipal(7L, "member@example.com", "member")
+        val controller = ScheduleController(scheduleUseCase)
+
+        val failure = assertThrows<BusinessException> {
+            controller.snoozeDepartureReminder(legacyPrincipal, 71L, null)
+        }
+
+        assertEquals(ErrorCode.UNAUTHORIZED, failure.errorCode)
     }
 }

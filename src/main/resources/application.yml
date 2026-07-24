@@ -19,7 +19,8 @@ spring:
 
   jpa:
     # 주기적으로 실행되는 스케줄 워커의 정상 쿼리는 출력하지 않는다.
-    # 그 외 쿼리는 P6Spy 리스너가 바인딩 값을 포함해 출력하며, 실패 SQL은 항상 출력한다.
+    # 그 외 쿼리도 P6Spy 리스너가 operation/table/elapsed만 출력한다. SQL 원문과
+    # 바인딩 값은 성공/실패 모두 default-deny 하고, 실패 시 안전한 JDBC code만 추가한다.
     show-sql: false
     properties:
       hibernate:
@@ -48,7 +49,7 @@ spring:
 
 logging:
   level:
-    # SQL 출력은 P6Spy 리스너 한 곳으로 모아 중복 로그를 피한다.
+    # SQL 실행 메타데이터는 값 없는 P6Spy 리스너 한 곳으로 모아 중복 로그를 피한다.
     org.hibernate.SQL: "OFF"
     org.hibernate.orm.jdbc.bind: "OFF"
     # IDE 의존성 동기화 전에 P6Spy가 아직 없다면 Hibernate 오류 로그가 fallback이 된다.

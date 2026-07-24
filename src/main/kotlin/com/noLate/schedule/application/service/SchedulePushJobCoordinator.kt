@@ -1,8 +1,10 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -18,19 +20,52 @@ import java.time.temporal.ChronoUnit
  * 외부 호출을 감싼 transaction의 rollback과 분리한다.
  */
 @Service
-class SchedulePushJobCoordinator(
+class SchedulePushJobCoordinator private constructor(
     private val repository: SchedulePushJobRepository,
+    private val memberRepository: MemberRepository?,
+    @Suppress("UNUSED_PARAMETER") legacyTestBoundary: Boolean,
 ) {
+    @Autowired
+    constructor(
+        repository: SchedulePushJobRepository,
+        memberRepository: MemberRepository,
+    ) : this(repository, memberRepository, false)
+
+    /** Unit tests that exercise detached worker policy without a persistence member fixture. */
+    internal constructor(repository: SchedulePushJobRepository) : this(repository, null, true)
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun claimNextDueJob(now: Instant, workerId: String): SchedulePushJob? {
-        val dueJob = repository
-            .findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+        if (memberRepository == null) {
+            val legacyTestJob = repository
+                .findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+                    SchedulePushJobStatus.ACTIVE,
+                    now,
+                    PageRequest.of(0, 1),
+                )
+                .singleOrNull()
+                ?: return null
+            legacyTestJob.startProcessing(workerId, now)
+            repository.flush()
+            return legacyTestJob
+        }
+        val candidate = repository
+            .findDueCandidates(
                 SchedulePushJobStatus.ACTIVE,
                 now,
                 PageRequest.of(0, 1),
             )
             .singleOrNull()
+            ?: return null
+        if (memberRepository.findByIdForUpdate(candidate.memberId)?.deleted != false) {
+            return null
+        }
+        val dueJob = repository.findByIdForUpdate(candidate.id)
+            ?.takeIf {
+                it.memberId == candidate.memberId &&
+                    it.status == SchedulePushJobStatus.ACTIVE &&
+                    !it.nextCheckAt.isAfter(now)
+            }
             ?: return null
         dueJob.startProcessing(workerId, now)
         repository.flush()
@@ -45,12 +80,50 @@ class SchedulePushJobCoordinator(
         batchSize: Int,
     ): Int {
         val timeoutBoundary = now.minus(processingTimeoutMinutes, ChronoUnit.MINUTES)
-        val staleJobs = repository
-            .findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
+        if (memberRepository == null) {
+            val legacyTestJobs = repository
+                .findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
+                    SchedulePushJobStatus.PROCESSING,
+                    timeoutBoundary,
+                    PageRequest.of(0, batchSize.coerceIn(1, 200)),
+                )
+            legacyTestJobs.forEach { job ->
+                if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
+                    job.complete()
+                } else {
+                    job.recoverProcessingTimeout(
+                        reason = "Processing timeout. lockedBy=${job.lockedBy}, lockedAt=${job.lockedAt}",
+                        nextCheckAt = now,
+                    )
+                }
+            }
+            repository.flush()
+            return legacyTestJobs.size
+        }
+        val candidates = repository
+            .findStaleCandidates(
                 SchedulePushJobStatus.PROCESSING,
                 timeoutBoundary,
                 PageRequest.of(0, batchSize.coerceIn(1, 200)),
             )
+        if (candidates.isEmpty()) return 0
+        val activeMemberIds = memberRepository.findAllByIdsForUpdate(
+            candidates.map { it.memberId }.distinct().sorted(),
+        ).asSequence()
+            .filterNot { it.deleted }
+            .map { it.id }
+            .toSet()
+        val staleJobs = candidates.asSequence()
+            .filter { it.memberId in activeMemberIds }
+            .mapNotNull { it.id }
+            .sorted()
+            .mapNotNull(repository::findByIdForUpdate)
+            .filter {
+                it.memberId in activeMemberIds &&
+                    it.status == SchedulePushJobStatus.PROCESSING &&
+                    it.lockedAt?.isAfter(timeoutBoundary) == false
+            }
+            .toList()
         staleJobs.forEach { job ->
             if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
                 job.complete()
@@ -67,9 +140,13 @@ class SchedulePushJobCoordinator(
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun persist(job: SchedulePushJob, workerId: String) {
+        if (memberRepository != null &&
+            memberRepository.findByIdForUpdate(job.memberId)?.deleted != false
+        ) {
+            return
+        }
         job.id?.let { jobId ->
-            val current = repository.findByIdForUpdate(jobId)
-                ?: error("Schedule push job disappeared while processing. jobId=$jobId")
+            val current = repository.findByIdForUpdate(jobId) ?: return
             check(
                 current.status == SchedulePushJobStatus.PROCESSING &&
                     current.lockedBy == workerId

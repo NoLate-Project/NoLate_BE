@@ -4,6 +4,7 @@ import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.PushManifestState
 import com.noLate.notification.domain.PushOutboxDispatchStatus
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.support.ensureActivePushMember
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -35,12 +37,16 @@ import java.util.concurrent.TimeUnit
 class PushOutboxDispatchCoordinatorConcurrencyIntegrationTest @Autowired constructor(
     private val coordinator: PushOutboxDispatchCoordinator,
     private val repository: AppNotificationRepository,
+    private val jdbcTemplate: JdbcTemplate,
 ) {
     private val now = Instant.parse("2026-07-24T05:00:00Z")
 
     @BeforeEach
     fun clean() {
         repository.deleteAll()
+        listOf(31L, 41L, 42L, 43L).forEach {
+            ensureActivePushMember(jdbcTemplate, it)
+        }
     }
 
     @Test

@@ -95,8 +95,8 @@ class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException::class)
     fun handleDataIntegrityViolation(ex: DataIntegrityViolationException): ResponseEntity<ApiResponse<Nothing>> {
-        // Driver/Hibernate messages may contain SQL literals. P6Spy emits the sanctioned
-        // SQLState/vendor-code event; the HTTP boundary records class metadata only.
+        // Driver/Hibernate messages may contain SQL literals. P6Spy emits only value-free
+        // operation/table/SQLState/vendor-code metadata; the HTTP boundary records class metadata only.
         log.warn(
             "Database uniqueness/constraint violation rejected. failureType={}, rootType={}",
             ex.javaClass.simpleName,

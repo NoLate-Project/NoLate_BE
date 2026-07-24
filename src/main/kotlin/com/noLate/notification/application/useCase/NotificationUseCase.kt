@@ -10,6 +10,7 @@ import com.noLate.notification.application.service.PersistedPushDispatchFenceFac
 import com.noLate.notification.application.service.PreparedPushEvent
 import com.noLate.notification.application.service.PushDeliveryClaim
 import com.noLate.notification.application.service.PushDeliveryClaimOutcome
+import com.noLate.notification.application.service.PushDeliveryFailureTransition
 import com.noLate.notification.application.service.PushDeliveryService
 import com.noLate.notification.application.service.PushDispatchFence
 import com.noLate.notification.application.service.PushEventOutboxService
@@ -129,6 +130,9 @@ class NotificationUseCase(
             persistInInbox = true,
             fence = dispatchFence,
         )
+        if (!prepared.recipientActive) {
+            return NotificationSendResult(recipientInactive = true)
+        }
         if (!prepared.fenceAccepted) {
             return NotificationSendResult(fenceRejected = true)
         }
@@ -186,6 +190,12 @@ class NotificationUseCase(
 
                 PushDeliveryClaimOutcome.INVALID_TOKEN ->
                     NotificationSendResult(invalidTokenCount = 1)
+
+                PushDeliveryClaimOutcome.EXHAUSTED ->
+                    NotificationSendResult(exhaustedCount = 1)
+
+                PushDeliveryClaimOutcome.DEFERRED ->
+                    NotificationSendResult(deferredCount = 1)
 
                 PushDeliveryClaimOutcome.DEDUPLICATED ->
                     NotificationSendResult(deduplicatedCount = 1)
@@ -339,8 +349,8 @@ class NotificationUseCase(
         } catch (exception: ConfirmedPushDeliveryException) {
             val errorCode = exception.javaClass.simpleName
             val errorMessage = exception.safeMessage(providerToken)
-            val retryStatePersisted = deliveryId?.let {
-                runCatching {
+            val transition = deliveryId?.let {
+                runCatching<PushDeliveryFailureTransition> {
                     pushDeliveryService.markFailure(
                         it,
                         errorCode,
@@ -356,8 +366,8 @@ class NotificationUseCase(
                         deliveryId,
                         failure.javaClass.simpleName,
                     )
-                }.isSuccess
-            } ?: false
+                }.getOrDefault(PushDeliveryFailureTransition.NOT_APPLIED)
+            } ?: PushDeliveryFailureTransition.NOT_APPLIED
             recordFailure(
                 memberId,
                 tokenEntity,
@@ -372,13 +382,19 @@ class NotificationUseCase(
                 tokenEntity.id,
                 deliveryId,
                 errorCode,
-                retryStatePersisted,
+                transition == PushDeliveryFailureTransition.RETRYABLE,
             )
             NotificationSendResult(
                 attemptedCount = 1,
                 failedCount = 1,
-                retryableFailedCount = if (retryStatePersisted) 1 else 0,
-                ambiguousCount = if (retryStatePersisted) 0 else 1,
+                retryableFailedCount =
+                    if (transition == PushDeliveryFailureTransition.RETRYABLE) 1 else 0,
+                supersededCount =
+                    if (transition == PushDeliveryFailureTransition.TERMINAL_SUPERSEDED) 1 else 0,
+                ambiguousCount =
+                    if (transition == PushDeliveryFailureTransition.NOT_APPLIED) 1 else 0,
+                recipientInactive =
+                    transition == PushDeliveryFailureTransition.RECIPIENT_INACTIVE,
             )
         } catch (exception: Exception) {
             val errorCode = exception.javaClass.simpleName
@@ -503,6 +519,10 @@ data class NotificationSendResult(
     val retryableFailedCount: Int = 0,
     val removedTokenCount: Int = 0,
     val invalidTokenCount: Int = 0,
+    /** confirmed failure가 per-device provider attempt 한도를 모두 사용한 terminal 수 */
+    val exhaustedCount: Int = 0,
+    /** authoritative schedule source가 PROCESSING이라 provider 없이 연기한 manifest 수 */
+    val deferredCount: Int = 0,
     val alreadyDeliveredCount: Int = 0,
     /** provider 호출 전 경계만 남아 성공 여부가 모호해 재전송하지 않은 기기 수 */
     val ambiguousCount: Int = 0,
@@ -512,6 +532,8 @@ data class NotificationSendResult(
     /** manifest가 0건으로 동결되어 이후 등록 기기로 확장하지 않는 event 수 */
     val noDeviceEventCount: Int = 0,
     val fenceRejected: Boolean = false,
+    /** withdrawal이 먼저 linearize되어 source/history/provider 작업을 만들지 않은 terminal no-op */
+    val recipientInactive: Boolean = false,
     /** ALREADY_SUCCESS 재조회 시 원래 provider 성공 시각 */
     val alreadyDeliveredAt: Instant? = null,
     val eventSnapshot: AppNotificationSnapshot? = null,
@@ -520,7 +542,7 @@ data class NotificationSendResult(
     val durablyHandledCount: Int
         get() =
             sentCount + alreadyDeliveredCount + ambiguousCount + deduplicatedCount +
-                invalidTokenCount + supersededCount + noDeviceEventCount
+                invalidTokenCount + exhaustedCount + supersededCount + noDeviceEventCount
 
     val confirmedSuccessCount: Int
         get() = sentCount + alreadyDeliveredCount
@@ -528,7 +550,7 @@ data class NotificationSendResult(
     val terminalManifestCount: Int
         get() =
             sentCount + alreadyDeliveredCount + ambiguousCount + invalidTokenCount +
-                supersededCount + deduplicatedCount
+                exhaustedCount + supersededCount + deduplicatedCount
 
     operator fun plus(other: NotificationSendResult): NotificationSendResult =
         NotificationSendResult(
@@ -539,12 +561,15 @@ data class NotificationSendResult(
             retryableFailedCount = retryableFailedCount + other.retryableFailedCount,
             removedTokenCount = removedTokenCount + other.removedTokenCount,
             invalidTokenCount = invalidTokenCount + other.invalidTokenCount,
+            exhaustedCount = exhaustedCount + other.exhaustedCount,
+            deferredCount = deferredCount + other.deferredCount,
             alreadyDeliveredCount = alreadyDeliveredCount + other.alreadyDeliveredCount,
             ambiguousCount = ambiguousCount + other.ambiguousCount,
             deduplicatedCount = deduplicatedCount + other.deduplicatedCount,
             supersededCount = supersededCount + other.supersededCount,
             noDeviceEventCount = noDeviceEventCount + other.noDeviceEventCount,
             fenceRejected = fenceRejected || other.fenceRejected,
+            recipientInactive = recipientInactive || other.recipientInactive,
             alreadyDeliveredAt = listOfNotNull(alreadyDeliveredAt, other.alreadyDeliveredAt).maxOrNull(),
             eventSnapshot = eventSnapshot ?: other.eventSnapshot,
             inboxDeduplicated = inboxDeduplicated || other.inboxDeduplicated,

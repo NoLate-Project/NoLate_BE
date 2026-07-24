@@ -112,6 +112,10 @@ class AppNotification(
     @Column(name = "dispatch_attempt_count", nullable = false)
     var dispatchAttemptCount: Int = 0,
 
+    /** 실제 drainer 실패 예산. source job PROCESSING 같은 정상 deferral claim은 포함하지 않는다. */
+    @Column(name = "dispatch_failure_count", nullable = false)
+    var dispatchFailureCount: Int = 0,
+
     @Column(name = "next_dispatch_at")
     var nextDispatchAt: Instant? = null,
 
@@ -199,6 +203,21 @@ class AppNotification(
     }
 
     /**
+     * A late confirmed failure must not resurrect an event whose authoritative schedule source is
+     * terminal or whose generation/input identity changed. This invalidates any stale outbox lease
+     * and converges the persisted safety source in the same transaction as the delivery.
+     */
+    fun completeSupersededDispatch(at: Instant, reason: String) {
+        if (manifestState != PushManifestState.FROZEN) return
+        dispatchStatus = PushOutboxDispatchStatus.COMPLETED
+        dispatchCompletedAt = at
+        nextDispatchAt = null
+        dispatchLockedBy = null
+        dispatchLockedAt = null
+        dispatchFailureReason = reason.take(500)
+    }
+
+    /**
      * Schedule source worker가 lease를 잃은 뒤 늦게 성공한 경우에도 confirmed 지표 보정이
      * 유실되지 않도록 ALREADY_SUCCESS redrive를 예약한다. provider는 다시 호출되지 않는다.
      */
@@ -240,6 +259,7 @@ class AppNotification(
     fun retryDispatch(workerId: String, nextAt: Instant, reason: String) {
         check(dispatchStatus == PushOutboxDispatchStatus.PROCESSING && dispatchLockedBy == workerId)
         dispatchStatus = PushOutboxDispatchStatus.PENDING
+        dispatchFailureCount += 1
         nextDispatchAt = nextAt
         dispatchLockedBy = null
         dispatchLockedAt = null
@@ -249,8 +269,22 @@ class AppNotification(
     fun failDispatch(workerId: String, at: Instant, reason: String) {
         check(dispatchStatus == PushOutboxDispatchStatus.PROCESSING && dispatchLockedBy == workerId)
         dispatchStatus = PushOutboxDispatchStatus.FAILED
+        dispatchFailureCount += 1
         dispatchCompletedAt = at
         nextDispatchAt = null
+        dispatchLockedBy = null
+        dispatchLockedAt = null
+        dispatchFailureReason = reason.take(500)
+    }
+
+    /**
+     * Authoritative source worker가 아직 PROCESSING인 경우의 정상 대기다. lease epoch인
+     * dispatchAttemptCount는 계속 단조 증가하지만 실제 실패 예산은 소비하지 않는다.
+     */
+    fun deferDispatch(workerId: String, nextAt: Instant, reason: String) {
+        check(dispatchStatus == PushOutboxDispatchStatus.PROCESSING && dispatchLockedBy == workerId)
+        dispatchStatus = PushOutboxDispatchStatus.PENDING
+        nextDispatchAt = nextAt
         dispatchLockedBy = null
         dispatchLockedAt = null
         dispatchFailureReason = reason.take(500)

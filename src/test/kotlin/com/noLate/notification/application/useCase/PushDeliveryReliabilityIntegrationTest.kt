@@ -29,6 +29,7 @@ import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.notification.support.registerAuthenticatedPushToken
+import com.noLate.notification.support.ensureActivePushMember
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -609,14 +610,16 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         assertFalse(history.errorMessage.orEmpty().contains(token))
     }
 
-    private fun send(memberId: Long, key: String): NotificationSendResult =
-        notificationUseCase.sendToMember(
+    private fun send(memberId: Long, key: String): NotificationSendResult {
+        ensureActivePushMember(jdbcTemplate, memberId)
+        return notificationUseCase.sendToMember(
             memberId = memberId,
             title = "출발 시간 안내",
             body = "이동을 준비해주세요.",
             data = pushData(),
             inboxDeduplicationKey = key,
         )
+    }
 
     private fun pushData() = mapOf(
         "type" to "SCHEDULE_DEPARTURE_REMINDER",

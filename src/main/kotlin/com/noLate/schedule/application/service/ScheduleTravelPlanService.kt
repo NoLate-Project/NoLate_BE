@@ -24,6 +24,7 @@ import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import com.noLate.subscription.application.SubscriptionPolicyService
 import jakarta.transaction.Transactional
+import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.stereotype.Service
 import java.time.Clock
 import java.time.Instant
@@ -139,6 +140,29 @@ class ScheduleTravelPlanService(
             .filterNot { ScheduleTravelPlanFingerprint.matches(it, schedule) }
             .map { it.memberId }
             .toSet()
+    }
+
+    @Transactional
+    fun findNotificationEnabledMemberIds(scheduleId: Long): Set<Long> =
+        travelPlanRepository.findNotificationEnabledMemberIdsByScheduleId(scheduleId).toSet()
+
+    /**
+     * schedule row lock을 얻은 뒤 다시 읽은 알림 대상은 편집이 job gap을 잡기 전에 잠근
+     * member 집합의 부분집합이어야 한다. 새 대상이 보이면 gap 뒤에서 member lock을 추가해
+     * 전역 lock order를 뒤집지 않고 transaction 전체를 롤백한다.
+     */
+    @Transactional
+    fun requireNotificationMembersWithinFence(
+        scheduleId: Long,
+        lockedMemberIds: Set<Long>,
+    ) {
+        val currentMemberIds =
+            travelPlanRepository.findNotificationEnabledMemberIdsByScheduleId(scheduleId)
+        if (currentMemberIds.any { it !in lockedMemberIds }) {
+            throw ConcurrencyFailureException(
+                "Schedule notification participants changed while the edit fence was being acquired.",
+            )
+        }
     }
 
     /**

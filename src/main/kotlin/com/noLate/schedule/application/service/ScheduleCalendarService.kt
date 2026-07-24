@@ -98,6 +98,10 @@ class ScheduleCalendarService(
         color: String?,
         defaultContentMode: ScheduleShareContentMode?,
     ): ScheduleCalendarDto {
+        val previewMemberIds = calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+        lockCalendarMembers(previewMemberIds + ownerMemberId, ownerMemberId)
         val calendar = lockOwnedCalendar(calendarId, ownerMemberId)
         val ownerMembership = findActiveMembership(calendarId, ownerMemberId)
         val previousContentMode = calendar.defaultContentMode
@@ -150,8 +154,9 @@ class ScheduleCalendarService(
         targetAppId: Long?,
         role: ScheduleCalendarRole,
     ): ScheduleCalendarMemberDto {
-        lockOwnedCalendar(calendarId, ownerMemberId)
+        // Recipient member precedes calendar/membership and the BEFORE_COMMIT notification source.
         val target = findTargetMember(targetEmail, targetAppId)
+        lockOwnedCalendar(calendarId, ownerMemberId)
         val targetMemberId = requireNotNull(target.id)
         if (targetMemberId == ownerMemberId) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "캘린더 소유자는 다시 초대할 수 없습니다.")
@@ -192,6 +197,7 @@ class ScheduleCalendarService(
         targetMemberId: Long,
         role: ScheduleCalendarRole?,
     ): ScheduleCalendarMemberDto {
+        lockCalendarMembers(listOf(targetMemberId), targetMemberId)
         lockOwnedCalendar(calendarId, ownerMemberId)
         val membership = calendarMemberRepository.findForUpdate(calendarId, targetMemberId)
             ?.takeIf { !it.deleted && it.status == ScheduleCalendarMemberStatus.ACTIVE }
@@ -230,6 +236,7 @@ class ScheduleCalendarService(
 
     @Transactional
     fun removeMember(ownerMemberId: Long, calendarId: Long, targetMemberId: Long) {
+        lockCalendarMembers(listOf(targetMemberId), targetMemberId)
         lockOwnedCalendar(calendarId, ownerMemberId)
         val membership = calendarMemberRepository.findForUpdate(calendarId, targetMemberId)
             ?.takeIf { !it.deleted && it.status == ScheduleCalendarMemberStatus.ACTIVE }
@@ -245,6 +252,7 @@ class ScheduleCalendarService(
 
     @Transactional
     fun leaveCalendar(memberId: Long, calendarId: Long) {
+        lockCalendarMembers(listOf(memberId), memberId)
         val calendar = calendarRepository.findActiveForUpdate(calendarId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
         val membership = calendarMemberRepository.findForUpdate(calendarId, memberId)
@@ -303,6 +311,10 @@ class ScheduleCalendarService(
 
     @Transactional
     fun archiveCalendar(ownerMemberId: Long, calendarId: Long) {
+        val previewMemberIds = calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+        lockCalendarMembers(previewMemberIds + ownerMemberId, ownerMemberId)
         val calendar = lockOwnedCalendar(calendarId, ownerMemberId)
         val pendingInvitations = lockPendingCalendarInvitations(calendarId)
         val affectedMemberIds = calendarMemberRepository
@@ -322,6 +334,26 @@ class ScheduleCalendarService(
             throw BusinessException(ErrorCode.FORBIDDEN)
         }
         return calendar
+    }
+
+    /**
+     * Withdrawal 및 push-job cleanup과 동일한 전역 순서(member -> calendar -> job)를 쓴다.
+     * 잠금 없는 membership preview는 대상 id 발견에만 사용하고, 권한/상태는 calendar 및
+     * membership row를 잠근 뒤 다시 검증한다.
+     */
+    private fun lockCalendarMembers(
+        memberIds: Collection<Long>,
+        requiredMemberId: Long,
+    ) {
+        val activeIds = memberRepository.findAllByIdsForUpdate(
+            memberIds.distinct().sorted(),
+        ).asSequence()
+            .filterNot { it.deleted }
+            .mapNotNull { it.id }
+            .toSet()
+        if (requiredMemberId !in activeIds) {
+            throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
+        }
     }
 
     /**
@@ -372,13 +404,16 @@ class ScheduleCalendarService(
         if (hasEmail == hasAppId) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "targetEmail과 targetAppId 중 하나만 입력해야 합니다.")
         }
-        return if (hasAppId) {
+        val target = if (hasAppId) {
             val id = targetAppId?.takeIf { it > 0L }
                 ?: throw BusinessException(ErrorCode.INVALID_INPUT, "targetAppId는 양수여야 합니다.")
             memberRepository.findByIdAndDeletedFalse(id)
         } else {
             memberRepository.findByEmailAndDeletedFalse(requireNotNull(normalizedEmail))
         } ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
+        return memberRepository.findByIdForUpdate(requireNotNull(target.id))
+            ?.takeUnless { it.deleted }
+            ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
     }
 
     private fun validateGrantableRole(role: ScheduleCalendarRole) {
