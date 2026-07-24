@@ -24,7 +24,11 @@ import java.time.Instant
         UniqueConstraint(
             name = "uk_app_notifications_member_deduplication",
             columnNames = ["member_id", "deduplication_key"],
-        )
+        ),
+        UniqueConstraint(
+            name = "uk_app_notifications_member_logical_event",
+            columnNames = ["member_id", "logical_event_key"],
+        ),
     ],
     indexes = [
         Index(
@@ -52,6 +56,9 @@ class AppNotification(
      */
     @Column(name = "deduplication_key", length = 180)
     val deduplicationKey: String? = null,
+
+    @Column(name = "logical_event_key", nullable = false, length = 100)
+    val logicalEventKey: String = PushLogicalEventKey.newEvent(),
 
     @Column(nullable = false, length = 80)
     val type: String,
@@ -91,6 +98,7 @@ class AppNotification(
 
     protected constructor() : this(
         memberId = 0L,
+        logicalEventKey = "event:jpa-placeholder",
         type = "GENERAL",
         title = "",
         body = "",

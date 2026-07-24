@@ -53,13 +53,17 @@ class MemberService(
        return MemberPrincipal(
            id = requireNotNull(member.id),
            email = member.email ?: "",
-           name = member.name ?: ""
+           name = member.name ?: "",
+           accessTokenIssuedAt = tokenIssuedAt,
        )
     }
 
     @Transactional
     fun invalidateSessions(memberId: Long) {
-        val member = memberRepository.findByIdAndDeletedFalse(memberId) ?: return
+        // logout/withdraw 모두 token row보다 member row를 먼저 잠그는 전역 순서를 지킨다.
+        val member = memberRepository.findByIdForUpdate(memberId)
+            ?.takeUnless { it.deleted }
+            ?: return
         member.tokensValidAfter = Instant.now()
         memberRepository.save(member)
     }

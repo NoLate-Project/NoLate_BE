@@ -91,9 +91,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
         whenever(scheduleAccessPolicy.resolve(2L, schedule)).thenReturn(
             ScheduleAccessDecision(
@@ -128,9 +128,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
         assertEquals(1, worker().runDueJobs(testNow))
@@ -185,9 +185,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
         whenever(travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
             .thenReturn(stalePlan)
@@ -231,9 +231,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
         worker().runDueJobs(testNow)
@@ -281,9 +281,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -328,9 +328,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -395,9 +395,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 secondReminderAt,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -458,9 +458,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -504,9 +504,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -654,6 +654,28 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `과거 SUCCESS 재조회는 lastPushedAt을 현재 시각으로 이동시키지 않는다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val deliveredAt = testNow.minus(2, ChronoUnit.MINUTES)
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 1,
+                    alreadyDeliveredCount = 1,
+                    alreadyDeliveredAt = deliveredAt,
+                )
+            )
+
+        worker().runDueJobs(testNow)
+
+        assertEquals(deliveredAt, job.lastPushedAt)
+        assertEquals(deliveredAt, job.departureNoticeSentAt)
+    }
+
+    @Test
     fun `모호한 전달은 이벤트 단계만 전진시키고 confirmed success 시각은 기록하지 않는다`() {
         val schedule = schedule(shortScheduleStartAt)
         val job = dueDepartureJob(schedule)
@@ -670,10 +692,14 @@ class SchedulePushJobWorkerTest {
         worker().runDueJobs(testNow)
 
         assertEquals(1, job.checkCount)
-        assertEquals(testNow, job.departureNoticeSentAt)
-        assertEquals("DEPART_NOW", job.lastDepartureReminderStage)
+        assertNull(job.departureNoticeSentAt)
+        assertNull(job.lastDepartureReminderStage)
+        assertEquals(testNow, job.handledDepartureNoticeAt)
+        assertEquals("DEPART_NOW", job.lastHandledDepartureReminderStage)
+        assertEquals(testNow, job.lastUncertainAt)
         assertNull(job.lastPushedAt)
         assertEquals(0, job.retryCount)
+        assertEquals(testNow.plus(3, ChronoUnit.MINUTES), job.nextCheckAt)
     }
 
     @Test
@@ -684,9 +710,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job), listOf(job))
+        ).thenReturn(listOf(job), emptyList(), listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(60)
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
@@ -701,6 +727,7 @@ class SchedulePushJobWorkerTest {
             departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
             monitorStartAt = schedule.startAt.minus(90, ChronoUnit.MINUTES),
             intervalMinutes = notificationIntervalMinutes,
+            notificationInputFingerprint = "meaningful-edit-fingerprint",
         )
         assertEquals(0, job.checkCount)
         assertEquals(1, job.notificationGeneration)
@@ -805,9 +832,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
 
         worker().runDueJobs(testNow)
 
@@ -850,9 +877,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(firstJob, secondJob))
+        ).thenReturn(listOf(firstJob), listOf(secondJob), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(firstSchedule)
         whenever(scheduleRepository.findScheduleDetail(20L, 2L)).thenReturn(secondSchedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(45, 50)
@@ -912,13 +939,14 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
                 SchedulePushJobStatus.PROCESSING,
                 testNow.minus(10, ChronoUnit.MINUTES),
+                org.springframework.data.domain.PageRequest.of(0, 50),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
         ).thenReturn(emptyList())
 
@@ -948,9 +976,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(42)
 
@@ -1002,9 +1030,9 @@ class SchedulePushJobWorkerTest {
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 testNow,
-                org.springframework.data.domain.PageRequest.of(0, 50),
+                org.springframework.data.domain.PageRequest.of(0, 1),
             )
-        ).thenReturn(listOf(job))
+        ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
     }

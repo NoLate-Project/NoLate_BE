@@ -11,6 +11,7 @@ import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushPlatform
+import com.noLate.notification.domain.PushLogicalEventKey
 import com.noLate.notification.domain.PushSendStatus
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -88,16 +89,26 @@ class NotificationUseCaseUnitTest {
             .getTokensByMember(memberId)
 
         verify(pushClient, times(1))
-            .sendToToken("token-1", title, body, data)
+            .sendToToken(
+                eq("token-1"),
+                eq(title),
+                eq(body),
+                argThat { canonicalFor(memberId, data) },
+            )
         verify(pushClient, times(1))
-            .sendToToken("token-2", title, body, data)
+            .sendToToken(
+                eq("token-2"),
+                eq(title),
+                eq(body),
+                argThat { canonicalFor(memberId, data) },
+            )
         verify(pushSendHistoryService).recordSuccess(
-            memberId = memberId,
-            token = tokens[0],
-            title = title,
-            body = body,
-            data = data,
-            fcmMessageId = "message-id",
+            memberId = eq(memberId),
+            token = eq(tokens[0]),
+            title = eq(title),
+            body = eq(body),
+            data = argThat { canonicalFor(memberId, data) },
+            fcmMessageId = eq("message-id"),
         )
         verify(appNotificationService, times(1)).recordWithResult(
             memberId = memberId,
@@ -107,12 +118,12 @@ class NotificationUseCaseUnitTest {
             deduplicationKey = null,
         )
         verify(pushSendHistoryService).recordSuccess(
-            memberId = memberId,
-            token = tokens[1],
-            title = title,
-            body = body,
-            data = data,
-            fcmMessageId = "message-id",
+            memberId = eq(memberId),
+            token = eq(tokens[1]),
+            title = eq(title),
+            body = eq(body),
+            data = argThat { canonicalFor(memberId, data) },
+            fcmMessageId = eq("message-id"),
         )
         assertEquals(2, result.requestedCount)
         assertEquals(2, result.sentCount)
@@ -132,20 +143,33 @@ class NotificationUseCaseUnitTest {
         whenever(notificationTokenService.getTokensByMember(memberId)).thenReturn(listOf(token))
         whenever(pushClient.sendToToken(eq("invalid-token"), any(), any(), any()))
             .thenThrow(InvalidPushTokenException("invalid-token"))
+        whenever(
+            notificationTokenService.removeTokenByOwnership(
+                memberId,
+                1L,
+                token.tokenFingerprint,
+                token.ownershipVersion,
+            )
+        ).thenReturn(true)
 
         val result = notificationUseCase.sendToMember(memberId, "제목", "내용")
 
         verify(pushSendHistoryService).recordFailure(
-            memberId = memberId,
-            token = token,
-            title = "제목",
-            body = "내용",
-            data = emptyMap(),
-            status = PushSendStatus.INVALID_TOKEN,
-            errorCode = InvalidPushTokenException::class.java.simpleName,
-            errorMessage = "유효하지 않은 푸시 토큰입니다.",
+            memberId = eq(memberId),
+            token = eq(token),
+            title = eq("제목"),
+            body = eq("내용"),
+            data = argThat { canonicalFor(memberId, emptyMap()) },
+            status = eq(PushSendStatus.INVALID_TOKEN),
+            errorCode = eq(InvalidPushTokenException::class.java.simpleName),
+            errorMessage = eq("유효하지 않은 푸시 토큰입니다."),
         )
-        verify(notificationTokenService).removeTokenById(memberId, 1L)
+        verify(notificationTokenService).removeTokenByOwnership(
+            memberId,
+            1L,
+            token.tokenFingerprint,
+            token.ownershipVersion,
+        )
         assertEquals(0, result.sentCount)
         assertEquals(1, result.failedCount)
         assertEquals(1, result.removedTokenCount)
@@ -166,10 +190,10 @@ class NotificationUseCaseUnitTest {
         )
 
         verify(pushSendHistoryService).recordNoToken(
-            memberId = memberId,
-            title = "제목",
-            body = "내용",
-            data = data,
+            memberId = eq(memberId),
+            title = eq("제목"),
+            body = eq("내용"),
+            data = argThat { canonicalFor(memberId, data) },
         )
         verify(appNotificationService).recordWithResult(
             memberId = memberId,
@@ -294,16 +318,16 @@ class NotificationUseCaseUnitTest {
         notificationUseCase.sendToMember(2L, "회원 2 알림", "회원 2 일정", secondData)
 
         verify(pushClient).sendToToken(
-            "member-1-token",
-            "회원 1 알림",
-            "회원 1 일정",
-            firstData,
+            eq("member-1-token"),
+            eq("회원 1 알림"),
+            eq("회원 1 일정"),
+            argThat { canonicalFor(1L, firstData) },
         )
         verify(pushClient).sendToToken(
-            "member-2-token",
-            "회원 2 알림",
-            "회원 2 일정",
-            secondData,
+            eq("member-2-token"),
+            eq("회원 2 알림"),
+            eq("회원 2 일정"),
+            argThat { canonicalFor(2L, secondData) },
         )
         verify(pushClient, never()).sendToToken(
             eq("member-1-token"),
@@ -318,4 +342,51 @@ class NotificationUseCaseUnitTest {
             eq(firstData),
         )
     }
+
+    @Test
+    fun `route action payload는 durable logical event와 recipient account binding을 포함한다`() {
+        val memberId = 77L
+        val deduplicationKey = "route-setup:77:marker-digest"
+        val expectedEventKey = PushLogicalEventKey.deterministic(memberId, deduplicationKey)
+        val token = NotificationDeviceToken(
+            id = 77L,
+            memberId = memberId,
+            deviceId = "route-device",
+            platform = PushPlatform.ANDROID,
+            token = "route-token",
+        )
+        whenever(notificationTokenService.getTokensByMember(memberId)).thenReturn(listOf(token))
+        whenever(pushClient.sendToToken(any(), any(), any(), any()))
+            .thenReturn(PushSendResult("route-message"))
+
+        notificationUseCase.sendToMember(
+            memberId = memberId,
+            title = "경로를 설정해주세요",
+            body = "일정의 출발 경로를 확인해주세요.",
+            data = mapOf(
+                "type" to "ROUTE_SETUP_REMINDER",
+                "scheduleId" to "700",
+            ),
+            inboxDeduplicationKey = deduplicationKey,
+        )
+
+        verify(pushClient).sendToToken(
+            eq("route-token"),
+            any(),
+            any(),
+            argThat {
+                this["type"] == "ROUTE_SETUP_REMINDER" &&
+                    this["logicalEventKey"] == expectedEventKey &&
+                    this["recipientMemberId"] == memberId.toString()
+            },
+        )
+    }
+
+    private fun Map<String, String>.canonicalFor(
+        memberId: Long,
+        original: Map<String, String>,
+    ): Boolean =
+        entries.containsAll(original.entries) &&
+            this["recipientMemberId"] == memberId.toString() &&
+            this["logicalEventKey"]?.startsWith("event:") == true
 }

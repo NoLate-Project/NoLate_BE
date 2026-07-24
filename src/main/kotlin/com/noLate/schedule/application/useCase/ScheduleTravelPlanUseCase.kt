@@ -39,6 +39,7 @@ class ScheduleTravelPlanUseCase(
         scheduleId: Long,
         command: ScheduleTravelPlanUpsertCommand,
     ): ScheduleTravelPlanDto {
+        pushJobService.lockForTravelPlanEdit(scheduleId, memberId)
         val plan = travelPlanService.upsertMyTravelPlan(memberId, scheduleId, command)
         val schedule = scheduleService.getScheduleDetail(memberId, scheduleId)
         if (plan.notificationEnabled) {

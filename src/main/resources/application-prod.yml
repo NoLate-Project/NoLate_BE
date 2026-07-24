@@ -8,6 +8,12 @@ spring:
       ddl-auto: update
     open-in-view: false
 
+logging:
+  level:
+    # JDBC driver duplicate-key 원문은 opaque credential을 포함할 수 있다. 운영에서는
+    # P6Spy의 SQLState/vendorCode/exceptionClass 기반 sanitized event만 남긴다.
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: "OFF"
+
 # 운영 API 계약과 내부 모델을 공개하지 않는다. 개발/테스트 프로필의 Swagger는 유지한다.
 springdoc:
   api-docs:

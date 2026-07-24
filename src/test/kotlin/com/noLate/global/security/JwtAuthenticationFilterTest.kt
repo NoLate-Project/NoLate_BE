@@ -41,15 +41,18 @@ class JwtAuthenticationFilterTest {
     @Test
     fun `access token authenticates only an active non-revoked member`() {
         val token = tokenProvider.createAccessToken(1L, "member")
-        whenever(memberService.getPrincipalById(org.mockito.kotlin.eq(1L), org.mockito.kotlin.any()))
-            .thenReturn(MemberPrincipal(1L, "member@example.com", "member"))
+        val issuedAt = tokenProvider.getIssuedAt(token)
+        whenever(memberService.getPrincipalById(org.mockito.kotlin.eq(1L), org.mockito.kotlin.eq(issuedAt)))
+            .thenReturn(MemberPrincipal(1L, "member@example.com", "member", issuedAt))
         val request = MockHttpServletRequest().apply {
             addHeader("Authorization", "Bearer $token")
         }
 
         filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
 
-        kotlin.test.assertEquals(1L, (SecurityContextHolder.getContext().authentication?.principal as MemberPrincipal).id)
+        val principal = SecurityContextHolder.getContext().authentication?.principal as MemberPrincipal
+        kotlin.test.assertEquals(1L, principal.id)
+        kotlin.test.assertEquals(issuedAt, principal.accessTokenIssuedAt)
     }
 
     @Test

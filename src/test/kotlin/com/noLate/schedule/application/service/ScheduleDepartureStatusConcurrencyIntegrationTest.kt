@@ -9,6 +9,7 @@ import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationWriter
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.NotificationTokenWriter
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.PushSendStatus
@@ -46,6 +47,7 @@ import java.util.concurrent.TimeUnit
     ScheduleDepartureStatusService::class,
     ScheduleDeparturePushNotificationListener::class,
     NotificationTokenService::class,
+    NotificationTokenWriter::class,
     PushSendHistoryService::class,
     AppNotificationService::class,
     AppNotificationWriter::class,

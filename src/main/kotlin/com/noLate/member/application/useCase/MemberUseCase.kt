@@ -8,6 +8,7 @@ import com.noLate.member.application.service.MemberProfileService
 import com.noLate.member.application.service.MemberConsentService
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
+import com.noLate.member.application.service.MemberSessionFenceService
 import com.noLate.member.application.service.MemberValidator
 import com.noLate.member.application.service.SocialIdentityVerifier
 import com.noLate.member.application.service.VerifiedSocialIdentity
@@ -34,6 +35,7 @@ class MemberUseCase(
     private val memberValidator: MemberValidator,
     private val refreshTokenService: RefreshTokenService,
     private val memberConsentService: MemberConsentService,
+    private val memberSessionFenceService: MemberSessionFenceService,
     private val socialIdentityVerifier: SocialIdentityVerifier? = null,
     private val accountCleanupService: AccountCleanupService? = null,
 ) {
@@ -250,13 +252,7 @@ class MemberUseCase(
         }
 
         // 4) 모든 세션과 기기 토큰을 제거하고 기존 access token도 즉시 무효화한다.
-        memberService.invalidateSessions(memberIdFromToken)
-        if (accountCleanupService != null) {
-            accountCleanupService.logoutAll(memberIdFromToken)
-        } else {
-            // 단위 테스트 호환 fallback. 운영에서는 AccountCleanupService bean이 항상 주입된다.
-            refreshTokenService.deleteAllByMemberId(memberIdFromToken)
-        }
+        memberSessionFenceService.invalidateSessionsAndLogout(memberIdFromToken)
     }
 
     /**

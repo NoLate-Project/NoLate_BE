@@ -9,12 +9,12 @@ import jakarta.persistence.*
     name = "push_device_token",
     uniqueConstraints = [
         UniqueConstraint(
-            name = "uk_push_device_token_token",
-            columnNames = ["token"],
+            name = "uk_push_device_token_token_fingerprint",
+            columnNames = ["token_fingerprint"],
         ),
         UniqueConstraint(
-            name = "uk_push_device_token_member_device",
-            columnNames = ["member_id", "device_id"],
+            name = "uk_push_device_token_member_device_fingerprint",
+            columnNames = ["member_id", "device_fingerprint"],
         ),
     ],
 )
@@ -45,9 +45,42 @@ class NotificationDeviceToken(
      * 실제 Push Provider(Firebase 등)에서 발급받은 토큰
      */
     @Column(nullable = false, length = 500)
-    var token: String
+    var token: String,
+
+    @Column(name = "token_fingerprint", nullable = false, length = 64)
+    var tokenFingerprint: String = OpaquePushIdentifier.fingerprint(token),
+
+    @Column(name = "device_fingerprint", length = 64)
+    var deviceFingerprint: String? = deviceId?.let(OpaquePushIdentifier::fingerprint),
+
+    @Column(name = "ownership_version", nullable = false)
+    var ownershipVersion: Long = 0,
 
 ) : BaseEntity() {
+
+    fun replaceOwnership(
+        memberId: Long,
+        deviceId: String?,
+        platform: PushPlatform,
+        token: String,
+        tokenFingerprint: String,
+        deviceFingerprint: String?,
+    ) {
+        val changed =
+            this.memberId != memberId ||
+                this.deviceId != deviceId ||
+                this.tokenFingerprint != tokenFingerprint ||
+                this.deviceFingerprint != deviceFingerprint
+        this.memberId = memberId
+        this.deviceId = deviceId
+        this.platform = platform
+        this.token = token
+        this.tokenFingerprint = tokenFingerprint
+        this.deviceFingerprint = deviceFingerprint
+        if (changed) {
+            ownershipVersion += 1
+        }
+    }
 
     // JPA용 기본 생성자
     protected constructor() : this(

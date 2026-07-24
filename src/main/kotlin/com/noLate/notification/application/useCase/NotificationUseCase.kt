@@ -8,12 +8,16 @@ import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.PushDeliveryClaim
 import com.noLate.notification.application.service.PushDeliveryClaimOutcome
 import com.noLate.notification.application.service.PushDeliveryService
+import com.noLate.notification.application.service.PushDispatchFence
+import com.noLate.notification.application.service.PushEventOutboxService
+import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.service.PushSendHistoryService
+import com.noLate.notification.domain.PushLogicalEventKey
 import com.noLate.notification.domain.PushSendStatus
+import com.noLate.notification.domain.withPushAccountBinding
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
+import java.time.Instant
 
 @Component
 class NotificationUseCase(
@@ -22,8 +26,15 @@ class NotificationUseCase(
     private val pushSendHistoryService: PushSendHistoryService,
     private val appNotificationService: AppNotificationService,
     private val pushDeliveryService: PushDeliveryService? = null,
+    private val pushEventOutboxService: PushEventOutboxService? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    fun findPersistedEvent(
+        memberId: Long,
+        inboxDeduplicationKey: String,
+    ): AppNotificationSnapshot? =
+        appNotificationService.findSnapshot(memberId, inboxDeduplicationKey)
 
     /**
      * 단일 회원에게 푸시 발송
@@ -35,10 +46,63 @@ class NotificationUseCase(
         data: Map<String, String> = emptyMap(),
         inboxDeduplicationKey: String? = null,
         persistInInbox: Boolean = true,
+    ): NotificationSendResult =
+        sendToMemberInternal(
+            memberId,
+            title,
+            body,
+            data,
+            inboxDeduplicationKey,
+            persistInInbox,
+            dispatchFence = null,
+        )
+
+    fun sendToMemberFenced(
+        memberId: Long,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+        inboxDeduplicationKey: String,
+        persistInInbox: Boolean = true,
+        dispatchFence: PushDispatchFence,
+    ): NotificationSendResult =
+        sendToMemberInternal(
+            memberId,
+            title,
+            body,
+            data,
+            inboxDeduplicationKey,
+            persistInInbox,
+            dispatchFence,
+        )
+
+    private fun sendToMemberInternal(
+        memberId: Long,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+        inboxDeduplicationKey: String?,
+        persistInInbox: Boolean,
+        dispatchFence: PushDispatchFence?,
     ): NotificationSendResult {
+        val tokens = notificationTokenService.getTokensByMember(memberId)
+        val preparedEvent = pushEventOutboxService?.prepare(
+            memberId = memberId,
+            title = title,
+            body = body,
+            data = data,
+            deduplicationKey = inboxDeduplicationKey,
+            persistInInbox = persistInInbox,
+            tokens = tokens,
+            fence = dispatchFence,
+        )
+        if (preparedEvent?.fenceAccepted == false) {
+            return NotificationSendResult(fenceRejected = true)
+        }
+
         // 사용자 알림은 기기 토큰과 무관한 논리 이벤트다. FCM 조회보다 먼저 한 번 저장하면
         // 토큰이 없거나 모든 기기 발송이 실패해도 앱 안에서 나중에 확인할 수 있다.
-        val inboxRecord = if (persistInInbox) {
+        val inboxRecord = if (preparedEvent == null && persistInInbox) {
             appNotificationService.recordWithResult(
                 memberId = memberId,
                 title = title,
@@ -49,38 +113,46 @@ class NotificationUseCase(
         } else {
             null
         }
-
-        val tokens = notificationTokenService.getTokensByMember(memberId)
-        val eventKey = inboxRecord?.notification?.id
-            ?.let { "inbox:$it" }
+        val fallbackEventKey = inboxRecord?.notification?.logicalEventKey
             ?: inboxDeduplicationKey
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
-                ?.let { "key:${it.sha256()}" }
-        if (eventKey != null && pushDeliveryService != null) {
+                ?.let { PushLogicalEventKey.deterministic(memberId, it) }
+            ?: PushLogicalEventKey.newEvent()
+        val eventKey = preparedEvent?.logicalEventKey ?: fallbackEventKey
+        val eventSnapshot = preparedEvent?.snapshot
+        val effectiveTitle = eventSnapshot?.title ?: title
+        val effectiveBody = eventSnapshot?.body ?: body
+        val effectiveData = eventSnapshot?.data
+            ?: data.withPushAccountBinding(eventKey, memberId)
+        if (preparedEvent == null && pushDeliveryService != null) {
             pushDeliveryService.prepareManifest(
                 memberId = memberId,
                 eventKey = eventKey,
                 tokens = tokens,
-                data = data,
+                data = effectiveData,
             )
         }
         var sentCount = 0
         var failedCount = 0
         var retryableFailedCount = 0
         var removedTokenCount = 0
+        var invalidTokenCount = 0
         var attemptedCount = 0
         var alreadyDeliveredCount = 0
         var ambiguousCount = 0
         var deduplicatedCount = 0
+        var supersededCount = 0
+        var fenceRejected = false
+        var alreadyDeliveredAt: Instant? = null
 
         if (tokens.isEmpty()) {
             runCatching {
                 pushSendHistoryService.recordNoToken(
                     memberId = memberId,
-                    title = title,
-                    body = body,
-                    data = data,
+                    title = effectiveTitle,
+                    body = effectiveBody,
+                    data = effectiveData,
                 )
             }.onFailure {
                 log.warn(
@@ -97,31 +169,47 @@ class NotificationUseCase(
                 eventKey = eventKey,
                 token = tokenEntity,
                 inboxAlreadyExisted = inboxRecord?.created == false,
+                dispatchFence = dispatchFence,
             )
             when (claim.outcome) {
                 PushDeliveryClaimOutcome.ALREADY_SUCCESS -> {
                     alreadyDeliveredCount += 1
+                    alreadyDeliveredAt = listOfNotNull(alreadyDeliveredAt, claim.deliveredAt).maxOrNull()
                     return@forEach
                 }
                 PushDeliveryClaimOutcome.AMBIGUOUS -> {
                     ambiguousCount += 1
                     return@forEach
                 }
-                PushDeliveryClaimOutcome.INVALID_TOKEN,
+                PushDeliveryClaimOutcome.INVALID_TOKEN -> {
+                    invalidTokenCount += 1
+                    return@forEach
+                }
                 PushDeliveryClaimOutcome.DEDUPLICATED -> {
                     deduplicatedCount += 1
+                    return@forEach
+                }
+                PushDeliveryClaimOutcome.SUPERSEDED -> {
+                    supersededCount += 1
+                    return@forEach
+                }
+                PushDeliveryClaimOutcome.FENCE_REJECTED -> {
+                    fenceRejected = true
                     return@forEach
                 }
                 PushDeliveryClaimOutcome.SEND -> Unit
             }
 
             attemptedCount += 1
+            val providerToken = requireNotNull(claim.providerToken) {
+                "SEND claim에는 검증된 provider token이 필요합니다."
+            }
             try {
                 val sendResult = pushClient.sendToToken(
-                    token = tokenEntity.token,
-                    title = title,
-                    body = body,
-                    data = data
+                    token = providerToken,
+                    title = effectiveTitle,
+                    body = effectiveBody,
+                    data = effectiveData,
                 )
 
                 // provider가 성공한 뒤 로컬 기록이 실패해도 FAILED로 되돌리지 않는다.
@@ -143,9 +231,9 @@ class NotificationUseCase(
                     pushSendHistoryService.recordSuccess(
                         memberId = memberId,
                         token = tokenEntity,
-                        title = title,
-                        body = body,
-                        data = data,
+                        title = effectiveTitle,
+                        body = effectiveBody,
+                        data = effectiveData,
                         fcmMessageId = sendResult.messageId,
                     )
                 }.onFailure {
@@ -159,7 +247,7 @@ class NotificationUseCase(
                 sentCount += 1
             } catch (exception: InvalidPushTokenException) {
                 val errorCode = exception.javaClass.simpleName
-                val errorMessage = exception.safeMessage(tokenEntity.token)
+                val errorMessage = exception.safeMessage(providerToken)
                 claim.deliveryId?.let { deliveryId ->
                     runCatching {
                         pushDeliveryService?.markInvalidToken(deliveryId, errorCode, errorMessage)
@@ -177,9 +265,9 @@ class NotificationUseCase(
                     pushSendHistoryService.recordFailure(
                         memberId = memberId,
                         token = tokenEntity,
-                        title = title,
-                        body = body,
-                        data = data,
+                        title = effectiveTitle,
+                        body = effectiveBody,
+                        data = effectiveData,
                         status = PushSendStatus.INVALID_TOKEN,
                         errorCode = errorCode,
                         errorMessage = errorMessage,
@@ -193,9 +281,12 @@ class NotificationUseCase(
                     )
                 }
                 val tokenRemoved = runCatching {
-                    tokenEntity.id
-                        ?.let { notificationTokenService.removeTokenById(memberId, it) }
-                        ?: error("저장된 push token ID가 없습니다.")
+                    notificationTokenService.removeTokenByOwnership(
+                        memberId = memberId,
+                        tokenId = requireNotNull(claim.tokenId),
+                        tokenFingerprint = requireNotNull(claim.tokenFingerprint),
+                        ownershipVersion = requireNotNull(claim.tokenOwnershipVersion),
+                    )
                 }.onFailure {
                     log.warn(
                         "Invalid push token removal failed. memberId={}, tokenId={}, errorCode={}",
@@ -203,10 +294,11 @@ class NotificationUseCase(
                         tokenEntity.id,
                         it.javaClass.simpleName,
                     )
-                }.isSuccess
+                }.getOrDefault(false)
                 if (tokenRemoved) {
                     removedTokenCount += 1
                 }
+                invalidTokenCount += 1
                 failedCount += 1
                 log.info(
                     "Processed invalid push token. memberId={}, tokenId={}, deliveryId={}, removed={}",
@@ -217,7 +309,7 @@ class NotificationUseCase(
                 )
             } catch (exception: ConfirmedPushDeliveryException) {
                 val errorCode = exception.javaClass.simpleName
-                val errorMessage = exception.safeMessage(tokenEntity.token)
+                val errorMessage = exception.safeMessage(providerToken)
                 val retryStatePersisted = claim.deliveryId?.let { deliveryId ->
                     runCatching {
                         pushDeliveryService?.markFailure(deliveryId, errorCode, errorMessage)
@@ -235,9 +327,9 @@ class NotificationUseCase(
                     pushSendHistoryService.recordFailure(
                         memberId = memberId,
                         token = tokenEntity,
-                        title = title,
-                        body = body,
-                        data = data,
+                        title = effectiveTitle,
+                        body = effectiveBody,
+                        data = effectiveData,
                         status = PushSendStatus.FAILED,
                         errorCode = errorCode,
                         errorMessage = errorMessage,
@@ -269,16 +361,16 @@ class NotificationUseCase(
                 )
             } catch (exception: Exception) {
                 val errorCode = exception.javaClass.simpleName
-                val errorMessage = exception.safeMessage(tokenEntity.token)
+                val errorMessage = exception.safeMessage(providerToken)
                 // 요청 수락 여부를 증명할 수 없는 transport/local 예외다. 사전 커밋한
                 // DISPATCHING을 그대로 두고 UNKNOWN 이력만 남겨 자동 재전송을 막는다.
                 runCatching {
                     pushSendHistoryService.recordFailure(
                         memberId = memberId,
                         token = tokenEntity,
-                        title = title,
-                        body = body,
-                        data = data,
+                        title = effectiveTitle,
+                        body = effectiveBody,
+                        data = effectiveData,
                         status = PushSendStatus.UNKNOWN,
                         errorCode = errorCode,
                         errorMessage = errorMessage,
@@ -309,10 +401,17 @@ class NotificationUseCase(
             failedCount = failedCount,
             retryableFailedCount = retryableFailedCount,
             removedTokenCount = removedTokenCount,
+            invalidTokenCount = invalidTokenCount,
             alreadyDeliveredCount = alreadyDeliveredCount,
             ambiguousCount = ambiguousCount,
             deduplicatedCount = deduplicatedCount,
-            inboxDeduplicated = inboxRecord?.created == false,
+            supersededCount = supersededCount,
+            fenceRejected = fenceRejected,
+            alreadyDeliveredAt = alreadyDeliveredAt,
+            eventSnapshot = eventSnapshot,
+            inboxDeduplicated =
+                preparedEvent?.let { persistInInbox && !it.inboxCreated }
+                    ?: (inboxRecord?.created == false),
         )
     }
 
@@ -321,20 +420,22 @@ class NotificationUseCase(
         eventKey: String?,
         token: com.noLate.notification.domain.NotificationDeviceToken,
         inboxAlreadyExisted: Boolean,
+        dispatchFence: PushDispatchFence?,
     ): PushDeliveryClaim {
         if (eventKey == null) {
-            return PushDeliveryClaim(PushDeliveryClaimOutcome.SEND)
+            return token.directSendClaim()
         }
         val service = pushDeliveryService
             ?: return if (inboxAlreadyExisted) {
                 PushDeliveryClaim(PushDeliveryClaimOutcome.DEDUPLICATED)
             } else {
-                PushDeliveryClaim(PushDeliveryClaimOutcome.SEND)
+                token.directSendClaim()
             }
         return service.claim(
             memberId = memberId,
             eventKey = eventKey,
             token = token,
+            fence = dispatchFence,
         )
     }
 
@@ -372,10 +473,18 @@ data class NotificationSendResult(
     /** provider가 명시적으로 미수락해 동일 event/device로 재시도할 수 있는 실패 수 */
     val retryableFailedCount: Int = 0,
     val removedTokenCount: Int = 0,
+    /** provider가 확정 무효로 판정했거나 이미 INVALID_TOKEN terminal인 기기 수 */
+    val invalidTokenCount: Int = 0,
     val alreadyDeliveredCount: Int = 0,
     /** provider 호출 전 경계만 남아 성공 여부가 모호해 재전송하지 않은 기기 수 */
     val ambiguousCount: Int = 0,
     val deduplicatedCount: Int = 0,
+    /** 현재 token ownership과 manifest snapshot이 달라 외부 호출 없이 terminal 처리한 수 */
+    val supersededCount: Int = 0,
+    val fenceRejected: Boolean = false,
+    /** ALREADY_SUCCESS 재조회 시 원래 provider 성공 시각 */
+    val alreadyDeliveredAt: Instant? = null,
+    val eventSnapshot: AppNotificationSnapshot? = null,
     val inboxDeduplicated: Boolean = false,
 ) {
     /**
@@ -383,7 +492,9 @@ data class NotificationSendResult(
      * 다시 provider로 보내지 않고 schedule job 상태를 전진시킬 수 있다.
      */
     val durablyHandledCount: Int
-        get() = sentCount + alreadyDeliveredCount + ambiguousCount + deduplicatedCount
+        get() =
+            sentCount + alreadyDeliveredCount + ambiguousCount + deduplicatedCount +
+                invalidTokenCount + supersededCount
 
     val confirmedSuccessCount: Int
         get() = sentCount + alreadyDeliveredCount
@@ -396,9 +507,14 @@ data class NotificationSendResult(
             failedCount = failedCount + other.failedCount,
             retryableFailedCount = retryableFailedCount + other.retryableFailedCount,
             removedTokenCount = removedTokenCount + other.removedTokenCount,
+            invalidTokenCount = invalidTokenCount + other.invalidTokenCount,
             alreadyDeliveredCount = alreadyDeliveredCount + other.alreadyDeliveredCount,
             ambiguousCount = ambiguousCount + other.ambiguousCount,
             deduplicatedCount = deduplicatedCount + other.deduplicatedCount,
+            supersededCount = supersededCount + other.supersededCount,
+            fenceRejected = fenceRejected || other.fenceRejected,
+            alreadyDeliveredAt = listOfNotNull(alreadyDeliveredAt, other.alreadyDeliveredAt).maxOrNull(),
+            eventSnapshot = eventSnapshot ?: other.eventSnapshot,
             inboxDeduplicated = inboxDeduplicated || other.inboxDeduplicated,
         )
 }
@@ -408,7 +524,11 @@ private fun Throwable.safeMessage(token: String): String =
         .let { raw -> if (token.isEmpty()) raw else raw.replace(token, "[REDACTED]") }
         .take(1000)
 
-private fun String.sha256(): String =
-    MessageDigest.getInstance("SHA-256")
-        .digest(toByteArray(StandardCharsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
+private fun com.noLate.notification.domain.NotificationDeviceToken.directSendClaim(): PushDeliveryClaim =
+    PushDeliveryClaim(
+        outcome = PushDeliveryClaimOutcome.SEND,
+        providerToken = token,
+        tokenId = id,
+        tokenFingerprint = tokenFingerprint,
+        tokenOwnershipVersion = ownershipVersion,
+    )

@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
@@ -128,8 +129,13 @@ class ScheduleController(
     fun markScheduleDeparted(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
     ): ApiResponse<ScheduleDto> {
-        val result = scheduleUseCase.markDeparted(requireMemberId(principal), scheduleId)
+        val result = scheduleUseCase.markDeparted(
+            requireMemberId(principal),
+            scheduleId,
+            idempotencyKey,
+        )
         return ApiResponse.success(result)
     }
 
@@ -141,8 +147,13 @@ class ScheduleController(
     fun snoozeDepartureReminder(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
     ): ApiResponse<Unit> {
-        scheduleUseCase.snoozeDepartureReminder(requireMemberId(principal), scheduleId)
+        scheduleUseCase.snoozeDepartureReminder(
+            requireMemberId(principal),
+            scheduleId,
+            idempotencyKey,
+        )
         return ApiResponse.success(Unit)
     }
 

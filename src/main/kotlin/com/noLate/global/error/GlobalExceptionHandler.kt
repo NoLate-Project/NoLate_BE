@@ -42,6 +42,7 @@ class GlobalExceptionHandler {
             ErrorCode.DUPLICATE_MEMBER -> HttpStatus.CONFLICT
             ErrorCode.ACCOUNT_LINK_REQUIRED -> HttpStatus.CONFLICT
             ErrorCode.INVALID_STATE,
+            ErrorCode.IDEMPOTENCY_KEY_CONFLICT,
             ErrorCode.SNS_SIGNUP_REQUIRED -> HttpStatus.CONFLICT
             else -> HttpStatus.BAD_REQUEST
         }

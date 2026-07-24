@@ -16,6 +16,7 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
+import com.noLate.schedule.infrastructure.ScheduleNotificationActionReceiptRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
@@ -46,6 +47,7 @@ class AccountCleanupService(
     private val memberSettingRepository: MemberSettingRepository,
     private val memberProfileRepository: MemberProfileRepository,
     private val memberConsentRepository: MemberConsentRepository,
+    private val notificationActionReceiptRepository: ScheduleNotificationActionReceiptRepository,
 ) {
     @Transactional
     fun logoutAll(memberId: Long) {
@@ -62,6 +64,7 @@ class AccountCleanupService(
         pushDeliveryRepository.deleteAllByMemberId(memberId)
         pushHistoryRepository.deleteAllByMemberId(memberId)
         appNotificationRepository.deleteAllByMemberId(memberId)
+        notificationActionReceiptRepository.deleteAllByMemberId(memberId)
         pushJobRepository.deleteAllByMemberId(memberId)
         departureStatusRepository.deleteAllByMemberId(memberId)
         travelPlanRepository.deleteAllByMemberId(memberId)

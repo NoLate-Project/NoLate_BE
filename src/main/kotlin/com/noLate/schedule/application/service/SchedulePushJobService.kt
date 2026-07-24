@@ -4,6 +4,7 @@ import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobDto
 import com.noLate.schedule.domain.SchedulePushJobStatus
+import com.noLate.schedule.domain.ScheduleNotificationInputFingerprint
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import jakarta.transaction.Transactional
@@ -23,6 +24,21 @@ class SchedulePushJobService(
     private val departureSnoozeMinutes: Long = 5,
     private val clock: Clock = Clock.systemUTC(),
 ) {
+
+    /**
+     * 일정/개인 경로 의미 입력을 수정하기 전에 worker와 같은 job row를 먼저 잠근다.
+     * 이 lock이 먼저면 기존 generation의 provider fence가 거절되고, provider fence가
+     * 먼저면 기존 immutable event가 논리적으로 먼저 발송된 뒤 편집이 새 generation을 연다.
+     */
+    @Transactional
+    fun lockForScheduleEdit(scheduleId: Long) {
+        schedulePushJobRepository.findAllByScheduleIdOrderByIdAsc(scheduleId)
+    }
+
+    @Transactional
+    fun lockForTravelPlanEdit(scheduleId: Long, memberId: Long) {
+        schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
+    }
 
 
     @Transactional
@@ -50,6 +66,8 @@ class SchedulePushJobService(
             departureAt = departureAt,
             monitorStartAt = monitorStartAt,
             intervalMinutes = intervalMinutes,
+            notificationInputFingerprint =
+                ScheduleNotificationInputFingerprint.fromSchedule(memberId, scheduleDto),
         )
 
     }
@@ -81,6 +99,8 @@ class SchedulePushJobService(
             departureAt = departureAt,
             monitorStartAt = departureAt.minusSeconds(leadMinutes.toLong() * 60),
             intervalMinutes = intervalMinutes,
+            notificationInputFingerprint =
+                ScheduleNotificationInputFingerprint.fromTravelPlan(memberId, scheduleDto, plan),
         )
     }
 
@@ -91,14 +111,16 @@ class SchedulePushJobService(
         departureAt: Instant,
         monitorStartAt: Instant,
         intervalMinutes: Int,
+        notificationInputFingerprint: String,
     ): SchedulePushJobDto {
-        val pushJob = schedulePushJobRepository.findByScheduleIdAndMemberId(scheduleId, memberId)
+        val pushJob = schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
             ?.apply {
                 changeSchedule(
                     scheduleAt = scheduleAt,
                     departureAt = departureAt,
                     monitorStartAt = monitorStartAt,
                     intervalMinutes = intervalMinutes,
+                    notificationInputFingerprint = notificationInputFingerprint,
                 )
             }
             ?: SchedulePushJob.create(
@@ -108,6 +130,7 @@ class SchedulePushJobService(
                 departureAt = departureAt,
                 monitorStartAt = monitorStartAt,
                 intervalMinutes = intervalMinutes,
+                notificationInputFingerprint = notificationInputFingerprint,
             )
 
         return SchedulePushJobDto.fromEntity(schedulePushJobRepository.save(pushJob))
@@ -116,27 +139,27 @@ class SchedulePushJobService(
 
     @Transactional
     fun cancelByScheduleId(scheduleId: Long) {
-        schedulePushJobRepository.findAllByScheduleId(scheduleId).forEach { it.cancel() }
+        schedulePushJobRepository.findAllByScheduleIdOrderByIdAsc(scheduleId).forEach { it.cancel() }
     }
 
     @Transactional
     fun cancelByScheduleIdAndMemberId(scheduleId: Long, memberId: Long) {
-        schedulePushJobRepository.findByScheduleIdAndMemberId(scheduleId, memberId)?.cancel()
+        schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)?.cancel()
     }
 
     @Transactional
-    fun snoozeDepartureReminder(memberId: Long, scheduleId: Long) {
-        val pushJob = schedulePushJobRepository.findByScheduleIdAndMemberId(scheduleId, memberId)
-            ?: return
+    fun snoozeDepartureReminder(memberId: Long, scheduleId: Long): Instant? {
+        val pushJob = schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
+            ?: return null
         val now = Instant.now(clock)
 
         if (pushJob.status == SchedulePushJobStatus.CANCELED) {
-            return
+            return pushJob.snoozedUntil
         }
 
         if (!now.isBefore(pushJob.scheduleAt)) {
             pushJob.complete()
-            return
+            return null
         }
 
         val requestedSnoozeAt = now.plus(departureSnoozeMinutes, ChronoUnit.MINUTES)
@@ -144,10 +167,11 @@ class SchedulePushJobService(
         val nextCheckAt = minOf(requestedSnoozeAt, latestUsefulReminderAt)
 
         if (!nextCheckAt.isAfter(now)) {
-            return
+            return pushJob.snoozedUntil
         }
 
         pushJob.snoozeUntil(nextCheckAt)
+        return pushJob.snoozedUntil
     }
 
     private fun parseInstant(value: String): Instant =

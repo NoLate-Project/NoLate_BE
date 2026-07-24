@@ -60,7 +60,13 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
                 ready.countDown()
                 start.await()
                 try {
-                    claims += workerId to coordinator.claimDueJobs(now, workerId, 50).size
+                    claims += workerId to if (
+                        coordinator.claimNextDueJob(now, workerId) == null
+                    ) {
+                        0
+                    } else {
+                        1
+                    }
                 } catch (error: Throwable) {
                     failures += error
                 } finally {
@@ -86,7 +92,7 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
     @Test
     fun `timeout을 넘은 PROCESSING lease만 ACTIVE로 복구해 다음 worker가 다시 claim한다`() {
         repository.saveAndFlush(createJob())
-        assertEquals(1, coordinator.claimDueJobs(now, "worker-a", 50).size)
+        assertTrue(coordinator.claimNextDueJob(now, "worker-a") != null)
 
         val recoveredAt = now.plus(11, ChronoUnit.MINUTES)
         assertEquals(
@@ -95,6 +101,7 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
                 now = recoveredAt,
                 processingTimeoutMinutes = 10,
                 deliveryGraceMinutes = 10,
+                batchSize = 50,
             ),
         )
 
@@ -105,7 +112,7 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
         assertNull(recovered.lockedBy)
         assertNull(recovered.lockedAt)
 
-        assertEquals(1, coordinator.claimDueJobs(recoveredAt, "worker-b", 50).size)
+        assertTrue(coordinator.claimNextDueJob(recoveredAt, "worker-b") != null)
         val reclaimed = repository.findAll().single()
         assertEquals(SchedulePushJobStatus.PROCESSING, reclaimed.status)
         assertEquals("worker-b", reclaimed.lockedBy)
@@ -114,14 +121,15 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
     @Test
     fun `stale 복구 뒤 이전 worker는 새 owner의 상태를 덮어쓸 수 없다`() {
         repository.saveAndFlush(createJob())
-        val staleClaim = coordinator.claimDueJobs(now, "worker-a", 50).single()
+        val staleClaim = requireNotNull(coordinator.claimNextDueJob(now, "worker-a"))
         val recoveredAt = now.plus(11, ChronoUnit.MINUTES)
         coordinator.recoverStaleProcessingJobs(
             now = recoveredAt,
             processingTimeoutMinutes = 10,
             deliveryGraceMinutes = 10,
+            batchSize = 50,
         )
-        coordinator.claimDueJobs(recoveredAt, "worker-b", 50)
+        coordinator.claimNextDueJob(recoveredAt, "worker-b")
 
         staleClaim.cancel()
 
@@ -134,18 +142,44 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
     }
 
     @Test
-    fun `claim은 설정된 batch 크기만 잠그고 backlog를 다음 worker에 남긴다`() {
+    fun `claim은 처리 직전 한 건만 PROCESSING으로 바꾸고 backlog는 ACTIVE로 남긴다`() {
         repository.saveAndFlush(createJob(scheduleId = 901L))
         repository.saveAndFlush(createJob(scheduleId = 902L))
         repository.saveAndFlush(createJob(scheduleId = 903L))
 
-        val firstBatch = coordinator.claimDueJobs(now, "worker-a", 2)
-        val secondBatch = coordinator.claimDueJobs(now, "worker-b", 2)
+        val first = requireNotNull(coordinator.claimNextDueJob(now, "worker-a"))
 
-        assertEquals(2, firstBatch.size)
-        assertEquals(1, secondBatch.size)
-        assertTrue(firstBatch.map { it.scheduleId }.toSet().intersect(secondBatch.map { it.scheduleId }.toSet()).isEmpty())
-        assertEquals(setOf(901L, 902L, 903L), (firstBatch + secondBatch).map { it.scheduleId }.toSet())
+        assertEquals(SchedulePushJobStatus.PROCESSING, first.status)
+        val persisted = repository.findAll()
+        assertEquals(1, persisted.count { it.status == SchedulePushJobStatus.PROCESSING })
+        assertEquals(2, persisted.count { it.status == SchedulePushJobStatus.ACTIVE })
+    }
+
+    @Test
+    fun `한 worker의 느린 provider 처리 중에도 tail job은 lease 없이 다른 worker가 claim한다`() {
+        repository.saveAndFlush(createJob(scheduleId = 911L))
+        repository.saveAndFlush(createJob(scheduleId = 912L))
+        val providerEntered = CountDownLatch(1)
+        val releaseProvider = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+
+        val slowWorker = executor.submit<Pair<Long, String>> {
+            val claimed = requireNotNull(coordinator.claimNextDueJob(now, "slow-worker"))
+            providerEntered.countDown()
+            check(releaseProvider.await(5, TimeUnit.SECONDS))
+            requireNotNull(claimed.id) to requireNotNull(claimed.lockedBy)
+        }
+        assertTrue(providerEntered.await(5, TimeUnit.SECONDS))
+
+        val tail = requireNotNull(coordinator.claimNextDueJob(now, "fast-worker"))
+
+        assertEquals("fast-worker", tail.lockedBy)
+        releaseProvider.countDown()
+        val slowClaim = slowWorker.get(5, TimeUnit.SECONDS)
+        assertTrue(requireNotNull(tail.id) != slowClaim.first)
+        assertEquals(setOf(911L, 912L), setOf(tail.scheduleId, repository.findById(slowClaim.first).orElseThrow().scheduleId))
+        executor.shutdownNow()
+        assertEquals(2, repository.findAll().count { it.status == SchedulePushJobStatus.PROCESSING })
     }
 
     private fun createJob(scheduleId: Long = 901L): SchedulePushJob =

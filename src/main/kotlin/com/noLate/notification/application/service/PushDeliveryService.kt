@@ -1,21 +1,27 @@
 package com.noLate.notification.application.service
 
 import com.noLate.notification.domain.NotificationDeviceToken
+import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.notification.domain.PushDelivery
 import com.noLate.notification.domain.PushDeliveryStatus
+import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.time.Clock
 import java.time.Instant
 
 data class PushDeliveryClaim(
     val outcome: PushDeliveryClaimOutcome,
     val deliveryId: Long? = null,
+    val providerToken: String? = null,
+    val tokenId: Long? = null,
+    val tokenFingerprint: String? = null,
+    val tokenOwnershipVersion: Long? = null,
+    val deliveredAt: Instant? = null,
 )
 
 enum class PushDeliveryClaimOutcome {
@@ -26,6 +32,10 @@ enum class PushDeliveryClaimOutcome {
     INVALID_TOKEN,
     /** inbox는 기존 이벤트인데 기기 경계가 없으면 과거 호출 가능성을 우선해 보내지 않는다. */
     DEDUPLICATED,
+    /** manifest 이후 token ownership이 바뀌어 stale snapshot을 terminal 처리했다. */
+    SUPERSEDED,
+    /** schedule edit/recovery가 먼저 linearize되어 이 worker의 lease/event identity가 오래됐다. */
+    FENCE_REJECTED,
 }
 
 /**
@@ -63,10 +73,15 @@ class PushDeliveryService(
         memberId: Long,
         eventKey: String,
         token: NotificationDeviceToken,
+        fence: PushDispatchFence? = null,
     ): PushDeliveryClaim {
         val deviceKey = token.deliveryDeviceKey(memberId)
         val normalizedEventKey = eventKey.take(100)
-        return writer.claim(memberId, normalizedEventKey, deviceKey)
+        return try {
+            writer.claim(memberId, normalizedEventKey, deviceKey, fence)
+        } catch (_: OptimisticLockingFailureException) {
+            writer.claim(memberId, normalizedEventKey, deviceKey, fence)
+        }
     }
 
     fun markSuccess(deliveryId: Long, providerMessageId: String) {
@@ -85,7 +100,9 @@ class PushDeliveryService(
 @Service
 class PushDeliveryWriter(
     private val repository: PushDeliveryRepository,
+    private val tokenRepository: NotificationDeviceTokenRepository,
     private val clock: Clock,
+    private val fenceValidator: PushDispatchFenceValidator? = null,
 ) {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -106,7 +123,9 @@ class PushDeliveryWriter(
                     eventKey = eventKey,
                     deviceKey = token.deliveryDeviceKey(memberId),
                     deviceTokenId = token.id,
-                    deviceId = token.deviceId?.take(100),
+                    tokenFingerprint = token.tokenFingerprint,
+                    tokenOwnershipVersion = token.ownershipVersion,
+                    deviceFingerprint = token.deviceFingerprint,
                     platform = token.platform,
                     scheduleId = data["scheduleId"]?.toLongOrNull(),
                     payloadType = data["type"]?.take(80),
@@ -122,7 +141,11 @@ class PushDeliveryWriter(
         memberId: Long,
         eventKey: String,
         deviceKey: String,
+        fence: PushDispatchFence? = null,
     ): PushDeliveryClaim {
+        if (fence != null && fenceValidator?.validate(fence) != true) {
+            return PushDeliveryClaim(PushDeliveryClaimOutcome.FENCE_REJECTED)
+        }
         val existing = repository.findByMemberIdAndEventKeyAndDeviceKey(
             memberId,
             eventKey,
@@ -130,7 +153,11 @@ class PushDeliveryWriter(
         ) ?: return PushDeliveryClaim(PushDeliveryClaimOutcome.DEDUPLICATED)
         return when (existing.status) {
             PushDeliveryStatus.SUCCESS ->
-                PushDeliveryClaim(PushDeliveryClaimOutcome.ALREADY_SUCCESS, existing.id)
+                PushDeliveryClaim(
+                    PushDeliveryClaimOutcome.ALREADY_SUCCESS,
+                    existing.id,
+                    deliveredAt = existing.deliveredAt,
+                )
 
             PushDeliveryStatus.DISPATCHING ->
                 PushDeliveryClaim(PushDeliveryClaimOutcome.AMBIGUOUS, existing.id)
@@ -138,11 +165,37 @@ class PushDeliveryWriter(
             PushDeliveryStatus.INVALID_TOKEN ->
                 PushDeliveryClaim(PushDeliveryClaimOutcome.INVALID_TOKEN, existing.id)
 
+            PushDeliveryStatus.SUPERSEDED ->
+                PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED, existing.id)
+
             PushDeliveryStatus.PENDING,
             PushDeliveryStatus.FAILED -> {
+                val currentToken = existing.deviceTokenId
+                    ?.let(tokenRepository::findByIdForUpdate)
+                val verifiedToken = currentToken?.takeIf {
+                        it.memberId == memberId &&
+                            it.tokenFingerprint == existing.tokenFingerprint &&
+                            it.ownershipVersion == existing.tokenOwnershipVersion &&
+                            it.deliveryDeviceKey(memberId) == existing.deviceKey
+                    }
+                if (verifiedToken == null) {
+                    existing.markSuperseded(
+                        Instant.now(clock),
+                        "Token ownership snapshot changed before provider dispatch.",
+                    )
+                    repository.saveAndFlush(existing)
+                    return PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED, existing.id)
+                }
                 existing.beginDispatch(Instant.now(clock))
                 repository.saveAndFlush(existing)
-                PushDeliveryClaim(PushDeliveryClaimOutcome.SEND, requireNotNull(existing.id))
+                PushDeliveryClaim(
+                    outcome = PushDeliveryClaimOutcome.SEND,
+                    deliveryId = requireNotNull(existing.id),
+                    providerToken = verifiedToken.token,
+                    tokenId = verifiedToken.id,
+                    tokenFingerprint = verifiedToken.tokenFingerprint,
+                    tokenOwnershipVersion = verifiedToken.ownershipVersion,
+                )
             }
         }
     }
@@ -167,15 +220,9 @@ class PushDeliveryWriter(
 }
 
 internal fun NotificationDeviceToken.deliveryDeviceKey(memberId: Long): String {
-    val stableDeviceId = deviceId?.trim()?.takeIf { it.isNotEmpty() }
-    return if (stableDeviceId != null) {
-        "device-sha256:${"$memberId:${platform.name}:$stableDeviceId".sha256()}"
+    return if (deviceFingerprint != null) {
+        "device-sha256:${OpaquePushIdentifier.fingerprint("$memberId:$deviceFingerprint")}"
     } else {
-        "token-sha256:${token.sha256()}"
+        "token-sha256:$tokenFingerprint"
     }
 }
-
-private fun String.sha256(): String =
-    MessageDigest.getInstance("SHA-256")
-        .digest(toByteArray(StandardCharsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }

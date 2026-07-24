@@ -9,6 +9,7 @@ import com.noLate.member.application.service.MemberProfileService
 import com.noLate.member.application.service.MemberConsentService
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
+import com.noLate.member.application.service.MemberSessionFenceService
 import com.noLate.member.application.service.MemberValidator
 import com.noLate.member.application.service.SocialIdentityVerifier
 import com.noLate.member.application.service.VerifiedSocialIdentity
@@ -64,6 +65,9 @@ class MemberUseCaseUnitTest {
     @Mock
     lateinit var socialIdentityVerifier: SocialIdentityVerifier
 
+    @Mock
+    lateinit var memberSessionFenceService: MemberSessionFenceService
+
     private val signupConsents = SignupConsentCommand(
         termsVersion = "2026.07.16",
         privacyCollectionVersion = "2026.07.16",
@@ -84,6 +88,7 @@ class MemberUseCaseUnitTest {
             memberValidator = memberValidator,
             refreshTokenService = refreshTokenService,
             memberConsentService = memberConsentService,
+            memberSessionFenceService = memberSessionFenceService,
             socialIdentityVerifier = socialIdentityVerifier,
         )
     }
@@ -498,8 +503,7 @@ class MemberUseCaseUnitTest {
         // then
         verify(refreshTokenService, times(1))
             .validateAndGet(refreshToken)
-        verify(memberService).invalidateSessions(memberId)
-        verify(refreshTokenService).deleteAllByMemberId(memberId)
+        verify(memberSessionFenceService).invalidateSessionsAndLogout(memberId)
     }
 
     @Test

@@ -23,16 +23,18 @@ class SchedulePushJobCoordinator(
 ) {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun claimDueJobs(now: Instant, workerId: String, batchSize: Int): List<SchedulePushJob> {
-        val dueJobs = repository
+    fun claimNextDueJob(now: Instant, workerId: String): SchedulePushJob? {
+        val dueJob = repository
             .findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
                 now,
-                PageRequest.of(0, batchSize.coerceIn(1, 200)),
+                PageRequest.of(0, 1),
             )
-        dueJobs.forEach { it.startProcessing(workerId, now) }
+            .singleOrNull()
+            ?: return null
+        dueJob.startProcessing(workerId, now)
         repository.flush()
-        return dueJobs
+        return dueJob
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -40,12 +42,14 @@ class SchedulePushJobCoordinator(
         now: Instant,
         processingTimeoutMinutes: Long,
         deliveryGraceMinutes: Long,
+        batchSize: Int,
     ): Int {
         val timeoutBoundary = now.minus(processingTimeoutMinutes, ChronoUnit.MINUTES)
         val staleJobs = repository
             .findAllByStatusAndLockedAtLessThanEqualOrderByLockedAtAsc(
                 SchedulePushJobStatus.PROCESSING,
                 timeoutBoundary,
+                PageRequest.of(0, batchSize.coerceIn(1, 200)),
             )
         staleJobs.forEach { job ->
             if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {

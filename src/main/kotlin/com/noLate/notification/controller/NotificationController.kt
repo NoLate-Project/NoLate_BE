@@ -33,11 +33,14 @@ class NotificationController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: RegisterPushTokenRequest
     ): ApiResponse<Unit> {
+        val authenticated = requirePrincipal(principal)
         notificationTokenService.registerToken(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
             deviceId = request.deviceId,
             platform = request.platform,
-            token = request.token
+            token = request.token,
+            accessTokenIssuedAt = authenticated.accessTokenIssuedAt
+                ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
         )
         return ApiResponse.success(Unit)
     }
@@ -75,6 +78,9 @@ class NotificationController(
 
     private fun requireMemberId(principal: MemberPrincipal?): Long =
         principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+    private fun requirePrincipal(principal: MemberPrincipal?): MemberPrincipal =
+        principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
 }
 
 data class RegisterPushTokenRequest(

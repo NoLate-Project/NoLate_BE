@@ -1,230 +1,178 @@
-// src/test/kotlin/com/swyp/notification/application/NotificationTokenServiceUnitTest.kt
 package com.noLate.notification.application
 
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.NotificationTokenWriter
 import com.noLate.notification.domain.NotificationDeviceToken
+import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
+import com.noLate.member.infrastructure.MemberRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
-import org.mockito.kotlin.*
+import org.mockito.kotlin.any
+import org.mockito.kotlin.check
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
+import org.mockito.kotlin.whenever
 
 @ExtendWith(MockitoExtension::class)
 class NotificationTokenServiceUnitTest {
+    @Mock
+    lateinit var repository: NotificationDeviceTokenRepository
 
     @Mock
-    lateinit var notificationDeviceTokenRepository: NotificationDeviceTokenRepository
+    lateinit var memberRepository: MemberRepository
 
-    private lateinit var notificationTokenService: NotificationTokenService
+    private lateinit var service: NotificationTokenService
 
     @BeforeEach
     fun setUp() {
-        notificationTokenService = NotificationTokenService(notificationDeviceTokenRepository)
+        service = NotificationTokenService(
+            repository,
+            NotificationTokenWriter(repository, memberRepository),
+        )
     }
 
     @Test
-    fun `deviceId가 있을 때 기존 엔티티가 존재하면 토큰과 플랫폼을 갱신한다`() {
+    fun `same member device fingerprint updates one canonical row and increments ownership`() {
         val memberId = 1L
-        val deviceId = "device-1"
-
+        val deviceId = "Device-AbC"
+        val deviceFingerprint = OpaquePushIdentifier.fingerprint(deviceId)
         val existing = NotificationDeviceToken(
             id = 10L,
             memberId = memberId,
             deviceId = deviceId,
-            platform = PushPlatform.ANDROID,
-            token = "old-token"
-        )
-
-        whenever(notificationDeviceTokenRepository.findAllByMemberIdAndDeviceId(memberId, deviceId))
-            .thenReturn(listOf(existing))
-
-        notificationTokenService.registerToken(
-            memberId = memberId,
-            deviceId = deviceId,
-            platform = PushPlatform.IOS,
-            token = "new-token"
-        )
-
-        verify(notificationDeviceTokenRepository, times(1))
-            .findAllByMemberIdAndDeviceId(memberId, deviceId)
-
-        verify(notificationDeviceTokenRepository, times(1))
-            .save(check {
-                assertEquals(10L, it.id)
-                assertEquals(memberId, it.memberId)
-                assertEquals(deviceId, it.deviceId)
-                assertEquals(PushPlatform.IOS, it.platform)
-                assertEquals("new-token", it.token)
-            })
-    }
-
-    @Test
-    fun `deviceId가 있을 때 기존 엔티티가 없으면 새 엔티티를 저장한다`() {
-        val memberId = 2L
-        val deviceId = "device-2"
-
-        whenever(notificationDeviceTokenRepository.findAllByMemberIdAndDeviceId(memberId, deviceId))
-            .thenReturn(emptyList())
-
-        notificationTokenService.registerToken(
-            memberId = memberId,
-            deviceId = deviceId,
-            platform = PushPlatform.ANDROID,
-            token = "token-2"
-        )
-
-        verify(notificationDeviceTokenRepository, times(1))
-            .findAllByMemberIdAndDeviceId(memberId, deviceId)
-
-        verify(notificationDeviceTokenRepository, times(1))
-            .save(check {
-                assertEquals(memberId, it.memberId)
-                assertEquals(deviceId, it.deviceId)
-                assertEquals(PushPlatform.ANDROID, it.platform)
-                assertEquals("token-2", it.token)
-            })
-    }
-
-    @Test
-    fun `deviceId가 null이고 같은 token이 없으면 새 엔티티를 저장한다`() {
-        val memberId = 3L
-
-        notificationTokenService.registerToken(
-            memberId = memberId,
-            deviceId = null,
-            platform = PushPlatform.WEB,
-            token = "web-token"
-        )
-
-        verify(notificationDeviceTokenRepository, never())
-            .findAllByMemberIdAndDeviceId(any(), any())
-
-        verify(notificationDeviceTokenRepository, times(1))
-            .save(check {
-                assertEquals(memberId, it.memberId)
-                assertEquals(null, it.deviceId)
-                assertEquals(PushPlatform.WEB, it.platform)
-                assertEquals("web-token", it.token)
-            })
-    }
-
-    @Test
-    fun `legacy 중복 token과 device row는 최신 member device 한 건으로 정리한다`() {
-        val memberId = 7L
-        val deviceId = "duplicate-device"
-        val oldDeviceRow = NotificationDeviceToken(
-            id = 10L,
-            memberId = memberId,
-            deviceId = deviceId,
-            platform = PushPlatform.ANDROID,
+            platform = PushPlatform.UNKNOWN,
             token = "old-token",
         )
-        val newestDeviceRow = NotificationDeviceToken(
-            id = 12L,
-            memberId = memberId,
-            deviceId = deviceId,
-            platform = PushPlatform.ANDROID,
-            token = "newer-token",
+        whenever(repository.findAllByTokenFingerprint(OpaquePushIdentifier.fingerprint("new-token")))
+            .thenReturn(emptyList())
+        whenever(repository.findAllByMemberIdAndDeviceFingerprint(memberId, deviceFingerprint))
+            .thenReturn(listOf(existing))
+
+        service.registerToken(memberId, deviceId, PushPlatform.ANDROID, "new-token")
+
+        verify(repository).saveAndFlush(
+            check {
+                assertEquals(10L, it.id)
+                assertEquals("new-token", it.token)
+                assertEquals(PushPlatform.ANDROID, it.platform)
+                assertEquals(1L, it.ownershipVersion)
+            }
         )
-        val conflictingTokenOwner = NotificationDeviceToken(
+    }
+
+    @Test
+    fun `same raw token ownership moves to the last successful registering member`() {
+        val token = "Shared-Token"
+        val fingerprint = OpaquePushIdentifier.fingerprint(token)
+        val existing = NotificationDeviceToken(
             id = 11L,
-            memberId = 99L,
-            deviceId = "other-device",
-            platform = PushPlatform.IOS,
-            token = "registered-token",
+            memberId = 1L,
+            deviceId = "old-device",
+            platform = PushPlatform.ANDROID,
+            token = token,
         )
-        whenever(notificationDeviceTokenRepository.findAllByToken("registered-token"))
-            .thenReturn(listOf(conflictingTokenOwner))
-        whenever(notificationDeviceTokenRepository.findAllByDeviceId(deviceId))
-            .thenReturn(listOf(oldDeviceRow, newestDeviceRow))
-        whenever(notificationDeviceTokenRepository.findAllByMemberIdAndDeviceId(memberId, deviceId))
-            .thenReturn(listOf(oldDeviceRow, newestDeviceRow))
-
-        notificationTokenService.registerToken(
-            memberId = memberId,
-            deviceId = deviceId,
-            platform = PushPlatform.WEB,
-            token = "registered-token",
-        )
-
-        verify(notificationDeviceTokenRepository).deleteAll(
-            check {
-                assertEquals(setOf(10L, 11L), it.map(NotificationDeviceToken::id).toSet())
-            }
-        )
-        verify(notificationDeviceTokenRepository).flush()
-        verify(notificationDeviceTokenRepository).save(
-            check {
-                assertEquals(12L, it.id)
-                assertEquals("registered-token", it.token)
-                assertEquals(PushPlatform.WEB, it.platform)
-            }
-        )
-    }
-
-    @Test
-    fun `removeToken은 해당 memberId와 deviceId에 해당하는 토큰만 삭제한다`() {
-        val memberId = 4L
-        val deviceId = "device-4"
-
-        notificationTokenService.removeToken(memberId, deviceId)
-
-        verify(notificationDeviceTokenRepository, times(1))
-            .deleteByMemberIdAndDeviceId(memberId, deviceId)
-    }
-
-    @Test
-    fun `removeAllTokensByMember는 해당 회원의 모든 토큰을 삭제한다`() {
-        val memberId = 5L
-
-        notificationTokenService.removeAllTokensByMember(memberId)
-
-        verify(notificationDeviceTokenRepository, times(1))
-            .deleteAllByMemberId(memberId)
-    }
-
-    @Test
-    fun `removeTokenValue는 회원과 토큰 값으로 무효 토큰을 삭제한다`() {
-        notificationTokenService.removeTokenValue(5L, "invalid-token")
-
-        verify(notificationDeviceTokenRepository)
-            .deleteByMemberIdAndToken(5L, "invalid-token")
-    }
-
-    @Test
-    fun `getTokensByMember는 해당 회원의 토큰 목록을 반환한다`() {
-        val memberId = 6L
-        val tokens = listOf(
-            NotificationDeviceToken(
-                id = 1L,
-                memberId = memberId,
-                deviceId = "d1",
-                platform = PushPlatform.ANDROID,
-                token = "t1"
-            ),
-            NotificationDeviceToken(
-                id = 2L,
-                memberId = memberId,
-                deviceId = "d2",
-                platform = PushPlatform.IOS,
-                token = "t2"
+        whenever(repository.findAllByTokenFingerprint(fingerprint)).thenReturn(listOf(existing))
+        whenever(
+            repository.findAllByMemberIdAndDeviceFingerprint(
+                2L,
+                OpaquePushIdentifier.fingerprint("new-device"),
             )
+        ).thenReturn(emptyList())
+
+        service.registerToken(2L, "new-device", PushPlatform.IOS, token)
+
+        verify(repository).saveAndFlush(
+            check {
+                assertEquals(2L, it.memberId)
+                assertEquals("new-device", it.deviceId)
+                assertEquals(1L, it.ownershipVersion)
+            }
+        )
+    }
+
+    @Test
+    fun `platform metadata transition does not change token ownership version`() {
+        val token = NotificationDeviceToken(
+            id = 12L,
+            memberId = 1L,
+            deviceId = "stable-device",
+            platform = PushPlatform.UNKNOWN,
+            token = "stable-token",
         )
 
-        whenever(notificationDeviceTokenRepository.findAllByMemberId(memberId))
-            .thenReturn(tokens)
+        token.replaceOwnership(
+            memberId = 1L,
+            deviceId = "stable-device",
+            platform = PushPlatform.IOS,
+            token = "stable-token",
+            tokenFingerprint = token.tokenFingerprint,
+            deviceFingerprint = token.deviceFingerprint,
+        )
 
-        val result = notificationTokenService.getTokensByMember(memberId)
+        assertEquals(PushPlatform.IOS, token.platform)
+        assertEquals(0L, token.ownershipVersion)
+    }
 
-        verify(notificationDeviceTokenRepository, times(1))
-            .findAllByMemberId(memberId)
+    @Test
+    fun `case-distinct opaque token fingerprints create distinct rows`() {
+        whenever(repository.findAllByTokenFingerprint(any())).thenReturn(emptyList())
 
-        assertEquals(2, result.size)
-        assertEquals("t1", result[0].token)
-        assertEquals("t2", result[1].token)
+        service.registerToken(3L, null, PushPlatform.WEB, "AbC")
+        service.registerToken(3L, null, PushPlatform.WEB, "aBc")
+
+        verify(repository).findAllByTokenFingerprint(OpaquePushIdentifier.fingerprint("AbC"))
+        verify(repository).findAllByTokenFingerprint(OpaquePushIdentifier.fingerprint("aBc"))
+        verify(repository, never()).deleteAll(any<List<NotificationDeviceToken>>())
+    }
+
+    @Test
+    fun `legacy duplicate fingerprint rows converge to newest canonical row`() {
+        val fingerprint = OpaquePushIdentifier.fingerprint("same-token")
+        val old = NotificationDeviceToken(
+            id = 20L,
+            memberId = 4L,
+            deviceId = null,
+            platform = PushPlatform.WEB,
+            token = "same-token",
+        )
+        val newest = NotificationDeviceToken(
+            id = 21L,
+            memberId = 4L,
+            deviceId = null,
+            platform = PushPlatform.WEB,
+            token = "same-token",
+        )
+        whenever(repository.findAllByTokenFingerprint(fingerprint)).thenReturn(listOf(old, newest))
+
+        service.registerToken(4L, null, PushPlatform.WEB, "same-token")
+
+        verify(repository).deleteAll(check { assertEquals(listOf(20L), it.map { row -> row.id }) })
+        verify(repository).saveAndFlush(check { assertEquals(21L, it.id) })
+    }
+
+    @Test
+    fun `removeToken uses case-sensitive device fingerprint rather than raw id`() {
+        service.removeToken(5L, "Device-AbC")
+
+        verify(repository).deleteByMemberIdAndDeviceFingerprint(
+            5L,
+            OpaquePushIdentifier.fingerprint("Device-AbC"),
+        )
+    }
+
+    @Test
+    fun `invalid token removal uses the full ownership snapshot`() {
+        whenever(repository.deleteByOwnershipSnapshot(30L, 6L, "fingerprint", 9L))
+            .thenReturn(1)
+
+        val removed = service.removeTokenByOwnership(6L, 30L, "fingerprint", 9L)
+
+        assertEquals(true, removed)
     }
 }

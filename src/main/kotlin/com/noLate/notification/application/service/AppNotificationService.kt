@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.notification.domain.AppNotification
+import com.noLate.notification.domain.PushLogicalEventKey
+import com.noLate.notification.domain.withPushAccountBinding
 import com.noLate.notification.infrastructure.AppNotificationRepository
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.data.domain.PageRequest
@@ -22,6 +24,15 @@ data class AppNotificationInboxPage(
 data class AppNotificationRecordResult(
     val notification: AppNotification,
     val created: Boolean,
+)
+
+data class AppNotificationSnapshot(
+    val id: Long?,
+    val logicalEventKey: String,
+    val title: String,
+    val body: String,
+    val data: Map<String, String>,
+    val createdAt: Instant,
 )
 
 /**
@@ -75,15 +86,20 @@ class AppNotificationService(
             }
         }
 
+        val logicalEventKey = normalizedKey
+            ?.let { PushLogicalEventKey.deterministic(memberId, it) }
+            ?: PushLogicalEventKey.newEvent()
+        val canonicalData = data.withPushAccountBinding(logicalEventKey, memberId)
         val notification = AppNotification(
             memberId = memberId,
             deduplicationKey = normalizedKey,
-            type = data["type"]?.trim()?.takeIf { it.isNotEmpty() }?.take(80) ?: "GENERAL",
-            scheduleId = data["scheduleId"]?.toLongOrNull(),
-            categoryId = data["categoryId"]?.toLongOrNull(),
+            logicalEventKey = logicalEventKey,
+            type = canonicalData["type"]?.trim()?.takeIf { it.isNotEmpty() }?.take(80) ?: "GENERAL",
+            scheduleId = canonicalData["scheduleId"]?.toLongOrNull(),
+            categoryId = canonicalData["categoryId"]?.toLongOrNull(),
             title = title.take(200),
             body = body.take(1000),
-            dataJson = objectMapper.writeValueAsString(data),
+            dataJson = objectMapper.writeValueAsString(canonicalData),
             createdAt = Instant.now(clock),
         )
 
@@ -98,6 +114,14 @@ class AppNotificationService(
             AppNotificationRecordResult(existing, created = false)
         }
     }
+
+    fun findSnapshot(memberId: Long, deduplicationKey: String): AppNotificationSnapshot? {
+        val normalizedKey = deduplicationKey.trim().takeIf { it.isNotEmpty() }?.take(180) ?: return null
+        return writer.find(memberId, normalizedKey)?.toSnapshot()
+    }
+
+    private fun AppNotification.toSnapshot(): AppNotificationSnapshot =
+        toSnapshot(objectMapper)
 
     @Transactional(readOnly = true)
     fun getInbox(
@@ -153,6 +177,23 @@ class AppNotificationService(
     fun markAllRead(memberId: Long): Int =
         repository.markAllRead(memberId, Instant.now(clock))
 }
+
+internal fun AppNotification.toSnapshot(objectMapper: ObjectMapper): AppNotificationSnapshot =
+    AppNotificationSnapshot(
+        id = id,
+        logicalEventKey = logicalEventKey,
+        title = title,
+        body = body,
+        data = objectMapper.readValue(
+            dataJson,
+            objectMapper.typeFactory.constructMapType(
+                LinkedHashMap::class.java,
+                String::class.java,
+                String::class.java,
+            ),
+        ),
+        createdAt = createdAt,
+    )
 
 /**
  * 유니크 충돌이 난 insert와 그 후 복구 조회가 같은 rollback-only 트랜잭션을 공유하지 않도록

@@ -9,8 +9,12 @@ import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationWriter
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.NotificationTokenWriter
 import com.noLate.notification.application.service.PushDeliveryService
 import com.noLate.notification.application.service.PushDeliveryWriter
+import com.noLate.notification.application.service.PushEventOutboxService
+import com.noLate.notification.application.service.PushEventOutboxWriter
+import com.noLate.notification.application.service.deliveryDeviceKey
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushDeliveryStatus
@@ -47,11 +51,14 @@ import java.util.concurrent.atomic.AtomicInteger
 @DataJpaTest
 @Import(
     NotificationTokenService::class,
+    NotificationTokenWriter::class,
     PushSendHistoryService::class,
     AppNotificationService::class,
     AppNotificationWriter::class,
     PushDeliveryService::class,
     PushDeliveryWriter::class,
+    PushEventOutboxService::class,
+    PushEventOutboxWriter::class,
     NotificationUseCase::class,
     PushDeliveryReliabilityTestConfig::class,
 )
@@ -76,6 +83,7 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     private val appNotificationService: AppNotificationService,
     private val pushDeliveryService: PushDeliveryService,
     private val pushSendHistoryService: PushSendHistoryService,
+    private val pushEventOutboxService: PushEventOutboxService,
 ) {
 
     @BeforeEach
@@ -130,7 +138,7 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         assertEquals(2, pushClient.attempts("retry-token"))
         assertEquals(
             listOf(1, 2),
-            deliveries(memberId).sortedBy { it.deviceId }.map { it.attemptCount },
+            deliveries(memberId).sortedBy { it.deviceFingerprint }.map { it.attemptCount },
         )
         assertEquals(setOf(PushDeliveryStatus.SUCCESS), deliveries(memberId).map { it.status }.toSet())
     }
@@ -148,7 +156,7 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
             data = data,
             deduplicationKey = "manifest-before-claim-event",
         )
-        val eventKey = "inbox:${requireNotNull(inbox.notification.id)}"
+        val eventKey = inbox.notification.logicalEventKey
 
         pushDeliveryService.prepareManifest(
             memberId = memberId,
@@ -169,6 +177,92 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         assertEquals(1, pushClient.attempts("pending-token-1"))
         assertEquals(1, pushClient.attempts("pending-token-2"))
         assertTrue(deliveries(memberId).all { it.status == PushDeliveryStatus.SUCCESS })
+    }
+
+    @Test
+    fun `inbox 생성 직후 종료되어 manifest가 없어도 다음 실행이 전체 manifest를 복구한다`() {
+        val memberId = 510L
+        register(memberId, "device-1", "inbox-crash-token-1")
+        register(memberId, "device-2", "inbox-crash-token-2")
+        val inbox = appNotificationService.recordWithResult(
+            memberId = memberId,
+            title = "출발 시간 안내",
+            body = "이동을 준비해주세요.",
+            data = pushData(),
+            deduplicationKey = "inbox-before-manifest-event",
+        ).notification
+        assertTrue(
+            deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(
+                memberId,
+                inbox.logicalEventKey,
+            ).isEmpty()
+        )
+
+        val resumed = send(memberId, "inbox-before-manifest-event")
+
+        assertEquals(2, resumed.sentCount)
+        assertEquals(2, deliveries(memberId).size)
+        assertTrue(deliveries(memberId).all { it.status == PushDeliveryStatus.SUCCESS })
+    }
+
+    @Test
+    fun `manifest 뒤 token 소유권이 이동하면 stale recipient에게 provider 호출하지 않는다`() {
+        val memberId = 511L
+        val nextOwner = 512L
+        val rawToken = "ownership-transfer-token"
+        register(memberId, "old-device", rawToken)
+        val staleToken = tokenRepository.findAllByMemberId(memberId).single()
+        val prepared = pushEventOutboxService.prepare(
+            memberId = memberId,
+            title = "소유권 경합",
+            body = "이전 회원에게 보내면 안 됩니다.",
+            data = pushData(),
+            deduplicationKey = "ownership-transfer-event",
+            persistInInbox = true,
+            tokens = listOf(staleToken),
+            fence = null,
+        )
+
+        register(nextOwner, "new-device", rawToken)
+        val claim = pushDeliveryService.claim(
+            memberId = memberId,
+            eventKey = prepared.logicalEventKey,
+            token = staleToken,
+        )
+
+        assertEquals(
+            com.noLate.notification.application.service.PushDeliveryClaimOutcome.SUPERSEDED,
+            claim.outcome,
+        )
+        assertEquals(0, pushClient.attempts(rawToken))
+        assertEquals(
+            PushDeliveryStatus.SUPERSEDED,
+            deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(
+                memberId,
+                prepared.logicalEventKey,
+            ).single().status,
+        )
+        assertEquals(nextOwner, tokenRepository.findAll().single().memberId)
+    }
+
+    @Test
+    fun `invalid 응답 사이 token 소유권이 이동하면 새 소유자의 row를 삭제하지 않는다`() {
+        val oldOwner = 513L
+        val newOwner = 514L
+        val rawToken = "invalid-race-token"
+        register(oldOwner, "old-device", rawToken)
+        pushClient.invalidateWithCallback(rawToken) {
+            register(newOwner, "new-device", rawToken)
+        }
+
+        val result = send(oldOwner, "invalid-race-event")
+
+        assertEquals(1, result.failedCount)
+        assertEquals(0, result.removedTokenCount)
+        val current = tokenRepository.findAll().single()
+        assertEquals(newOwner, current.memberId)
+        assertEquals(rawToken, current.token)
+        assertEquals(PushDeliveryStatus.INVALID_TOKEN, deliveries(oldOwner).single().status)
     }
 
     @Test
@@ -206,24 +300,11 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     @Test
     fun `같은 실제 deviceId의 중복 token row는 provider를 한 번만 호출한다`() {
         val memberId = 509L
+        register(memberId, "same-device", "legacy-token-a")
+        val persisted = tokenRepository.findAllByMemberId(memberId).single()
         val duplicateTokenService = mock<NotificationTokenService>()
         whenever(duplicateTokenService.getTokensByMember(memberId)).thenReturn(
-            listOf(
-                NotificationDeviceToken(
-                    id = 1001L,
-                    memberId = memberId,
-                    deviceId = "same-device",
-                    platform = PushPlatform.ANDROID,
-                    token = "legacy-token-a",
-                ),
-                NotificationDeviceToken(
-                    id = 1002L,
-                    memberId = memberId,
-                    deviceId = "same-device",
-                    platform = PushPlatform.ANDROID,
-                    token = "legacy-token-b",
-                ),
-            )
+            listOf(persisted, persisted)
         )
         val useCase = NotificationUseCase(
             notificationTokenService = duplicateTokenService,
@@ -245,8 +326,30 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         assertEquals(1, result.attemptedCount)
         assertEquals(1, result.sentCount)
         assertEquals(1, result.alreadyDeliveredCount)
-        assertEquals(1, pushClient.attempts("legacy-token-a") + pushClient.attempts("legacy-token-b"))
+        assertEquals(1, pushClient.attempts("legacy-token-a"))
         assertEquals(1, deliveries(memberId).size)
+    }
+
+    @Test
+    fun `platform 변경은 동일 member device의 delivery identity를 바꾸지 않는다`() {
+        val memberId = 515L
+        val android = NotificationDeviceToken(
+            memberId = memberId,
+            deviceId = "mutable-platform-device",
+            platform = PushPlatform.UNKNOWN,
+            token = "platform-token-before",
+        )
+        val ios = NotificationDeviceToken(
+            memberId = memberId,
+            deviceId = "mutable-platform-device",
+            platform = PushPlatform.IOS,
+            token = "platform-token-after",
+        )
+
+        assertEquals(
+            android.deliveryDeviceKey(memberId),
+            ios.deliveryDeviceKey(memberId),
+        )
     }
 
     @Test
@@ -324,6 +427,8 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
 
         assertEquals(1, result.failedCount)
         assertEquals(1, result.removedTokenCount)
+        assertEquals(1, result.invalidTokenCount)
+        assertEquals(1, result.durablyHandledCount)
         assertEquals(0, tokenRepository.findAllByMemberId(memberId).size)
         val delivery = deliveries(memberId).single()
         assertEquals(PushDeliveryStatus.INVALID_TOKEN, delivery.status)
@@ -359,9 +464,8 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     private fun deliveries(memberId: Long) =
         inboxRepository.findAllByMemberIdOrderByIdDesc(memberId)
             .single()
-            .id
-            ?.let { deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(memberId, "inbox:$it") }
-            .orEmpty()
+            .logicalEventKey
+            .let { deliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(memberId, it) }
 }
 
 @TestConfiguration
@@ -386,6 +490,7 @@ class RecordingReliabilityPushClient : PushClient {
     private val crashOnce = ConcurrentHashMap.newKeySet<String>()
     private val unknownOnce = ConcurrentHashMap.newKeySet<String>()
     private val invalid = ConcurrentHashMap.newKeySet<String>()
+    private val invalidCallbacks = ConcurrentHashMap<String, () -> Unit>()
 
     fun reset() {
         attempts.clear()
@@ -393,6 +498,7 @@ class RecordingReliabilityPushClient : PushClient {
         crashOnce.clear()
         unknownOnce.clear()
         invalid.clear()
+        invalidCallbacks.clear()
     }
 
     fun failOnce(token: String) {
@@ -411,6 +517,11 @@ class RecordingReliabilityPushClient : PushClient {
         invalid += token
     }
 
+    fun invalidateWithCallback(token: String, callback: () -> Unit) {
+        invalid += token
+        invalidCallbacks[token] = callback
+    }
+
     fun attempts(token: String): Int = attempts[token]?.get() ?: 0
 
     override fun sendToToken(
@@ -421,6 +532,7 @@ class RecordingReliabilityPushClient : PushClient {
     ): PushSendResult {
         val attempt = attempts.computeIfAbsent(token) { AtomicInteger() }.incrementAndGet()
         if (invalid.contains(token)) {
+            invalidCallbacks.remove(token)?.invoke()
             throw InvalidPushTokenException(token)
         }
         if (crashOnce.remove(token)) {

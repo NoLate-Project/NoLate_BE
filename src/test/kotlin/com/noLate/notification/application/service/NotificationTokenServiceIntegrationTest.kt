@@ -4,20 +4,30 @@ import com.noLate.notification.application.service.NotificationTokenService
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.test.context.junit.jupiter.SpringExtension
+import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @SpringBootTest
 @ExtendWith(SpringExtension::class)
-@Transactional   // 각 테스트마다 롤백
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationTokenServiceIntegrationTest @Autowired constructor(
     private val notificationTokenService: NotificationTokenService,
     private val notificationDeviceTokenRepository: NotificationDeviceTokenRepository
 ) {
+    @BeforeEach
+    fun cleanTokens() {
+        notificationDeviceTokenRepository.deleteAll()
+    }
 
     @Test
     fun `deviceId 기반 등록시 기존 레코드가 있으면 갱신된다`() {
@@ -223,5 +233,42 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         assertEquals(1, currentTokens.size)
         assertEquals(token, currentTokens.single().token)
         assertEquals(deviceId, currentTokens.single().deviceId)
+    }
+
+    @Test
+    fun `동시 token 등록은 fingerprint unique 충돌 뒤 하나의 최종 소유권으로 수렴한다`() {
+        val token = "Case-Sensitive-Concurrent-Token"
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(2)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newFixedThreadPool(2)
+
+        listOf(900_101L, 900_102L).forEach { memberId ->
+            executor.submit {
+                ready.countDown()
+                start.await()
+                runCatching {
+                    notificationTokenService.registerToken(
+                        memberId = memberId,
+                        deviceId = "device-$memberId",
+                        platform = PushPlatform.ANDROID,
+                        token = token,
+                    )
+                }.onFailure(failures::add)
+                done.countDown()
+            }
+        }
+
+        assertTrue(ready.await(5, TimeUnit.SECONDS))
+        start.countDown()
+        assertTrue(done.await(10, TimeUnit.SECONDS))
+        executor.shutdownNow()
+
+        assertTrue(failures.isEmpty(), failures.joinToString { it.javaClass.simpleName })
+        val rows = notificationDeviceTokenRepository.findAll()
+        assertEquals(1, rows.size)
+        assertTrue(rows.single().memberId in setOf(900_101L, 900_102L))
+        assertEquals(token, rows.single().token)
     }
 }

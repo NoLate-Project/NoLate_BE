@@ -116,6 +116,16 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var lastReminderBoundaryAt: Instant? = null
         protected set
 
+    @Column(name = "last_handled_departure_at")
+    @Comment("확인 성공 또는 ambiguous terminal이 처리한 마지막 추천 출발 시각")
+    var lastHandledDepartureAt: Instant? = null
+        protected set
+
+    @Column(name = "last_handled_reminder_boundary_at")
+    @Comment("확인 성공 또는 ambiguous terminal이 처리한 마지막 reminder 경계")
+    var lastHandledReminderBoundaryAt: Instant? = null
+        protected set
+
     @Column(name = "last_checked_at")
     @Comment("마지막 교통상황 체크 실행 시간")
     var lastCheckedAt: Instant? = null
@@ -131,6 +141,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var departureNoticeSentAt: Instant? = null
         protected set
 
+    @Column(name = "handled_departure_notice_at")
+    @Comment("확인 성공 또는 ambiguous terminal의 최초 DEPART_NOW 논리 처리 시각")
+    var handledDepartureNoticeAt: Instant? = null
+        protected set
+
     @Column(name = "last_departure_reminder_stage", length = 40)
     @Comment("마지막으로 처리한 출발 후속 알림 단계")
     var lastDepartureReminderStage: String? = null
@@ -139,6 +154,21 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     @Column(name = "last_departure_reminder_boundary_at")
     @Comment("마지막으로 처리한 출발 후속 알림 경계 시각")
     var lastDepartureReminderBoundaryAt: Instant? = null
+        protected set
+
+    @Column(name = "last_handled_departure_reminder_stage", length = 40)
+    @Comment("확인 성공 또는 ambiguous terminal의 마지막 논리 reminder 단계")
+    var lastHandledDepartureReminderStage: String? = null
+        protected set
+
+    @Column(name = "last_handled_departure_reminder_boundary_at")
+    @Comment("확인 성공 또는 ambiguous terminal의 마지막 논리 reminder 경계")
+    var lastHandledDepartureReminderBoundaryAt: Instant? = null
+        protected set
+
+    @Column(name = "last_uncertain_at")
+    @Comment("가장 최근 ambiguous terminal 처리 시각")
+    var lastUncertainAt: Instant? = null
         protected set
 
     @Column(name = "snoozed_until")
@@ -159,6 +189,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     @Column(name = "notification_generation", nullable = false)
     @Comment("일정 의미 변경 시 증가하는 알림 이벤트 세대")
     var notificationGeneration: Long = 0
+        protected set
+
+    @Column(name = "notification_input_fingerprint", nullable = false, length = 64)
+    @Comment("알림 의미 입력의 결정적 SHA-256 지문")
+    var notificationInputFingerprint: String = ""
         protected set
 
     @Column(name = "locked_by", length = 100)
@@ -182,6 +217,13 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     fun startProcessing(workerId: String, now: Instant = Instant.now()) {
         status = SchedulePushJobStatus.PROCESSING
         lockedBy = workerId
+        lockedAt = now
+    }
+
+    fun refreshLease(workerId: String, now: Instant) {
+        check(status == SchedulePushJobStatus.PROCESSING && lockedBy == workerId) {
+            "현재 lease owner만 heartbeat를 갱신할 수 있습니다."
+        }
         lockedAt = now
     }
 
@@ -235,7 +277,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
      * reminder stage와 check count는 모든 재시도 가능 기기가 terminal이 될 때까지 건드리지 않는다.
      */
     fun recordConfirmedPush(at: Instant) {
-        lastPushedAt = at
+        lastPushedAt = listOfNotNull(lastPushedAt, at).maxOrNull()
     }
 
     /**
@@ -247,6 +289,8 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         pushSent: Boolean,
         notifiedDepartureAt: Instant?,
         pushConfirmed: Boolean = pushSent,
+        pushConfirmedAt: Instant? = null,
+        pushUncertain: Boolean = false,
         reminderBoundaryAt: Instant? = null,
         departureReminderStage: ScheduleDepartureReminderStage? = null,
         departureReminderBoundaryAt: Instant? = null,
@@ -262,24 +306,52 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         retryCount = 0
         failureReason = null
 
-        if (pushSent) {
+        val notificationHandled = pushConfirmed || pushUncertain
+        if (notificationHandled) {
+            lastHandledDepartureAt = notifiedDepartureAt
+            if (reminderBoundaryAt != null) {
+                lastHandledReminderBoundaryAt = reminderBoundaryAt
+            }
+        }
+        if (pushConfirmed) {
             lastNotifiedDepartureAt = notifiedDepartureAt
             if (reminderBoundaryAt != null) {
                 lastReminderBoundaryAt = reminderBoundaryAt
             }
+            val confirmedAt = pushConfirmedAt ?: now
+            lastPushedAt = listOfNotNull(lastPushedAt, confirmedAt).maxOrNull()
         }
-        if (pushConfirmed) {
-            lastPushedAt = now
+        if (pushUncertain) {
+            lastUncertainAt = now
         }
 
-        if (departureReminderStage != null) {
-            lastDepartureReminderStage = departureReminderStage.name
-            lastDepartureReminderBoundaryAt = requireNotNull(departureReminderBoundaryAt) {
+        if (departureReminderStage != null && notificationHandled) {
+            val boundaryAt = requireNotNull(departureReminderBoundaryAt) {
                 "출발 후속 알림 단계에는 경계 시각이 필요합니다."
             }
-            if (departureReminderStage == ScheduleDepartureReminderStage.DEPART_NOW && departureNoticeSentAt == null) {
+            lastHandledDepartureReminderStage = departureReminderStage.name
+            lastHandledDepartureReminderBoundaryAt = boundaryAt
+            if (
+                departureReminderStage == ScheduleDepartureReminderStage.DEPART_NOW &&
+                handledDepartureNoticeAt == null
+            ) {
+                handledDepartureNoticeAt = if (pushConfirmed) {
+                    pushConfirmedAt ?: now
+                } else {
+                    now
+                }
+            }
+            if (pushConfirmed) {
+                lastDepartureReminderStage = departureReminderStage.name
+                lastDepartureReminderBoundaryAt = boundaryAt
+            }
+            if (
+                pushConfirmed &&
+                departureReminderStage == ScheduleDepartureReminderStage.DEPART_NOW &&
+                departureNoticeSentAt == null
+            ) {
                 // 후속 +3/+7분 알림은 실제로 사용자에게 처음 출발을 재촉한 시각을 기준으로 삼는다.
-                departureNoticeSentAt = now
+                departureNoticeSentAt = pushConfirmedAt ?: now
             }
         }
 
@@ -306,8 +378,16 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         scheduleAt: Instant,
         departureAt: Instant,
         monitorStartAt: Instant,
-        intervalMinutes: Int
-    ) {
+        intervalMinutes: Int,
+        notificationInputFingerprint: String = ScheduleNotificationInputFingerprint.legacy(
+            memberId = memberId,
+            scheduleId = scheduleId,
+            scheduleAt = scheduleAt,
+            departureAt = departureAt,
+            monitorStartAt = monitorStartAt,
+            intervalMinutes = intervalMinutes,
+        ),
+    ): Boolean {
         validateScheduleTime(
             scheduleAt = scheduleAt,
             departureAt = departureAt,
@@ -315,28 +395,43 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         )
         validateInterval(intervalMinutes)
 
+        if (
+            this.notificationInputFingerprint == notificationInputFingerprint &&
+            status != SchedulePushJobStatus.CANCELED
+        ) {
+            return false
+        }
+
         this.scheduleAt = scheduleAt
         this.departureAt = departureAt
         this.monitorStartAt = monitorStartAt
         this.intervalMinutes = intervalMinutes
         this.notificationGeneration += 1
+        this.notificationInputFingerprint = notificationInputFingerprint
         this.nextCheckAt = monitorStartAt
         this.status = SchedulePushJobStatus.ACTIVE
         this.lastTravelMinutes = null
         this.lastRecommendedDepartureAt = null
         this.lastNotifiedDepartureAt = null
         this.lastReminderBoundaryAt = null
+        this.lastHandledDepartureAt = null
+        this.lastHandledReminderBoundaryAt = null
         this.lastCheckedAt = null
         this.lastPushedAt = null
         this.departureNoticeSentAt = null
+        this.handledDepartureNoticeAt = null
         this.lastDepartureReminderStage = null
         this.lastDepartureReminderBoundaryAt = null
+        this.lastHandledDepartureReminderStage = null
+        this.lastHandledDepartureReminderBoundaryAt = null
+        this.lastUncertainAt = null
         this.snoozedUntil = null
         this.checkCount = 0
         this.retryCount = 0
         this.failureReason = null
 
         clearLock()
+        return true
     }
 
     /**
@@ -384,7 +479,15 @@ class SchedulePushJob protected constructor() : BaseEntity() {
             scheduleAt: Instant,
             departureAt: Instant,
             monitorStartAt: Instant,
-            intervalMinutes: Int
+            intervalMinutes: Int,
+            notificationInputFingerprint: String = ScheduleNotificationInputFingerprint.legacy(
+                memberId = memberId,
+                scheduleId = scheduleId,
+                scheduleAt = scheduleAt,
+                departureAt = departureAt,
+                monitorStartAt = monitorStartAt,
+                intervalMinutes = intervalMinutes,
+            ),
         ): SchedulePushJob {
             require(memberId > 0) {
                 "memberId는 0보다 커야 합니다. memberId=$memberId"
@@ -413,6 +516,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
                 this.checkCount = 0
                 this.retryCount = 0
                 this.notificationGeneration = 0
+                this.notificationInputFingerprint = notificationInputFingerprint
             }
         }
 

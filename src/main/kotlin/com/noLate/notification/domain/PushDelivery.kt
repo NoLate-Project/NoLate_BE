@@ -70,8 +70,14 @@ class PushDelivery(
     @Column(name = "device_token_id")
     val deviceTokenId: Long? = null,
 
-    @Column(name = "device_id", length = 100)
-    val deviceId: String? = null,
+    @Column(name = "token_fingerprint", nullable = false, length = 64)
+    val tokenFingerprint: String,
+
+    @Column(name = "token_ownership_version", nullable = false)
+    val tokenOwnershipVersion: Long,
+
+    @Column(name = "device_fingerprint", length = 64)
+    val deviceFingerprint: String? = null,
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -148,10 +154,20 @@ class PushDelivery(
         errorMessage = message?.take(1000)
     }
 
+    fun markSuperseded(at: Instant, reason: String) {
+        if (status != PushDeliveryStatus.PENDING && status != PushDeliveryStatus.FAILED) return
+        status = PushDeliveryStatus.SUPERSEDED
+        lastAttemptedAt = at
+        errorCode = "TOKEN_OWNERSHIP_CHANGED"
+        errorMessage = reason.take(1000)
+    }
+
     protected constructor() : this(
         memberId = 0L,
         eventKey = "",
         deviceKey = "",
+        tokenFingerprint = "",
+        tokenOwnershipVersion = 0,
         platform = PushPlatform.UNKNOWN,
     )
 }
@@ -165,4 +181,6 @@ enum class PushDeliveryStatus {
     /** Provider가 실패를 명시적으로 반환해 안전하게 재시도할 수 있다. */
     FAILED,
     INVALID_TOKEN,
+    /** Manifest 이후 token/member/device ownership이 바뀌어 stale snapshot을 보내지 않았다. */
+    SUPERSEDED,
 }

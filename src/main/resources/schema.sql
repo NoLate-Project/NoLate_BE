@@ -279,15 +279,22 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     last_recommended_departure_at DATETIME(6) NULL COMMENT 'Last recommended departure time',
     last_notified_departure_at DATETIME(6) NULL COMMENT 'Last departure time notified to the user',
     last_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last 5-minute reminder boundary time',
+    last_handled_departure_at DATETIME(6) NULL COMMENT 'Last confirmed or uncertain logical departure time',
+    last_handled_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last confirmed or uncertain logical reminder boundary',
     last_checked_at DATETIME(6) NULL COMMENT 'Last checked time',
     last_pushed_at DATETIME(6) NULL COMMENT 'Last push sent time',
     departure_notice_sent_at DATETIME(6) NULL COMMENT 'First depart-now notification sent time',
+    handled_departure_notice_at DATETIME(6) NULL COMMENT 'First confirmed or uncertain DEPART_NOW handling time',
     last_departure_reminder_stage VARCHAR(40) NULL COMMENT 'Last handled departure follow-up stage',
     last_departure_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last handled departure follow-up boundary',
+    last_handled_departure_reminder_stage VARCHAR(40) NULL COMMENT 'Last confirmed or uncertain follow-up stage',
+    last_handled_departure_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last confirmed or uncertain follow-up boundary',
+    last_uncertain_at DATETIME(6) NULL COMMENT 'Most recent ambiguous delivery handling time',
     snoozed_until DATETIME(6) NULL COMMENT 'User requested reminder time',
     check_count INT NOT NULL DEFAULT 0 COMMENT 'Traffic check count',
     retry_count INT NOT NULL DEFAULT 0 COMMENT 'Retry count',
     notification_generation BIGINT NOT NULL DEFAULT 0 COMMENT 'Notification event generation incremented on schedule changes',
+    notification_input_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Deterministic notification semantic input SHA-256',
     locked_by VARCHAR(100) NULL COMMENT 'Worker id',
     locked_at DATETIME(6) NULL COMMENT 'Locked time',
     failure_reason VARCHAR(500) NULL COMMENT 'Last failure reason',
@@ -304,10 +311,43 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     INDEX idx_schedule_push_job_schedule_id (schedule_id)
 ) COMMENT='Schedule push jobs';
 
+CREATE TABLE IF NOT EXISTS schedule_notification_action_receipts (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Action receipt primary key',
+    key_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Case-sensitive SHA-256 of the unpersisted Idempotency-Key',
+    member_id BIGINT NOT NULL COMMENT 'Authenticated action member id',
+    schedule_id BIGINT NOT NULL COMMENT 'Bound schedule id',
+    action_type VARCHAR(24) NOT NULL COMMENT 'DEPART_NOW or SNOOZE',
+    result_departed_at DATETIME(6) NULL COMMENT 'Authoritative first departure time',
+    result_snoozed_until DATETIME(6) NULL COMMENT 'Snooze time returned by the one mutation',
+    completed_at DATETIME(6) NULL COMMENT 'Completion time committed atomically with mutation',
+    created_at DATETIME(6) NOT NULL COMMENT 'Receipt creation time',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_notification_action_key_fingerprint (key_fingerprint),
+    INDEX idx_schedule_notification_action_scope (member_id, schedule_id, action_type)
+) COMMENT='Durable idempotency receipts for schedule notification actions';
+
+CREATE TABLE IF NOT EXISTS push_device_token (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    member_id BIGINT NOT NULL,
+    device_id VARCHAR(100) NULL,
+    platform VARCHAR(20) NOT NULL,
+    token VARCHAR(500) NOT NULL,
+    token_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    device_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    ownership_version BIGINT NOT NULL DEFAULT 0,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_push_device_token_token_fingerprint (token_fingerprint),
+    UNIQUE KEY uk_push_device_token_member_device_fingerprint (member_id, device_fingerprint)
+) COMMENT='Current per-member push token ownership; raw opaque values are never indexed';
+
 CREATE TABLE IF NOT EXISTS app_notifications (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'In-app notification primary key',
     member_id BIGINT NOT NULL COMMENT 'Notification recipient member id',
     deduplication_key VARCHAR(180) NULL COMMENT 'Logical event key used to merge concurrent delivery attempts',
+    logical_event_key VARCHAR(100) NOT NULL COMMENT 'Durable logical push/outbox event key',
     type VARCHAR(80) NOT NULL COMMENT 'Client navigation and presentation type',
     schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
     category_id BIGINT NULL COMMENT 'Related category id when applicable',
@@ -318,6 +358,7 @@ CREATE TABLE IF NOT EXISTS app_notifications (
     read_at DATETIME(6) NULL COMMENT 'First read time',
     PRIMARY KEY (id),
     UNIQUE KEY uk_app_notifications_member_deduplication (member_id, deduplication_key),
+    UNIQUE KEY uk_app_notifications_member_logical_event (member_id, logical_event_key),
     INDEX idx_app_notifications_member_id_id (member_id, id),
     INDEX idx_app_notifications_member_read_at (member_id, read_at)
 ) COMMENT='Durable user-facing in-app notification inbox';
@@ -334,11 +375,13 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     event_key VARCHAR(100) NOT NULL COMMENT 'Durable logical event identifier',
     device_key VARCHAR(100) NOT NULL COMMENT 'Stable device id or one-way token fingerprint',
     device_token_id BIGINT NULL COMMENT 'Token row id at dispatch time; no foreign key so invalid-token removal keeps evidence',
-    device_id VARCHAR(100) NULL COMMENT 'Non-secret client device id when supplied',
+    token_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Case-sensitive token ownership snapshot',
+    token_ownership_version BIGINT NOT NULL COMMENT 'Token ownership version snapshot',
+    device_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT 'One-way client device fingerprint',
     platform VARCHAR(20) NOT NULL COMMENT 'Push platform',
     schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
     payload_type VARCHAR(80) NULL COMMENT 'Push payload type',
-    status VARCHAR(30) NOT NULL COMMENT 'PENDING, DISPATCHING, SUCCESS, FAILED, or INVALID_TOKEN',
+    status VARCHAR(30) NOT NULL COMMENT 'PENDING, DISPATCHING, SUCCESS, FAILED, INVALID_TOKEN, or SUPERSEDED',
     attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Provider call attempt count',
     first_attempted_at DATETIME(6) NULL COMMENT 'First provider call boundary creation time',
     last_attempted_at DATETIME(6) NULL COMMENT 'Most recent provider call boundary time',

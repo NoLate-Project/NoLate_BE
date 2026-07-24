@@ -5,6 +5,7 @@ import com.noLate.favorite.domain.FavoritePlaceDto
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.SchedulePushJobService
+import com.noLate.schedule.application.service.ScheduleNotificationActionIdempotencyService
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
 import com.noLate.schedule.domain.ScheduleDepartureStatus
@@ -54,6 +55,9 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var scheduleTravelPlanService: ScheduleTravelPlanService
 
+    @Mock
+    lateinit var notificationActionIdempotencyService: ScheduleNotificationActionIdempotencyService
+
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
 
     private lateinit var scheduleUseCase: ScheduleUseCase
@@ -68,6 +72,7 @@ class ScheduleUseCaseUnitTest {
             favoritePlaceService = favoritePlaceService,
             clock = clock,
             scheduleTravelPlanService = scheduleTravelPlanService,
+            notificationActionIdempotencyService = notificationActionIdempotencyService,
         )
     }
 
@@ -404,6 +409,35 @@ class ScheduleUseCaseUnitTest {
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, sharedMemberId)
         verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
         assertEquals("2026-06-01T00:00:00Z", result.myDepartedAt)
+    }
+
+    @Test
+    fun `Idempotency-Key 없는 legacy snooze 수동 요청은 기존 동작을 유지한다`() {
+        scheduleUseCase.snoozeDepartureReminder(
+            memberId = 1L,
+            scheduleId = 10L,
+            idempotencyKey = null,
+        )
+
+        verify(schedulePushJobService).snoozeDepartureReminder(1L, 10L)
+    }
+
+    @Test
+    fun `알림 action key가 있으면 durable idempotency 경계로 위임한다`() {
+        val logicalKey = "key:" + "b".repeat(64)
+        val departKey = "departNow:$logicalKey"
+        val snoozeKey = "snooze:$logicalKey"
+        val result = scheduleDto().copy(id = 10L, ownerMemberId = 1L)
+        whenever(notificationActionIdempotencyService.departNow(1L, 10L, departKey))
+            .thenReturn(result)
+
+        assertEquals(result, scheduleUseCase.markDeparted(1L, 10L, departKey))
+        scheduleUseCase.snoozeDepartureReminder(1L, 10L, snoozeKey)
+
+        verify(notificationActionIdempotencyService).departNow(1L, 10L, departKey)
+        verify(notificationActionIdempotencyService).snooze(1L, 10L, snoozeKey)
+        verify(scheduleDepartureStatusService, never()).markDeparted(1L, 10L)
+        verify(schedulePushJobService, never()).snoozeDepartureReminder(1L, 10L)
     }
 
     @Test

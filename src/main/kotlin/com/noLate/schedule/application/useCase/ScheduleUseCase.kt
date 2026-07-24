@@ -5,6 +5,7 @@ import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleDepartureStatusService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.SchedulePushJobService
+import com.noLate.schedule.application.service.ScheduleNotificationActionIdempotencyService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportResultDto
@@ -29,6 +30,7 @@ class ScheduleUseCase(
     private val scheduleHybridParserService: ScheduleHybridParserService,
     private val scheduleDepartureStatusService: ScheduleDepartureStatusService,
     private val favoritePlaceService: FavoritePlaceService,
+    private val notificationActionIdempotencyService: ScheduleNotificationActionIdempotencyService,
     private val clock: Clock = Clock.systemUTC(),
     private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
 ) {
@@ -170,6 +172,7 @@ class ScheduleUseCase(
      */
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
+        schedulePushJobService.lockForScheduleEdit(scheduleId)
         val updated = scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
         // 공유 EDITOR가 수정해도 평탄형 경로와 기존 오너 push job은 실제 일정 소유자 기준으로
         // 동기화한다. 요청자를 오너로 간주하면 공유 편집 직후 SCHEDULE_NOT_FOUND로 롤백된다.
@@ -211,6 +214,7 @@ class ScheduleUseCase(
      */
     @Transactional
     fun deleteSchedule(memberId: Long, scheduleId: Long) {
+        schedulePushJobService.lockForScheduleEdit(scheduleId)
         scheduleService.deleteSchedule(memberId, scheduleId)
         schedulePushJobService.cancelByScheduleId(scheduleId)
     }
@@ -219,7 +223,14 @@ class ScheduleUseCase(
      * 사용자가 푸시의 "지금 출발" 액션을 선택했을 때 더 이상의 출발 알림을 중지한다.
      */
     @Transactional
-    fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
+    fun markDeparted(
+        memberId: Long,
+        scheduleId: Long,
+        idempotencyKey: String? = null,
+    ): ScheduleDto {
+        if (idempotencyKey != null) {
+            return notificationActionIdempotencyService.departNow(memberId, scheduleId, idempotencyKey)
+        }
         val detail = scheduleService.getScheduleDetail(memberId, scheduleId)
 
         scheduleDepartureStatusService.markDeparted(memberId, scheduleId)
@@ -239,7 +250,15 @@ class ScheduleUseCase(
      * 사용자가 푸시의 "5분 뒤 다시 알림" 액션을 선택했을 때 출발 알림 job을 다시 깨운다.
      */
     @Transactional
-    fun snoozeDepartureReminder(memberId: Long, scheduleId: Long) {
+    fun snoozeDepartureReminder(
+        memberId: Long,
+        scheduleId: Long,
+        idempotencyKey: String? = null,
+    ) {
+        if (idempotencyKey != null) {
+            notificationActionIdempotencyService.snooze(memberId, scheduleId, idempotencyKey)
+            return
+        }
         schedulePushJobService.snoozeDepartureReminder(memberId, scheduleId)
     }
 
