@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.ScheduleCalendar
@@ -106,15 +107,17 @@ class ScheduleCalendarService(
             defaultContentMode = defaultContentMode ?: calendar.defaultContentMode,
         )
         calendarRepository.saveAndFlush(calendar)
+        val affectedMemberIds = calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+        publishCalendarCacheInvalidation(affectedMemberIds, "calendar-settings-updated")
         if (
             previousContentMode == ScheduleShareContentMode.SCHEDULE_AND_TRAVEL &&
             calendar.defaultContentMode == ScheduleShareContentMode.SCHEDULE_ONLY
         ) {
             travelAccessCleanupService?.cancelRevokedForCalendar(
                 calendarId,
-                calendarMemberRepository
-                    .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
-                    .map { it.memberId },
+                affectedMemberIds,
             )
         }
         return calendar.toDto(
@@ -176,6 +179,8 @@ class ScheduleCalendarService(
                     resourceTitle = calendar.title,
                 )
             )
+        } else {
+            publishCalendarCacheInvalidation(listOf(targetMemberId), "calendar-member-role-updated")
         }
         return saved.toDto(target)
     }
@@ -199,6 +204,7 @@ class ScheduleCalendarService(
             membership.changeRole(it)
         }
         val saved = calendarMemberRepository.saveAndFlush(membership)
+        publishCalendarCacheInvalidation(listOf(targetMemberId), "calendar-member-role-updated")
         return saved.toDto(memberRepository.findByIdAndDeletedFalse(targetMemberId))
     }
 
@@ -233,6 +239,7 @@ class ScheduleCalendarService(
         }
         membership.remove()
         calendarMemberRepository.saveAndFlush(membership)
+        publishCalendarCacheInvalidation(listOf(targetMemberId), "calendar-member-removed")
         travelAccessCleanupService?.cancelRevokedForCalendar(calendarId, listOf(targetMemberId))
     }
 
@@ -248,6 +255,7 @@ class ScheduleCalendarService(
         }
         membership.leave()
         calendarMemberRepository.saveAndFlush(membership)
+        publishCalendarCacheInvalidation(listOf(memberId), "calendar-member-left")
         travelAccessCleanupService?.cancelRevokedForCalendar(calendarId, listOf(memberId))
     }
 
@@ -280,6 +288,10 @@ class ScheduleCalendarService(
         calendarMemberRepository.flush()
         calendarRepository.saveAndFlush(calendar)
         revokePendingCalendarInvitations(pendingInvitations)
+        publishCalendarCacheInvalidation(
+            listOf(ownerMemberId, targetMemberId),
+            "calendar-ownership-transferred",
+        )
 
         return calendar.toDto(
             membership = currentOwner,
@@ -299,6 +311,7 @@ class ScheduleCalendarService(
         revokePendingCalendarInvitations(pendingInvitations)
         calendar.archive()
         calendarRepository.saveAndFlush(calendar)
+        publishCalendarCacheInvalidation(affectedMemberIds, "calendar-archived")
         travelAccessCleanupService?.cancelRevokedForCalendar(calendarId, affectedMemberIds)
     }
 
@@ -329,6 +342,16 @@ class ScheduleCalendarService(
         invitations.forEach { it.revoke() }
         invitationRepository?.saveAll(invitations)
         invitationRepository?.flush()
+    }
+
+    private fun publishCalendarCacheInvalidation(memberIds: Collection<Long>, reason: String) {
+        if (memberIds.isEmpty()) return
+        eventPublisher.publishEvent(
+            ScheduleCalendarCacheInvalidationEvent(
+                memberIds = memberIds.toSet(),
+                reason = reason,
+            )
+        )
     }
 
     private fun findActiveCalendar(calendarId: Long): ScheduleCalendar =

@@ -19,7 +19,13 @@ spring:
   flyway:
     enabled: false
 
+calendar:
+  metadata-cache:
+    enabled: false
+
 schedule:
+  calendar-cache:
+    enabled: false
   push:
     enabled: false
     fixed-delay-ms: 86400000

@@ -256,6 +256,46 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `shared editor can update while keeping owner's existing category snapshot`() {
+        val editorId = 2L
+        val scheduleId = 10L
+        val existing = scheduleEntity(id = scheduleId, memberId = 99L, title = "Old schedule")
+        val accessPolicy = mock<ScheduleAccessPolicy>()
+        val categoryRepository = mock<ScheduleCategoryRepository>()
+        val categoryShareRepository = mock<ScheduleCategoryShareRepository>()
+        val securedService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            scheduleAccessPolicy = accessPolicy,
+            categoryRepository = categoryRepository,
+            categoryShareRepository = categoryShareRepository,
+        )
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)).thenReturn(existing)
+        whenever(accessPolicy.resolve(editorId, existing)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = true,
+                travelEnabled = false,
+                canViewAllTravelPlans = true,
+                effectivePermission = ScheduleSharePermission.EDITOR,
+            )
+        )
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        val result = securedService.updateSchedule(
+            editorId,
+            scheduleId,
+            scheduleDto(title = "Editor update"),
+        )
+
+        assertEquals("Editor update", result.title)
+        assertEquals("Work", result.category.title)
+        verify(categoryRepository, never()).findById(any())
+        verify(categoryShareRepository, never()).findByCategoryIdAndTargetMemberId(any(), any())
+    }
+
+    @Test
     fun `moving schedule locks source and target calendars in ascending id order`() {
         val memberId = 1L
         val scheduleId = 10L

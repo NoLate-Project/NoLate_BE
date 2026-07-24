@@ -187,7 +187,8 @@ class CalendarMetadataService(
         this?.holidaysSyncedAt?.isBefore(staleBefore) != false
 
     companion object {
-        const val MAX_RANGE_DAYS = 93L
+        // FE가 이전·현재·다음 달과 각 월의 바깥 주를 한 번에 요청할 때의 최대 범위다.
+        const val MAX_RANGE_DAYS = 98L
         private val SEOUL_ZONE: ZoneId = ZoneId.of("Asia/Seoul")
     }
 

@@ -1,6 +1,10 @@
 # NoLate Project Roadmap
 
+
 Last verified: 2026-07-24 KST (Push-driven share and notification badges)
+
+Last verified: 2026-07-24 KST (Redis calendar query cache and metadata cache)
+
 
 이 문서는 NoLate 문서의 상위 인덱스다. 세부 구현, 검증 절차, 테스트 목록은 분야별 문서에서 관리하고, 이 파일에는 현재 제품 상태와 우선순위만 둔다.
 
@@ -19,7 +23,10 @@ MVP 1차 완료 조건:
 
 병행 트랙인 일정 공유는 BE/FE 기능 연결과 시뮬레이터 시나리오 검증까지 완료했다. 운영 반영 전에는 DB migration, 권한별 쓰기 차단, 실기기 공유 push, 공개 handle/친구 검색을 순서대로 마무리한다.
 
+
 FE 메인 캘린더의 공유함·알림 배지는 2026-07-24부터 45초 polling 대신 push 수신 이벤트로 갱신한다. 화면 최초 진입과 앱 foreground 복귀 시 서버 동기화를 보완하고, 실제 APNs/FCM 수신 시 두 배지가 즉시 갱신되는지는 TestFlight에서 최종 검증한다.
+월 이동 조회 성능 개선도 완료했다. 사용자·revision·월 단위 일정 Redis 캐시와 전 사용자 공용 음력/공휴일 월 캐시를 적용했고, 일정 생성·수정·삭제와 일정/카테고리/캘린더 공유 변경은 커밋 이후 영향 회원의 revision을 올린다. 실제 Redis 검증에서 warm metadata 조회는 회원·달력 SQL 없이 반환됐다.
+
 
 ## Area Index
 
@@ -29,6 +36,7 @@ FE 메인 캘린더의 공유함·알림 배지는 2026-07-24부터 45초 pollin
 | Schedule / Push Implementation | [`schedule/schedule-push-implementation-guide.md`](schedule/schedule-push-implementation-guide.md) | 구현/검증 가이드 | 최신 남은 작업과 실행 절차 유지 |
 | Push Scenario Runner | [`schedule/push-scenario-runner.md`](schedule/push-scenario-runner.md) | 수동 E2E 도구 완료 | 실제 일정 기반 Runner 결과 기록 |
 | Quick Schedule | [`schedule/quick-schedule-creation-roadmap.md`](schedule/quick-schedule-creation-roadmap.md) | 자연어 일정 생성 기반 완료, 확장 설계 진행 | 입력 채널 확장, OCR/share |
+| Calendar Query Cache | [`quality/quality-ops-developer-tools-roadmap.md`](quality/quality-ops-developer-tools-roadmap.md) | 일정/공유 변경 revision 캐시와 공용 메타데이터 월 캐시 구현·실 Redis 검증 완료 | 운영 hit ratio/p95, 다중 BE 인스턴스 single-flight |
 | Schedule Sharing | [`schedule/schedule-sharing-roadmap.md`](schedule/schedule-sharing-roadmap.md) | 앱 ID/이메일·링크 공유, 통합 공유함, 참가자별 이동/출발 상태, 첫 출발 자동 push, 오너 지정 push 구현 | 운영 migration, 권한 집행, 실기기 push, handle/친구 검색 |
 | Notification / FCM / App Push | [`notification/notification-fcm-app-push-roadmap.md`](notification/notification-fcm-app-push-roadmap.md) | 기존 일정 알림과 공유 참가자 출발/지정 알림 payload, 상세 이동, 발송 이력, push 기반 공유함·알림 배지 갱신 구현 | 실기기 수신·클릭·액션과 무 polling 배지 갱신 검증 |
 | FE App / Route UX | [`frontend/fe-app-route-ux-roadmap.md`](frontend/fe-app-route-ux-roadmap.md) | 로그인, 일정, 경로, 알림 UX 기반 완료 | 실기기 UX 검증, 오류/빈 상태 정리 |

@@ -3,6 +3,9 @@ package com.noLate.schedule.application.service
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheAudienceResolver
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheService
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportProvider
@@ -23,6 +26,7 @@ import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.subscription.application.SubscriptionPolicyService
 import jakarta.transaction.Transactional
 import org.springframework.data.domain.PageRequest
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import java.time.Instant
 import java.time.LocalDate
@@ -45,6 +49,9 @@ class ScheduleService(
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
     private val calendarRepository: ScheduleCalendarRepository? = null,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository? = null,
+    private val calendarCacheService: ScheduleCalendarCacheService? = null,
+    private val calendarCacheAudienceResolver: ScheduleCalendarCacheAudienceResolver? = null,
+    private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
 
@@ -116,6 +123,10 @@ class ScheduleService(
         }
 
         val savedEntity = scheduleRepository.save(entity)
+        publishCalendarCacheInvalidation(
+            memberIds = calendarCacheAudienceResolver?.resolve(savedEntity).orEmpty() + memberId,
+            reason = "schedule-created",
+        )
 
         return savedEntity.toDto(objectMapper)
     }
@@ -123,9 +134,10 @@ class ScheduleService(
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
         val existingSchedule = findEditableActive(memberId, scheduleId)
+        val previousAudience = calendarCacheAudienceResolver?.resolve(existingSchedule).orEmpty()
         val authorizedDto = withAuthorizedCalendar(
             memberId = memberId,
-            scheduleDto = withAuthorizedCategory(memberId, scheduleDto),
+            scheduleDto = withAuthorizedCategory(memberId, scheduleDto, existingSchedule),
             existingCalendarId = existingSchedule.calendarId,
         )
 
@@ -142,22 +154,29 @@ class ScheduleService(
 
         applyDto(existingSchedule, normalizedDto)
         val savedEntity = scheduleRepository.save(existingSchedule)
+        publishCalendarCacheInvalidation(
+            memberIds = previousAudience + calendarCacheAudienceResolver?.resolve(savedEntity).orEmpty(),
+            reason = "schedule-updated",
+        )
 
-        return savedEntity.toDto(objectMapper)
+        return toVisibleDtos(memberId, listOf(savedEntity)).single()
     }
 
     @Transactional
     fun deleteSchedule(memberId: Long, scheduleId: Long) {
         val entity = findOwnedActive(memberId, scheduleId)
+        val affectedMemberIds = calendarCacheAudienceResolver?.resolve(entity).orEmpty() + memberId
         // 삭제한 외부 일정은 사용자가 나중에 의도적으로 다시 가져올 수 있어야 한다.
         entity.externalSourceKey = null
         entity.softDelete()
         scheduleRepository.save(entity)
+        publishCalendarCacheInvalidation(affectedMemberIds, "schedule-deleted")
     }
 
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
         val entity = findOwnedActive(memberId, scheduleId)
+        val affectedMemberIds = calendarCacheAudienceResolver?.resolve(entity).orEmpty() + memberId
         // 출발 완료는 알림 액션에서 중복 호출될 수 있으므로 최초 완료 시각을 보존한다.
         // 경로 정보는 남겨 두고 해당 일정의 남은 실시간 알림만 비활성화한다.
         entity.route?.departedAt = entity.route?.departedAt ?: Instant.now()
@@ -165,7 +184,9 @@ class ScheduleService(
         entity.route?.notificationLeadMinutes = null
         entity.route?.notificationIntervalMinutes = null
 
-        return scheduleRepository.save(entity).toDto(objectMapper)
+        val saved = scheduleRepository.save(entity)
+        publishCalendarCacheInvalidation(affectedMemberIds, "schedule-departed")
+        return saved.toDto(objectMapper)
     }
 
     @Transactional
@@ -187,15 +208,22 @@ class ScheduleService(
             throw BusinessException(ErrorCode.INVALID_INPUT, "endAt must be after startAt.")
         }
 
-        return toVisibleDtos(
-            memberId,
-            scheduleRepository.findOverlappingScheduleList(
-                memberId = memberId,
-                rangeStart = rangeStart,
-                rangeEnd = rangeEnd,
-            ),
-        )
+        val loader = { loadStart: Instant, loadEnd: Instant ->
+            toVisibleDtos(
+                memberId,
+                scheduleRepository.findOverlappingScheduleList(
+                    memberId = memberId,
+                    rangeStart = loadStart,
+                    rangeEnd = loadEnd,
+                ),
+            )
+        }
+        return calendarCacheService?.getOrLoad(memberId, rangeStart, rangeEnd, loader)
+            ?: loader(rangeStart, rangeEnd)
     }
+
+    fun getCalendarCacheRevision(memberId: Long): Long =
+        calendarCacheService?.currentRevision(memberId) ?: 0L
 
     @Transactional
     fun getDailyScheduleList(memberId: Long, date: String): List<ScheduleDto> {
@@ -363,6 +391,16 @@ class ScheduleService(
         }
     }
 
+    private fun publishCalendarCacheInvalidation(memberIds: Collection<Long>, reason: String) {
+        if (memberIds.isEmpty()) return
+        eventPublisher.publishEvent(
+            ScheduleCalendarCacheInvalidationEvent(
+                memberIds = memberIds.toSet(),
+                reason = reason,
+            )
+        )
+    }
+
     private fun findActive(memberId: Long, scheduleId: Long): Schedule {
         return scheduleRepository.findScheduleDetail(scheduleId, memberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
@@ -418,13 +456,29 @@ class ScheduleService(
         return scheduleDto
     }
 
-    private fun withAuthorizedCategory(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
+    private fun withAuthorizedCategory(
+        memberId: Long,
+        scheduleDto: ScheduleDto,
+        existingSchedule: Schedule? = null,
+    ): ScheduleDto {
         // 단위 테스트에서 직접 생성한 legacy 인스턴스만 fallback을 허용한다. Spring 운영 bean에는
         // 두 repository가 항상 주입되어 client category snapshot을 신뢰하지 않는다.
         val categories = categoryRepository ?: return scheduleDto
         val shares = categoryShareRepository ?: return scheduleDto
         val categoryId = scheduleDto.category.id?.toLongOrNull()
             ?: throw BusinessException(ErrorCode.INVALID_INPUT, "유효한 category.id가 필요합니다.")
+        val existingSnapshot = existingSchedule?.categorySnapshot
+        val existingCategoryId = existingSchedule?.categoryId
+            ?: existingSnapshot?.categoryId?.toLongOrNull()
+        if (existingSnapshot != null && existingCategoryId == categoryId) {
+            return scheduleDto.copy(
+                category = ScheduleCategoryDto(
+                    id = existingSnapshot.categoryId,
+                    title = existingSnapshot.title,
+                    color = existingSnapshot.color,
+                )
+            )
+        }
         val category = categories.findById(categoryId).orElse(null)
             ?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
