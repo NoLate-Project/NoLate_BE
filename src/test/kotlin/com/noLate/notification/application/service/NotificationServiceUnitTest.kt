@@ -3,6 +3,7 @@ package com.noLate.notification.application
 import com.noLate.notification.application.service.NotificationTokenService
 import com.noLate.notification.application.service.NotificationTokenWriter
 import com.noLate.notification.application.service.NotificationTokenRegistrationResult
+import com.noLate.notification.application.service.NotificationTokenRetirementService
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.notification.domain.PushPlatform
@@ -41,6 +42,9 @@ class NotificationTokenServiceUnitTest {
     @Mock
     lateinit var memberRepository: MemberRepository
 
+    @Mock
+    lateinit var retirementService: NotificationTokenRetirementService
+
     private lateinit var service: NotificationTokenService
 
     @BeforeEach
@@ -48,6 +52,7 @@ class NotificationTokenServiceUnitTest {
         service = NotificationTokenService(
             repository,
             NotificationTokenWriter(repository, memberRepository),
+            retirementService,
         )
         lenient().whenever(memberRepository.findAllByIdsForUpdate(any())).thenAnswer { invocation ->
             @Suppress("UNCHECKED_CAST")
@@ -259,7 +264,7 @@ class NotificationTokenServiceUnitTest {
     fun `removeToken uses case-sensitive device fingerprint rather than raw id`() {
         service.removeToken(5L, "Device-AbC")
 
-        verify(repository).deleteByMemberIdAndDeviceFingerprint(
+        verify(retirementService).retireByDeviceFingerprint(
             5L,
             OpaquePushIdentifier.fingerprint("Device-AbC"),
         )
@@ -269,7 +274,7 @@ class NotificationTokenServiceUnitTest {
     fun `removeToken preserves whitespace in opaque device identity`() {
         service.removeToken(5L, " Device-AbC ")
 
-        verify(repository).deleteByMemberIdAndDeviceFingerprint(
+        verify(retirementService).retireByDeviceFingerprint(
             5L,
             OpaquePushIdentifier.fingerprint(" Device-AbC "),
         )
@@ -277,8 +282,8 @@ class NotificationTokenServiceUnitTest {
 
     @Test
     fun `invalid token removal uses the full ownership snapshot`() {
-        whenever(repository.deleteByOwnershipSnapshot(30L, 6L, "fingerprint", 9L))
-            .thenReturn(1)
+        whenever(retirementService.retireByOwnership(6L, 30L, "fingerprint", 9L))
+            .thenReturn(true)
 
         val removed = service.removeTokenByOwnership(6L, 30L, "fingerprint", 9L)
 
@@ -287,8 +292,8 @@ class NotificationTokenServiceUnitTest {
 
     @Test
     fun `stale invalid response cannot delete ownership transferred row`() {
-        whenever(repository.deleteByOwnershipSnapshot(31L, 6L, "old-fingerprint", 0L))
-            .thenReturn(0)
+        whenever(retirementService.retireByOwnership(6L, 31L, "old-fingerprint", 0L))
+            .thenReturn(false)
 
         val removed = service.removeTokenByOwnership(6L, 31L, "old-fingerprint", 0L)
 
@@ -298,7 +303,7 @@ class NotificationTokenServiceUnitTest {
     @Test
     fun `transient lock failure retries in a fresh writer call and converges`() {
         val transientWriter = mock<NotificationTokenWriter>()
-        val retryingService = NotificationTokenService(repository, transientWriter)
+        val retryingService = NotificationTokenService(repository, transientWriter, retirementService)
         whenever(
             transientWriter.register(
                 memberId = any(),
@@ -337,7 +342,7 @@ class NotificationTokenServiceUnitTest {
     @Test
     fun `expected fingerprint duplicate retries in a fresh writer call and converges`() {
         val duplicateWriter = mock<NotificationTokenWriter>()
-        val retryingService = NotificationTokenService(repository, duplicateWriter)
+        val retryingService = NotificationTokenService(repository, duplicateWriter, retirementService)
         whenever(
             duplicateWriter.register(
                 memberId = any(),
@@ -376,7 +381,7 @@ class NotificationTokenServiceUnitTest {
     @Test
     fun `generic data integrity violation is not retried or hidden`() {
         val failingWriter = mock<NotificationTokenWriter>()
-        val failingService = NotificationTokenService(repository, failingWriter)
+        val failingService = NotificationTokenService(repository, failingWriter, retirementService)
         val expected = DataIntegrityViolationException("non-duplicate integrity failure")
         whenever(
             failingWriter.register(
@@ -418,7 +423,7 @@ class NotificationTokenServiceUnitTest {
     @Test
     fun `non transient registration failure is not retried or hidden`() {
         val failingWriter = mock<NotificationTokenWriter>()
-        val failingService = NotificationTokenService(repository, failingWriter)
+        val failingService = NotificationTokenService(repository, failingWriter, retirementService)
         whenever(
             failingWriter.register(
                 memberId = any(),
@@ -458,7 +463,7 @@ class NotificationTokenServiceUnitTest {
     @Test
     fun `repeated transient failures stop at the bound with a sanitized error`() {
         val failingWriter = mock<NotificationTokenWriter>()
-        val failingService = NotificationTokenService(repository, failingWriter)
+        val failingService = NotificationTokenService(repository, failingWriter, retirementService)
         val transient = CannotAcquireLockException("db detail")
         whenever(
             failingWriter.register(

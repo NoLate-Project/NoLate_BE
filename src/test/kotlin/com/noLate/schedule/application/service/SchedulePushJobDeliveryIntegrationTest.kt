@@ -8,6 +8,7 @@ import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationWriter
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.NotificationTokenRetirementService
 import com.noLate.notification.application.service.NotificationTokenWriter
 import com.noLate.notification.application.service.PushDeliveryService
 import com.noLate.notification.application.service.PushDeliveryWriter
@@ -16,6 +17,8 @@ import com.noLate.notification.application.service.PushEventOutboxWriter
 import com.noLate.notification.application.service.PushOutboxDispatchCoordinator
 import com.noLate.notification.application.service.PushOutboxDispatchWorker
 import com.noLate.notification.application.service.PushOutboxDispatchWriter
+import com.noLate.notification.application.service.PushTokenProviderLeaseService
+import com.noLate.notification.application.service.PushTokenProviderLeaseWriter
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.PushDeliveryStatus
@@ -71,6 +74,7 @@ import java.util.concurrent.atomic.AtomicInteger
     DepartureReminderPolicy::class,
     TrafficChangePolicy::class,
     NotificationTokenService::class,
+    NotificationTokenRetirementService::class,
     NotificationTokenWriter::class,
     PushSendHistoryService::class,
     AppNotificationService::class,
@@ -83,6 +87,8 @@ import java.util.concurrent.atomic.AtomicInteger
     NotificationUseCase::class,
     PushOutboxDispatchCoordinator::class,
     PushOutboxDispatchWriter::class,
+    PushTokenProviderLeaseService::class,
+    PushTokenProviderLeaseWriter::class,
     PushOutboxDispatchWorker::class,
     SchedulePersistedPushDispatchFenceFactory::class,
     SchedulePushOutboxConfirmedDeliveryReconciler::class,

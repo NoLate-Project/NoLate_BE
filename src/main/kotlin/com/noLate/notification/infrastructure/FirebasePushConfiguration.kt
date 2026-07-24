@@ -45,6 +45,9 @@ class FirebasePushConfiguration {
 
         val options = FirebaseOptions.builder()
             .setCredentials(credentials)
+            .setConnectTimeout(properties.connectTimeoutMillis)
+            .setReadTimeout(properties.readTimeoutMillis)
+            .setWriteTimeout(properties.writeTimeoutMillis)
             .apply {
                 properties.projectId?.takeIf { it.isNotBlank() }?.let(::setProjectId)
             }
@@ -189,4 +192,7 @@ data class FirebaseProperties(
     var enabled: Boolean = false,
     var credentialsPath: String? = null,
     var projectId: String? = null,
+    var connectTimeoutMillis: Int = 5_000,
+    var readTimeoutMillis: Int = 30_000,
+    var writeTimeoutMillis: Int = 5_000,
 )

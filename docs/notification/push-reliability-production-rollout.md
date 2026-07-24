@@ -118,6 +118,8 @@ old writer가 모두 중지된 상태에서 정확히 다음 순서로 실행한
 - case-sensitive token SHA-256 global unique
 - platform과 member에 무관한 device SHA-256 global unique
 - per-delivery ownership snapshot
+- claim 뒤 account ownership 이동을 막는 token별 provider dispatch lease와
+  logout/withdraw 중 lease identity를 보존하는 retirement marker
 - schedule notification generation/action receipt
 - legacy schedule job 0건 보장과 full-fingerprint owner/participant startup 재구성
 - `member.session_generation`
@@ -235,7 +237,16 @@ Docker가 없는 개발 환경에서 MySQL Testcontainers 테스트가 skip될 �
 3개 script, global fingerprint 경합, 다중 인스턴스 claim, schedule edit/backfill의
 member→job gap→schedule 잠금, lock timeout/deadlock bounded retry를 실행한 결과를 staging
 promotion gate로 남긴다. 느린 실제 provider를 사용한 lease recovery/confirmed failure
-reconciliation과 FCM 응답 분류도 같은 gate에서 확인한다. H2/단위 테스트만으로 이 gate를
+reconciliation과 FCM 응답 분류도 같은 gate에서 확인한다. provider 호출은 DB transaction
+밖에서 실행하고, 짧은 transaction이 남긴 token별 lease만 유지한다. FCM connect/read/write
+timeout의 최악 합은 `notification.push-token.provider-max-call-seconds`보다 작아야 하고,
+provider max는 `dispatch-lease-seconds` 및 ownership-transfer wait보다 반드시 작아야 한다.
+lease 획득 뒤 프로세스가 종료되면 delivery는 `DISPATCHING`으로 남아 자동 재전송되지 않으며,
+logout/withdraw/remove는 활성 lease row를 즉시 삭제하지 않고 `retirement_requested`를
+남긴다. 정상 provider 종료는 조건부 release에서 row를 삭제하고, 프로세스 종료는 TTL 뒤
+reaper 또는 다음 registration이 삭제해 새 account가 과거 lease를 우회하지 못한다.
+token lease 만료 뒤에만 등록/소유권 이전을 운영적으로 재개한다. 이 timeout/lease 불변식과
+실제 느린 provider 중 ownership transfer 대기를 staging에서 검증한다. H2/단위 테스트만으로 이 gate를
 대체하지 않는다.
 
 ## 6. Rollback policy

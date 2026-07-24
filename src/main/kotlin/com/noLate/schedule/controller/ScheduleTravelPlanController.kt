@@ -52,12 +52,27 @@ class ScheduleTravelPlanController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
         @RequestBody request: ScheduleTravelPlanUpsertRequest,
-    ): ApiResponse<ScheduleTravelPlanDto> = ApiResponse.success(
-        useCase.upsertMyTravelPlan(requireMemberId(principal), scheduleId, request.toCommand())
-    )
+    ): ApiResponse<ScheduleTravelPlanDto> {
+        val authenticated = requirePrincipal(principal)
+        return ApiResponse.success(
+            useCase.upsertMyTravelPlan(
+                memberId = authenticated.id,
+                scheduleId = scheduleId,
+                command = request.toCommand(),
+                presentedSessionGeneration = requireSessionGeneration(authenticated),
+            ),
+        )
+    }
 
     private fun requireMemberId(principal: MemberPrincipal?): Long =
         principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+    private fun requirePrincipal(principal: MemberPrincipal?): MemberPrincipal =
+        principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+    private fun requireSessionGeneration(principal: MemberPrincipal): Long =
+        principal.accessTokenSessionGeneration
+            ?: throw BusinessException(ErrorCode.INVALID_TOKEN)
 }
 
 data class ScheduleTravelPlanUpsertRequest(

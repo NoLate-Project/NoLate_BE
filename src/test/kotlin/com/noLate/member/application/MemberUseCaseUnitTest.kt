@@ -10,6 +10,7 @@ import com.noLate.global.security.LogoutRefreshSession
 import com.noLate.member.application.service.MemberProfileService
 import com.noLate.member.application.service.MemberConsentService
 import com.noLate.member.application.service.AccountCleanupService
+import com.noLate.member.application.service.AccountWithdrawalFence
 import com.noLate.member.application.service.MemberService
 import com.noLate.member.application.service.MemberSettingService
 import com.noLate.member.application.service.MemberSessionFenceService
@@ -605,8 +606,13 @@ class MemberUseCaseUnitTest {
             sessionGeneration = 6,
         )
 
-        whenever(memberService.getActiveMemberForUpdate(memberId, 6L))
-            .thenReturn(member)
+        val withdrawalFence = AccountWithdrawalFence(
+            member = member,
+            ownedScheduleIds = emptySet(),
+            lockedMemberIds = setOf(memberId),
+        )
+        whenever(accountCleanupService.lockWithdrawalFence(memberId, 6L))
+            .thenReturn(withdrawalFence)
         whenever(passwordEncoder.matches("pw", "encoded-pw"))
             .thenReturn(true)
 
@@ -615,14 +621,14 @@ class MemberUseCaseUnitTest {
 
         // then
         verify(memberSessionFenceService).invalidateSessionForWithdrawal(memberId, 6L)
-        verify(accountCleanupService).withdraw(member)
+        verify(accountCleanupService).withdraw(withdrawalFence)
         verify(memberService).updateMember(member)
     }
 
     @Test
     fun `withdraw는 filter 이후 session generation이 바뀌면 account cleanup 전에 fail closed한다`() {
         val memberId = 21L
-        whenever(memberService.getActiveMemberForUpdate(memberId, 3L))
+        whenever(accountCleanupService.lockWithdrawalFence(memberId, 3L))
             .thenThrow(BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다."))
 
         val failure = assertThrows<BusinessException> {
@@ -631,7 +637,7 @@ class MemberUseCaseUnitTest {
 
         assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
         verify(memberSessionFenceService, never()).invalidateSessionForWithdrawal(any(), any())
-        verifyNoInteractions(accountCleanupService)
+        verify(accountCleanupService, never()).withdraw(any<AccountWithdrawalFence>())
         verify(memberService, never()).updateMember(any())
     }
 

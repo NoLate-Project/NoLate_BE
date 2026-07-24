@@ -2,6 +2,8 @@ package com.noLate.schedule.application.useCase
 
 import com.noLate.favorite.application.service.FavoritePlaceService
 import com.noLate.favorite.domain.FavoritePlaceDto
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.member.application.service.MemberService
 import com.noLate.schedule.application.service.ScheduleHybridParserService
 import com.noLate.schedule.application.service.ScheduleDepartureMemberFence
@@ -68,6 +70,7 @@ class ScheduleUseCaseUnitTest {
     lateinit var memberService: MemberService
 
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
+    private val sessionGeneration = 11L
 
     private lateinit var scheduleUseCase: ScheduleUseCase
 
@@ -300,7 +303,12 @@ class ScheduleUseCaseUnitTest {
         stubCurrentSchedule(memberId, scheduleId)
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(request.copy(id = scheduleId))
 
-        val result = scheduleUseCase.updateSchedule(memberId, scheduleId, request)
+        val result = scheduleUseCase.updateSchedule(
+            memberId,
+            scheduleId,
+            request,
+            sessionGeneration,
+        )
 
         verify(scheduleService, times(1)).updateSchedule(memberId, scheduleId, request)
         verify(schedulePushJobService, times(1)).cancelByScheduleIdAndMemberId(scheduleId, memberId)
@@ -321,7 +329,7 @@ class ScheduleUseCaseUnitTest {
         stubCurrentSchedule(memberId, scheduleId)
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
 
-        scheduleUseCase.updateSchedule(memberId, scheduleId, request)
+        scheduleUseCase.updateSchedule(memberId, scheduleId, request, sessionGeneration)
 
         verify(schedulePushJobService).registerFromScheduleDto(memberId, updated)
         verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
@@ -343,7 +351,7 @@ class ScheduleUseCaseUnitTest {
         whenever(scheduleTravelPlanService.findStaleNotificationMemberIds(scheduleId))
             .thenReturn(setOf(2L, 3L))
 
-        scheduleUseCase.updateSchedule(memberId, scheduleId, request)
+        scheduleUseCase.updateSchedule(memberId, scheduleId, request, sessionGeneration)
 
         verify(scheduleService).lockForNotificationEdit(memberId, scheduleId)
         verify(scheduleTravelPlanService).requireNotificationMembersWithinFence(
@@ -373,7 +381,7 @@ class ScheduleUseCaseUnitTest {
         )
 
         assertThrows(ConcurrencyFailureException::class.java) {
-            scheduleUseCase.updateSchedule(memberId, scheduleId, request)
+            scheduleUseCase.updateSchedule(memberId, scheduleId, request, sessionGeneration)
         }
 
         verify(scheduleService).lockForNotificationEdit(memberId, scheduleId)
@@ -390,13 +398,15 @@ class ScheduleUseCaseUnitTest {
         stubCurrentSchedule(editorMemberId, scheduleId, ownerMemberId)
         whenever(scheduleService.updateSchedule(editorMemberId, scheduleId, request)).thenReturn(updated)
 
-        scheduleUseCase.updateSchedule(editorMemberId, scheduleId, request)
+        scheduleUseCase.updateSchedule(editorMemberId, scheduleId, request, sessionGeneration)
 
         inOrder(scheduleService, schedulePushJobService) {
             verify(scheduleService).getScheduleDetail(editorMemberId, scheduleId)
             verify(schedulePushJobService).lockForScheduleEdit(
                 scheduleId,
                 setOf(editorMemberId, ownerMemberId),
+                editorMemberId,
+                sessionGeneration,
             )
             verify(scheduleService).updateSchedule(editorMemberId, scheduleId, request)
         }
@@ -420,7 +430,12 @@ class ScheduleUseCaseUnitTest {
         stubCurrentSchedule(memberId, scheduleId)
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
 
-        val result = scheduleUseCase.updateSchedule(memberId, scheduleId, request)
+        val result = scheduleUseCase.updateSchedule(
+            memberId,
+            scheduleId,
+            request,
+            sessionGeneration,
+        )
 
         assertEquals(scheduleId, result.id)
         verify(schedulePushJobService, never()).registerFromScheduleDto(memberId, updated)
@@ -433,17 +448,64 @@ class ScheduleUseCaseUnitTest {
         val scheduleId = 40L
         stubCurrentSchedule(memberId, scheduleId)
 
-        scheduleUseCase.deleteSchedule(memberId, scheduleId)
+        scheduleUseCase.deleteSchedule(memberId, scheduleId, sessionGeneration)
 
         inOrder(scheduleService, schedulePushJobService) {
             verify(scheduleService).getScheduleDetail(memberId, scheduleId)
             verify(schedulePushJobService).lockForScheduleEdit(
                 scheduleId,
                 setOf(memberId),
+                memberId,
+                sessionGeneration,
             )
             verify(scheduleService).deleteSchedule(memberId, scheduleId)
             verify(schedulePushJobService).cancelByScheduleId(scheduleId)
         }
+    }
+
+    @Test
+    fun `stale generation fails update and delete before schedule job or outbox mutation`() {
+        val memberId = 4L
+        val scheduleId = 40L
+        val request = scheduleDto(title = "stale")
+        whenever(scheduleService.getScheduleDetail(memberId, scheduleId))
+            .thenReturn(
+                request.copy(
+                    id = scheduleId,
+                    ownerMemberId = memberId,
+                ),
+            )
+        whenever(scheduleTravelPlanService.findNotificationEnabledMemberIds(scheduleId))
+            .thenReturn(emptySet())
+        whenever(
+            schedulePushJobService.lockForScheduleEdit(
+                scheduleId,
+                setOf(memberId),
+                memberId,
+                sessionGeneration,
+            ),
+        ).thenThrow(BusinessException(ErrorCode.INVALID_TOKEN))
+
+        val updateFailure = assertThrows(BusinessException::class.java) {
+            scheduleUseCase.updateSchedule(
+                memberId,
+                scheduleId,
+                request,
+                sessionGeneration,
+            )
+        }
+        val deleteFailure = assertThrows(BusinessException::class.java) {
+            scheduleUseCase.deleteSchedule(memberId, scheduleId, sessionGeneration)
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, updateFailure.errorCode)
+        assertEquals(ErrorCode.INVALID_TOKEN, deleteFailure.errorCode)
+        verify(scheduleService, never()).lockForNotificationEdit(memberId, scheduleId)
+        verify(scheduleService, never()).updateSchedule(memberId, scheduleId, request)
+        verify(scheduleService, never()).deleteSchedule(memberId, scheduleId)
+        verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
+        verify(schedulePushJobService, never())
+            .cancelByScheduleIdAndMemberId(scheduleId, memberId)
     }
 
     @Test
@@ -736,6 +798,8 @@ class ScheduleUseCaseUnitTest {
             schedulePushJobService.lockForScheduleEdit(
                 scheduleId,
                 lockedMemberIds,
+                actorMemberId,
+                sessionGeneration,
             )
         ).thenReturn(ScheduleEditMemberFence(lockedMemberIds))
     }

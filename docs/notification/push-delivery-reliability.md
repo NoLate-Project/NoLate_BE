@@ -22,6 +22,16 @@ at-most-once를 우선한다.
   달라 provider를 호출하지 않고 종료한 상태다. 계정 전환 뒤 이전 회원의 알림이 새 소유자
   token으로 전송되는 것을 막는다.
 
+`DISPATCHING` claim 뒤 실제 provider 호출 직전에는 token row의
+`memberId + tokenFingerprint + ownershipVersion`과 source/delivery 상태, 현재 수신 권한을
+짧은 독립 transaction에서 다시 검증하고 token별 `dispatch_lease_id/until`을 기록한다.
+provider I/O 동안 DB/member/global lock은 유지하지 않지만, 등록·logout·withdraw·수동 제거는
+활성 lease row를 삭제하지 않고 `retirement_requested=true`로 남긴다. 따라서 A 알림 호출 중
+같은 installation/token을 B가 등록해도 B 소유권 이전은 호출 종료 뒤에만 진행된다. 정상
+종료는 조건부 lease release에서 retired row를 삭제하고, 프로세스 종료는 delivery를
+`DISPATCHING`으로 억제한 채 lease TTL 뒤 bounded reaper가 row를 정리한다. retired token은
+새 manifest/current-token 조회에서 제외된다.
+
 명시적인 공급자 오류 코드가 없는 transport 예외는 수락 여부가 모호하므로 delivery row를
 `DISPATCHING`으로 유지하고 `push_send_history.status=UNKNOWN`으로 관측한다. 이 결과도 자동
 재전송하지 않는다.
@@ -94,7 +104,10 @@ PK 하나가 `route-setup:<member>:marker:<id>` 하나에 영구 대응한다. A
 marker scheduler는 비잠금 후보 조회 뒤 `member → marker → immutable outbox`만 짧은
 transaction에서 수행하고 marker를 `SENT`(durable enqueue 완료 의미)로 닫는다. provider I/O는
 공용 outbox drainer가 transaction 밖에서 수행하므로 느린 FCM 호출이 route/ETA marker lock을
-유지하지 않는다.
+유지하지 않는다. scanner 결과는 권한 증거가 아니다. 실제 marker insert transaction이
+recipient member를 잠근 뒤 일정 존재/삭제 상태, schedule fingerprint, 현재 travel grant와
+route-reminder policy를 다시 검증한다. category revoke/delete 또는 owner withdrawal이 먼저
+commit되면 지연된 scanner는 `PENDING` marker를 재생성하지 않는다.
 
 ## 알림 action idempotency
 
@@ -227,6 +240,14 @@ A 계정의 같은 device가 B 계정에서 등록되면 한 transaction이 기�
 token/device fingerprint의 global unique index는 raw opaque 값을 SQL index/duplicate-key
 메시지에 싣지 않으면서 최종 소유자가 하나임을 보장한다.
 
+schedule update/delete, 개인 travel-plan 변경, schedule/category/calendar share·invite·revoke,
+category create/update/delete/reorder와 기본 category를 만드는 조회, calendar mutation,
+departure nudge도 controller가 signed generation을 실제 write transaction까지 전달한다.
+각 transaction은 첫 write 전에 actor member를 전체 affected member 집합과 ID 오름차순으로
+잠그고 active/deleted/generation을 재검증한다. security filter 통과 뒤 g1 요청이 지연되고
+logout/relogin이 g2를 열면 stale mutation은 `INVALID_TOKEN`으로 끝나 job/outbox/receipt/marker를
+바꾸지 않는다.
+
 일정 알림 dedupe input은 `job id + notification generation + check count`이며, 여기서 도출한
 `logicalEventKey`를 실제 event key로 쓴다. 시작 시각, 목적지, 현재 회원의 출발지/경로,
 이동수단, 알림 정책 같은 의미 input의 deterministic fingerprint가 달라질 때만 generation과
@@ -278,6 +299,27 @@ scan은 불변 `(memberId, scheduleId, travelPlanId)`만 정렬해 반환하고,
 `REQUIRES_NEW` writer가 `member → current schedule/plan 재검증 → push-job` 순서로 하나씩
 commit한다. 다중 인스턴스가 같은 후보를 읽어도 member/job lock에서 수렴하며, scan 뒤
 withdrawal/edit가 먼저 끝난 stale 후보는 새 job을 만들지 않는다.
+
+category revoke/delete는 owner와 영향을 받는 target member를 먼저 정렬 잠근 뒤 category row를
+공유 생성과 같은 `FOR UPDATE` 직렬화 지점으로 사용한다. parent lock 뒤 participant 집합이
+선잠금 집합보다 늘었으면 transaction 전체를 fresh `READ_COMMITTED` transaction으로 bounded
+retry한다. delete가 먼저면 뒤 share는 deleted category에서 fail closed하고, share가 먼저면
+delete 재시도가 새 target까지 잠가 active share/invite와 participant plan/job/route marker,
+frozen source/delivery/history를 함께 정리한다. 직접 schedule/calendar 등 다른 travel grant가
+남은 pair는 유지한다. startup backfill과 provider-start fence도 현재 travel access를 다시
+확인하므로 회수 뒤 participant job이나 외부 호출을 부활시키지 않는다.
+
+일정 owner withdrawal은 삭제할 schedule과 직접/category/calendar participant 및 이미 존재하는
+job/source/delivery/history/marker/plan의 member를 먼저 snapshot하고 전역 ID 순서로 잠근다.
+`READ_COMMITTED` 재조회에서 선잠금 밖 participant가 보이면 fail closed한다. 성공 경로는 모든
+participant schedule-bound notification state를 먼저 제거한 뒤 schedule을 삭제한다.
+withdrawal이 provider-start fence보다 먼저면 provider 호출은 0회이고, fence가 먼저면 그 호출은
+논리적으로 선행한 residual이지만 늦은 결과 writer가 삭제된 source/resource를 재생성하지 않는다.
+
+departure nudge는 actor/target member lock을 가진 business transaction에서 provider를 직접
+호출하거나 `REQUIRES_NEW`로 target을 다시 잠그지 않는다. 같은 transaction에 immutable
+outbox/frozen manifest만 enqueue하고 API 성공은 “durable 접수”를 뜻한다. provider는 commit 뒤
+공용 drainer가 호출한다.
 
 Snooze는 단순히 `next_check_at`만 이동하지 않고 `notification_generation`을 증가시키고
 check/stage를 reset한다. 이미 `SUCCESS`인 old delivery는 감사 결과로 보존하지만 old

@@ -18,6 +18,19 @@ interface SchedulePushJobCandidate {
 
 interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
     fun deleteAllByMemberId(memberId: Long)
+    fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
+
+    @Query(
+        """
+        select distinct job.memberId
+        from SchedulePushJob job
+        where job.scheduleId in :scheduleIds
+        order by job.memberId
+        """
+    )
+    fun findDistinctMemberIdsByScheduleIdIn(
+        @Param("scheduleIds") scheduleIds: Collection<Long>,
+    ): List<Long>
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select job from SchedulePushJob job where job.id = :id")

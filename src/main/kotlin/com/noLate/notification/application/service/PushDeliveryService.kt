@@ -100,6 +100,9 @@ class PushDeliveryService(
 
     fun markInvalidToken(deliveryId: Long, errorCode: String, errorMessage: String?): Boolean =
         writer.markInvalidToken(deliveryId, errorCode, errorMessage)
+
+    fun markOwnershipSuperseded(deliveryId: Long): Boolean =
+        writer.markOwnershipSuperseded(deliveryId)
 }
 
 @Service
@@ -110,6 +113,7 @@ class PushDeliveryWriter(
     private val memberRepository: MemberRepository,
     private val clock: Clock,
     private val fenceValidator: PushDispatchFenceValidator? = null,
+    private val recipientAuthorizationValidator: PushRecipientAuthorizationValidator? = null,
     @Value("\${notification.push-outbox.retry-delay-seconds:60}")
     private val outboxRetryDelaySeconds: Long = 60,
     @Value("\${notification.push-outbox.max-attempts:5}")
@@ -146,6 +150,28 @@ class PushDeliveryWriter(
             memberId,
             eventKey,
         ) ?: return PushDeliveryClaim(PushDeliveryClaimOutcome.DEDUPLICATED)
+        val source = appNotificationRepository.findByMemberIdAndLogicalEventKey(memberId, eventKey)
+        if (
+            source == null ||
+            recipientAuthorizationValidator?.canDispatch(
+                memberId = memberId,
+                scheduleId = source.scheduleId ?: existing.scheduleId,
+                categoryId = source.categoryId,
+                payloadType = source.type,
+            ) == false
+        ) {
+            if (
+                existing.status == PushDeliveryStatus.PENDING ||
+                existing.status == PushDeliveryStatus.FAILED
+            ) {
+                existing.markSuperseded(
+                    Instant.now(clock),
+                    "Recipient no longer has access to the immutable push source.",
+                )
+                repository.saveAndFlush(existing)
+            }
+            return PushDeliveryClaim(PushDeliveryClaimOutcome.SUPERSEDED, existing.id)
+        }
         return when (existing.status) {
             PushDeliveryStatus.SUCCESS ->
                 PushDeliveryClaim(
@@ -188,6 +214,7 @@ class PushDeliveryWriter(
             ?.let(tokenRepository::findByIdForUpdate)
         val verifiedToken = currentToken?.takeIf {
             it.memberId == memberId &&
+                !it.retirementRequested &&
                 it.tokenFingerprint == existing.tokenFingerprint &&
                 it.ownershipVersion == existing.tokenOwnershipVersion &&
                 it.deliveryDeviceKey() == existing.deviceKey
@@ -394,6 +421,26 @@ class PushDeliveryWriter(
         delivery.markInvalidToken(Instant.now(clock), errorCode, errorMessage)
         repository.flush()
         return true
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun markOwnershipSuperseded(deliveryId: Long): Boolean {
+        val identity = repository.findById(deliveryId).orElse(null) ?: return false
+        if (memberRepository.findActiveNotificationRecipientForUpdate(identity.memberId) == null) {
+            return false
+        }
+        val delivery = repository.findByIdForUpdate(deliveryId) ?: return false
+        if (delivery.memberId != identity.memberId || delivery.eventKey != identity.eventKey) {
+            return false
+        }
+        val changed = delivery.markDispatchOwnershipSuperseded(
+            Instant.now(clock),
+            "Token ownership changed after delivery claim and before provider dispatch.",
+        )
+        if (changed) {
+            repository.flush()
+        }
+        return changed
     }
 }
 

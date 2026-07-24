@@ -10,6 +10,19 @@ import java.time.LocalDateTime
 
 interface ScheduleTravelPlanRepository : JpaRepository<ScheduleTravelPlan, Long> {
     fun deleteAllByMemberId(memberId: Long)
+    fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
+
+    @Query(
+        """
+        select distinct plan.memberId
+        from ScheduleTravelPlan plan
+        where plan.scheduleId in :scheduleIds
+        order by plan.memberId
+        """
+    )
+    fun findDistinctMemberIdsByScheduleIdIn(
+        @Param("scheduleIds") scheduleIds: Collection<Long>,
+    ): List<Long>
 
     fun findByScheduleIdAndMemberId(scheduleId: Long, memberId: Long): ScheduleTravelPlan?
 
@@ -34,6 +47,11 @@ interface ScheduleTravelPlanRepository : JpaRepository<ScheduleTravelPlan, Long>
     fun findAllByMemberIdAndScheduleIdInAndDeletedFalse(
         memberId: Long,
         scheduleIds: Collection<Long>,
+    ): List<ScheduleTravelPlan>
+
+    fun findAllByScheduleIdInAndMemberIdInAndDeletedFalse(
+        scheduleIds: Collection<Long>,
+        memberIds: Collection<Long>,
     ): List<ScheduleTravelPlan>
 
     /**

@@ -17,6 +17,24 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
     fun findAllByMemberId(memberId: Long): List<Schedule>
 
     @Query(
+        value = """
+        select distinct s.*
+        from schedules s
+        left join schedule_category_snapshots snapshot on snapshot.schedule_id = s.id
+        where s.deleted = false
+          and (
+            s.category_id = :categoryId
+            or snapshot.category_id = concat('', :categoryId)
+          )
+        order by s.id asc
+        """,
+        nativeQuery = true,
+    )
+    fun findAllByCategoryIdIncludingSnapshotAndDeletedFalseOrderByIdAsc(
+        @Param("categoryId") categoryId: Long,
+    ): List<Schedule>
+
+    @Query(
         """
         select distinct s
         from Schedule s
@@ -65,6 +83,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -115,6 +139,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -168,6 +198,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -222,6 +258,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -277,6 +319,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (
@@ -343,6 +391,12 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
               where scs.target_member_id = :memberId
                 and scs.status = 'ACTIVE'
                 and scs.deleted = false
+                and exists (
+                  select 1
+                  from schedule_categories shared_category
+                  where shared_category.id = scs.category_id
+                    and shared_category.deleted = false
+                )
                 and (
                   scs.category_id = s.category_id
                   or exists (

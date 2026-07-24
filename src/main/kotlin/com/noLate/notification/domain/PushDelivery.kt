@@ -157,6 +157,15 @@ class PushDelivery(
         return true
     }
 
+    fun markDispatchOwnershipSuperseded(at: Instant, reason: String): Boolean {
+        if (status != PushDeliveryStatus.DISPATCHING) return false
+        status = PushDeliveryStatus.SUPERSEDED
+        lastAttemptedAt = at
+        errorCode = "TOKEN_OWNERSHIP_CHANGED"
+        errorMessage = reason.take(1000)
+        return true
+    }
+
     fun markInvalidToken(at: Instant, code: String, message: String?) {
         if (status != PushDeliveryStatus.DISPATCHING) return
         status = PushDeliveryStatus.INVALID_TOKEN

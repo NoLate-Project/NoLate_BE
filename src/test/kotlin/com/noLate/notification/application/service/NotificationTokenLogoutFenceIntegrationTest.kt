@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit
 @DataJpaTest
 @Import(
     NotificationTokenService::class,
+    NotificationTokenRetirementService::class,
     NotificationTokenWriter::class,
     MemberSessionFenceService::class,
     NotificationTokenLogoutFenceTestConfig::class,

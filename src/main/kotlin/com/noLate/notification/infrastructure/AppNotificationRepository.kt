@@ -18,6 +18,30 @@ interface AppNotificationDispatchCandidate {
 
 interface AppNotificationRepository : JpaRepository<AppNotification, Long> {
 
+    fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
+
+    @Query(
+        """
+        select distinct notification.memberId
+        from AppNotification notification
+        where notification.scheduleId in :scheduleIds
+        order by notification.memberId
+        """
+    )
+    fun findDistinctMemberIdsByScheduleIdIn(
+        @Param("scheduleIds") scheduleIds: Collection<Long>,
+    ): List<Long>
+
+    fun findAllByScheduleIdInAndMemberIdIn(
+        scheduleIds: Collection<Long>,
+        memberIds: Collection<Long>,
+    ): List<AppNotification>
+
+    fun findAllByCategoryIdAndMemberIdIn(
+        categoryId: Long,
+        memberIds: Collection<Long>,
+    ): List<AppNotification>
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select notification from AppNotification notification where notification.id = :id")
     fun findByIdForUpdate(@Param("id") id: Long): AppNotification?

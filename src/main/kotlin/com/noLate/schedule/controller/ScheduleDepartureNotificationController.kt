@@ -21,17 +21,20 @@ class ScheduleDepartureNotificationController(
     private val service: ScheduleDepartureNotificationService,
 ) {
 
-    @Operation(summary = "특정 공유 참가자에게 출발 확인 푸시 전송")
+    @Operation(summary = "특정 공유 참가자의 출발 확인 푸시를 durable outbox에 접수")
     @PostMapping("/{targetMemberId}")
     fun sendDepartureNudge(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
         @PathVariable targetMemberId: Long,
-    ): ApiResponse<NotificationSendResult> = ApiResponse.success(
-        service.sendDepartureNudge(
-            ownerMemberId = principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
+    ): ApiResponse<NotificationSendResult> {
+        val authenticated = principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+        return ApiResponse.success(service.sendDepartureNudge(
+            ownerMemberId = authenticated.id,
             scheduleId = scheduleId,
             targetMemberId = targetMemberId,
-        )
-    )
+            presentedSessionGeneration = authenticated.accessTokenSessionGeneration
+                ?: throw BusinessException(ErrorCode.INVALID_TOKEN),
+        ))
+    }
 }

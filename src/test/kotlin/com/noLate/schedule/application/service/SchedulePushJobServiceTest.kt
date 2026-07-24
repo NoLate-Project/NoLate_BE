@@ -1,6 +1,9 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.member.domain.member.Member
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePlaceDto
@@ -38,11 +41,15 @@ class SchedulePushJobServiceTest {
     fun `job이 없어도 actor와 owner member를 먼저 잠근 뒤 schedule job gap을 잠근다`() {
         whenever(repository.findMemberIdsByScheduleId(10L)).thenReturn(emptyList())
         whenever(repository.findAllByScheduleIdOrderByIdAsc(10L)).thenReturn(emptyList())
+        whenever(memberRepository.findAllByIdsForUpdate(listOf(2L, 9L)))
+            .thenReturn(listOf(Member(id = 9L, sessionGeneration = 3L)))
         val service = SchedulePushJobService(repository, memberRepository)
 
         service.lockForScheduleEdit(
             scheduleId = 10L,
             requiredMemberIds = listOf(9L, 2L),
+            actorMemberId = 9L,
+            presentedSessionGeneration = 3L,
         )
 
         inOrder(repository, memberRepository) {
@@ -57,11 +64,15 @@ class SchedulePushJobServiceTest {
         whenever(repository.findMemberIdsByScheduleId(10L))
             .thenReturn(listOf(7L, 2L, 7L))
         whenever(repository.findAllByScheduleIdOrderByIdAsc(10L)).thenReturn(emptyList())
+        whenever(memberRepository.findAllByIdsForUpdate(listOf(2L, 5L, 7L, 9L)))
+            .thenReturn(listOf(Member(id = 5L, sessionGeneration = 3L)))
         val service = SchedulePushJobService(repository, memberRepository)
 
         service.lockForScheduleEdit(
             scheduleId = 10L,
             requiredMemberIds = listOf(5L, 2L, 9L),
+            actorMemberId = 5L,
+            presentedSessionGeneration = 3L,
         )
 
         verify(memberRepository).findAllByIdsForUpdate(listOf(2L, 5L, 7L, 9L))
@@ -72,18 +83,80 @@ class SchedulePushJobServiceTest {
         whenever(repository.findMemberIdsByScheduleId(10L))
             .thenReturn(listOf(2L), listOf(2L, 8L))
         whenever(repository.findAllByScheduleIdOrderByIdAsc(10L)).thenReturn(emptyList())
+        whenever(memberRepository.findAllByIdsForUpdate(listOf(2L, 5L)))
+            .thenReturn(listOf(Member(id = 5L, sessionGeneration = 3L)))
         val service = SchedulePushJobService(repository, memberRepository)
 
         assertThrows(ConcurrencyFailureException::class.java) {
             service.lockForScheduleEdit(
                 scheduleId = 10L,
                 requiredMemberIds = listOf(5L),
+                actorMemberId = 5L,
+                presentedSessionGeneration = 3L,
             )
         }
 
         verify(memberRepository).findAllByIdsForUpdate(listOf(2L, 5L))
         verify(memberRepository, org.mockito.kotlin.never())
             .findByIdForUpdate(8L)
+    }
+
+    @Test
+    fun `stale actor generation is rejected after sorted member locks and before job gap lock`() {
+        whenever(repository.findMemberIdsByScheduleId(10L)).thenReturn(listOf(2L))
+        whenever(memberRepository.findAllByIdsForUpdate(listOf(2L, 9L)))
+            .thenReturn(listOf(Member(id = 9L, sessionGeneration = 4L)))
+        val service = SchedulePushJobService(repository, memberRepository)
+
+        val failure = assertThrows(BusinessException::class.java) {
+            service.lockForScheduleEdit(
+                scheduleId = 10L,
+                requiredMemberIds = listOf(9L),
+                actorMemberId = 9L,
+                presentedSessionGeneration = 3L,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
+        verify(repository, org.mockito.kotlin.never())
+            .findAllByScheduleIdOrderByIdAsc(10L)
+    }
+
+    @Test
+    fun `travel plan fence validates current actor generation before the member job lock`() {
+        val member = Member(id = 9L, sessionGeneration = 4L)
+        whenever(memberRepository.findByIdForUpdate(9L)).thenReturn(member)
+        val service = SchedulePushJobService(repository, memberRepository)
+
+        service.lockForTravelPlanEdit(
+            scheduleId = 10L,
+            memberId = 9L,
+            presentedSessionGeneration = 4L,
+        )
+
+        inOrder(memberRepository, repository) {
+            verify(memberRepository).findByIdForUpdate(9L)
+            verify(repository).findByScheduleIdAndMemberIdForUpdate(10L, 9L)
+        }
+    }
+
+    @Test
+    fun `stale travel plan actor cannot reach the job or plan mutation boundary`() {
+        whenever(memberRepository.findByIdForUpdate(9L))
+            .thenReturn(Member(id = 9L, sessionGeneration = 4L))
+        val service = SchedulePushJobService(repository, memberRepository)
+
+        val failure = assertThrows(BusinessException::class.java) {
+            service.lockForTravelPlanEdit(
+                scheduleId = 10L,
+                memberId = 9L,
+                presentedSessionGeneration = 3L,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
+        verify(repository, org.mockito.kotlin.never())
+            .findByScheduleIdAndMemberIdForUpdate(10L, 9L)
     }
 
     @Test

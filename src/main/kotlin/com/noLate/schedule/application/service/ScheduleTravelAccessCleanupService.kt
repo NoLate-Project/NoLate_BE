@@ -1,9 +1,15 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.infrastructure.PushDeliveryRepository
+import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.SchedulePushJobStatus
+import com.noLate.schedule.domain.ScheduleRouteSetupReminderStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
+import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -18,6 +24,11 @@ import org.springframework.transaction.annotation.Transactional
 class ScheduleTravelAccessCleanupService(
     private val scheduleRepository: ScheduleRepository,
     private val pushJobRepository: SchedulePushJobRepository,
+    private val travelPlanRepository: ScheduleTravelPlanRepository,
+    private val routeSetupReminderRepository: ScheduleRouteSetupReminderRepository,
+    private val appNotificationRepository: AppNotificationRepository,
+    private val pushDeliveryRepository: PushDeliveryRepository,
+    private val pushSendHistoryRepository: PushSendHistoryRepository,
     private val accessPolicy: ScheduleAccessPolicy,
 ) {
 
@@ -35,10 +46,39 @@ class ScheduleTravelAccessCleanupService(
         cancelRevoked(schedules, memberIds)
     }
 
-    private fun cancelRevoked(schedules: List<Schedule>, memberIds: Collection<Long>) {
-        val normalizedMemberIds = memberIds.distinct()
+    /**
+     * Legacy category sharing applies to every current schedule linked by either the canonical
+     * category FK or its compatibility snapshot. The caller must lock the owner and every affected
+     * target member in ascending ID order before changing the category/share row, then invoke this
+     * method in that same transaction.
+     */
+    @Transactional
+    fun cancelRevokedForCategory(categoryId: Long, memberIds: Collection<Long>) {
+        val schedules =
+            scheduleRepository.findAllByCategoryIdIncludingSnapshotAndDeletedFalseOrderByIdAsc(categoryId)
+        val revokedPairs = cancelRevoked(schedules, memberIds)
+        val normalizedMemberIds = memberIds.distinct().sorted()
+        if (normalizedMemberIds.isEmpty()) return
+
+        // Category-share notification sources have category_id but no schedule_id. Remove their
+        // frozen manifests under the same recipient locks so a drainer cannot navigate a revoked
+        // category after the business transaction commits.
+        val categorySources =
+            appNotificationRepository.findAllByCategoryIdAndMemberIdIn(categoryId, normalizedMemberIds)
+        deleteNotificationSources(categorySources, normalizedMemberIds)
+
+        // `cancelRevoked` already removes schedule-bound sources for the exact revoked pairs.
+        // Keeping this local value makes the category-specific source cleanup explicit.
+        if (revokedPairs.isEmpty()) return
+    }
+
+    private fun cancelRevoked(
+        schedules: List<Schedule>,
+        memberIds: Collection<Long>,
+    ): Set<Pair<Long, Long>> {
+        val normalizedMemberIds = memberIds.distinct().sorted()
         val scheduleIds = schedules.mapNotNull { it.id }
-        if (scheduleIds.isEmpty() || normalizedMemberIds.isEmpty()) return
+        if (scheduleIds.isEmpty() || normalizedMemberIds.isEmpty()) return emptySet()
 
         // resolveAll은 회원 한 명당 grant 저장소를 종류별 한 번만 조회한다. 캘린더에 일정이
         // 많아도 각 일정마다 직접/카테고리/캘린더 쿼리를 반복하지 않는다.
@@ -48,11 +88,63 @@ class ScheduleTravelAccessCleanupService(
                 if (decisions[scheduleId]?.travelEnabled == true) null else scheduleId to memberId
             }
         }
-        if (revokedPairs.isEmpty()) return
+        if (revokedPairs.isEmpty()) return emptySet()
 
         pushJobRepository.findAllByScheduleIdInAndMemberIdIn(scheduleIds, normalizedMemberIds)
             .filter { it.status == SchedulePushJobStatus.ACTIVE || it.status == SchedulePushJobStatus.PROCESSING }
             .filter { it.scheduleId to it.memberId in revokedPairs }
             .forEach { it.cancel() }
+
+        // A revoked participant plan is no longer an authoritative startup-backfill source. Soft
+        // deletion retains audit/version history while preventing a restarted node from rebuilding
+        // the participant job after the share row was revoked.
+        travelPlanRepository
+            .findAllByScheduleIdInAndMemberIdInAndDeletedFalse(scheduleIds, normalizedMemberIds)
+            .filter { it.scheduleId to it.memberId in revokedPairs }
+            .forEach { it.softDelete() }
+
+        routeSetupReminderRepository
+            .findAllByScheduleIdInAndMemberIdIn(scheduleIds, normalizedMemberIds)
+            .filter { it.scheduleId to it.memberId in revokedPairs }
+            .filter {
+                it.status == ScheduleRouteSetupReminderStatus.PENDING ||
+                    it.status == ScheduleRouteSetupReminderStatus.FAILED
+            }
+            .forEach { it.cancel() }
+
+        val revokedScheduleIds = revokedPairs.mapTo(linkedSetOf()) { it.first }
+        val revokedMemberIds = revokedPairs.mapTo(linkedSetOf()) { it.second }
+        val sources = appNotificationRepository
+            .findAllByScheduleIdInAndMemberIdIn(revokedScheduleIds, revokedMemberIds)
+            .filter { it.scheduleId to it.memberId in revokedPairs }
+        deleteNotificationSources(sources, revokedMemberIds)
+
+        val orphanDeliveries = pushDeliveryRepository
+            .findAllByScheduleIdInAndMemberIdIn(revokedScheduleIds, revokedMemberIds)
+            .filter { it.scheduleId to it.memberId in revokedPairs }
+        if (orphanDeliveries.isNotEmpty()) {
+            pushDeliveryRepository.deleteAll(orphanDeliveries)
+        }
+        val histories = pushSendHistoryRepository
+            .findAllByScheduleIdInAndMemberIdIn(revokedScheduleIds, revokedMemberIds)
+            .filter { it.scheduleId to it.memberId in revokedPairs }
+        if (histories.isNotEmpty()) {
+            pushSendHistoryRepository.deleteAll(histories)
+        }
+        return revokedPairs
+    }
+
+    private fun deleteNotificationSources(
+        sources: Collection<com.noLate.notification.domain.AppNotification>,
+        memberIds: Collection<Long>,
+    ) {
+        if (sources.isEmpty()) return
+        val eventKeys = sources.map { it.logicalEventKey }
+        val deliveries =
+            pushDeliveryRepository.findAllByMemberIdInAndEventKeyIn(memberIds, eventKeys)
+        if (deliveries.isNotEmpty()) {
+            pushDeliveryRepository.deleteAll(deliveries)
+        }
+        appNotificationRepository.deleteAll(sources)
     }
 }

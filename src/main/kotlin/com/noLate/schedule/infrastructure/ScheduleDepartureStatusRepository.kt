@@ -9,6 +9,20 @@ import org.springframework.data.repository.query.Param
 
 interface ScheduleDepartureStatusRepository : JpaRepository<ScheduleDepartureStatus, Long> {
     fun deleteAllByMemberId(memberId: Long)
+    fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
+
+    @Query(
+        """
+        select distinct status.memberId
+        from ScheduleDepartureStatus status
+        where status.scheduleId in :scheduleIds
+        order by status.memberId
+        """
+    )
+    fun findDistinctMemberIdsByScheduleIdIn(
+        @Param("scheduleIds") scheduleIds: Collection<Long>,
+    ): List<Long>
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query(
         """

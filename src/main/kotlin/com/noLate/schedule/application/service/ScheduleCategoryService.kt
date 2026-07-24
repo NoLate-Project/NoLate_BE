@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategorySettingDto
@@ -13,13 +14,18 @@ import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
 import jakarta.transaction.Transactional
 import org.springframework.context.ApplicationEventPublisher
+import org.springframework.dao.ConcurrencyFailureException
+import org.springframework.dao.TransientDataAccessException
 import org.springframework.stereotype.Service
 
 @Service
 class ScheduleCategoryService(
     private val categoryRepository: ScheduleCategoryRepository,
+    private val memberRepository: MemberRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository? = null,
     private val invitationRepository: ScheduleShareInvitationRepository? = null,
+    private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
+    private val categoryDeleteCoordinator: ScheduleCategoryDeleteCoordinator? = null,
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
 ) {
     private val defaultCategories = listOf(
@@ -38,7 +44,15 @@ class ScheduleCategoryService(
     )
 
     @Transactional
-    fun getCategories(memberId: Long): List<ScheduleCategorySettingDto> {
+    fun getCategories(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ): List<ScheduleCategorySettingDto> {
+        lockMutationMembers(memberId, presentedSessionGeneration)
+        return getCategoriesAfterFence(memberId)
+    }
+
+    private fun getCategoriesAfterFence(memberId: Long): List<ScheduleCategorySettingDto> {
         ensureDefaultCategories(memberId)
         val visibleCategories = categoryRepository.findVisibleCategories(memberId)
         val hasReceivedCategory = visibleCategories.any { it.memberId != memberId }
@@ -79,7 +93,9 @@ class ScheduleCategoryService(
         color: String?,
         iconKey: String?,
         sortOrder: Int?,
+        presentedSessionGeneration: Long,
     ): ScheduleCategorySettingDto {
+        lockMutationMembers(memberId, presentedSessionGeneration)
         val entity = ScheduleCategory(
             memberId = memberId,
             title = normalizeRequiredText(title, "title", maxLength = 80),
@@ -99,7 +115,9 @@ class ScheduleCategoryService(
         color: String?,
         iconKey: String?,
         sortOrder: Int?,
+        presentedSessionGeneration: Long,
     ): ScheduleCategorySettingDto {
+        lockMutationMembers(memberId, presentedSessionGeneration)
         val entity = findCategory(memberId, categoryId)
         entity.update(
             title = title?.let { normalizeRequiredText(it, "title", maxLength = 80) } ?: entity.title,
@@ -112,13 +130,37 @@ class ScheduleCategoryService(
     }
 
     @Transactional
-    fun deleteCategory(memberId: Long, categoryId: Long) {
-        val entity = findCategory(memberId, categoryId)
-        val affectedMemberIds = categoryShareRepository
+    fun deleteCategory(
+        memberId: Long,
+        categoryId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        categoryDeleteCoordinator?.let {
+            it.delete(memberId, categoryId, presentedSessionGeneration)
+            return
+        }
+        val affectedShares = categoryShareRepository
             ?.findAllByCategoryIdAndDeletedFalse(categoryId)
-            ?.onEach { it.revoke() }
-            ?.map { it.targetMemberId }
             .orEmpty()
+        val affectedMemberIds = affectedShares.map { it.targetMemberId }
+        lockMutationMembers(memberId, presentedSessionGeneration, affectedMemberIds)
+        // Parent category is the serialization point for share/invitation creation. Re-read
+        // every dependent row only after it is locked; never acquire a newly discovered
+        // participant member lock after the category lock.
+        val entity = categoryRepository.findOwnedActiveForShareUpdate(categoryId, memberId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+        val currentShares = categoryShareRepository
+            ?.findAllByCategoryIdAndDeletedFalse(categoryId)
+            .orEmpty()
+        val unprelockedMemberIds = currentShares
+            .map { it.targetMemberId }
+            .filterNot((affectedMemberIds + memberId).toSet()::contains)
+        if (unprelockedMemberIds.isNotEmpty()) {
+            throw ConcurrencyFailureException(
+                "Category participant set changed while acquiring the mutation fence.",
+            )
+        }
+        currentShares.forEach { it.revoke() }
         invitationRepository
             ?.findAllByOwnerMemberIdAndResourceTypeAndResourceIdAndDeletedFalseOrderByIdDesc(
                 ownerMemberId = memberId,
@@ -128,6 +170,7 @@ class ScheduleCategoryService(
             ?.forEach { it.revoke() }
         entity.softDelete()
         categoryRepository.save(entity)
+        travelAccessCleanupService?.cancelRevokedForCategory(categoryId, affectedMemberIds)
         if (affectedMemberIds.isNotEmpty()) {
             eventPublisher.publishEvent(
                 ScheduleCalendarCacheInvalidationEvent(
@@ -139,14 +182,41 @@ class ScheduleCategoryService(
     }
 
     @Transactional
-    fun reorderCategories(memberId: Long, items: List<ScheduleCategoryReorderItem>): List<ScheduleCategorySettingDto> {
+    fun reorderCategories(
+        memberId: Long,
+        items: List<ScheduleCategoryReorderItem>,
+        presentedSessionGeneration: Long,
+    ): List<ScheduleCategorySettingDto> {
+        lockMutationMembers(memberId, presentedSessionGeneration)
         items.forEach { item ->
             val entity = findCategory(memberId, item.id)
             entity.sortOrder = item.sortOrder
             categoryRepository.save(entity)
         }
 
-        return getCategories(memberId)
+        return getCategoriesAfterFence(memberId)
+    }
+
+    /**
+     * Account-transition mutations use one global member-row lock order. The actor is
+     * generation-checked while every affected recipient is already locked, so category
+     * cleanup cannot invert owner/participant locks used by withdrawal or push writers.
+     */
+    private fun lockMutationMembers(
+        actorMemberId: Long,
+        presentedSessionGeneration: Long,
+        affectedMemberIds: Collection<Long> = emptyList(),
+    ) {
+        val lockedById = (affectedMemberIds + actorMemberId)
+            .distinct()
+            .sorted()
+            .associateWith(memberRepository::findByIdForUpdate)
+        val actor = lockedById[actorMemberId]
+            ?.takeUnless { it.deleted }
+            ?: throw BusinessException(ErrorCode.INVALID_TOKEN, "종료되었거나 존재하지 않는 로그인 세션입니다.")
+        if (actor.sessionGeneration != presentedSessionGeneration) {
+            throw BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다.")
+        }
     }
 
     private fun ensureDefaultCategories(memberId: Long) {
@@ -202,6 +272,123 @@ class ScheduleCategoryService(
         return normalized
     }
 }
+
+/**
+ * The first non-locking share snapshot can race a share transaction that already owns the actor
+ * member row. A post-category-lock target expansion is deliberately fail-closed; this facade then
+ * retries the whole mutation in a fresh transaction so share-first and delete-first both converge.
+ */
+@Service
+class ScheduleCategoryDeleteCoordinator(
+    private val writer: ScheduleCategoryDeleteWriter,
+) {
+    fun delete(
+        memberId: Long,
+        categoryId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        var last: RuntimeException? = null
+        repeat(CATEGORY_DELETE_MAX_ATTEMPTS) { attempt ->
+            try {
+                writer.deleteOnce(memberId, categoryId, presentedSessionGeneration)
+                return
+            } catch (failure: RuntimeException) {
+                if (failure !is ConcurrencyFailureException &&
+                    failure !is TransientDataAccessException
+                ) {
+                    throw failure
+                }
+                last = failure
+                if (attempt == CATEGORY_DELETE_MAX_ATTEMPTS - 1) {
+                    throw ConcurrencyFailureException(
+                        "Category deletion did not converge after a participant-set race.",
+                        failure,
+                    )
+                }
+            }
+        }
+        throw ConcurrencyFailureException(
+            "Category deletion did not converge after a participant-set race.",
+            last,
+        )
+    }
+}
+
+@Service
+class ScheduleCategoryDeleteWriter(
+    private val categoryRepository: ScheduleCategoryRepository,
+    private val memberRepository: MemberRepository,
+    private val categoryShareRepository: ScheduleCategoryShareRepository,
+    private val invitationRepository: ScheduleShareInvitationRepository,
+    private val travelAccessCleanupService: ScheduleTravelAccessCleanupService,
+    private val eventPublisher: ApplicationEventPublisher,
+    private val observer: ScheduleCategoryDeleteObserver? = null,
+) {
+    @org.springframework.transaction.annotation.Transactional(
+        propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW,
+        isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED,
+    )
+    fun deleteOnce(
+        memberId: Long,
+        categoryId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        val previewShares = categoryShareRepository.findAllByCategoryIdAndDeletedFalse(categoryId)
+        observer?.afterSharePreview(categoryId)
+        val previewMemberIds = previewShares.map { it.targetMemberId }
+        val lockedMemberIds = (previewMemberIds + memberId).distinct().sorted()
+        val lockedById = memberRepository.findAllByIdsForUpdate(lockedMemberIds)
+            .associateBy { requireNotNull(it.id) }
+        val actor = lockedById[memberId]
+            ?.takeUnless { it.deleted }
+            ?: throw BusinessException(
+                ErrorCode.INVALID_TOKEN,
+                "종료되었거나 존재하지 않는 로그인 세션입니다.",
+            )
+        if (actor.sessionGeneration != presentedSessionGeneration) {
+            throw BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다.")
+        }
+
+        val category = categoryRepository.findOwnedActiveForShareUpdate(categoryId, memberId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+        val currentShares = categoryShareRepository.findAllByCategoryIdAndDeletedFalse(categoryId)
+        if (currentShares.any { it.targetMemberId !in lockedMemberIds }) {
+            throw ConcurrencyFailureException(
+                "Category participant set changed while acquiring the mutation fence.",
+            )
+        }
+        currentShares.forEach { it.revoke() }
+        categoryShareRepository.saveAllAndFlush(currentShares)
+        invitationRepository
+            .findAllByOwnerMemberIdAndResourceTypeAndResourceIdAndDeletedFalseOrderByIdDesc(
+                ownerMemberId = memberId,
+                resourceType = ScheduleShareResourceType.CATEGORY,
+                resourceId = categoryId,
+            )
+            .forEach { it.revoke() }
+        category.softDelete()
+        categoryRepository.saveAndFlush(category)
+        travelAccessCleanupService.cancelRevokedForCategory(
+            categoryId,
+            currentShares.map { it.targetMemberId },
+        )
+        val affectedMemberIds = currentShares.map { it.targetMemberId }.toSet()
+        if (affectedMemberIds.isNotEmpty()) {
+            eventPublisher.publishEvent(
+                ScheduleCalendarCacheInvalidationEvent(
+                    memberIds = affectedMemberIds,
+                    reason = "category-deleted",
+                )
+            )
+        }
+    }
+}
+
+fun interface ScheduleCategoryDeleteObserver {
+    fun afterSharePreview(categoryId: Long)
+}
+
+private const val CATEGORY_DELETE_MAX_ATTEMPTS = 3
 
 data class ScheduleCategoryReorderItem(
     val id: Long,

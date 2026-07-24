@@ -2,7 +2,6 @@ package com.noLate.notification.application.useCase
 
 import com.noLate.notification.application.ConfirmedPushDeliveryException
 import com.noLate.notification.application.InvalidPushTokenException
-import com.noLate.notification.application.PushClient
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.service.NotificationTokenService
@@ -16,6 +15,8 @@ import com.noLate.notification.application.service.PushDispatchFence
 import com.noLate.notification.application.service.PushEventOutboxService
 import com.noLate.notification.application.service.PushOutboxDispatchLease
 import com.noLate.notification.application.service.PushSendHistoryService
+import com.noLate.notification.application.service.PushTokenProviderLeaseOutcome
+import com.noLate.notification.application.service.PushTokenProviderLeaseService
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.PushLogicalEventKey
 import com.noLate.notification.domain.PushSendStatus
@@ -34,7 +35,7 @@ import java.time.Instant
 @Component
 class NotificationUseCase(
     private val notificationTokenService: NotificationTokenService,
-    private val pushClient: PushClient,
+    private val pushTokenProviderLeaseService: PushTokenProviderLeaseService,
     private val pushSendHistoryService: PushSendHistoryService,
     private val appNotificationService: AppNotificationService,
     private val pushDeliveryService: PushDeliveryService,
@@ -265,12 +266,45 @@ class NotificationUseCase(
         val deliveryId = claim.deliveryId
 
         return try {
-            val providerResult = pushClient.sendToToken(
-                token = providerToken,
+            val providerSend = pushTokenProviderLeaseService.sendIfOwned(
+                memberId = memberId,
+                claim = claim,
                 title = snapshot.title,
                 body = snapshot.body,
                 data = snapshot.data,
             )
+            if (providerSend.outcome == PushTokenProviderLeaseOutcome.SUPERSEDED) {
+                deliveryId?.let { pushDeliveryService.markOwnershipSuperseded(it) }
+                return NotificationSendResult(supersededCount = 1)
+            }
+            if (providerSend.outcome == PushTokenProviderLeaseOutcome.BUSY) {
+                // 다른 logical event가 같은 token의 provider boundary를 잠시 보유한 경우다.
+                // 이 delivery는 provider에 넘기기 전임이 확실하므로 UNKNOWN으로 버리지 않고
+                // confirmed local deferral로 되돌려 안전하게 재시도한다.
+                val transition = deliveryId?.let {
+                    pushDeliveryService.markFailure(
+                        deliveryId = it,
+                        errorCode = "TOKEN_DISPATCH_LEASE_BUSY",
+                        errorMessage = "Token provider dispatch is already in progress.",
+                        fence = dispatchFence,
+                        sourceLease = sourceLease,
+                    )
+                } ?: PushDeliveryFailureTransition.NOT_APPLIED
+                return NotificationSendResult(
+                    failedCount = 1,
+                    retryableFailedCount =
+                        if (transition == PushDeliveryFailureTransition.RETRYABLE) 1 else 0,
+                    supersededCount =
+                        if (transition == PushDeliveryFailureTransition.TERMINAL_SUPERSEDED) 1 else 0,
+                    ambiguousCount =
+                        if (transition == PushDeliveryFailureTransition.NOT_APPLIED) 1 else 0,
+                    recipientInactive =
+                        transition == PushDeliveryFailureTransition.RECIPIENT_INACTIVE,
+                )
+            }
+            val providerResult = requireNotNull(providerSend.providerResult) {
+                "An acquired provider lease must return a provider result."
+            }
 
             // Provider 성공 직후 로컬 기록 전 종료되면 DISPATCHING이 남는다. 이를 재시도하지
             // 않는 것이 exactly-once를 거짓 주장하지 않는 at-most-once 경계다.

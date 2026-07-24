@@ -27,16 +27,43 @@ import java.time.Instant
 class ScheduleRouteSetupReminderWriter(
     private val repository: ScheduleRouteSetupReminderRepository,
     private val memberRepository: MemberRepository,
+    private val insertValidator: ScheduleRouteSetupReminderInsertValidator? = null,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun insert(reminder: ScheduleRouteSetupReminder): ScheduleRouteSetupReminder? {
         memberRepository.findActiveNotificationRecipientForUpdate(reminder.memberId) ?: return null
+        if (insertValidator?.canInsert(reminder) == false) return null
         return repository.saveAndFlush(reminder)
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun find(scheduleId: Long, memberId: Long, fingerprint: String): ScheduleRouteSetupReminder? =
         repository.findByScheduleIdAndMemberIdAndScheduleFingerprint(scheduleId, memberId, fingerprint)
+}
+
+/**
+ * Scanner results are advisory. Marker creation re-reads the active schedule, immutable
+ * fingerprint and recipient travel grant while holding the recipient member row. Category revoke,
+ * category delete and owner withdrawal use that same member-first boundary, so cleanup-first can
+ * never be followed by a recreated PENDING marker.
+ */
+@Service
+class ScheduleRouteSetupReminderInsertValidator(
+    private val scheduleRepository: ScheduleRepository,
+    private val accessPolicy: ScheduleAccessPolicy,
+) {
+    fun canInsert(reminder: ScheduleRouteSetupReminder): Boolean {
+        val schedule = scheduleRepository.findById(reminder.scheduleId)
+            .orElse(null)
+            ?.takeUnless { it.deleted }
+            ?: return false
+        if (ScheduleTravelPlanFingerprint.calculate(schedule) != reminder.scheduleFingerprint) {
+            return false
+        }
+        val access = accessPolicy.resolve(reminder.memberId, schedule)
+        return access.travelEnabled &&
+            accessPolicy.routeReminderEnabled(reminder.memberId, schedule)
+    }
 }
 
 /**

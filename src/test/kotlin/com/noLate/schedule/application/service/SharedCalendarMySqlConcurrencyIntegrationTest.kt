@@ -69,6 +69,7 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
             title = "MySQL 공유 캘린더",
             color = "#2F80FF",
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         runConcurrently(
@@ -79,6 +80,8 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
                     targetEmail = target.email,
                     targetAppId = null,
                     role = ScheduleCalendarRole.VIEWER,
+                    authenticatedActorMemberId = requireNotNull(owner.id),
+                    presentedSessionGeneration = owner.sessionGeneration,
                 )
             },
             {
@@ -88,6 +91,8 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
                     targetEmail = null,
                     targetAppId = target.id,
                     role = ScheduleCalendarRole.EDITOR,
+                    authenticatedActorMemberId = requireNotNull(owner.id),
+                    presentedSessionGeneration = owner.sessionGeneration,
                 )
             },
         )
@@ -143,6 +148,7 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
             title = "수락 보관 경합",
             color = "#2F80FF",
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         val invitation = shareService.createCalendarInvitation(
             ownerMemberId = ownerId,
@@ -150,13 +156,18 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
             permission = ScheduleSharePermission.VIEWER,
             ttlHours = 24,
             maxAcceptCount = 1,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         val accepted = AtomicBoolean(false)
 
         runConcurrently(
             {
                 try {
-                    shareService.acceptInvitation(requireNotNull(target.id), invitation.token)
+                    shareService.acceptInvitation(
+                        requireNotNull(target.id),
+                        invitation.token,
+                        target.sessionGeneration,
+                    )
                     accepted.set(true)
                 } catch (error: BusinessException) {
                     assertTrue(
@@ -167,7 +178,13 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
                     )
                 }
             },
-            { calendarService.archiveCalendar(ownerId, calendar.id) },
+            {
+                calendarService.archiveCalendar(
+                    ownerId,
+                    calendar.id,
+                    owner.sessionGeneration,
+                )
+            },
         )
 
         val persistedInvitation = invitationRepository.findAll().single()

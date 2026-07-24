@@ -82,6 +82,7 @@ class SchedulePushJobBackfillPairWriter(
     private val scheduleRepository: ScheduleRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
     private val schedulePushJobService: SchedulePushJobService,
+    private val scheduleAccessPolicy: ScheduleAccessPolicy,
     private val objectMapper: ObjectMapper,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -109,6 +110,13 @@ class SchedulePushJobBackfillPairWriter(
                 memberId = candidate.memberId,
                 scheduleDto = schedule.toDto(objectMapper),
             ) != null
+        }
+
+        // A retained legacy plan is not itself an authorization grant. The recipient member lock
+        // above serializes this final policy read with direct/category/calendar revoke. If revoke
+        // wins, startup must not recreate a participant job from the stale plan.
+        if (!scheduleAccessPolicy.resolve(candidate.memberId, schedule).travelEnabled) {
+            return false
         }
 
         val plan = travelPlanRepository.findById(requireNotNull(candidate.travelPlanId))

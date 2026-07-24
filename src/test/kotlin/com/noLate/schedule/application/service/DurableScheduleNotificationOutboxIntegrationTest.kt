@@ -11,6 +11,7 @@ import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationWriter
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.NotificationTokenRetirementService
 import com.noLate.notification.application.service.NotificationTokenWriter
 import com.noLate.notification.application.service.PushDeliveryService
 import com.noLate.notification.application.service.PushDeliveryWriter
@@ -19,6 +20,8 @@ import com.noLate.notification.application.service.PushEventOutboxWriter
 import com.noLate.notification.application.service.PushOutboxDispatchCoordinator
 import com.noLate.notification.application.service.PushOutboxDispatchWorker
 import com.noLate.notification.application.service.PushOutboxDispatchWriter
+import com.noLate.notification.application.service.PushTokenProviderLeaseService
+import com.noLate.notification.application.service.PushTokenProviderLeaseWriter
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.domain.PushDeliveryStatus
@@ -68,6 +71,7 @@ import java.util.concurrent.atomic.AtomicInteger
     PushEventOutboxService::class,
     PushEventOutboxWriter::class,
     NotificationTokenService::class,
+    NotificationTokenRetirementService::class,
     NotificationTokenWriter::class,
     PushSendHistoryService::class,
     AppNotificationService::class,
@@ -77,6 +81,8 @@ import java.util.concurrent.atomic.AtomicInteger
     NotificationUseCase::class,
     PushOutboxDispatchCoordinator::class,
     PushOutboxDispatchWriter::class,
+    PushTokenProviderLeaseService::class,
+    PushTokenProviderLeaseWriter::class,
     PushOutboxDispatchWorker::class,
     AccountCleanupService::class,
     ScheduleSharePushNotificationListener::class,
@@ -468,7 +474,7 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
         assertEquals(PushDeliveryStatus.DISPATCHING, deliveryRepository.findAll().single().status)
 
         accountCleanupService.withdraw(memberRepository.findById(memberId).orElseThrow())
-        assertNotificationRowsAbsent(memberId)
+        assertNotificationRowsAbsentExceptRetiredProviderLease(memberId)
 
         providerGate.release.countDown()
         executor.shutdown()
@@ -512,6 +518,15 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
         assertTrue(deliveryRepository.findAll().none { it.memberId == memberId })
         assertTrue(historyRepository.findAll().none { it.memberId == memberId })
         assertTrue(tokenRepository.findAllByMemberId(memberId).isEmpty())
+    }
+
+    private fun assertNotificationRowsAbsentExceptRetiredProviderLease(memberId: Long) {
+        assertTrue(notificationRepository.findAllByMemberIdOrderByIdDesc(memberId).isEmpty())
+        assertTrue(deliveryRepository.findAll().none { it.memberId == memberId })
+        assertTrue(historyRepository.findAll().none { it.memberId == memberId })
+        val retired = tokenRepository.findAllByMemberId(memberId).single()
+        assertTrue(retired.retirementRequested)
+        assertTrue(retired.dispatchLeaseId != null)
     }
 
     private fun register(memberId: Long, deviceId: String, token: String) {

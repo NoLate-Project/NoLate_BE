@@ -9,6 +9,30 @@ import org.springframework.data.repository.query.Param
 
 interface PushDeliveryRepository : JpaRepository<PushDelivery, Long> {
 
+    fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
+
+    @Query(
+        """
+        select distinct delivery.memberId
+        from PushDelivery delivery
+        where delivery.scheduleId in :scheduleIds
+        order by delivery.memberId
+        """
+    )
+    fun findDistinctMemberIdsByScheduleIdIn(
+        @Param("scheduleIds") scheduleIds: Collection<Long>,
+    ): List<Long>
+
+    fun findAllByScheduleIdInAndMemberIdIn(
+        scheduleIds: Collection<Long>,
+        memberIds: Collection<Long>,
+    ): List<PushDelivery>
+
+    fun findAllByMemberIdInAndEventKeyIn(
+        memberIds: Collection<Long>,
+        eventKeys: Collection<String>,
+    ): List<PushDelivery>
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select delivery from PushDelivery delivery where delivery.id = :id")
     fun findByIdForUpdate(@Param("id") id: Long): PushDelivery?

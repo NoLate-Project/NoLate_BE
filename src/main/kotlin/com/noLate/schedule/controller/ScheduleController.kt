@@ -110,7 +110,13 @@ class ScheduleController(
         @PathVariable scheduleId: Long,
         @RequestBody request: UpdateScheduleRequest,
     ): ApiResponse<ScheduleDto> {
-        val result = scheduleUseCase.updateSchedule(requireMemberId(principal), scheduleId, request.toDto())
+        val authenticated = requirePrincipal(principal)
+        val result = scheduleUseCase.updateSchedule(
+            memberId = authenticated.id,
+            scheduleId = scheduleId,
+            scheduleDto = request.toDto(),
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
+        )
         return ApiResponse.success(result)
     }
 
@@ -124,7 +130,12 @@ class ScheduleController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
     ): ApiResponse<Unit> {
-        scheduleUseCase.deleteSchedule(requireMemberId(principal), scheduleId)
+        val authenticated = requirePrincipal(principal)
+        scheduleUseCase.deleteSchedule(
+            memberId = authenticated.id,
+            scheduleId = scheduleId,
+            presentedSessionGeneration = requireSessionGeneration(authenticated),
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -309,7 +320,7 @@ class ScheduleController(
 
     private fun requireSessionGeneration(principal: MemberPrincipal): Long =
         principal.accessTokenSessionGeneration
-            ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+            ?: throw BusinessException(ErrorCode.INVALID_TOKEN)
 }
 
 /**

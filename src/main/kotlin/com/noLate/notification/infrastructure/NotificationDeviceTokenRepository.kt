@@ -12,6 +12,53 @@ interface NotificationDeviceTokenRepository : JpaRepository<NotificationDeviceTo
 
     fun findAllByMemberId(memberId: Long): List<NotificationDeviceToken>
 
+    fun findAllByMemberIdAndRetirementRequestedFalse(
+        memberId: Long,
+    ): List<NotificationDeviceToken>
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select token
+        from NotificationDeviceToken token
+        where token.memberId = :memberId
+        order by token.id
+        """
+    )
+    fun findAllByMemberIdForUpdate(
+        @Param("memberId") memberId: Long,
+    ): List<NotificationDeviceToken>
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select token
+        from NotificationDeviceToken token
+        where token.memberId = :memberId
+          and token.deviceFingerprint = :deviceFingerprint
+        order by token.id
+        """
+    )
+    fun findAllByMemberIdAndDeviceFingerprintForUpdate(
+        @Param("memberId") memberId: Long,
+        @Param("deviceFingerprint") deviceFingerprint: String,
+    ): List<NotificationDeviceToken>
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select token
+        from NotificationDeviceToken token
+        where token.memberId = :memberId
+          and token.tokenFingerprint = :tokenFingerprint
+        order by token.id
+        """
+    )
+    fun findAllByMemberIdAndTokenFingerprintForUpdate(
+        @Param("memberId") memberId: Long,
+        @Param("tokenFingerprint") tokenFingerprint: String,
+    ): List<NotificationDeviceToken>
+
     /**
      * token/device fingerprint 후보를 먼저 ID 순으로 확정한 뒤 아래 query에서 같은 순서로
      * 잠근다. 서로 다른 token/device가 교차하는 ownership transfer도 lock order가 같다.
@@ -60,27 +107,18 @@ interface NotificationDeviceTokenRepository : JpaRepository<NotificationDeviceTo
     @Query("select token from NotificationDeviceToken token where token.id = :id")
     fun findByIdForUpdate(@Param("id") id: Long): NotificationDeviceToken?
 
-    fun deleteByMemberIdAndDeviceFingerprint(memberId: Long, deviceFingerprint: String)
-
-    fun deleteAllByMemberId(memberId: Long)
-
-    fun deleteByMemberIdAndTokenFingerprint(memberId: Long, tokenFingerprint: String)
-
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(
         """
         delete from NotificationDeviceToken token
-        where token.id = :id
-          and token.memberId = :memberId
-          and token.tokenFingerprint = :tokenFingerprint
-          and token.ownershipVersion = :ownershipVersion
+        where token.retirementRequested = true
+          and (
+            token.dispatchLeaseId is null
+            or token.dispatchLeaseUntil is null
+            or token.dispatchLeaseUntil <= :now
+          )
         """
     )
-    fun deleteByOwnershipSnapshot(
-        @Param("id") id: Long,
-        @Param("memberId") memberId: Long,
-        @Param("tokenFingerprint") tokenFingerprint: String,
-        @Param("ownershipVersion") ownershipVersion: Long,
-    ): Int
+    fun deleteExpiredRetired(@Param("now") now: java.time.Instant): Int
 
 }

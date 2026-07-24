@@ -140,6 +140,7 @@ class PushEventOutboxWriter(
     private val objectMapper: ObjectMapper,
     private val clock: Clock,
     private val fenceValidator: PushDispatchFenceValidator? = null,
+    private val recipientAuthorizationValidator: PushRecipientAuthorizationValidator? = null,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun prepareInline(
@@ -204,6 +205,16 @@ class PushEventOutboxWriter(
         // Global notification/withdrawal lock order starts with the recipient member. The active
         // check and every source/manifest write below are committed under this same row lock.
         if (memberRepository.findActiveNotificationRecipientForUpdate(memberId) == null) {
+            return inactiveRecipient()
+        }
+        if (
+            recipientAuthorizationValidator?.canDispatch(
+                memberId = memberId,
+                scheduleId = data["scheduleId"]?.toLongOrNull(),
+                categoryId = data["categoryId"]?.toLongOrNull(),
+                payloadType = data["type"],
+            ) == false
+        ) {
             return inactiveRecipient()
         }
         if (fence != null && fenceValidator?.validate(fence) != true) {
@@ -288,7 +299,8 @@ class PushEventOutboxWriter(
             existing
         } else {
             val data = notification.toSnapshot(objectMapper).data
-            val frozen = tokenRepository.findAllByMemberId(memberId)
+            val frozen =
+                tokenRepository.findAllByMemberIdAndRetirementRequestedFalse(memberId)
                 .distinctBy { it.deliveryDeviceKey() }
                 .map { token ->
                     PushDelivery(

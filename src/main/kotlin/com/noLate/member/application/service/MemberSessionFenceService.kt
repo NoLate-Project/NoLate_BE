@@ -5,7 +5,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
-import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
+import com.noLate.notification.application.service.NotificationTokenRetirementService
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -31,7 +31,7 @@ enum class SessionLogoutResult {
 class MemberSessionFenceService(
     private val memberRepository: MemberRepository,
     private val refreshTokenService: RefreshTokenService,
-    private val deviceTokenRepository: NotificationDeviceTokenRepository,
+    private val tokenRetirementService: NotificationTokenRetirementService,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     /**
@@ -83,7 +83,7 @@ class MemberSessionFenceService(
 
         advanceLockedSession(member)
         refreshTokenService.deleteAllByMemberId(memberId)
-        deviceTokenRepository.deleteAllByMemberId(memberId)
+        tokenRetirementService.retireAllByMember(memberId)
         return SessionLogoutResult.REVOKED
     }
 
@@ -98,7 +98,7 @@ class MemberSessionFenceService(
         if (member.deleted) return
         advanceLockedSession(member)
         refreshTokenService.deleteAllByMemberId(memberId)
-        deviceTokenRepository.deleteAllByMemberId(memberId)
+        tokenRetirementService.retireAllByMember(memberId)
     }
 
     /**

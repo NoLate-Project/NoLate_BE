@@ -145,8 +145,20 @@ firebase:
   enabled: ${FIREBASE_ENABLED:false}
   credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
   project-id: ${FIREBASE_PROJECT_ID:}
+  # 합계가 push-token provider-max-call보다 작아 token dispatch lease가 provider I/O
+  # 전체를 덮도록 유지한다.
+  connect-timeout-millis: ${FIREBASE_CONNECT_TIMEOUT_MILLIS:5000}
+  read-timeout-millis: ${FIREBASE_READ_TIMEOUT_MILLIS:30000}
+  write-timeout-millis: ${FIREBASE_WRITE_TIMEOUT_MILLIS:5000}
 
 notification:
+  push-token:
+    provider-max-call-seconds: ${NOTIFICATION_PUSH_PROVIDER_MAX_CALL_SECONDS:60}
+    dispatch-lease-seconds: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_SECONDS:600}
+    dispatch-lease-wait-millis: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_WAIT_MILLIS:70000}
+    dispatch-lease-poll-millis: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_POLL_MILLIS:25}
+    retirement-reaper-enabled: ${NOTIFICATION_PUSH_TOKEN_RETIREMENT_REAPER_ENABLED:true}
+    retirement-reaper-fixed-delay-millis: ${NOTIFICATION_PUSH_TOKEN_RETIREMENT_REAPER_FIXED_DELAY_MILLIS:30000}
   push-outbox:
     enabled: ${NOTIFICATION_PUSH_OUTBOX_ENABLED:true}
     fixed-delay-ms: ${NOTIFICATION_PUSH_OUTBOX_FIXED_DELAY_MS:30000}

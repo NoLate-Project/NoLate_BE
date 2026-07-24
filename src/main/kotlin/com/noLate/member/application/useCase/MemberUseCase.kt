@@ -22,6 +22,7 @@ import com.noLate.member.domain.memberSetting.MemberSettingDto
 import com.noLate.member.domain.profile.MemberProfileDto
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Component
+import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
 import java.util.Locale
 
@@ -415,17 +416,20 @@ class MemberUseCase(
      * 요청이 지연될 수 있으므로 member row를 잠그고 presented access JWT generation을 다시
      * 비교한다. mismatch면 401로 fail closed하고 더 최신 session/account를 변경하지 않는다.
      */
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     fun withdraw(
         memberId: Long,
         presentedSessionGeneration: Long,
         passwordForCheck: String?,
     ) {
-        // 1) 인증된 access session과 회원 row를 같은 transaction에서 선형화
-        val member = memberService.getActiveMemberForUpdate(
+        // 1) Owner와 소유 일정의 모든 알림 참가자 member row를 전역 ID 순서로 잠근 뒤
+        // 인증 generation을 검증한다. Owner만 먼저 잠그면 더 낮은 participant ID를 나중에
+        // 얻는 withdrawal이 participant mutation과 lock order를 뒤집을 수 있다.
+        val withdrawalFence = accountCleanupService.lockWithdrawalFence(
             memberId = memberId,
             presentedSessionGeneration = presentedSessionGeneration,
         )
+        val member = withdrawalFence.member
 
         // 2) COMMON 계정은 비밀번호 검증
         if (member.loginType == LoginType.COMMON) {
@@ -449,7 +453,7 @@ class MemberUseCase(
             memberId = id,
             presentedSessionGeneration = presentedSessionGeneration,
         )
-        accountCleanupService.withdraw(member)
+        accountCleanupService.withdraw(withdrawalFence)
         memberService.updateMember(member)
     }
 

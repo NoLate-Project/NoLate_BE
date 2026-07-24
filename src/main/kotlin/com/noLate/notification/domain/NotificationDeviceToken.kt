@@ -3,6 +3,7 @@ package com.noLate.notification.domain
 
 import com.noLate.global.common.BaseEntity
 import jakarta.persistence.*
+import java.time.Instant
 
 @Entity
 @Table(
@@ -15,6 +16,12 @@ import jakarta.persistence.*
         UniqueConstraint(
             name = "uk_push_device_token_device_fingerprint",
             columnNames = ["device_fingerprint"],
+        ),
+    ],
+    indexes = [
+        Index(
+            name = "idx_push_device_token_dispatch_lease",
+            columnList = "dispatch_lease_until, id",
         ),
     ],
 )
@@ -57,6 +64,22 @@ class NotificationDeviceToken(
     @Column(name = "ownership_version", nullable = false)
     var ownershipVersion: Long = 0,
 
+    /**
+     * provider I/O와 account ownership transfer 사이의 짧은 영속 lease다.
+     *
+     * lease 획득/해제 transaction은 token row만 잠그고, 실제 provider 호출 동안에는 DB
+     * transaction이나 member/global lock을 유지하지 않는다. 등록 writer는 활성 lease가
+     * 끝날 때까지 fresh transaction으로 재시도한다.
+     */
+    @Column(name = "dispatch_lease_id", length = 64)
+    var dispatchLeaseId: String? = null,
+
+    @Column(name = "dispatch_lease_until")
+    var dispatchLeaseUntil: Instant? = null,
+
+    @Column(name = "retirement_requested", nullable = false)
+    var retirementRequested: Boolean = false,
+
 ) : BaseEntity() {
 
     fun replaceOwnership(
@@ -80,7 +103,39 @@ class NotificationDeviceToken(
         this.deviceFingerprint = deviceFingerprint
         if (changed) {
             ownershipVersion += 1
+            dispatchLeaseId = null
+            dispatchLeaseUntil = null
         }
+    }
+
+    fun hasActiveDispatchLease(now: Instant): Boolean =
+        dispatchLeaseId != null && dispatchLeaseUntil?.isAfter(now) == true
+
+    fun acquireDispatchLease(
+        leaseId: String,
+        now: Instant,
+        leaseUntil: Instant,
+    ): Boolean {
+        if (retirementRequested || hasActiveDispatchLease(now)) return false
+        dispatchLeaseId = leaseId
+        dispatchLeaseUntil = leaseUntil
+        return true
+    }
+
+    fun releaseDispatchLease(leaseId: String): Boolean {
+        if (dispatchLeaseId != leaseId) return false
+        dispatchLeaseId = null
+        dispatchLeaseUntil = null
+        return true
+    }
+
+    /**
+     * 활성 provider lease가 있으면 row identity를 유지해 새 account 등록을 막고, lease가
+     * 없으면 caller가 즉시 삭제할 수 있게 true를 반환한다.
+     */
+    fun requestRetirement(now: Instant): Boolean {
+        retirementRequested = true
+        return !hasActiveDispatchLease(now)
     }
 
     // JPA용 기본 생성자

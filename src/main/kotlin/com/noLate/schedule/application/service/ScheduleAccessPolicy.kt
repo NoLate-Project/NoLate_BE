@@ -14,6 +14,7 @@ import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.springframework.stereotype.Component
@@ -42,6 +43,7 @@ class ScheduleAccessPolicy(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val categoryRepository: ScheduleCategoryRepository? = null,
 ) {
 
     fun resolve(memberId: Long, schedule: Schedule): ScheduleAccessDecision {
@@ -301,7 +303,14 @@ class ScheduleAccessPolicy(
         schedule.scheduleType == ScheduleType.ROUTE || schedule.route != null || schedule.routeSetupRequired
 
     private fun categoryId(schedule: Schedule): Long? =
-        schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+        (schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull())
+            ?.takeIf { categoryId ->
+                categoryRepository
+                    ?.findById(categoryId)
+                    ?.orElse(null)
+                    ?.takeUnless { it.deleted } != null ||
+                    categoryRepository == null
+            }
 
     private fun isActive(share: ScheduleShare): Boolean =
         !share.deleted && share.status == ScheduleShareStatus.ACTIVE

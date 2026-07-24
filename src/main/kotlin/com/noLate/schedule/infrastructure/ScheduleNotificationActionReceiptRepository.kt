@@ -25,4 +25,17 @@ interface ScheduleNotificationActionReceiptRepository :
     fun findByKeyFingerprint(keyFingerprint: String): ScheduleNotificationActionReceipt?
 
     fun deleteAllByMemberId(memberId: Long)
+    fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
+
+    @Query(
+        """
+        select distinct receipt.memberId
+        from ScheduleNotificationActionReceipt receipt
+        where receipt.scheduleId in :scheduleIds
+        order by receipt.memberId
+        """
+    )
+    fun findDistinctMemberIdsByScheduleIdIn(
+        @Param("scheduleIds") scheduleIds: Collection<Long>,
+    ): List<Long>
 }

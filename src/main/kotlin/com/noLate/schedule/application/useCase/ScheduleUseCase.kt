@@ -199,7 +199,12 @@ class ScheduleUseCase(
      * 시간, 카테고리, 장소, 경로 정보를 모두 같은 화면 모델 기준으로 교체한다.
      */
     @Transactional
-    fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
+    fun updateSchedule(
+        memberId: Long,
+        scheduleId: Long,
+        scheduleDto: ScheduleDto,
+        presentedSessionGeneration: Long,
+    ): ScheduleDto {
         // 잠금 없는 상세는 actor의 접근 권한과 owner identity만 미리 확인한다. 실제 수정 권한과
         // schedule 상태는 member -> job fence 뒤 updateSchedule에서 다시 검증한다.
         val current = scheduleService.getScheduleDetail(memberId, scheduleId)
@@ -209,6 +214,8 @@ class ScheduleUseCase(
             scheduleId = scheduleId,
             requiredMemberIds =
                 setOf(memberId, current.ownerMemberId ?: memberId) + previewNotificationMemberIds,
+            actorMemberId = memberId,
+            presentedSessionGeneration = presentedSessionGeneration,
         )
         scheduleService.lockForNotificationEdit(memberId, scheduleId)
         scheduleTravelPlanService?.requireNotificationMembersWithinFence(
@@ -256,7 +263,11 @@ class ScheduleUseCase(
      * 복구 가능성을 남기기 위해 실제 삭제가 아니라 deleted flag를 변경한다.
      */
     @Transactional
-    fun deleteSchedule(memberId: Long, scheduleId: Long) {
+    fun deleteSchedule(
+        memberId: Long,
+        scheduleId: Long,
+        presentedSessionGeneration: Long,
+    ) {
         val current = scheduleService.getScheduleDetail(memberId, scheduleId)
         val previewNotificationMemberIds =
             scheduleTravelPlanService?.findNotificationEnabledMemberIds(scheduleId).orEmpty()
@@ -264,6 +275,8 @@ class ScheduleUseCase(
             scheduleId = scheduleId,
             requiredMemberIds =
                 setOf(memberId, current.ownerMemberId ?: memberId) + previewNotificationMemberIds,
+            actorMemberId = memberId,
+            presentedSessionGeneration = presentedSessionGeneration,
         )
         scheduleService.lockForNotificationEdit(memberId, scheduleId)
         scheduleTravelPlanService?.requireNotificationMembersWithinFence(

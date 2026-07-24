@@ -86,6 +86,8 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
                 jobService.lockForScheduleEdit(
                     scheduleId = scheduleId,
                     requiredMemberIds = listOf(EDITOR_MEMBER_ID, MEMBER_ID),
+                    actorMemberId = EDITOR_MEMBER_ID,
+                    presentedSessionGeneration = 0L,
                 )
                 editLocked.countDown()
                 check(releaseEdit.await(5, TimeUnit.SECONDS))
@@ -128,6 +130,8 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
                 jobService.lockForScheduleEdit(
                     scheduleId = scheduleId,
                     requiredMemberIds = listOf(MEMBER_ID, PLAN_MEMBER_ID),
+                    actorMemberId = MEMBER_ID,
+                    presentedSessionGeneration = 0L,
                 )
                 editLocked.countDown()
                 check(releaseEdit.await(5, TimeUnit.SECONDS))
@@ -164,7 +168,12 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
 
         val edit = executor.submit {
             transactions.executeWithoutResult {
-                jobService.lockForScheduleEdit(10L, listOf(MEMBER_ID))
+                jobService.lockForScheduleEdit(
+                    scheduleId = 10L,
+                    requiredMemberIds = listOf(MEMBER_ID),
+                    actorMemberId = MEMBER_ID,
+                    presentedSessionGeneration = 0L,
+                )
                 jobService.registerFromScheduleDto(
                     MEMBER_ID,
                     original.copy(startAt = "2026-07-24T05:05:00Z"),

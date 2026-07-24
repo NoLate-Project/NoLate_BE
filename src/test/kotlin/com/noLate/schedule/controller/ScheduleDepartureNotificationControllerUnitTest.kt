@@ -13,6 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 
 @ExtendWith(MockitoExtension::class)
@@ -24,15 +25,21 @@ class ScheduleDepartureNotificationControllerUnitTest {
     @Test
     fun `authenticated owner can request a nudge for one participant`() {
         val controller = ScheduleDepartureNotificationController(service)
-        val principal = MemberPrincipal(id = 1L, email = "owner@example.com", name = "Owner")
-        val sendResult = NotificationSendResult(requestedCount = 1, sentCount = 1)
-        whenever(service.sendDepartureNudge(1L, 10L, 2L)).thenReturn(sendResult)
+        val principal = MemberPrincipal(
+            id = 1L,
+            email = "owner@example.com",
+            name = "Owner",
+            accessTokenSessionGeneration = 4L,
+        )
+        // API success now acknowledges a frozen durable outbox event, not provider confirmation.
+        val sendResult = NotificationSendResult(requestedCount = 1, sentCount = 0)
+        whenever(service.sendDepartureNudge(1L, 10L, 2L, 4L)).thenReturn(sendResult)
 
         val response = controller.sendDepartureNudge(principal, scheduleId = 10L, targetMemberId = 2L)
 
         assertTrue(response.success)
         assertEquals(sendResult, response.data)
-        verify(service).sendDepartureNudge(1L, 10L, 2L)
+        verify(service).sendDepartureNudge(1L, 10L, 2L, 4L)
     }
 
     @Test
@@ -44,5 +51,18 @@ class ScheduleDepartureNotificationControllerUnitTest {
         }
 
         assertEquals(ErrorCode.UNAUTHORIZED, error.errorCode)
+    }
+
+    @Test
+    fun `authenticated request without signed generation is rejected as invalid token`() {
+        val controller = ScheduleDepartureNotificationController(service)
+        val principal = MemberPrincipal(id = 1L, email = "owner@example.com", name = "Owner")
+
+        val error = assertThrows(BusinessException::class.java) {
+            controller.sendDepartureNudge(principal, scheduleId = 10L, targetMemberId = 2L)
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, error.errorCode)
+        verifyNoInteractions(service)
     }
 }

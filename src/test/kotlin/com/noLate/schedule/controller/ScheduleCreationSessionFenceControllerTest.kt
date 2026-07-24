@@ -69,7 +69,30 @@ class ScheduleCreationSessionFenceControllerTest {
     }
 
     @Test
-    fun `legacy principal without a signed generation cannot reach add or import mutation`() {
+    fun `update and delete forward the signed generation to the edit fence`() {
+        val principal = principal(memberId = 44L, sessionGeneration = 29L)
+        val request = updateRequest("update")
+        whenever(scheduleUseCase.updateSchedule(eq(44L), eq(101L), any(), eq(29L)))
+            .thenAnswer { invocation -> invocation.getArgument(2) }
+
+        controller.updateSchedule(principal, 101L, request)
+        controller.deleteSchedule(principal, 101L)
+
+        verify(scheduleUseCase).updateSchedule(
+            memberId = eq(44L),
+            scheduleId = eq(101L),
+            scheduleDto = eq(request.toDto()),
+            presentedSessionGeneration = eq(29L),
+        )
+        verify(scheduleUseCase).deleteSchedule(
+            memberId = eq(44L),
+            scheduleId = eq(101L),
+            presentedSessionGeneration = eq(29L),
+        )
+    }
+
+    @Test
+    fun `legacy principal without a signed generation cannot reach schedule mutation`() {
         val principal = MemberPrincipal(
             id = 43L,
             email = "legacy@example.com",
@@ -95,11 +118,21 @@ class ScheduleCreationSessionFenceControllerTest {
                 ),
             )
         }
+        val updateFailure = assertThrows<BusinessException> {
+            controller.updateSchedule(principal, 101L, updateRequest("legacy-update"))
+        }
+        val deleteFailure = assertThrows<BusinessException> {
+            controller.deleteSchedule(principal, 101L)
+        }
 
-        assertEquals(ErrorCode.UNAUTHORIZED, addFailure.errorCode)
-        assertEquals(ErrorCode.UNAUTHORIZED, importFailure.errorCode)
+        assertEquals(ErrorCode.INVALID_TOKEN, addFailure.errorCode)
+        assertEquals(ErrorCode.INVALID_TOKEN, importFailure.errorCode)
+        assertEquals(ErrorCode.INVALID_TOKEN, updateFailure.errorCode)
+        assertEquals(ErrorCode.INVALID_TOKEN, deleteFailure.errorCode)
         verify(scheduleUseCase, never()).addSchedule(any(), any(), any())
         verify(scheduleUseCase, never()).importSchedule(any(), any(), any(), any())
+        verify(scheduleUseCase, never()).updateSchedule(any(), any(), any(), any())
+        verify(scheduleUseCase, never()).deleteSchedule(any(), any(), any())
     }
 
     private fun principal(
@@ -116,6 +149,19 @@ class ScheduleCreationSessionFenceControllerTest {
 
     private fun scheduleRequest(title: String): AddScheduleRequest =
         AddScheduleRequest(
+            title = title,
+            startAt = "2099-07-24T05:00:00Z",
+            endAt = "2099-07-24T06:00:00Z",
+            category = ScheduleCategoryDto(
+                id = "1",
+                title = "업무",
+                color = "#123456",
+            ),
+            notificationEnabled = false,
+        )
+
+    private fun updateRequest(title: String): UpdateScheduleRequest =
+        UpdateScheduleRequest(
             title = title,
             startAt = "2099-07-24T05:00:00Z",
             endAt = "2099-07-24T06:00:00Z",

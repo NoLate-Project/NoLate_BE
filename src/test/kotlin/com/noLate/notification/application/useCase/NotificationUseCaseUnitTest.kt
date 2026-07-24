@@ -11,6 +11,9 @@ import com.noLate.notification.application.service.PushDeliveryClaim
 import com.noLate.notification.application.service.PushDeliveryClaimOutcome
 import com.noLate.notification.application.service.PushDeliveryService
 import com.noLate.notification.application.service.PushEventOutboxService
+import com.noLate.notification.application.service.PushTokenProviderLeaseOutcome
+import com.noLate.notification.application.service.PushTokenProviderLeaseService
+import com.noLate.notification.application.service.PushTokenProviderSendResult
 import com.noLate.notification.application.service.PreparedPushEvent
 import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.useCase.NotificationUseCase
@@ -26,6 +29,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.*
+import org.mockito.Mockito.lenient
 import java.time.Instant
 
 @ExtendWith(MockitoExtension::class)
@@ -49,18 +53,41 @@ class NotificationUseCaseUnitTest {
     @Mock
     lateinit var pushEventOutboxService: PushEventOutboxService
 
+    @Mock
+    lateinit var pushTokenProviderLeaseService: PushTokenProviderLeaseService
+
     private lateinit var notificationUseCase: NotificationUseCase
 
     @BeforeEach
     fun setUp() {
         notificationUseCase = NotificationUseCase(
             notificationTokenService = notificationTokenService,
-            pushClient = pushClient,
+            pushTokenProviderLeaseService = pushTokenProviderLeaseService,
             pushSendHistoryService = pushSendHistoryService,
             appNotificationService = appNotificationService,
             pushDeliveryService = pushDeliveryService,
             pushEventOutboxService = pushEventOutboxService,
         )
+        lenient().whenever(
+            pushTokenProviderLeaseService.sendIfOwned(
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+            ),
+        ).thenAnswer { invocation ->
+            val claim = invocation.getArgument<PushDeliveryClaim>(1)
+            PushTokenProviderSendResult(
+                outcome = PushTokenProviderLeaseOutcome.ACQUIRED,
+                providerResult = pushClient.sendToToken(
+                    token = requireNotNull(claim.providerToken),
+                    title = invocation.getArgument(2),
+                    body = invocation.getArgument(3),
+                    data = invocation.getArgument(4),
+                ),
+            )
+        }
     }
 
     @Test

@@ -13,6 +13,7 @@ import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.dao.CannotAcquireLockException
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.dao.TransientDataAccessException
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -22,8 +23,21 @@ import java.time.Instant
 class NotificationTokenService (
     private val notificationRepository: NotificationDeviceTokenRepository,
     private val writer: NotificationTokenWriter,
+    private val retirementService: NotificationTokenRetirementService,
+    @Value("\${notification.push-token.dispatch-lease-wait-millis:70000}")
+    private val dispatchLeaseWaitMillis: Long = 70_000,
+    @Value("\${notification.push-token.dispatch-lease-poll-millis:25}")
+    private val dispatchLeasePollMillis: Long = 25,
+    @Value("\${notification.push-token.provider-max-call-seconds:60}")
+    private val providerMaxCallSeconds: Long = 60,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    init {
+        require(dispatchLeaseWaitMillis > providerMaxCallSeconds * 1_000) {
+            "Push token ownership wait must outlive the bounded provider call."
+        }
+    }
 
     /**
      * FCM/APNs/Expo 등에서 받은 토큰 등록/갱신
@@ -46,7 +60,10 @@ class NotificationTokenService (
         val normalizedDeviceId = deviceId?.takeIf { it.isNotEmpty() }
         val tokenFingerprint = OpaquePushIdentifier.fingerprint(token)
         val deviceFingerprint = normalizedDeviceId?.let(OpaquePushIdentifier::fingerprint)
-        repeat(3) { attempt ->
+        var concurrencyAttempt = 0
+        val leaseWaitDeadline =
+            System.nanoTime() + dispatchLeaseWaitMillis.coerceAtLeast(0) * 1_000_000
+        while (true) {
             try {
                 val result = writer.register(
                     memberId = memberId,
@@ -66,21 +83,36 @@ class NotificationTokenService (
                     result.result,
                 )
                 return
+            } catch (ex: PushTokenDispatchLeaseActiveException) {
+                if (System.nanoTime() >= leaseWaitDeadline) {
+                    throw ConcurrencyFailureException(
+                        "Push token ownership transfer timed out waiting for active dispatch.",
+                    )
+                }
+                try {
+                    Thread.sleep(dispatchLeasePollMillis.coerceIn(1, 250))
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw ConcurrencyFailureException(
+                        "Push token ownership transfer was interrupted.",
+                    )
+                }
             } catch (ex: RuntimeException) {
                 if (!ex.isExpectedTokenFingerprintCollision() &&
                     ex !is TransientDataAccessException
                 ) {
                     throw ex
                 }
+                concurrencyAttempt += 1
                 // 빈 key-range에 대한 동시 insert는 fingerprint unique에서 한 caller가 진다.
                 // deadlock/lock-timeout도 실패 transaction을 버린 뒤 fresh REQUIRES_NEW에서
                 // canonical row를 다시 잠근다. raw token/device는 오류에 포함하지 않는다.
                 log.warn(
                     "Push token registration concurrency retry. attempt={}, failureType={}",
-                    attempt + 1,
+                    concurrencyAttempt,
                     ex.javaClass.simpleName,
                 )
-                if (attempt == 2) {
+                if (concurrencyAttempt >= 3) {
                     throw ConcurrencyFailureException(
                         "Push token registration did not converge after bounded retries.",
                     )
@@ -94,7 +126,7 @@ class NotificationTokenService (
      */
     @Transactional
     fun removeToken(memberId: Long, deviceId: String) {
-        notificationRepository.deleteByMemberIdAndDeviceFingerprint(
+        retirementService.retireByDeviceFingerprint(
             memberId,
             OpaquePushIdentifier.fingerprint(deviceId),
         )
@@ -105,12 +137,12 @@ class NotificationTokenService (
      */
     @Transactional
     fun removeAllTokensByMember(memberId: Long) {
-        notificationRepository.deleteAllByMemberId(memberId)
+        retirementService.retireAllByMember(memberId)
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun removeTokenValue(memberId: Long, token: String) {
-        notificationRepository.deleteByMemberIdAndTokenFingerprint(
+        retirementService.retireByTokenFingerprint(
             memberId,
             OpaquePushIdentifier.fingerprint(token),
         )
@@ -126,19 +158,19 @@ class NotificationTokenService (
         tokenFingerprint: String,
         ownershipVersion: Long,
     ): Boolean =
-        notificationRepository.deleteByOwnershipSnapshot(
-            id = tokenId,
+        retirementService.retireByOwnership(
             memberId = memberId,
+            tokenId = tokenId,
             tokenFingerprint = tokenFingerprint,
             ownershipVersion = ownershipVersion,
-        ) == 1
+        )
 
     /**
      * 해당 회원의 모든 기기 토큰 조회
      */
     @Transactional(readOnly = true)
     fun getTokensByMember(memberId: Long): List<NotificationDeviceToken> {
-        return notificationRepository.findAllByMemberId(memberId)
+        return notificationRepository.findAllByMemberIdAndRetirementRequestedFalse(memberId)
     }
 
     private fun logRegistration(
@@ -195,6 +227,7 @@ class NotificationTokenWriter(
     private val notificationRepository: NotificationDeviceTokenRepository,
     private val memberRepository: MemberRepository,
     private val registrationObserver: NotificationTokenRegistrationObserver? = null,
+    private val clock: java.time.Clock = java.time.Clock.systemUTC(),
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun register(
@@ -256,10 +289,22 @@ class NotificationTokenWriter(
                 "Push token ownership changed during registration fencing.",
             )
         }
-        val tokenMatches = candidates.filter { it.tokenFingerprint == tokenFingerprint }
+        val now = Instant.now(clock)
+        val expiredRetired = candidates.filter {
+            it.retirementRequested && !it.hasActiveDispatchLease(now)
+        }
+        if (expiredRetired.isNotEmpty()) {
+            notificationRepository.deleteAll(expiredRetired)
+            notificationRepository.flush()
+        }
+        val liveCandidates = candidates.filterNot { it in expiredRetired }
+        if (liveCandidates.any { it.hasActiveDispatchLease(now) }) {
+            throw PushTokenDispatchLeaseActiveException()
+        }
+        val tokenMatches = liveCandidates.filter { it.tokenFingerprint == tokenFingerprint }
         val deviceMatches = deviceFingerprint
             ?.let { fingerprint ->
-                candidates.filter { it.deviceFingerprint == fingerprint }
+                liveCandidates.filter { it.deviceFingerprint == fingerprint }
             }
             .orEmpty()
         val preferred = if (deviceFingerprint != null) {
@@ -305,6 +350,9 @@ class NotificationTokenWriter(
         return NotificationTokenRegistrationResult(duplicates.size, "created")
     }
 }
+
+class PushTokenDispatchLeaseActiveException :
+    TransientDataAccessException("Push token ownership is leased by an active provider dispatch.")
 
 /**
  * 보안 필터 통과 후 DB write가 지연되는 경합을 결정적으로 검증하기 위한 관찰 지점.

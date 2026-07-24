@@ -20,6 +20,7 @@ class PushSendHistoryService(
     private val memberRepository: MemberRepository,
     private val objectMapper: ObjectMapper,
     private val clock: Clock,
+    private val recipientAuthorizationValidator: PushRecipientAuthorizationValidator? = null,
 ) {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -98,6 +99,16 @@ class PushSendHistoryService(
         // member is the first lock in both notification writers and withdrawal. A provider result
         // that returns after account cleanup therefore cannot recreate private history payloads.
         memberRepository.findActiveNotificationRecipientForUpdate(memberId) ?: return null
+        if (
+            recipientAuthorizationValidator?.canDispatch(
+                memberId = memberId,
+                scheduleId = data["scheduleId"]?.toLongOrNull(),
+                categoryId = data["categoryId"]?.toLongOrNull(),
+                payloadType = data["type"],
+            ) == false
+        ) {
+            return null
+        }
         val history = PushSendHistory(
             memberId = memberId,
             deviceTokenId = token?.id,

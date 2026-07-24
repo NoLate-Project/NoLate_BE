@@ -18,6 +18,24 @@ interface ScheduleRouteSetupReminderCandidate {
 interface ScheduleRouteSetupReminderRepository : JpaRepository<ScheduleRouteSetupReminder, Long> {
 
     fun deleteAllByMemberId(memberId: Long)
+    fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
+
+    fun findAllByScheduleIdInAndMemberIdIn(
+        scheduleIds: Collection<Long>,
+        memberIds: Collection<Long>,
+    ): List<ScheduleRouteSetupReminder>
+
+    @Query(
+        """
+        select distinct reminder.memberId
+        from ScheduleRouteSetupReminder reminder
+        where reminder.scheduleId in :scheduleIds
+        order by reminder.memberId
+        """
+    )
+    fun findDistinctMemberIdsByScheduleIdIn(
+        @Param("scheduleIds") scheduleIds: Collection<Long>,
+    ): List<Long>
 
     fun findByScheduleIdAndMemberIdAndScheduleFingerprint(
         scheduleId: Long,

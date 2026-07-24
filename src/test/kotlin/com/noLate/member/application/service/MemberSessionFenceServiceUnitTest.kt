@@ -6,7 +6,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
-import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
+import com.noLate.notification.application.service.NotificationTokenRetirementService
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -23,12 +23,12 @@ import org.mockito.kotlin.whenever
 class MemberSessionFenceServiceUnitTest {
     private val memberRepository = mock<MemberRepository>()
     private val refreshTokenService = mock<RefreshTokenService>()
-    private val deviceTokenRepository = mock<NotificationDeviceTokenRepository>()
+    private val tokenRetirementService = mock<NotificationTokenRetirementService>()
     private val revokedAt = Instant.parse("2026-07-24T08:00:00Z")
     private val service = MemberSessionFenceService(
         memberRepository = memberRepository,
         refreshTokenService = refreshTokenService,
-        deviceTokenRepository = deviceTokenRepository,
+        tokenRetirementService = tokenRetirementService,
         clock = Clock.fixed(revokedAt, ZoneOffset.UTC),
     )
 
@@ -81,7 +81,7 @@ class MemberSessionFenceServiceUnitTest {
         assertEquals(SessionLogoutResult.ALREADY_REVOKED, result)
         assertEquals(2L, member.sessionGeneration)
         assertNull(member.tokensValidAfter)
-        verifyNoInteractions(refreshTokenService, deviceTokenRepository)
+        verifyNoInteractions(refreshTokenService, tokenRetirementService)
     }
 
     @Test
@@ -105,7 +105,7 @@ class MemberSessionFenceServiceUnitTest {
         assertEquals(2L, member.sessionGeneration)
         assertEquals(revokedAt, member.tokensValidAfter)
         verify(refreshTokenService).deleteAllByMemberId(41L)
-        verify(deviceTokenRepository).deleteAllByMemberId(41L)
+        verify(tokenRetirementService).retireAllByMember(41L)
     }
 
     @Test
@@ -129,7 +129,7 @@ class MemberSessionFenceServiceUnitTest {
         assertEquals(1L, member.sessionGeneration)
         assertNull(member.tokensValidAfter)
         verify(refreshTokenService, never()).deleteAllByMemberId(41L)
-        verifyNoInteractions(deviceTokenRepository)
+        verifyNoInteractions(tokenRetirementService)
     }
 
     @Test
@@ -145,7 +145,7 @@ class MemberSessionFenceServiceUnitTest {
         assertEquals(3L, member.sessionGeneration)
         assertEquals(revokedAt, member.tokensValidAfter)
         verify(refreshTokenService).deleteAllByMemberId(41L)
-        verifyNoInteractions(deviceTokenRepository)
+        verifyNoInteractions(tokenRetirementService)
     }
 
     @Test
@@ -163,7 +163,7 @@ class MemberSessionFenceServiceUnitTest {
         assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
         assertEquals(3L, member.sessionGeneration)
         assertNull(member.tokensValidAfter)
-        verifyNoInteractions(refreshTokenService, deviceTokenRepository)
+        verifyNoInteractions(refreshTokenService, tokenRetirementService)
     }
 
     private fun member(sessionGeneration: Long): Member =

@@ -6,6 +6,9 @@ import com.noLate.notification.support.ensureActivePushMember
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleNotificationInputFingerprint
 import com.noLate.schedule.domain.SchedulePushJob
+import com.noLate.schedule.domain.ScheduleShare
+import com.noLate.schedule.domain.ScheduleShareContentMode
+import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlan
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
@@ -13,6 +16,7 @@ import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
 import com.noLate.schedule.domain.ScheduleTravelPlanStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -38,6 +42,7 @@ import java.time.ZoneOffset
     SchedulePushJobBackfillPairWriter::class,
     SchedulePushJobBackfill::class,
     SchedulePushJobService::class,
+    ScheduleAccessPolicy::class,
     SchedulePushJobBackfillTestConfig::class,
 )
 @TestPropertySource(
@@ -52,6 +57,7 @@ import java.time.ZoneOffset
 class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
     private val scheduleRepository: ScheduleRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
+    private val scheduleShareRepository: ScheduleShareRepository,
     private val pushJobRepository: SchedulePushJobRepository,
     private val jdbcTemplate: JdbcTemplate,
     private val backfill: SchedulePushJobBackfill,
@@ -63,7 +69,7 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
 
     @Test
     fun `legacy drain rebuilds exact owner and current participant pairs with runtime fingerprints`() {
-        listOf(1L, 2L, 3L, 4L, 5L, 6L, 10L, 11L, 20L, 21L).forEach {
+        listOf(1L, 2L, 3L, 4L, 5L, 6L, 7L, 10L, 11L, 20L, 21L).forEach {
             ensureActivePushMember(jdbcTemplate, it)
         }
         val schedule = schedule(
@@ -98,6 +104,7 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
         val deletedParticipant = plan(schedule, memberId = 6L).apply {
             softDelete()
         }
+        val revokedParticipant = plan(schedule, memberId = 7L)
         travelPlanRepository.saveAll(
             listOf(
                 currentParticipant,
@@ -105,9 +112,28 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
                 existingParticipant,
                 disabledParticipant,
                 deletedParticipant,
+                revokedParticipant,
                 plan(pastSchedule, memberId = 11L),
                 plan(deletedSchedule, memberId = 21L),
             ),
+        )
+        scheduleShareRepository.saveAllAndFlush(
+            listOf(
+                ScheduleShare(
+                    scheduleId = scheduleId,
+                    ownerMemberId = 1L,
+                    targetMemberId = 2L,
+                    permission = ScheduleSharePermission.VIEWER,
+                    contentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+                ),
+                ScheduleShare(
+                    scheduleId = scheduleId,
+                    ownerMemberId = 1L,
+                    targetMemberId = 7L,
+                    permission = ScheduleSharePermission.VIEWER,
+                    contentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+                ).apply { revoke() },
+            )
         )
         pushJobRepository.saveAndFlush(existingJob(scheduleId, memberId = 4L))
 
@@ -120,6 +146,7 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
         assertFalse(jobs.containsKey(3L), "stale personal plans must not be rebuilt")
         assertFalse(jobs.containsKey(5L), "disabled personal plans must not be rebuilt")
         assertFalse(jobs.containsKey(6L), "deleted personal plans must not be rebuilt")
+        assertFalse(jobs.containsKey(7L), "revoked participant access must not be rebuilt")
         assertEquals(
             emptyList<SchedulePushJob>(),
             pushJobRepository.findAllByScheduleId(requireNotNull(pastSchedule.id)),

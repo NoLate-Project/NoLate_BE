@@ -1,5 +1,8 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
+import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePushJob
@@ -84,16 +87,26 @@ class SchedulePushJobService private constructor(
     fun lockForScheduleEdit(
         scheduleId: Long,
         requiredMemberIds: Collection<Long>,
+        actorMemberId: Long,
+        presentedSessionGeneration: Long,
     ): ScheduleEditMemberFence {
         val memberIds = (
             requiredMemberIds +
+                actorMemberId +
                 schedulePushJobRepository.findMemberIdsByScheduleId(scheduleId)
             )
             .distinct()
             .sorted()
-        if (memberIds.isNotEmpty()) {
-            memberRepository?.findAllByIdsForUpdate(memberIds)
-        }
+        val lockedMembers =
+            if (memberIds.isNotEmpty()) {
+                memberRepository?.findAllByIdsForUpdate(memberIds).orEmpty()
+            } else {
+                emptyList()
+            }
+        requireCurrentActorSession(
+            lockedMembers.firstOrNull { it.id == actorMemberId },
+            presentedSessionGeneration,
+        )
         schedulePushJobRepository.findAllByScheduleIdOrderByIdAsc(scheduleId)
         val fence = ScheduleEditMemberFence(memberIds.toSet())
         fence.requireContains(schedulePushJobRepository.findMemberIdsByScheduleId(scheduleId))
@@ -101,9 +114,34 @@ class SchedulePushJobService private constructor(
     }
 
     @Transactional
-    fun lockForTravelPlanEdit(scheduleId: Long, memberId: Long) {
-        memberRepository?.findByIdForUpdate(memberId)
+    fun lockForTravelPlanEdit(
+        scheduleId: Long,
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        requireCurrentActorSession(
+            memberRepository?.findByIdForUpdate(memberId),
+            presentedSessionGeneration,
+        )
         schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
+    }
+
+    private fun requireCurrentActorSession(
+        member: Member?,
+        presentedSessionGeneration: Long,
+    ) {
+        // Runtime wiring always supplies MemberRepository. The nullable branch exists only for
+        // legacy backfill fixture construction and must not authorize an authenticated mutation.
+        if (
+            member == null ||
+            member.deleted ||
+            member.sessionGeneration != presentedSessionGeneration
+        ) {
+            throw BusinessException(
+                ErrorCode.INVALID_TOKEN,
+                "종료된 로그인 세션입니다.",
+            )
+        }
     }
 
 

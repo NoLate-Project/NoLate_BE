@@ -193,7 +193,13 @@ ALTER TABLE push_device_token
         CHARACTER SET ascii COLLATE ascii_bin NULL AFTER token,
     ADD COLUMN device_fingerprint VARCHAR(64)
         CHARACTER SET ascii COLLATE ascii_bin NULL AFTER token_fingerprint,
-    ADD COLUMN ownership_version BIGINT NOT NULL DEFAULT 0 AFTER device_fingerprint;
+    ADD COLUMN ownership_version BIGINT NOT NULL DEFAULT 0 AFTER device_fingerprint,
+    ADD COLUMN dispatch_lease_id VARCHAR(64)
+        CHARACTER SET ascii COLLATE ascii_bin NULL AFTER ownership_version,
+    ADD COLUMN dispatch_lease_until DATETIME(6) NULL AFTER dispatch_lease_id,
+    ADD COLUMN retirement_requested BOOLEAN NOT NULL DEFAULT FALSE
+        AFTER dispatch_lease_until,
+    ADD INDEX idx_push_device_token_dispatch_lease (dispatch_lease_until, id);
 
 UPDATE push_device_token
 SET token_fingerprint = LOWER(SHA2(CAST(token AS BINARY), 256)),
@@ -463,6 +469,27 @@ BEGIN
                 'push linearization verification failed: global fingerprint indexes';
     END IF;
 
+    IF (
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = 'push_device_token'
+          AND column_name IN (
+              'dispatch_lease_id',
+              'dispatch_lease_until',
+              'retirement_requested'
+          )
+    ) <> 3 OR EXISTS (
+        SELECT 1
+        FROM push_device_token
+        WHERE (dispatch_lease_id IS NULL) <> (dispatch_lease_until IS NULL)
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'push linearization verification failed: token dispatch lease schema/state';
+    END IF;
+
     IF SHA2(CAST('AbC' AS BINARY), 256) = SHA2(CAST('aBc' AS BINARY), 256) THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
@@ -495,7 +522,7 @@ CREATE TABLE IF NOT EXISTS application_schema_migrations (
 INSERT INTO application_schema_migrations(version, description, applied_at)
 VALUES (
     '2026-07-24-push-reliability-v4',
-    'Frozen push manifests, durable outbox, global installation ownership, session generation',
+    'Frozen push manifests, durable outbox, provider token lease, global ownership, session generation',
     CURRENT_TIMESTAMP(6)
 );
 
@@ -544,6 +571,19 @@ FROM (
         CASE WHEN column_name IN ('token', 'device_id') THEN 1 ELSE 0 END
     ) > 0
 ) raw_unique_indexes;
+
+SELECT COUNT(*) AS inconsistent_push_token_dispatch_leases
+FROM push_device_token
+WHERE (dispatch_lease_id IS NULL) <> (dispatch_lease_until IS NULL);
+
+SELECT COUNT(*) AS expired_retired_push_tokens_pending_reap
+FROM push_device_token
+WHERE retirement_requested = TRUE
+  AND (
+    dispatch_lease_id IS NULL
+    OR dispatch_lease_until IS NULL
+    OR dispatch_lease_until <= CURRENT_TIMESTAMP(6)
+  );
 
 SELECT (
     SHA2(CAST('AbC' AS BINARY), 256) <>

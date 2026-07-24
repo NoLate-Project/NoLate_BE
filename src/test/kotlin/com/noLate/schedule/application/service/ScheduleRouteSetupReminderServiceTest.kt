@@ -14,6 +14,7 @@ import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderCandidate
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
@@ -21,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -38,9 +40,31 @@ class ScheduleRouteSetupReminderServiceTest {
     @Mock lateinit var accessPolicy: ScheduleAccessPolicy
     @Mock lateinit var dispatchWriter: ScheduleRouteSetupReminderDispatchWriter
     @Mock lateinit var pushEventOutboxService: PushEventOutboxService
+    @Mock lateinit var insertValidator: ScheduleRouteSetupReminderInsertValidator
 
     private val reminderPolicy = RouteSetupReminderPolicy()
     private val now = Instant.parse("2026-07-23T00:00:00Z")
+
+    @Test
+    fun `cleanup first prevents a delayed scanner from recreating a pending marker`() {
+        val marker = ScheduleRouteSetupReminder(
+            scheduleId = 10L,
+            memberId = 2L,
+            scheduleFingerprint = "f".repeat(64),
+            nextAttemptAt = now,
+        )
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(activeMember(2L))
+        whenever(insertValidator.canInsert(marker)).thenReturn(false)
+        val writer = ScheduleRouteSetupReminderWriter(
+            repository = reminderRepository,
+            memberRepository = memberRepository,
+            insertValidator = insertValidator,
+        )
+
+        assertNull(writer.insert(marker))
+
+        verify(reminderRepository, never()).saveAndFlush(any())
+    }
 
     @Test
     fun `dispatch bounds work and delegates one short transaction per marker`() {

@@ -9,11 +9,15 @@ import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationWriter
 import com.noLate.notification.application.service.NotificationTokenService
+import com.noLate.notification.application.service.NotificationTokenRetirementService
 import com.noLate.notification.application.service.NotificationTokenWriter
 import com.noLate.notification.application.service.PushDeliveryService
 import com.noLate.notification.application.service.PushDeliveryWriter
 import com.noLate.notification.application.service.PushEventOutboxService
 import com.noLate.notification.application.service.PushEventOutboxWriter
+import com.noLate.notification.application.service.PushTokenProviderLeaseObserver
+import com.noLate.notification.application.service.PushTokenProviderLeaseService
+import com.noLate.notification.application.service.PushTokenProviderLeaseWriter
 import com.noLate.notification.application.service.deliveryDeviceKey
 import com.noLate.notification.application.service.PushSendHistoryService
 import com.noLate.notification.domain.NotificationDeviceToken
@@ -53,11 +57,18 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import org.springframework.transaction.support.TransactionSynchronizationManager
 
 @DataJpaTest
 @Import(
     NotificationTokenService::class,
+    NotificationTokenRetirementService::class,
     NotificationTokenWriter::class,
     PushSendHistoryService::class,
     AppNotificationService::class,
@@ -66,6 +77,8 @@ import java.util.concurrent.atomic.AtomicInteger
     PushDeliveryWriter::class,
     PushEventOutboxService::class,
     PushEventOutboxWriter::class,
+    PushTokenProviderLeaseService::class,
+    PushTokenProviderLeaseWriter::class,
     NotificationUseCase::class,
     PushDeliveryReliabilityTestConfig::class,
 )
@@ -75,6 +88,7 @@ import java.util.concurrent.atomic.AtomicInteger
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "notification.push-token.dispatch-lease-poll-millis=200",
     ]
 )
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -86,6 +100,7 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     private val inboxRepository: AppNotificationRepository,
     private val historyRepository: PushSendHistoryRepository,
     private val pushClient: RecordingReliabilityPushClient,
+    private val providerLeaseObserver: BlockingPushTokenProviderLeaseObserver,
     private val transactionManager: PlatformTransactionManager,
     private val appNotificationService: AppNotificationService,
     private val pushDeliveryService: PushDeliveryService,
@@ -97,6 +112,7 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
 
     @BeforeEach
     fun resetProvider() {
+        providerLeaseObserver.release()
         pushClient.reset()
         deliveryRepository.deleteAll()
         historyRepository.deleteAll()
@@ -407,6 +423,135 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `delivery claim 뒤 ownership transfer가 먼저 commit되면 provider를 호출하지 않고 terminal 처리한다`() {
+        val previousOwner = 521L
+        val currentOwner = 522L
+        val deviceId = "claim-transfer-first-device"
+        val previousToken = "claim-transfer-first-old-token"
+        val currentToken = "claim-transfer-first-new-token"
+        register(previousOwner, deviceId, previousToken)
+        val gate = providerLeaseObserver.arm()
+        val executor = Executors.newSingleThreadExecutor()
+        val sendFuture = executor.submit<NotificationSendResult> {
+            send(previousOwner, "claim-transfer-first-event")
+        }
+
+        try {
+            assertTrue(gate.beforeLease.await(10, TimeUnit.SECONDS))
+            register(currentOwner, deviceId, currentToken)
+            gate.allowLease.countDown()
+            val result = sendFuture.get(10, TimeUnit.SECONDS)
+
+            assertEquals(0, result.attemptedCount)
+            assertEquals(1, result.supersededCount)
+            assertEquals(0, pushClient.attempts(previousToken))
+            assertEquals(0, pushClient.attempts(currentToken))
+            assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(previousOwner).single().status)
+            val owner = tokenRepository.findAll().single()
+            assertEquals(currentOwner, owner.memberId)
+            assertEquals(currentToken, owner.token)
+        } finally {
+            gate.allowLease.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `provider lease가 먼저면 ownership transfer는 provider call 종료까지 기다린다`() {
+        val previousOwner = 523L
+        val currentOwner = 524L
+        val deviceId = "provider-first-device"
+        val previousToken = "provider-first-old-token"
+        val currentToken = "provider-first-new-token"
+        register(previousOwner, deviceId, previousToken)
+        val providerGate = pushClient.block(previousToken)
+        val executor = Executors.newFixedThreadPool(2)
+        val sendFuture = executor.submit<NotificationSendResult> {
+            send(previousOwner, "provider-first-event")
+        }
+
+        try {
+            assertTrue(providerGate.entered.await(10, TimeUnit.SECONDS))
+            val transferFuture = executor.submit {
+                register(currentOwner, deviceId, currentToken)
+            }
+            assertThrows(TimeoutException::class.java) {
+                transferFuture.get(300, TimeUnit.MILLISECONDS)
+            }
+
+            providerGate.release.countDown()
+            val result = sendFuture.get(10, TimeUnit.SECONDS)
+            transferFuture.get(10, TimeUnit.SECONDS)
+
+            assertEquals(1, result.sentCount)
+            assertEquals(1, pushClient.attempts(previousToken))
+            assertEquals(PushDeliveryStatus.SUCCESS, deliveries(previousOwner).single().status)
+            val owner = tokenRepository.findAll().single()
+            assertEquals(currentOwner, owner.memberId)
+            assertEquals(currentToken, owner.token)
+        } finally {
+            providerGate.release.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `provider lease 중 logout delete는 retirement로 남고 새 owner는 호출 종료 뒤 등록한다`() {
+        val previousOwner = 525L
+        val currentOwner = 526L
+        val deviceId = "provider-delete-fence-device"
+        val previousToken = "provider-delete-fence-old-token"
+        val currentToken = "provider-delete-fence-new-token"
+        register(previousOwner, deviceId, previousToken)
+        val providerGate = pushClient.block(previousToken)
+        val executor = Executors.newFixedThreadPool(2)
+        val sendFuture = executor.submit<NotificationSendResult> {
+            send(previousOwner, "provider-delete-fence-event")
+        }
+
+        try {
+            assertTrue(providerGate.entered.await(10, TimeUnit.SECONDS))
+
+            // logout/account cleanup의 device-token 단계와 같은 retirement 경계다. 활성
+            // provider lease의 row identity를 유지해야 다른 account가 선점할 수 없다.
+            tokenService.removeAllTokensByMember(previousOwner)
+            val retired = tokenRepository.findAllByMemberId(previousOwner).single()
+            assertTrue(retired.retirementRequested)
+            assertTrue(retired.dispatchLeaseId != null)
+
+            // retirement된 token은 새 event manifest에는 들어가지 않는다.
+            val postLogout = send(previousOwner, "provider-delete-fence-new-event")
+            assertEquals(1, postLogout.noDeviceEventCount)
+            assertEquals(0, postLogout.requestedCount)
+
+            val transferFuture = executor.submit {
+                register(currentOwner, deviceId, currentToken)
+            }
+            assertThrows(TimeoutException::class.java) {
+                transferFuture.get(300, TimeUnit.MILLISECONDS)
+            }
+
+            providerGate.release.countDown()
+            val result = sendFuture.get(10, TimeUnit.SECONDS)
+            transferFuture.get(10, TimeUnit.SECONDS)
+
+            assertEquals(1, result.sentCount)
+            assertEquals(1, pushClient.attempts(previousToken))
+            assertEquals(0, pushClient.attempts(currentToken))
+            assertTrue(tokenRepository.findAllByMemberId(previousOwner).isEmpty())
+            val current = tokenRepository.findAllByMemberId(currentOwner).single()
+            assertEquals(currentToken, current.token)
+            assertFalse(current.retirementRequested)
+        } finally {
+            providerGate.release.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
     fun `같은 installation이 A에서 B로 이전되면 A delivery는 없고 B에게만 보낸다`() {
         val previousOwner = 519L
         val currentOwner = 520L
@@ -434,14 +579,27 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         val newOwner = 514L
         val rawToken = "invalid-race-token"
         register(oldOwner, "old-device", rawToken)
-        pushClient.invalidateWithCallback(rawToken) {
+        pushClient.invalidate(rawToken)
+        val providerGate = pushClient.block(rawToken)
+        val executor = Executors.newFixedThreadPool(2)
+        val sendFuture = executor.submit<NotificationSendResult> {
+            send(oldOwner, "invalid-race-event")
+        }
+        assertTrue(providerGate.entered.await(10, TimeUnit.SECONDS))
+        val transferFuture = executor.submit {
             register(newOwner, "new-device", rawToken)
         }
-
-        val result = send(oldOwner, "invalid-race-event")
+        assertThrows(TimeoutException::class.java) {
+            transferFuture.get(300, TimeUnit.MILLISECONDS)
+        }
+        providerGate.release.countDown()
+        val result = sendFuture.get(10, TimeUnit.SECONDS)
+        transferFuture.get(10, TimeUnit.SECONDS)
+        executor.shutdownNow()
+        assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
 
         assertEquals(1, result.failedCount)
-        assertEquals(0, result.removedTokenCount)
+        assertEquals(1, result.removedTokenCount)
         val current = tokenRepository.findAll().single()
         assertEquals(newOwner, current.memberId)
         assertEquals(rawToken, current.token)
@@ -658,6 +816,10 @@ class PushDeliveryReliabilityTestConfig {
     @Bean
     fun reliabilityPushClient(): RecordingReliabilityPushClient =
         RecordingReliabilityPushClient()
+
+    @Bean
+    fun blockingPushTokenProviderLeaseObserver(): BlockingPushTokenProviderLeaseObserver =
+        BlockingPushTokenProviderLeaseObserver()
 }
 
 class RecordingReliabilityPushClient : PushClient {
@@ -667,7 +829,7 @@ class RecordingReliabilityPushClient : PushClient {
     private val crashOnce = ConcurrentHashMap.newKeySet<String>()
     private val unknownOnce = ConcurrentHashMap.newKeySet<String>()
     private val invalid = ConcurrentHashMap.newKeySet<String>()
-    private val invalidCallbacks = ConcurrentHashMap<String, () -> Unit>()
+    private val blockingCalls = ConcurrentHashMap<String, ProviderCallGate>()
 
     fun reset() {
         attempts.clear()
@@ -676,7 +838,8 @@ class RecordingReliabilityPushClient : PushClient {
         crashOnce.clear()
         unknownOnce.clear()
         invalid.clear()
-        invalidCallbacks.clear()
+        blockingCalls.values.forEach { it.release.countDown() }
+        blockingCalls.clear()
     }
 
     fun failOnce(token: String) {
@@ -695,10 +858,8 @@ class RecordingReliabilityPushClient : PushClient {
         invalid += token
     }
 
-    fun invalidateWithCallback(token: String, callback: () -> Unit) {
-        invalid += token
-        invalidCallbacks[token] = callback
-    }
+    fun block(token: String): ProviderCallGate =
+        ProviderCallGate().also { gate -> blockingCalls[token] = gate }
 
     fun attempts(token: String): Int = attempts[token]?.get() ?: 0
 
@@ -711,12 +872,18 @@ class RecordingReliabilityPushClient : PushClient {
         body: String,
         data: Map<String, String>,
     ): PushSendResult {
+        check(!TransactionSynchronizationManager.isActualTransactionActive()) {
+            "Push provider I/O must run outside a database transaction."
+        }
         val attempt = attempts.computeIfAbsent(token) { AtomicInteger() }.incrementAndGet()
         recordedCalls.computeIfAbsent(token) {
             java.util.Collections.synchronizedList(mutableListOf())
         }.add(RecordedPushCall(title, body, LinkedHashMap(data)))
+        blockingCalls.remove(token)?.let { gate ->
+            gate.entered.countDown()
+            check(gate.release.await(10, TimeUnit.SECONDS))
+        }
         if (invalid.contains(token)) {
-            invalidCallbacks.remove(token)?.invoke()
             throw InvalidPushTokenException(token)
         }
         if (crashOnce.remove(token)) {
@@ -732,6 +899,33 @@ class RecordingReliabilityPushClient : PushClient {
         return PushSendResult("message-$attempt")
     }
 }
+
+class BlockingPushTokenProviderLeaseObserver : PushTokenProviderLeaseObserver {
+    private val armed = AtomicReference<ProviderLeaseGate?>()
+
+    fun arm(): ProviderLeaseGate =
+        ProviderLeaseGate().also { gate -> check(armed.compareAndSet(null, gate)) }
+
+    fun release() {
+        armed.getAndSet(null)?.allowLease?.countDown()
+    }
+
+    override fun beforeOwnershipLease(tokenId: Long) {
+        val gate = armed.getAndSet(null) ?: return
+        gate.beforeLease.countDown()
+        check(gate.allowLease.await(10, TimeUnit.SECONDS))
+    }
+}
+
+class ProviderLeaseGate(
+    val beforeLease: CountDownLatch = CountDownLatch(1),
+    val allowLease: CountDownLatch = CountDownLatch(1),
+)
+
+class ProviderCallGate(
+    val entered: CountDownLatch = CountDownLatch(1),
+    val release: CountDownLatch = CountDownLatch(1),
+)
 
 data class RecordedPushCall(
     val title: String,
