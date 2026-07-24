@@ -1,6 +1,6 @@
 # NoLate Project Roadmap
 
-Last verified: 2026-07-22 KST (Participant departure push and owner nudge)
+Last verified: 2026-07-24 KST (Push-driven share and notification badges)
 
 이 문서는 NoLate 문서의 상위 인덱스다. 세부 구현, 검증 절차, 테스트 목록은 분야별 문서에서 관리하고, 이 파일에는 현재 제품 상태와 우선순위만 둔다.
 
@@ -19,6 +19,8 @@ MVP 1차 완료 조건:
 
 병행 트랙인 일정 공유는 BE/FE 기능 연결과 시뮬레이터 시나리오 검증까지 완료했다. 운영 반영 전에는 DB migration, 권한별 쓰기 차단, 실기기 공유 push, 공개 handle/친구 검색을 순서대로 마무리한다.
 
+FE 메인 캘린더의 공유함·알림 배지는 2026-07-24부터 45초 polling 대신 push 수신 이벤트로 갱신한다. 화면 최초 진입과 앱 foreground 복귀 시 서버 동기화를 보완하고, 실제 APNs/FCM 수신 시 두 배지가 즉시 갱신되는지는 TestFlight에서 최종 검증한다.
+
 ## Area Index
 
 | Area | Source Of Truth | Status | Next Focus |
@@ -28,7 +30,7 @@ MVP 1차 완료 조건:
 | Push Scenario Runner | [`schedule/push-scenario-runner.md`](schedule/push-scenario-runner.md) | 수동 E2E 도구 완료 | 실제 일정 기반 Runner 결과 기록 |
 | Quick Schedule | [`schedule/quick-schedule-creation-roadmap.md`](schedule/quick-schedule-creation-roadmap.md) | 자연어 일정 생성 기반 완료, 확장 설계 진행 | 입력 채널 확장, OCR/share |
 | Schedule Sharing | [`schedule/schedule-sharing-roadmap.md`](schedule/schedule-sharing-roadmap.md) | 앱 ID/이메일·링크 공유, 통합 공유함, 참가자별 이동/출발 상태, 첫 출발 자동 push, 오너 지정 push 구현 | 운영 migration, 권한 집행, 실기기 push, handle/친구 검색 |
-| Notification / FCM / App Push | [`notification/notification-fcm-app-push-roadmap.md`](notification/notification-fcm-app-push-roadmap.md) | 기존 일정 알림과 공유 참가자 출발/지정 알림 payload, 상세 이동, 발송 이력 구현 | 실기기 수신·클릭·액션 검증 |
+| Notification / FCM / App Push | [`notification/notification-fcm-app-push-roadmap.md`](notification/notification-fcm-app-push-roadmap.md) | 기존 일정 알림과 공유 참가자 출발/지정 알림 payload, 상세 이동, 발송 이력, push 기반 공유함·알림 배지 갱신 구현 | 실기기 수신·클릭·액션과 무 polling 배지 갱신 검증 |
 | FE App / Route UX | [`frontend/fe-app-route-ux-roadmap.md`](frontend/fe-app-route-ux-roadmap.md) | 로그인, 일정, 경로, 알림 UX 기반 완료 | 실기기 UX 검증, 오류/빈 상태 정리 |
 | MVP Acceptance | [`quality/mvp-acceptance-checklist.md`](quality/mvp-acceptance-checklist.md) | 남은 BE/FE 검증 항목 정리 | 체크리스트 실행 결과 기록 |
 | Quality / Ops | [`quality/quality-ops-developer-tools-roadmap.md`](quality/quality-ops-developer-tools-roadmap.md) | BE/FE 테스트 일부, TestFlight 업로드 경로 확인 | CI, 환경변수, 관측성, 운영 배포 절차 |
@@ -58,6 +60,7 @@ MVP 1차 완료 조건:
 7. 실제 Tmap ETA 변화 시나리오 검증
 8. CI에 BE test, FE test, FE typecheck 추가
 9. 공유 참가자 첫 출발 자동 push와 오너 지정 출발 확인 push를 실기기 2대에서 수신·클릭 검증
+10. 포그라운드 push 직후 공유함·알림 배지가 갱신되고 유휴 상태에서 45초 반복 요청이 발생하지 않는지 TestFlight에서 확인
 
 ## Verification Commands
 
