@@ -121,6 +121,37 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var lastCheckedAt: Instant? = null
         protected set
 
+    @Column(name = "last_live_fetched_at")
+    @Comment("마지막 실시간 provider 응답 취득 시간")
+    var lastLiveFetchedAt: Instant? = null
+        protected set
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "last_eta_source", length = 30)
+    @Comment("마지막 ETA 출처")
+    var lastEtaSource: TrafficSource? = null
+        protected set
+
+    @Column(name = "last_eta_stale")
+    @Comment("마지막 ETA가 저장 fallback인지 여부")
+    var lastEtaStale: Boolean? = null
+        protected set
+
+    @Column(name = "last_eta_failure_reason", length = 500)
+    @Comment("마지막 ETA fallback 사유")
+    var lastEtaFailureReason: String? = null
+        protected set
+
+    @Column(name = "last_traffic_change_minutes")
+    @Comment("마지막으로 관찰한 ETA 변경량(분)")
+    var lastTrafficChangeMinutes: Int? = null
+        protected set
+
+    @Column(name = "last_changed_at")
+    @Comment("ETA가 마지막으로 변경된 확인 시각")
+    var lastChangedAt: Instant? = null
+        protected set
+
     @Column(name = "last_pushed_at")
     @Comment("마지막 푸시 발송 시간")
     var lastPushedAt: Instant? = null
@@ -239,11 +270,27 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         clearSnooze: Boolean = false,
         nextCheckAt: Instant?,
         completeAfterCheck: Boolean,
+        etaSource: TrafficSource = TrafficSource.SAVED_FALLBACK,
+        liveFetchedAt: Instant? = null,
+        etaStale: Boolean = true,
+        etaFailureReason: String? = null,
         now: Instant = Instant.now()
     ) {
+        lastTravelMinutes?.let { previousTravelMinutes ->
+            if (previousTravelMinutes != travelMinutes) {
+                lastTrafficChangeMinutes = travelMinutes - previousTravelMinutes
+                lastChangedAt = now
+            }
+        }
         lastTravelMinutes = travelMinutes
         lastRecommendedDepartureAt = recommendedDepartureAt
         lastCheckedAt = now
+        if (liveFetchedAt != null) {
+            lastLiveFetchedAt = liveFetchedAt
+        }
+        lastEtaSource = etaSource
+        lastEtaStale = etaStale
+        lastEtaFailureReason = etaFailureReason
         checkCount += 1
         retryCount = 0
         failureReason = null
@@ -310,6 +357,12 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.lastNotifiedDepartureAt = null
         this.lastReminderBoundaryAt = null
         this.lastCheckedAt = null
+        this.lastLiveFetchedAt = null
+        this.lastEtaSource = null
+        this.lastEtaStale = null
+        this.lastEtaFailureReason = null
+        this.lastTrafficChangeMinutes = null
+        this.lastChangedAt = null
         this.lastPushedAt = null
         this.departureNoticeSentAt = null
         this.lastDepartureReminderStage = null

@@ -2,7 +2,10 @@ package com.noLate.schedule.infrastructure
 
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.TrafficSource
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class FallbackTrafficClientTest {
@@ -18,7 +21,11 @@ class FallbackTrafficClientTest {
 
         val result = client.getTravelMinutes(request)
 
-        assertEquals(42, result)
+        assertEquals(42, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertTrue(result.stale)
+        assertNull(result.fetchedAt)
+        assertTrue(result.failureReason.orEmpty().contains("비활성화"))
     }
 
     @Test
@@ -30,7 +37,9 @@ class FallbackTrafficClientTest {
 
         val result = client.getTravelMinutes(request)
 
-        assertEquals(30, result)
+        assertEquals(30, result.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertTrue(result.stale)
     }
 
     private fun trafficRequest(

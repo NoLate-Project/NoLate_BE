@@ -5,6 +5,7 @@ import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficRequest
+import com.noLate.schedule.application.TrafficResult
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
 import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
@@ -15,6 +16,7 @@ import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlan
 import com.noLate.schedule.domain.ScheduleTravelPlanUpsertCommand
+import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
@@ -129,7 +131,7 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
         assertEquals(1, worker().runDueJobs(testNow))
 
         verify(trafficClient, times(1)).getTravelMinutes(check<TrafficRequest> {
@@ -230,7 +232,7 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(currentTravelMinutes))
         worker().runDueJobs(testNow)
 
         verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
@@ -279,7 +281,7 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(currentTravelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
@@ -325,7 +327,7 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
@@ -391,7 +393,7 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
@@ -453,7 +455,7 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(currentTravelMinutes)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(currentTravelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
@@ -498,7 +500,7 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
@@ -774,7 +776,10 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(firstJob, secondJob))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(firstSchedule)
         whenever(scheduleRepository.findScheduleDetail(20L, 2L)).thenReturn(secondSchedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(45, 50)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            liveTrafficResult(45),
+            liveTrafficResult(50),
+        )
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
@@ -852,7 +857,9 @@ class SchedulePushJobWorkerTest {
 
     @Test
     fun `사용자가 선택한 경로의 ETA 스냅샷을 실시간 교통 조회 fallback으로 넘긴다`() {
-        val schedule = schedule(routeJson = """{"id":"selected-route","minutes":42,"source":"api"}""")
+        val schedule = schedule(
+            routeJson = """{"id":"selected-route","minutes":42,"source":"api","providerRouteOption":"2"}"""
+        )
         val job = SchedulePushJob.create(
             memberId = 1L,
             scheduleId = 10L,
@@ -869,13 +876,14 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(42)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(42))
 
         worker().runDueJobs(testNow)
 
         verify(trafficClient).getTravelMinutes(check<TrafficRequest> {
             assertEquals(30, it.fallbackTravelMinutes)
             assertEquals(42, it.selectedRouteTravelMinutes)
+            assertEquals("2", it.selectedRouteOption)
             assertTrue(it.selectedRouteJson.orEmpty().contains("selected-route"))
         })
     }
@@ -921,7 +929,7 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job))
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(travelMinutes)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
     }
 
     private fun markDepartNowSent(
@@ -943,6 +951,13 @@ class SchedulePushJobWorkerTest {
             now = sentAt,
         )
     }
+
+    private fun liveTrafficResult(travelMinutes: Int) = TrafficResult(
+        travelMinutes = travelMinutes,
+        source = TrafficSource.LIVE_PROVIDER,
+        fetchedAt = testNow,
+        stale = false,
+    )
 
     private fun schedule(
         startAt: Instant = defaultScheduleStartAt,
