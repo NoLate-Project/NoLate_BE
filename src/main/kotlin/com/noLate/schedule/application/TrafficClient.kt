@@ -69,11 +69,42 @@ object TrafficFailureReasons {
         "PROVIDER_UNAVAILABLE: 실시간 ETA 공급자에 연결할 수 없습니다."
     const val SELECTED_ROUTE_OPTION_MISSING =
         "SELECTED_ROUTE_OPTION_MISSING: 선택 경로 옵션이 없어 같은 경로를 실시간으로 다시 조회할 수 없습니다."
-    const val SELECTED_TRANSIT_ROUTE_NOT_REFRESHABLE =
-        "SELECTED_TRANSIT_ROUTE_NOT_REFRESHABLE: 선택한 대중교통 여정은 동일 경로로 다시 조회할 수 없습니다."
+    const val TRANSIT_ITINERARY_REFRESH_UNSUPPORTED =
+        "TRANSIT_ITINERARY_REFRESH_UNSUPPORTED: 대중교통 여정은 동일 itinerary로 다시 조회할 수 없습니다."
+    const val UNSUPPORTED_TRAVEL_MODE =
+        "UNSUPPORTED_TRAVEL_MODE: 선택한 이동 수단은 실시간 ETA 조회를 지원하지 않습니다."
+    const val ROUTE_STALE =
+        "ROUTE_STALE: 저장된 경로가 변경 전 일정 시각 또는 목적지를 기준으로 합니다."
+    const val ETA_FALLBACK =
+        "ETA_FALLBACK: 실시간 ETA를 사용할 수 없어 저장된 ETA를 사용합니다."
 
     fun unsupportedMode(mode: ScheduleTravelMode): String =
         "UNSUPPORTED_TRAVEL_MODE: ${mode.name} 이동 수단은 실시간 ETA 조회를 지원하지 않습니다."
+}
+
+/**
+ * DB와 공개 상태 API에는 provider 예외 원문 대신 안정된 reason code만 남긴다.
+ */
+fun sanitizeTrafficFailureReason(reason: String?): String? {
+    if (reason == null) return null
+    val code = reason
+        .substringBefore(':')
+        .trim()
+        .takeIf { it.matches(Regex("[A-Z][A-Z0-9_]{1,63}")) }
+        ?: return TrafficFailureReasons.ETA_FALLBACK
+    return when (code) {
+        "PROVIDER_DISABLED" -> TrafficFailureReasons.PROVIDER_DISABLED
+        "PROVIDER_TIMEOUT" -> TrafficFailureReasons.PROVIDER_TIMEOUT
+        "PROVIDER_HTTP_ERROR" -> TrafficFailureReasons.PROVIDER_HTTP_ERROR
+        "PROVIDER_INVALID_RESPONSE" -> TrafficFailureReasons.PROVIDER_INVALID_RESPONSE
+        "PROVIDER_UNAVAILABLE" -> TrafficFailureReasons.PROVIDER_UNAVAILABLE
+        "SELECTED_ROUTE_OPTION_MISSING" -> TrafficFailureReasons.SELECTED_ROUTE_OPTION_MISSING
+        "TRANSIT_ITINERARY_REFRESH_UNSUPPORTED" ->
+            TrafficFailureReasons.TRANSIT_ITINERARY_REFRESH_UNSUPPORTED
+        "UNSUPPORTED_TRAVEL_MODE" -> TrafficFailureReasons.UNSUPPORTED_TRAVEL_MODE
+        "ROUTE_STALE" -> TrafficFailureReasons.ROUTE_STALE
+        else -> TrafficFailureReasons.ETA_FALLBACK
+    }
 }
 
 fun TrafficRequest.fallbackResult(reason: String): TrafficResult {
@@ -86,6 +117,6 @@ fun TrafficRequest.fallbackResult(reason: String): TrafficResult {
             TrafficSource.SAVED_FALLBACK
         },
         stale = true,
-        failureReason = reason.take(500),
+        failureReason = sanitizeTrafficFailureReason(reason),
     )
 }

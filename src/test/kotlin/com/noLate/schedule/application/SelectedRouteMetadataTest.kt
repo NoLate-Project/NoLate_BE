@@ -43,4 +43,33 @@ class SelectedRouteMetadataTest {
         assertNull(metadata.routeOption)
         assertNull(metadata.transitItineraryJson)
     }
+
+    @Test
+    fun `routeInfo 전체 시간만 사용하고 하위 step durationMinutes는 선택하지 않는다`() {
+        val metadata = SelectedRouteMetadata.parse(
+            objectMapper,
+            """
+                {
+                  "routeInfo": {
+                    "totalDurationMinutes": 40,
+                    "steps": [{"durationMinutes": 5}]
+                  }
+                }
+            """.trimIndent(),
+            ScheduleTravelMode.WALK,
+        )
+
+        assertEquals(40, metadata.travelMinutes)
+    }
+
+    @Test
+    fun `route-level 시간이 없으면 하위 step 시간은 전체 ETA로 승격하지 않는다`() {
+        val metadata = SelectedRouteMetadata.parse(
+            objectMapper,
+            """{"routeInfo":{"steps":[{"durationMinutes":5}]}}""",
+            ScheduleTravelMode.WALK,
+        )
+
+        assertNull(metadata.travelMinutes)
+    }
 }

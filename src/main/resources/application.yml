@@ -88,6 +88,8 @@ schedule:
     departure-reminder-interval-minutes: ${SCHEDULE_PUSH_DEPARTURE_REMINDER_INTERVAL_MINUTES:5}
     departure-snooze-minutes: ${SCHEDULE_PUSH_DEPARTURE_SNOOZE_MINUTES:5}
   traffic:
+    # provider 오응답이 과도하게 이른 출발 알림으로 승격되지 않도록 하는 제품 상한이다.
+    max-travel-minutes: ${SCHEDULE_TRAFFIC_MAX_TRAVEL_MINUTES:1440}
     tmap:
       enabled: ${TMAP_ENABLED:false}
       app-key: ${TMAP_APP_KEY:}

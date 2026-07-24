@@ -32,17 +32,32 @@ data class SelectedRouteMetadata(
             }.getOrDefault(SelectedRouteMetadata())
         }
 
-        private fun extractTravelMinutes(root: JsonNode): Int? =
-            sequenceOf("minutes", "travelMinutes", "durationMinutes")
-                .mapNotNull(root::findValue)
+        private fun extractTravelMinutes(root: JsonNode): Int? {
+            val routeInfo = root.path("routeInfo")
+            return sequenceOf(
+                root.path("totalDurationMinutes"),
+                root.path("minutes"),
+                root.path("travelMinutes"),
+                root.path("durationMinutes"),
+                routeInfo.path("totalDurationMinutes"),
+                routeInfo.path("minutes"),
+                routeInfo.path("travelMinutes"),
+                routeInfo.path("durationMinutes"),
+            )
                 .firstOrNull { it.isNumber }
                 ?.asDouble()
                 ?.takeIf { it.isFinite() && it > 0 }
                 ?.let { ceil(it).toInt().coerceAtLeast(1) }
+        }
 
-        private fun extractRouteOption(root: JsonNode): String? =
-            sequenceOf("searchOption", "providerRouteOption")
-                .mapNotNull(root::findValue)
+        private fun extractRouteOption(root: JsonNode): String? {
+            val routeInfo = root.path("routeInfo")
+            return sequenceOf(
+                root.path("searchOption"),
+                root.path("providerRouteOption"),
+                routeInfo.path("searchOption"),
+                routeInfo.path("providerRouteOption"),
+            )
                 .mapNotNull { node ->
                     node.takeIf { it.isTextual || it.isIntegralNumber }
                         ?.asText()
@@ -50,6 +65,7 @@ data class SelectedRouteMetadata(
                         ?.takeIf { it.matches(Regex("\\d{1,2}")) }
                 }
                 .firstOrNull()
+        }
 
         private fun extractTransitItinerary(
             root: JsonNode,
@@ -57,8 +73,13 @@ data class SelectedRouteMetadata(
         ): JsonNode? {
             if (travelMode != ScheduleTravelMode.TRANSIT) return null
 
-            return sequenceOf("selectedItinerary", "itinerary")
-                .mapNotNull(root::findValue)
+            val routeInfo = root.path("routeInfo")
+            return sequenceOf(
+                root.path("selectedItinerary"),
+                root.path("itinerary"),
+                routeInfo.path("selectedItinerary"),
+                routeInfo.path("itinerary"),
+            )
                 .firstOrNull { it.isObject }
                 ?: root.takeIf {
                     it.isObject && (it.path("legs").isArray || it.path("transferCount").isNumber)

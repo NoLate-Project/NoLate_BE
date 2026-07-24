@@ -6,6 +6,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.service.SchedulePushJobWorker
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.SchedulePushJob
+import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import jakarta.transaction.Transactional
@@ -136,6 +137,9 @@ class SchedulePushScenarioRunner(
                 notifiedDepartureAt = null,
                 nextCheckAt = now,
                 completeAfterCheck = false,
+                etaSource = TrafficSource.LIVE_PROVIDER,
+                liveFetchedAt = now.minus(1, ChronoUnit.MINUTES),
+                etaStale = false,
                 now = now.minus(1, ChronoUnit.MINUTES),
             )
         }
