@@ -90,8 +90,8 @@ class ScheduleShareServiceUnitTest {
 
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
-        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com"))
-            .thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com"))
+            .thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L))
             .thenReturn(null)
@@ -133,7 +133,6 @@ class ScheduleShareServiceUnitTest {
 
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
-        whenever(memberRepository.findByIdAndDeletedFalse(2L)).thenReturn(target)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(null)
         whenever(scheduleShareRepository.saveAndFlush(any<ScheduleShare>()))
@@ -150,7 +149,7 @@ class ScheduleShareServiceUnitTest {
 
         assertEquals(2L, result.targetMemberId)
         assertEquals("friend@example.com", result.targetEmail)
-        verify(memberRepository).findByIdAndDeletedFalse(2L)
+        verify(memberRepository, never()).findByIdAndDeletedFalse(2L)
     }
 
     @Test
@@ -185,7 +184,7 @@ class ScheduleShareServiceUnitTest {
 
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
-        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com")).thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com")).thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(existing)
         whenever(scheduleShareRepository.saveAndFlush(existing)).thenReturn(existing)
@@ -215,7 +214,7 @@ class ScheduleShareServiceUnitTest {
         )
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, 1L))
             .thenReturn(schedule(id = 10L, ownerId = 1L))
-        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com")).thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com")).thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(existing)
         whenever(scheduleShareRepository.saveAndFlush(existing)).thenReturn(existing)
@@ -240,8 +239,8 @@ class ScheduleShareServiceUnitTest {
 
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
-        whenever(memberRepository.findByEmailAndDeletedFalse("owner@example.com"))
-            .thenReturn(member(id = ownerId, email = "owner@example.com"))
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("owner@example.com"))
+            .thenReturn(ownerId)
         whenever(memberRepository.findByIdForUpdate(ownerId))
             .thenReturn(member(id = ownerId, email = "owner@example.com"))
 
@@ -301,8 +300,8 @@ class ScheduleShareServiceUnitTest {
 
         whenever(categoryRepository.findOwnedActiveForShareUpdate(7L, ownerId))
             .thenReturn(ScheduleCategory(id = 7L, memberId = ownerId, title = "팀"))
-        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com"))
-            .thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com"))
+            .thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(categoryShareRepository.findByCategoryIdAndTargetMemberId(7L, 2L))
             .thenReturn(existing)
@@ -334,7 +333,7 @@ class ScheduleShareServiceUnitTest {
         val staleActor = member(id = 5L, email = "owner-5@example.com").apply {
             sessionGeneration = 4L
         }
-        whenever(memberRepository.findByEmailAndDeletedFalse("target@example.com")).thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("target@example.com")).thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(memberRepository.findByIdForUpdate(5L)).thenReturn(staleActor)
 

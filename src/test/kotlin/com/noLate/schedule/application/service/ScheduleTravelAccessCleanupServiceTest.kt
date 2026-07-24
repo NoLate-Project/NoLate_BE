@@ -89,6 +89,11 @@ class ScheduleTravelAccessCleanupServiceTest {
             eventKey = shareSource.logicalEventKey,
             type = shareSource.type,
         )
+        val legacyUntypedHistory = pushHistory(
+            id = 73L,
+            eventKey = "legacy:untyped-travel",
+            type = null,
+        )
         val travelSourceDelivery = pushDelivery(
             id = 61L,
             eventKey = travelSource.logicalEventKey,
@@ -104,6 +109,11 @@ class ScheduleTravelAccessCleanupServiceTest {
             eventKey = shareSource.logicalEventKey,
             type = shareSource.type,
         )
+        val legacyUntypedDelivery = pushDelivery(
+            id = 64L,
+            eventKey = "legacy:untyped-travel",
+            type = null,
+        )
         whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
         whenever(accessPolicy.resolveAll(2L, listOf(schedule))).thenReturn(
             mapOf(10L to decision(canView = true, travelEnabled = false))
@@ -111,7 +121,7 @@ class ScheduleTravelAccessCleanupServiceTest {
         whenever(appNotificationRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
             .thenReturn(listOf(travelSource, shareSource))
         whenever(pushSendHistoryRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
-            .thenReturn(listOf(travelHistory, shareHistory))
+            .thenReturn(listOf(travelHistory, shareHistory, legacyUntypedHistory))
         whenever(
             pushSendHistoryRepository.findAllByMemberIdInAndLogicalEventKeyIn(
                 setOf(2L),
@@ -125,14 +135,14 @@ class ScheduleTravelAccessCleanupServiceTest {
             )
         ).thenReturn(listOf(travelSourceDelivery))
         whenever(pushDeliveryRepository.findAllByScheduleIdInAndMemberIdIn(setOf(10L), setOf(2L)))
-            .thenReturn(listOf(travelOrphanDelivery, shareDelivery))
+            .thenReturn(listOf(travelOrphanDelivery, shareDelivery, legacyUntypedDelivery))
 
         service().cancelRevokedForSchedule(10L, listOf(2L))
 
         verify(appNotificationRepository).deleteAll(listOf(travelSource))
-        verify(pushSendHistoryRepository).deleteAll(listOf(travelHistory))
+        verify(pushSendHistoryRepository).deleteAll(listOf(travelHistory, legacyUntypedHistory))
         verify(pushDeliveryRepository).deleteAll(listOf(travelSourceDelivery))
-        verify(pushDeliveryRepository).deleteAll(listOf(travelOrphanDelivery))
+        verify(pushDeliveryRepository).deleteAll(listOf(travelOrphanDelivery, legacyUntypedDelivery))
         verify(appNotificationRepository, never()).deleteAll(listOf(shareSource))
         verify(pushSendHistoryRepository, never()).deleteAll(listOf(shareHistory))
         verify(pushDeliveryRepository, never()).deleteAll(listOf(shareDelivery))
@@ -463,7 +473,7 @@ class ScheduleTravelAccessCleanupServiceTest {
     private fun pushHistory(
         id: Long,
         eventKey: String,
-        type: String,
+        type: String?,
     ) = PushSendHistory(
         id = id,
         memberId = 2L,
@@ -480,7 +490,7 @@ class ScheduleTravelAccessCleanupServiceTest {
     private fun pushDelivery(
         id: Long,
         eventKey: String,
-        type: String,
+        type: String?,
     ) = PushDelivery(
         id = id,
         memberId = 2L,

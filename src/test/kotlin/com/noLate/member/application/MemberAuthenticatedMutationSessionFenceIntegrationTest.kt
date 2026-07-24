@@ -17,6 +17,7 @@ import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.schedule.application.service.ScheduleCalendarService
 import com.noLate.schedule.application.service.ScheduleCalendarMutationFenceObserver
+import com.noLate.schedule.application.service.ScheduleShareMutationFenceObserver
 import com.noLate.schedule.application.service.ScheduleShareService
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
@@ -27,6 +28,7 @@ import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.ScheduleRouteSetupReminder
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleTravelPlan
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
@@ -35,6 +37,7 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
+import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -89,6 +92,7 @@ class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired construc
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
     private val categoryRepository: ScheduleCategoryRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
+    private val scheduleShareRepository: ScheduleShareRepository,
     private val scheduleRepository: ScheduleRepository,
     private val pushJobRepository: SchedulePushJobRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
@@ -97,6 +101,7 @@ class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired construc
     private val pushDeliveryRepository: PushDeliveryRepository,
     private val tokenRepository: NotificationDeviceTokenRepository,
     private val calendarMutationFenceObserver: BlockingCalendarTargetPreviewObserver,
+    private val shareMutationFenceObserver: BlockingShareTargetPreviewObserver,
     transactionManager: PlatformTransactionManager,
 ) {
     private val transactions = TransactionTemplate(transactionManager)
@@ -528,6 +533,135 @@ class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired construc
 
     @Test
     @Timeout(20)
+    fun `schedule share target withdrawal after scalar preview creates no active grant or notification`() {
+        val owner = activeMember("schedule-share-race-owner", "ShareRace1!")
+        val target = activeMember("schedule-share-race-target", "ShareRace2!")
+        val scheduleId = transactions.execute {
+            requireNotNull(
+                scheduleRepository.saveAndFlush(
+                    Schedule(
+                        memberId = owner.memberId,
+                        title = "schedule share race",
+                        startAt = Instant.parse("2099-08-04T01:00:00Z"),
+                        endAt = Instant.parse("2099-08-04T02:00:00Z"),
+                    ),
+                ).id,
+            )
+        } ?: error("schedule fixture was not created")
+
+        val gate = shareMutationFenceObserver.arm(
+            resourceType = ScheduleShareResourceType.SCHEDULE,
+            resourceId = scheduleId,
+            targetMemberId = target.memberId,
+        )
+        val executor = Executors.newSingleThreadExecutor()
+        val shareFuture = executor.submit<Throwable?> {
+            runCatching {
+                shareService.shareSchedule(
+                    ownerMemberId = owner.memberId,
+                    scheduleId = scheduleId,
+                    targetEmail = null,
+                    targetAppId = target.memberId,
+                    permission = ScheduleSharePermission.VIEWER,
+                    contentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+                    presentedSessionGeneration = owner.sessionGeneration,
+                )
+            }.exceptionOrNull()
+        }
+        val shareFailure: Throwable?
+        val withdrawalFailure: Throwable?
+        try {
+            assertTrue(gate.previewed.await(10, TimeUnit.SECONDS))
+            withdrawalFailure = runCatching {
+                memberUseCase.withdraw(
+                    memberId = target.memberId,
+                    presentedSessionGeneration = target.sessionGeneration,
+                    passwordForCheck = target.password,
+                )
+            }.exceptionOrNull()
+            gate.resume.countDown()
+            shareFailure = shareFuture.get(10, TimeUnit.SECONDS)
+        } finally {
+            gate.resume.countDown()
+            shareMutationFenceObserver.reset()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+
+        assertNull(withdrawalFailure, withdrawalFailure?.stackTraceToString())
+        assertBusinessError(shareFailure, ErrorCode.MEMBER_NOT_FOUND)
+        assertTrue(memberRepository.findById(target.memberId).orElseThrow().deleted)
+        assertNull(scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, target.memberId))
+        assertTrue(appNotificationRepository.findAllByMemberIdOrderByIdDesc(target.memberId).isEmpty())
+        assertTrue(pushDeliveryRepository.findAll().none { it.memberId == target.memberId })
+    }
+
+    @Test
+    @Timeout(20)
+    fun `category share target withdrawal after scalar preview creates no active grant or notification`() {
+        val owner = activeMember("category-share-race-owner", "CategoryRace1!")
+        val target = activeMember("category-share-race-target", "CategoryRace2!")
+        val targetEmail = memberRepository.findById(target.memberId).orElseThrow().email
+        val categoryId = transactions.execute {
+            requireNotNull(
+                categoryRepository.saveAndFlush(
+                    ScheduleCategory(
+                        memberId = owner.memberId,
+                        title = "category share race",
+                        color = "#778899",
+                    ),
+                ).id,
+            )
+        } ?: error("category fixture was not created")
+
+        val gate = shareMutationFenceObserver.arm(
+            resourceType = ScheduleShareResourceType.CATEGORY,
+            resourceId = categoryId,
+            targetMemberId = target.memberId,
+        )
+        val executor = Executors.newSingleThreadExecutor()
+        val shareFuture = executor.submit<Throwable?> {
+            runCatching {
+                shareService.shareCategory(
+                    ownerMemberId = owner.memberId,
+                    categoryId = categoryId,
+                    targetEmail = targetEmail,
+                    targetAppId = null,
+                    permission = ScheduleSharePermission.VIEWER,
+                    presentedSessionGeneration = owner.sessionGeneration,
+                )
+            }.exceptionOrNull()
+        }
+        val shareFailure: Throwable?
+        val withdrawalFailure: Throwable?
+        try {
+            assertTrue(gate.previewed.await(10, TimeUnit.SECONDS))
+            withdrawalFailure = runCatching {
+                memberUseCase.withdraw(
+                    memberId = target.memberId,
+                    presentedSessionGeneration = target.sessionGeneration,
+                    passwordForCheck = target.password,
+                )
+            }.exceptionOrNull()
+            gate.resume.countDown()
+            shareFailure = shareFuture.get(10, TimeUnit.SECONDS)
+        } finally {
+            gate.resume.countDown()
+            shareMutationFenceObserver.reset()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+
+        assertNull(withdrawalFailure, withdrawalFailure?.stackTraceToString())
+        assertBusinessError(shareFailure, ErrorCode.MEMBER_NOT_FOUND)
+        assertTrue(memberRepository.findById(target.memberId).orElseThrow().deleted)
+        assertNull(categoryShareRepository.findByCategoryIdAndTargetMemberId(categoryId, target.memberId))
+        assertTrue(appNotificationRepository.findAllByMemberIdOrderByIdDesc(target.memberId).isEmpty())
+        assertTrue(pushDeliveryRepository.findAll().none { it.memberId == target.memberId })
+    }
+
+    @Test
+    @Timeout(20)
     fun `participant remove and withdrawal serialize to one inactive membership`() {
         val owner = activeMember("calendar-remove-owner", "CalendarRace2!")
         val participant = activeMember("calendar-remove-participant", "CalendarRace3!")
@@ -758,6 +892,9 @@ class MemberAuthenticatedMutationSessionFenceIntegrationTest @Autowired construc
 class MemberAuthenticatedMutationFenceTestConfig {
     @Bean
     fun blockingCalendarTargetPreviewObserver() = BlockingCalendarTargetPreviewObserver()
+
+    @Bean
+    fun blockingShareTargetPreviewObserver() = BlockingShareTargetPreviewObserver()
 }
 
 class BlockingCalendarTargetPreviewObserver : ScheduleCalendarMutationFenceObserver {
@@ -782,6 +919,49 @@ class BlockingCalendarTargetPreviewObserver : ScheduleCalendarMutationFenceObser
 
 class CalendarTargetPreviewGate(
     val calendarId: Long,
+    val previewed: CountDownLatch = CountDownLatch(1),
+    val resume: CountDownLatch = CountDownLatch(1),
+)
+
+class BlockingShareTargetPreviewObserver : ScheduleShareMutationFenceObserver {
+    private val armed = AtomicReference<ShareTargetPreviewGate?>()
+
+    fun arm(
+        resourceType: ScheduleShareResourceType,
+        resourceId: Long,
+        targetMemberId: Long,
+    ): ShareTargetPreviewGate =
+        ShareTargetPreviewGate(resourceType, resourceId, targetMemberId).also {
+            check(armed.compareAndSet(null, it))
+        }
+
+    fun reset() {
+        armed.getAndSet(null)?.resume?.countDown()
+    }
+
+    override fun afterTargetPreview(
+        resourceType: ScheduleShareResourceType,
+        resourceId: Long,
+        targetMemberId: Long,
+    ) {
+        val gate = armed.get() ?: return
+        if (
+            gate.resourceType != resourceType ||
+            gate.resourceId != resourceId ||
+            gate.targetMemberId != targetMemberId ||
+            !armed.compareAndSet(gate, null)
+        ) {
+            return
+        }
+        gate.previewed.countDown()
+        check(gate.resume.await(10, TimeUnit.SECONDS))
+    }
+}
+
+class ShareTargetPreviewGate(
+    val resourceType: ScheduleShareResourceType,
+    val resourceId: Long,
+    val targetMemberId: Long,
     val previewed: CountDownLatch = CountDownLatch(1),
     val resume: CountDownLatch = CountDownLatch(1),
 )

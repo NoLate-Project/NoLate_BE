@@ -65,6 +65,15 @@ class SchedulePushRecipientAccessValidatorTest {
         assertFalse(
             validator().canDispatch(2L, 10L, null, "ROUTE_SETUP_REMINDER")
         )
+        assertTrue(
+            validator().canDispatch(2L, 10L, null, "SCHEDULE_DETAIL")
+        )
+        assertFalse(
+            validator().canDispatch(2L, 10L, null, null)
+        )
+        assertFalse(
+            validator().canDispatch(2L, 10L, null, "LEGACY_UNKNOWN_SCHEDULE_ALERT")
+        )
     }
 
     @Test

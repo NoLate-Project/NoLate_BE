@@ -55,6 +55,7 @@ class ScheduleShareService(
     private val calendarMemberRepository: ScheduleCalendarMemberRepository? = null,
     private val calendarService: ScheduleCalendarService? = null,
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
+    private val mutationFenceObserver: ScheduleShareMutationFenceObserver? = null,
 ) {
 
     @Transactional
@@ -313,8 +314,16 @@ class ScheduleShareService(
         presentedSessionGeneration: Long,
     ): ScheduleShareDto {
         val normalizedPermission = validateGrantablePermission(permission)
-        val targetPreview = findTargetMemberPreview(targetEmail, targetAppId)
-        val targetMemberId = requireNotNull(targetPreview.id)
+        // Resolve only the immutable member id before the member-row fence. Loading a Member
+        // entity here would put deleted=false in the persistence context; if target withdrawal
+        // commits while this request waits, a later pessimistic-lock query could reuse that stale
+        // managed instance and recreate an ACTIVE share after withdrawal cleanup.
+        val targetMemberId = resolveTargetMemberId(targetEmail, targetAppId)
+        mutationFenceObserver?.afterTargetPreview(
+            ScheduleShareResourceType.SCHEDULE,
+            scheduleId,
+            targetMemberId,
+        )
         val target = lockMutationMembers(
             actorMemberId = ownerMemberId,
             presentedSessionGeneration = presentedSessionGeneration,
@@ -434,8 +443,12 @@ class ScheduleShareService(
         presentedSessionGeneration: Long,
     ): ScheduleShareDto {
         val normalizedPermission = validateGrantablePermission(permission)
-        val targetPreview = findTargetMemberPreview(targetEmail, targetAppId)
-        val targetMemberId = requireNotNull(targetPreview.id)
+        val targetMemberId = resolveTargetMemberId(targetEmail, targetAppId)
+        mutationFenceObserver?.afterTargetPreview(
+            ScheduleShareResourceType.CATEGORY,
+            categoryId,
+            targetMemberId,
+        )
         val target = lockMutationMembers(
             actorMemberId = ownerMemberId,
             presentedSessionGeneration = presentedSessionGeneration,
@@ -794,7 +807,7 @@ class ScheduleShareService(
         )
     }
 
-    private fun findTargetMemberPreview(targetEmail: String?, targetAppId: Long?): Member {
+    private fun resolveTargetMemberId(targetEmail: String?, targetAppId: Long?): Long {
         val hasEmail = !targetEmail.isNullOrBlank()
         val hasAppId = targetAppId != null
 
@@ -808,14 +821,12 @@ class ScheduleShareService(
         }
 
         return if (hasAppId) {
-            val normalizedAppId = targetAppId
+            targetAppId
                 ?.takeIf { it > 0L }
                 ?: throw BusinessException(ErrorCode.INVALID_INPUT, "targetAppId must be a positive number.")
-            memberRepository.findByIdAndDeletedFalse(normalizedAppId)
-                ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         } else {
             val normalizedEmail = normalizeEmail(targetEmail)
-            memberRepository.findByEmailAndDeletedFalse(normalizedEmail)
+            memberRepository.findIdByEmailAndDeletedFalse(normalizedEmail)
                 ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         }
     }
@@ -1111,6 +1122,18 @@ class ScheduleShareService(
         private const val DEFAULT_MAX_ACCEPT_COUNT = 1
         private const val MAX_ACCEPT_COUNT = 20
     }
+}
+
+/**
+ * Test seam for the gap between scalar target resolution and the sorted member-row fence.
+ * Production has no implementation.
+ */
+fun interface ScheduleShareMutationFenceObserver {
+    fun afterTargetPreview(
+        resourceType: ScheduleShareResourceType,
+        resourceId: Long,
+        targetMemberId: Long,
+    )
 }
 
 private data class ShareResourceView(
