@@ -2,127 +2,134 @@
 
 Last reviewed: 2026-07-24 KST
 
-## Goal
+## 현재 판정
 
-NoLate MVP를 App Store와 Google Play에 제출할 수 있는 상태로 만들고, 심사 반려 가능성이 큰 기능·정책·빌드 공백을 출시 전에 제거한다.
+> **출시 준비 완료 아님.**
 
-이 문서는 스토어 출시 준비 중 **실제 소스 또는 빌드 설정에 영향을 주는 작업**을 중심으로 관리한다. App Store Connect, Play Console, Google Cloud Console에서만 수행하는 작업도 릴리스 게이트와 연결되는 경우 함께 기록한다.
+ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통과했다. 그러나 영구 앱 ID, Apple token revoke, Google Play 외부 탈퇴 URL, UGC 안전장치, 서명 산출물, 실기기·실제 provider·MySQL 8 검증이 남아 있으므로 아직 production 제출 단계가 아니다.
 
-## Status Legend
+## 상태 기준
 
-- `완료`: 코드와 실제 제출 산출물 또는 운영 환경에서 검증 완료
-- `진행 중`: 일부 구현 또는 설정은 있으나 완료 조건을 충족하지 못함
-- `미착수`: 구현이나 설정이 아직 없음
-- `결정 필요`: MVP 포함 여부 또는 정책 방향을 먼저 확정해야 함
-- `확인 필요`: 외부 콘솔 상태를 저장소만으로 확인할 수 없음
+- `완료`: 해당 범위가 통합됐고 독립 소스 검토와 전체 자동 테스트까지 통과했다.
+- `부분 완료`: 코드와 자동 테스트는 있으나 실기기, 스테이징, 운영 또는 외부 콘솔 증거가 남았다.
+- `미완료`: 실기기, 운영, 서명, 스토어 콘솔 등의 실행·검증 증거가 없다.
+- `개발 필요`: FE, BE, DB, Web 또는 네이티브 소스 구현이 추가로 필요하다.
 
-## P0: Required Before Store Submission
+복합 작업은 가장 낮은 상태로 표시한다. 표는 중요도 순이며 `완료` 항목은 가장 아래에 둔다.
 
-| ID | 작업 | App Store | Play Store | 소스 영향 | 현재 상태 | 완료 조건 |
+## 출시 준비 상태표
+
+| 우선순위 | 작업 | App Store | Play Store | 소스 영향 | 상태 | 완료 조건 |
 | --- | --- | --- | --- | --- | --- | --- |
-| REL-01 | 영구 Bundle ID / Package Name 확정 | 필수 | 필수 | FE 네이티브·빌드 설정, 외부 SDK 설정 | 미착수 | `com.anonymous.*`를 영구 ID로 교체하고 Firebase, Google, Apple, Kakao, Naver, TMAP 설정까지 동일 ID로 연결 |
-| REL-02 | 버전·빌드 번호 통일 및 검증 강화 | 필수 | 필수 | FE 빌드 설정과 검증 스크립트 | 진행 중 | `app.json`, iOS 메인 앱, 공유 확장, Android의 버전 값을 릴리스 규칙에 맞추고 타깃별 불일치 시 CI 실패 |
-| REL-03 | 스토어 서명과 실제 배포 산출물 생성 | 필수 | 필수 | 빌드 설정·CI·비밀정보 운영 | 미착수 | iOS Distribution Archive와 Android 서명 AAB를 생성하고 각 스토어의 사전 검증 통과. 키와 비밀번호는 Git에 저장하지 않음 |
-| REL-04 | Sign in with Apple 탈퇴 토큰 철회 | 필수 | 해당 없음 | FE 로그인·탈퇴, BE 인증·DB·Apple 연동 | 미착수 | Apple 로그인 시 server-side token exchange에 필요한 값을 처리하고 회원탈퇴 시 Apple REST API revoke 성공 후 계정 정리 |
-| REL-05 | 외부 회원탈퇴 웹 경로 제공 | 권장 | 필수 | 웹 페이지·BE API·보안·운영 | 미착수 | 앱을 재설치하지 않아도 본인 확인 후 탈퇴를 요청할 수 있는 공개 URL 제공. 페이지에 앱명, 삭제 범위, 보유 데이터와 처리 기간 표시 |
-| REL-06 | 일정 공유 UGC 대응 방향 확정 | 필수 | 필수 | 제품 범위와 FE/BE 동작 | 결정 필요 | `신고·차단·운영 처리`를 구현하거나, 해당 기능이 준비될 때까지 MVP에서 사용자 간 일정 공유를 비활성화 |
-| REL-07 | 일정·사용자 신고 기능 | 필수 | 필수 | FE UI, BE API, DB migration, 운영 도구 | REL-06에 종속 | 공유 기능 유지 시 일정/사용자 신고, 신고 사유, 처리 상태, 반복 위반 조치와 운영 조회 경로 구현 |
-| REL-08 | 공유 사용자 차단과 권한 집행 | 필수 | 필수 | FE UI, BE API, DB migration, 공유 도메인 | REL-06에 종속 | 차단/해제, 신규 초대·공유 차단, 기존 공유 접근 정책과 관련 테스트 구현 |
-| REL-09 | Google Calendar OAuth 공개 앱 준비 | 필수 | 필수 | FE 환경·인증 흐름 일부, Google Cloud 설정 | 확인 필요 | 플랫폼별 OAuth client/redirect 설정을 검증하고 `calendar.readonly` 민감 범위 공개 앱 검증 완료 |
-| REL-10 | 개인정보·약관과 실제 데이터 흐름 일치 | 필수 | 필수 | BE 법률 문서, FE fallback 문서, 스토어 콘솔 | 진행 중 | 위치, 일정, 검색, 푸시 토큰, 빠른 입력, Firebase/Groq 등 처리 내용을 일치시키고 국외 이전·보유·삭제 내용을 검토 |
-| REL-11 | 심사용 데모 계정과 리뷰 경로 | 필수 | 필수 | 운영 데이터 중심, 필요 시 데모 모드 | 미착수 | 만료되지 않는 심사용 계정, 샘플 일정/공유 데이터, 권한·기능별 심사 안내와 심사 기간 운영 BE 가용성 확보 |
-| REL-12 | 최종 릴리스 실기기 스모크 테스트 | 필수 | 필수 | 코드 수정은 실패 발견 시 발생 | REL-03에 종속 | 스토어 서명 빌드로 가입·로그인·일정·경로·권한·푸시·공유·탈퇴를 실기기에서 통과 |
+| P0-01 | 영구 Bundle ID / Package Name과 provider 매핑 | 필수 | 필수 | FE 네이티브·빌드, 외부 SDK | 개발 필요 | `com.anonymous.*`를 영구 ID로 바꾸고 메인 앱·확장·App Group·Keychain·Firebase·소셜·지도/교통 provider를 동일 ID로 재연결 |
+| P0-02 | Sign in with Apple 탈퇴 token revoke | 필수 | 해당 없음 | FE 인증, BE Apple 연동·보안 | 개발 필요 | authorization code 교환과 token 보관 정책을 정하고 탈퇴 시 Apple `/auth/revoke` 수행·실패 처리 |
+| P0-03 | 앱 밖 계정 삭제 요청 URL | 선택 | 필수 | Web, BE API·보안 | 개발 필요 | 앱명, 삭제 범위, 보유 데이터·기간이 보이는 공개 URL에서 앱 없이 본인 확인 후 삭제 요청 가능 |
+| P0-04 | 일정 공유 UGC 안전장치 또는 기능 비활성화 | 필수 | 필수 | FE, BE, DB, 운영 | 개발 필요 | 신고, 부적절 콘텐츠 필터, 사용자 차단, 공개 연락처·적시 운영 대응을 구현하거나 심사 빌드에서 공유 비활성화 |
+| P0-05 | 운영 DB migration 체계 | 공통 운영 | 공통 운영 | BE, DB, CI/CD | 부분 완료 | 버전 SQL, production schema guard와 rollout runbook을 실제 MySQL 8에 적용하고 marker, roll-forward/rollback, backup/restore를 스테이징에서 검증 |
+| P0-06 | Distribution Archive와 서명 AAB | 필수 | 필수 | FE 네이티브, CI, secret 운영 | 미완료 | 영구 ID의 iOS Distribution Archive와 Android release AAB를 생성·설치하고 스토어 사전 검사 통과 |
+| P0-07 | 실기기 ETA·알림 acceptance | 필수 | 필수 | 실패 시 FE/BE 수정 | 미완료 | iPhone과 Android 12/13+에서 실제 TMAP·FCM·APNs로 상태·권한·액션 매트릭스 통과 |
+| P0-08 | MySQL 8 다중 인스턴스·장애 복구 | 공통 운영 | 공통 운영 | BE 운영·DB | 미완료 | migration, 중복 scheduler, lock/deadlock, lease 만료, 프로세스 중단·재시작 통과 |
+| P0-09 | Firebase·Apple·Google·Kakao·Naver·TMAP 운영 설정 | 필수 | 필수 | 주로 외부 콘솔, 일부 FE 설정 | 미완료 | release ID·SHA·인증서·redirect·API 제한·APNs key로 실제 로그인·지도·푸시 성공 및 Google Calendar OAuth 공개 앱 검증 |
+| P0-10 | 심사 계정과 reviewer 경로 | 필수 | 필수 | 운영 데이터, 리뷰 노트 | 미완료 | 만료되지 않는 계정, 샘플 일정·공유 데이터, 비자명 기능 설명, 심사 기간 BE 가용성 준비 |
+| P0-11 | 스토어 메타데이터와 에셋 | 필수 | 필수 | 에셋, 콘솔 | 미완료 | 지원·개인정보 URL, 설명, 연령 등급, iPhone 스크린샷, Play 아이콘·feature graphic·스크린샷 준비 |
+| P0-12 | Play production access | 해당 없음 | 계정 조건부 필수 | Play Console | 미완료 | 2023-11-13 이후 생성 개인 계정이면 12명이 연속 14일 opted-in한 closed test 후 production access 신청 |
+| P0-13 | 개인정보·약관·App Privacy·Data safety 정합성 | 필수 | 필수 | BE 법률 문서, FE fallback, 콘솔 | 부분 완료 | 위치·일정·검색·푸시 토큰·빠른 입력·Firebase/Groq 등 실제 SDK 흐름과 연령 정책을 단일 데이터 맵으로 대조하고 게시 |
+| P0-14 | ETA 출처·신선도·동일 경로 비교 | 공통 | 공통 | FE, BE, DB | 부분 완료 | 통합 코드는 승인됨. 실제 TMAP에서 live 증가·감소·timeout·fallback·stale·경로 변경을 운영 DB/UI까지 검증 |
+| P0-15 | 푸시 내구성·권한 fence·다기기 재시도 | 공통 | 공통 | FE, BE, DB | 부분 완료 | 통합 코드는 승인됨. 실제 FCM/APNs와 다중 인스턴스에서 중복·유실·계정 전환·부분 실패를 계측 |
+| P0-16 | FE auth epoch·로컬 purge·신뢰도 UI | 필수 | 필수 | FE JS·native storage | 부분 완료 | 자동 테스트는 승인됨. 서명 빌드에서 로그아웃·탈퇴·재로그인·강제 종료·오프라인 복구 확인 |
+| P1-01 | 버전·빌드 번호와 release config | 필수 | 필수 | FE app config, Xcode, Gradle, CI | 부분 완료 | 영구 ID 전환 후 앱·확장·Android 버전 정책을 CI에서 검사하고 실제 업로드로 확인 |
+| P1-02 | 푸시·ETA 운영 관측과 호출 경보 | 권장 | 권장 | FE/BE metric·crash SDK, 운영 | 개발 필요 | actuator/micrometer 또는 동등 metric과 Crashlytics/Sentry를 붙이고 지연 job, lease, provider 실패율, ambiguous 발송에 dashboard·alert 연결 |
+| P1-03 | HTTPS Universal Link / App Link | 권장 | 권장 | FE 네이티브, Web | 개발 필요 | AASA/assetlinks와 HTTPS 초대 링크를 제공하고 설치·미설치 fallback 검증 |
+| P1-04 | Android adaptive icon | 해당 없음 | 권장 | FE Android resource/config | 부분 완료 | 원형·사각형 launcher와 Play listing에서 잘림 없는지 release 빌드로 확인 |
+| P2-01 | 반복 일정 | 제품 선택 | 제품 선택 | FE, BE, DB | 개발 필요 | 초기 출시 차단 항목은 아님. UT에서 수요 확인 후 발생·수정·push job 정책 구현 |
+| P2-02 | 다중 시간대·DST | 제품 선택 | 제품 선택 | FE, BE, DB | 개발 필요 | 국내 MVP 비차단. 해외 확장 전 사용자 시간대·DST·종일 일정 규칙 구현 |
 
-## Source Impact Breakdown
+## 완료된 소스 검증
 
-### Runtime Feature Changes
-
-| 작업 | 플랫폼 | FE | BE | DB / Web | 비고 |
-| --- | --- | --- | --- | --- | --- |
-| Apple 탈퇴 토큰 철회 | App Store | Apple 로그인·탈퇴 요청 보강 | token exchange/revoke와 실패 처리 | 토큰 저장이 필요하면 암호화 저장 구조 추가 | 현재 `authorizationCode`는 인증 판단에 사용하지 않음 |
-| 외부 회원탈퇴 페이지 | Play Store | 앱 내 링크는 선택 | 본인 확인·탈퇴 요청 API 재사용 또는 보강 | 공개 페이지와 보안·rate limit 필요 | 현재 예정 URL은 정상 페이지가 아님 |
-| UGC 신고 | 양쪽 | 일정/사용자 신고 UI | 신고 생성·조회·처리 API | 신고 테이블과 운영 조회 | 공유 기능 유지 시 필요 |
-| 사용자 차단 | 양쪽 | 차단·해제 UI와 상태 표시 | 공유·초대·접근 권한 집행 | 차단 관계 테이블 | API뿐 아니라 기존 공유 접근 차단 테스트 필요 |
-| 14세 미만 정책 | 양쪽 | 연령 확인 또는 보호자 동의 UX | 가입 정책과 동의 이력 | 정책 선택에 따라 스키마 추가 | MVP를 14세 이상으로 제한할지 먼저 결정 |
-| 플랫폼별 Google OAuth | 양쪽 | client ID와 redirect 처리 | 현재 구조에 따라 검증 보강 | Google Cloud 설정 | 민감 범위 검증 자체는 콘솔 작업 |
-
-### Build and Native Configuration Changes
-
-| 작업 | 영향 파일/영역 | 완료 기준 |
-| --- | --- | --- |
-| 영구 앱 ID | `NoLate_FE/app.json`, Android Gradle, Xcode project, entitlements, 공유 확장 | 모든 타깃과 외부 제공자 설정이 동일한 영구 ID 사용 |
-| 빌드 번호 | `app.json`, Android `versionCode`, Xcode 메인/확장 `CURRENT_PROJECT_VERSION` | 타깃별 정책에 맞게 자동 증가하고 불일치 검증 |
-| 릴리스 검증 | `NoLate_FE/scripts/verify-release-config.mjs` | 단순 문자열 개수 대신 iOS 타깃별 값과 Android 값을 명시적으로 검사 |
-| Android 서명 | Android Gradle, CI secrets, 로컬 비추적 설정 | `bundleRelease` 성공 및 Play Console 업로드 검증 |
-| Firebase·소셜 로그인 | Firebase 설정 파일, URL scheme, provider console | release Bundle ID/Package/SHA로 실기기 로그인 성공 |
-| Universal/App Links | iOS associated domains, Android intent filter, 웹 association 파일 | 앱 미설치 시 웹/스토어 fallback, 설치 시 앱 내 초대 화면 이동 |
-| Android adaptive icon | Android 리소스 또는 Expo app config | 원형·사각형 런처에서 잘림 없이 표시 |
-| Expo/native 동기화 | app config, native project, package version | 설정의 source of truth와 prebuild 사용 여부를 문서화하고 `expo-doctor` 통과 |
-
-### Legal Document Changes Stored in Source
-
-다음 내용은 Store Console 입력만으로 끝나지 않고 저장소의 법률 문서도 함께 수정해야 한다.
-
-- 개인정보 국외 이전 대상, 국가, 항목, 목적, 이전 시점·방법, 보유기간
-- Firebase, Groq, 지도·교통·소셜 로그인 제공자의 데이터 처리 범위
-- 회원탈퇴 시 삭제되는 데이터와 법적 사유로 보유되는 데이터
-- 사용자 생성 콘텐츠의 금지 행위, 신고, 차단, 제재 및 문의 경로
-- 만 14세 미만 가입 허용 여부와 동의 방식
-- App Privacy와 Play Data safety 선언에 대응하는 실제 데이터 흐름
-
-Primary source:
-
-- `NoLate_BE/src/main/kotlin/com/noLate/legal/domain/LegalDocuments.kt`
-- `NoLate_FE/src/api/legal.ts`
-
-## Console and Operations Tasks Without Mandatory Runtime Changes
-
-| 작업 | App Store | Play Store | 외부 콘솔/운영 |
+| 우선순위 | 작업 | 상태 | 증거 |
 | --- | --- | --- | --- |
-| 개인정보 수집 선언 | App Privacy | Data safety | 실제 앱·SDK 동작과 동일해야 함 |
-| 연령 등급 설문 | 필수 | 필수 | UGC, 위치, AI 입력 기능 반영 |
-| 민감 OAuth 검증 | 간접 영향 | 간접 영향 | Google Cloud Console |
-| 심사 메타데이터 | 설명, 키워드, 지원 URL, 리뷰 노트 | 설명, 카테고리, App content | 코드 변경 없음 |
-| 스토어 이미지 | iPhone 스크린샷과 아이콘 | 512 아이콘, feature graphic, 스크린샷 | 에셋 제작·업로드 |
-| Play 비공개 테스트 | 해당 없음 | 계정 조건부 필수 | 2023-11-13 이후 생성한 개인 계정은 12명·14일 요건 확인 |
-| Play App Signing | 해당 없음 | 필수 | Play Console과 업로드 키 관리 |
-| API 키 제한 | 권장 | 권장 | Firebase/Google/Kakao/Naver/TMAP/ODsay 콘솔에서 앱 ID·SHA·쿼터 제한 |
-| 배포 국가·가격·출시일 | 필수 | 필수 | 각 스토어 콘솔 |
+| 완료-01 | FE 신뢰성 통합 | 완료 | `fe2d1875c502dd46c78953642a6cc27ca6a26a57`: release config·typecheck 통과, lint 오류 0, 173 suites / 1,292 tests 통과 |
+| 완료-02 | BE ETA·푸시 통합 | 완료 | `3986d84552a162281986432d62295bc404153b09`: 768 tests 중 765 실행 통과, MySQL Docker 3건 조건부 스킵, 실패 0 |
+| 완료-03 | BE exact commit 독립 감사 | 완료 | ETA 결합과 push 보안·상태 머신 두 감사 모두 P0 0 / P1 0 승인 |
+| 완료-04 | 원본 변경 보호 | 완료 | 기존 dirty FE/BE 작업 트리를 유지하고 별도 integration worktree에서 통합 |
 
-## P1: Recommended Before Public Release
+위 `완료`는 소스와 자동검증 범위다. 실기기·운영·콘솔 게이트가 남아 있으므로 앱 전체 출시 준비가 완료됐다는 뜻은 아니다.
 
-| ID | 작업 | 플랫폼 | 소스 영향 | 완료 조건 |
-| --- | --- | --- | --- | --- |
-| REL-13 | HTTPS Universal Link / App Link | 양쪽 | 네이티브 설정·웹 | `nolate://`만 사용하는 초대 링크를 HTTPS 기반으로 보강 |
-| REL-14 | Android adaptive icon과 스토어 에셋 | Play Store | 에셋·앱 설정 | 런처 아이콘과 Play listing 에셋 검증 |
-| REL-15 | Crash/ANR 모니터링 | 양쪽 | SDK·앱 설정·개인정보 문서 | release 환경 크래시 수집과 알림, 개인정보 선언 일치 |
-| REL-16 | 명시적 DB migration과 복구 절차 | 공통 운영 | BE 설정·migration source | 운영 `ddl-auto: update` 의존 제거, backup/restore 검증 |
-| REL-17 | 공개 클라이언트 키 제한 | 양쪽 | 주로 외부 콘솔, 필요 시 BE proxy | 앱에 포함되는 키에 package/bundle/SHA/쿼터 제한 |
-| REL-18 | 릴리스 자동화 | 양쪽 | CI·스크립트 | 테스트, 버전, 서명, 산출물 검증을 반복 가능한 명령으로 실행 |
+## 실제 소스에 영향을 주는 묶음
 
-## Recommended Sequence
+### 1. 앱 ID·서명·provider
 
-1. 영구 Bundle ID와 Package Name을 확정한다.
-2. iOS/Android 버전·빌드 번호와 릴리스 검증 규칙을 정리한다.
-3. Android 업로드 키와 iOS Distribution signing을 준비해 실제 AAB/Archive를 생성한다.
-4. Apple 탈퇴 토큰 철회와 외부 회원탈퇴 웹 경로를 구현한다.
-5. 공유 기능을 MVP에 유지할지 결정하고, 유지하면 신고·차단·운영 처리를 구현한다.
-6. Google Calendar OAuth 민감 범위 검증을 신청한다.
-7. 개인정보처리방침·이용약관·App Privacy·Data safety를 동일한 데이터 맵으로 정리한다.
-8. 심사용 계정과 스토어 메타데이터를 준비한다.
-9. TestFlight와 Play internal/closed track에서 최종 실기기 스모크 테스트를 수행한다.
+| 변경 | FE | BE | DB / Web |
+| --- | --- | --- | --- |
+| 영구 앱 ID | app config, Android namespace/applicationId, Xcode targets, App Group, Keychain, Firebase 파일 | 허용 redirect/client 검증이 있으면 함께 변경 | provider 콘솔과 association 파일 |
+| Apple revoke | authorization code를 서버에 안전하게 전달 | token exchange, 보관/암호화 정책, revoke | token 저장이 필요하면 migration |
+| release signing | Xcode/Gradle/CI secret 참조 | 없음 | App Store Connect / Play Console |
+
+### 2. 계정·UGC·법률
+
+| 변경 | FE | BE | DB / Web |
+| --- | --- | --- | --- |
+| Play 외부 탈퇴 | 설정의 공개 URL 연결은 선택 | 기존 탈퇴 use case 재사용 또는 제한된 web API | 공개 페이지, 본인 확인, rate limit |
+| 신고·차단 | 일정/사용자 신고, 차단·해제 UI | 신고 처리, 공유·초대·기존 접근 집행 | 신고·차단 schema와 운영 조회 |
+| 공유 비활성화 대안 | 심사 빌드에서 공유 진입 제거 | 공유 API 정책 차단 권장 | 기존 공유 데이터 처리 결정 |
+| 개인정보 정합성 | 앱 내 fallback 문서, 권한 문구 | 법률 문서와 보유·삭제 정책 | 두 스토어 privacy 선언 |
+
+### 3. ETA·알림 운영 검증
+
+| 변경 | FE | BE | DB / 운영 |
+| --- | --- | --- | --- |
+| provenance UI | live/fallback, stale, 갱신 시각, confidence | source/fetchedAt/failure/fingerprint 계산 | job 상태 보관 |
+| delivery reliability | 권한·토큰 복구, 탭·액션, 계정 전환 | outbox, delivery, history, dispatch fence, partial retry | lease·상태·지표 |
+| 장애 대응 | 사용자에게 명확한 degraded 상태 표시 | timeout, ambiguous, retry/supersede 정책 | dashboard, alert, runbook |
+
+## 알림 전달 보장 경계
+
+- 같은 logical event의 확인된 성공 기기에는 재전송하지 않는다.
+- 다기기 일부 실패는 실패 기기만 같은 generation/check event로 제한 재시도한다.
+- provider 호출 결과가 불확실한 `DISPATCHING` 구간은 자동 재시도하지 않는 **at-most-once 경계**다.
+- 따라서 “exactly once”나 “유실 0”을 주장하지 않는다. 중복 방지를 우선한 경계이며 실제 provider 계측과 고객 대응 절차가 필요하다.
+
+## 실기기·스테이징 게이트
+
+| 대상 | 반드시 통과할 항목 |
+| --- | --- |
+| iPhone | foreground/background/terminated, 탭, `지금 출발`, tray/badge, 권한 복구, 서명 App Group/Keychain extension |
+| Android 12 | foreground/background/terminated, 채널, tray, 탭·액션, 로그아웃 후 이전 계정 오발송 없음 |
+| Android 13+ | 런타임 알림 권한 거부·복구와 위 전체 시나리오 |
+| TMAP | 동일 경로 live 증가·감소, timeout, fallback, stale, 경로 변경 시 비교 억제 |
+| FCM/APNs | 다계정·다기기, invalid token, 일부 실패, timeout/불확실 응답, 앱 상태별 수신 |
+| MySQL 8 | 명시적 migration, 두 scheduler 경쟁, lock/deadlock, lease heartbeat/만료, crash/restart |
+
+## 제출 순서
+
+1. 영구 앱 ID 확정 및 모든 provider 재매핑
+2. Apple revoke, Play 외부 탈퇴 URL, UGC 구현 또는 공유 비활성화
+3. DB migration 체계와 MySQL 8 스테이징 구성
+4. iOS Archive와 Android AAB 서명·설치
+5. TestFlight / Play internal에서 실제 provider와 실기기 매트릭스 수행
+6. 개인정보 문서·App Privacy·Data safety를 단일 데이터 맵으로 확정
+7. 해당 계정이면 Play closed test 12명·14일 수행
+8. 심사 계정·스토어 에셋·리뷰 노트를 준비하고 제출
 
 ## Release Gate
 
-아래 조건을 모두 만족하기 전에는 production 제출을 진행하지 않는다.
+다음 항목을 모두 만족하기 전에는 production 제출하지 않는다.
 
-- 영구 앱 ID와 provider 설정이 확정되어 있다.
-- iOS Archive와 Android AAB가 release signing으로 생성되고 설치된다.
-- 계정 생성, 소셜 로그인, 회원탈퇴와 재가입 정책이 정상 동작한다.
-- Apple 로그인 회원탈퇴 시 provider token 철회가 수행된다.
-- Play Console에 입력할 외부 탈퇴 URL이 정상 응답하고 앱 없이 요청 가능하다.
-- 공유 기능이 활성화되어 있다면 신고·차단·운영 대응이 동작한다.
-- App Privacy, Data safety, 개인정보처리방침의 데이터 항목이 실제 동작과 일치한다.
-- 심사용 계정으로 핵심 기능에 제한 없이 접근할 수 있다.
-- foreground/background/terminated 푸시와 알림 액션이 스토어 서명 빌드에서 검증됐다.
+- 영구 앱 ID, signing, provider 설정이 하나의 release identity로 연결돼 있다.
+- Apple 로그인 탈퇴 revoke와 Play 외부 탈퇴 URL이 실제 계정으로 동작한다.
+- 공유가 켜져 있으면 신고·필터·차단·연락처·운영 대응이 동작한다.
+- App Privacy, Data safety, 개인정보처리방침이 실제 앱·SDK 동작과 일치한다.
+- signed build의 iPhone/Android 알림 매트릭스와 실제 TMAP·FCM·APNs가 통과한다.
+- MySQL 8 migration·다중 인스턴스·장애 복구가 통과한다.
+- 심사 계정, backend, 지원 URL과 리뷰 노트가 심사 기간 동안 가용하다.
 
+## 공식 정책 참고
+
+- Apple account deletion: <https://developer.apple.com/support/offering-account-deletion-in-your-app/>
+- Apple Sign in with Apple token revocation: <https://developer.apple.com/documentation/technotes/tn3194-handling-account-deletions-and-revoking-tokens-for-sign-in-with-apple>
+- Apple UGC guideline 1.2: <https://developer.apple.com/app-store/review/guidelines/>
+- Apple App Privacy: <https://developer.apple.com/app-store/app-privacy-details/>
+- Google Play account deletion: <https://support.google.com/googleplay/android-developer/answer/13327111>
+- Google Play UGC moderation: <https://support.google.com/googleplay/android-developer/answer/12923286>
+- Google Play Data safety: <https://support.google.com/googleplay/android-developer/answer/10787469>
+- Google Play new personal account testing: <https://support.google.com/googleplay/android-developer/answer/14151465>
