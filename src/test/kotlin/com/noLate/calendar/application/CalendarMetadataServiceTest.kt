@@ -88,7 +88,28 @@ class CalendarMetadataServiceTest {
     }
 
     @Test
-    fun `역전되거나 93일을 초과한 범위를 거부한다`() {
+    fun `FE 최대 프리패치 98일은 허용하고 그보다 긴 범위는 거부한다`() {
+        val maxStartDate = LocalDate.of(2026, 5, 31)
+        val maxEndDate = maxStartDate.plusDays(CalendarMetadataService.MAX_RANGE_DAYS - 1)
+        whenever(kasiCalendarClient.isAvailable()).thenReturn(false)
+        whenever(
+            calendarDayCacheRepository.findAllByDateBetweenOrderByDateAsc(
+                maxStartDate,
+                maxEndDate,
+            )
+        ).thenReturn(emptyList())
+        whenever(
+            publicHolidayRepository.findAllByHolidayDateBetweenOrderByHolidayDateAscIdAsc(
+                maxStartDate,
+                maxEndDate,
+            )
+        ).thenReturn(emptyList())
+
+        assertEquals(
+            CalendarMetadataService.MAX_RANGE_DAYS.toInt(),
+            service().getDays(maxStartDate, maxEndDate).size,
+        )
+
         val reversed = assertThrows<BusinessException> {
             service().getDays(endDate, startDate)
         }

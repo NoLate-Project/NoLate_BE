@@ -31,7 +31,13 @@ jwt:
   access-token-validity-in-seconds: 300
   refresh-token-validity-in-seconds: 600
 
+calendar:
+  metadata-cache:
+    enabled: false
+
 schedule:
+  calendar-cache:
+    enabled: false
   push:
     fixed-delay-ms: 86400000
     retry-delay-minutes: 5

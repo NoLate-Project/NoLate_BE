@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategorySettingDto
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
@@ -11,6 +12,7 @@ import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
 import jakarta.transaction.Transactional
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 
 @Service
@@ -18,6 +20,7 @@ class ScheduleCategoryService(
     private val categoryRepository: ScheduleCategoryRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository? = null,
     private val invitationRepository: ScheduleShareInvitationRepository? = null,
+    private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
 ) {
     private val defaultCategories = listOf(
         DefaultScheduleCategory("업무", "#f44336", "briefcase-outline"),
@@ -111,9 +114,11 @@ class ScheduleCategoryService(
     @Transactional
     fun deleteCategory(memberId: Long, categoryId: Long) {
         val entity = findCategory(memberId, categoryId)
-        categoryShareRepository
+        val affectedMemberIds = categoryShareRepository
             ?.findAllByCategoryIdAndDeletedFalse(categoryId)
-            ?.forEach { it.revoke() }
+            ?.onEach { it.revoke() }
+            ?.map { it.targetMemberId }
+            .orEmpty()
         invitationRepository
             ?.findAllByOwnerMemberIdAndResourceTypeAndResourceIdAndDeletedFalseOrderByIdDesc(
                 ownerMemberId = memberId,
@@ -123,6 +128,14 @@ class ScheduleCategoryService(
             ?.forEach { it.revoke() }
         entity.softDelete()
         categoryRepository.save(entity)
+        if (affectedMemberIds.isNotEmpty()) {
+            eventPublisher.publishEvent(
+                ScheduleCalendarCacheInvalidationEvent(
+                    memberIds = affectedMemberIds.toSet(),
+                    reason = "category-deleted",
+                )
+            )
+        }
     }
 
     @Transactional

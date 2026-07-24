@@ -178,6 +178,15 @@ class ScheduleController(
         return ApiResponse.success(result)
     }
 
+    @Operation(summary = "캘린더 일정 캐시 revision 조회")
+    @GetMapping("/calendar-cache/revision")
+    fun getCalendarCacheRevision(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+    ): ApiResponse<Map<String, Long>> =
+        ApiResponse.success(
+            mapOf("revision" to scheduleUseCase.getCalendarCacheRevision(requireMemberId(principal)))
+        )
+
     /**
      * 하루 일정 조회.
      * 사용자가 선택한 날짜의 일정 리스트나 타임라인을 구성할 때 사용한다.

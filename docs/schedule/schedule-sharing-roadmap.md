@@ -1,6 +1,6 @@
 # Schedule Sharing Roadmap
 
-Last verified: 2026-07-23 KST
+Last verified: 2026-07-24 KST
 
 이 문서는 NoLate 일정 공유 기능의 현재 구현 상태와 고도화 계획을 정리한다.
 
@@ -34,6 +34,8 @@ Last verified: 2026-07-23 KST
 - 만료 시각을 지난 `PENDING` 링크는 API에서 `EXPIRED`로 계산하고 활성 링크 목록에서 제외
 - 카테고리 공유는 해당 카테고리에 속한 일정 묶음을 공유하는 모델
 - 일정 조회는 내 일정, 직접 공유받은 일정, 공유 카테고리에 속한 일정을 포함
+- 일정 조회는 사용자·revision·월 단위 Redis 캐시를 사용하고 `GET /api/schedules/calendar-cache/revision`으로 클라이언트 revision 동기화 지원
+- 일정 생성·수정·삭제, 직접 일정/카테고리 공유, 캘린더 멤버·역할·설정·소유권·보관 변경은 트랜잭션 `AFTER_COMMIT`에 영향 회원 revision 무효화
 - 프로필의 숫자 회원 ID 또는 전체 이메일로 직접 공유
 - 직접 공유 요청은 `targetAppId`, `targetEmail` 중 정확히 하나만 허용
 - 받은 공유와 내가 공유한 리소스/활성 링크를 각각 inbox/outbox로 조회
@@ -131,6 +133,8 @@ POST /api/schedule-calendars/{calendarId}/invitations
 - 직접/캘린더/카테고리 grant 합산과 100개 일정 batch 권한 조회 테스트
 - D-3 정확한 72시간 경계, stale plan, 회원별 묶음 발송, 동시 marker 생성 테스트
 - 공유 범위 축소 시 PushJob 즉시 취소와 worker 발송 직전 권한 재검사 테스트
+- 일정 캐시 HIT/MISS, 연속 월 partial miss, revision 변경 중 적재 재시도, Redis 장애 fallback 단위 테스트
+- 일정 생성·수정과 공유 변경 시 오너/수신자 cache revision 무효화 테스트
 - Docker 사용 가능 환경에서만 실행되는 MySQL 8 Testcontainers 멤버십/marker 동시성 테스트
 
 2026-07-15 검증 기록:
@@ -179,6 +183,16 @@ POST /api/schedule-calendars/{calendarId}/invitations
   - 오너, `EDITOR`, `VIEWER`에서 동일 캘린더의 역할·4명 멤버·`일정 + 각자 경로` 표시 확인
   - 동일 일정 상세에서 `EDITOR`는 본인 대중교통 42분, `VIEWER`는 본인 자동차 35분으로 분리 표시 확인
 - staging MySQL migration 실행, Docker 기반 동시성 실행, APNs/FCM 실기기 수신은 아직 완료 전
+
+2026-07-24 캐시 구현/검증 기록:
+
+- 사용자·revision·월 단위 일정 Redis 캐시와 15분 data TTL, 7일 revision TTL 구현
+- 일정/카테고리/캘린더 공유 및 초대 수락, 역할·설정·소유권·보관 변경의 영향 회원을 계산해 `AFTER_COMMIT` revision 증가
+- 공유 `EDITOR` 일정 수정 시 기존 오너의 카테고리 snapshot과 PushJob/개인 이동 계획 동기화 주체를 보존하도록 회귀 수정
+- 전 사용자 공용 음력/공휴일 월 캐시를 별도 적용해 일정 공유 변경과 독립적으로 24시간 유지
+- FE 최대 메타데이터 프리패치 범위와 BE 제한을 98일로 일치시키고 cold 5개 월을 2개 DB 범위로 묶어 적재
+- BE 전체 413개 테스트 실패 0개, FE 메타데이터 계약 6개 테스트와 TypeScript 검사 통과
+- 실제 Redis에서 첫 메타데이터 요청 `MISS/STORE`, 같은 범위와 다음 월 재조회 `HIT`, warm 회원·메타데이터 SQL 0건 확인
 
 ## Product Principles
 
@@ -335,6 +349,7 @@ POST /api/schedule-calendars/{calendarId}/invitations
 - token accept failure reason metric
 - 공유 일정 조회 쿼리 latency 추적
 - 공유 카테고리 일정 수가 많을 때 쿼리 성능 측정
+- 공유 변경 cache invalidation 수와 일정 cache hit/miss/fallback/p95 latency 추적
 
 ## Open Decisions
 

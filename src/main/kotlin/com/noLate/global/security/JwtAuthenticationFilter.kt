@@ -153,6 +153,10 @@ class JwtAuthenticationFilter(
     override fun shouldNotFilter(request: HttpServletRequest): Boolean {
         return request.method == "OPTIONS"
                 || request.dispatcherType == DispatcherType.ASYNC
+                || (
+                    request.method == "GET"
+                        && request.servletPath == "/api/calendar/days"
+                )
     }
 
 }
