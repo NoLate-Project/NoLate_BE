@@ -1,6 +1,6 @@
 # App Store & Google Play Release Roadmap
 
-Last reviewed: 2026-07-24 KST
+Last reviewed: 2026-07-25 KST
 
 ## 현재 판정
 
@@ -41,6 +41,7 @@ ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통�
 | P1-02 | 푸시·ETA 운영 관측과 호출 경보 | 권장 | 권장 | FE/BE metric·crash SDK, 운영 | 개발 필요 | actuator/micrometer 또는 동등 metric과 Crashlytics/Sentry를 붙이고 지연 job, lease, provider 실패율, ambiguous 발송에 dashboard·alert 연결 |
 | P1-03 | HTTPS Universal Link / App Link | 권장 | 권장 | FE 네이티브, Web | 개발 필요 | AASA/assetlinks와 HTTPS 초대 링크를 제공하고 설치·미설치 fallback 검증 |
 | P1-04 | Android adaptive icon | 해당 없음 | 권장 | FE Android resource/config | 부분 완료 | 원형·사각형 launcher와 Play listing에서 잘림 없는지 release 빌드로 확인 |
+| P1-05 | FE build/CLI 공급망과 간접 lodash | 권장 | 권장 | FE lock, CI Node/native build | 개발 필요 | 남은 CLI/build critical 3·high 8과 앱 전이 lodash high 1을 호환 패치로 정리하고 Node 22/24 LTS의 native release build로 검증 |
 | P2-01 | 반복 일정 | 제품 선택 | 제품 선택 | FE, BE, DB | 개발 필요 | 초기 출시 차단 항목은 아님. UT에서 수요 확인 후 발생·수정·push job 정책 구현 |
 | P2-02 | 다중 시간대·DST | 제품 선택 | 제품 선택 | FE, BE, DB | 개발 필요 | 국내 MVP 비차단. 해외 확장 전 사용자 시간대·DST·종일 일정 규칙 구현 |
 
@@ -48,10 +49,11 @@ ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통�
 
 | 우선순위 | 작업 | 상태 | 증거 |
 | --- | --- | --- | --- |
-| 완료-01 | FE 신뢰성 통합 | 완료 | `fe2d1875c502dd46c78953642a6cc27ca6a26a57`: release config·typecheck 통과, lint 오류 0, 173 suites / 1,292 tests 통과 |
-| 완료-02 | BE ETA·푸시 통합 | 완료 | `3986d84552a162281986432d62295bc404153b09`: 768 tests 중 765 실행 통과, MySQL Docker 3건 조건부 스킵, 실패 0 |
-| 완료-03 | BE exact commit 독립 감사 | 완료 | ETA 결합과 push 보안·상태 머신 두 감사 모두 P0 0 / P1 0 승인 |
-| 완료-04 | 원본 변경 보호 | 완료 | 기존 dirty FE/BE 작업 트리를 유지하고 별도 integration worktree에서 통합 |
+| 완료-01 | FE 신뢰성 통합 | 완료 | `680345135284d68b144091a31ab4df27a557dee2`: release config·typecheck 통과, lint 오류 0, 173 suites / 1,292 tests 통과 |
+| 완료-02 | FE runtime HTTP dependency P0 | 완료 | Axios 1.18.1·form-data 4.0.6, direct runtime critical/high 0, 최소 lock diff 독립 감사 P0 0 / P1 0 |
+| 완료-03 | BE ETA·푸시 통합 | 완료 | `3986d84552a162281986432d62295bc404153b09`: 768 tests 중 765 실행 통과, MySQL Docker 3건 조건부 스킵, 실패 0 |
+| 완료-04 | BE exact commit 독립 감사 | 완료 | ETA 결합과 push 보안·상태 머신 두 감사 모두 P0 0 / P1 0 승인 |
+| 완료-05 | 원본 변경 보호 | 완료 | 기존 dirty FE/BE 작업 트리를 유지하고 별도 integration worktree에서 통합 |
 
 위 `완료`는 소스와 자동검증 범위다. 실기기·운영·콘솔 게이트가 남아 있으므로 앱 전체 출시 준비가 완료됐다는 뜻은 아니다.
 
