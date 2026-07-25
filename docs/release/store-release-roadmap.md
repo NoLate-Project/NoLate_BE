@@ -6,7 +6,10 @@ Last reviewed: 2026-07-25 KST
 
 > **출시 준비 완료 아님.**
 
-ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통과했다. 그러나 영구 앱 ID, Apple token revoke, Google Play 외부 탈퇴 URL, UGC 안전장치, 서명 산출물, 실기기·실제 provider·MySQL 8 검증이 남아 있으므로 아직 production 제출 단계가 아니다.
+ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통과했고, 일정 공유는 store
+production에서 FE·BE 모두 fail-closed하도록 통합했다. 그러나 영구 앱 ID, Apple token
+revoke, Google Play 외부 탈퇴 URL, 공유-off 서명·운영 증거, 서명 산출물,
+실기기·실제 provider·MySQL 8 검증이 남아 있으므로 아직 production 제출 단계가 아니다.
 
 ## 상태 기준
 
@@ -24,7 +27,7 @@ ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통�
 | P0-01 | 영구 Bundle ID / Package Name과 provider 매핑 | 필수 | 필수 | FE 네이티브·빌드, 외부 SDK | 개발 필요 | `com.anonymous.*`를 영구 ID로 바꾸고 메인 앱·확장·App Group·Keychain·Firebase·소셜·지도/교통 provider를 동일 ID로 재연결 |
 | P0-02 | Sign in with Apple 탈퇴 token revoke | 필수 | 해당 없음 | FE 인증, BE Apple 연동·보안 | 개발 필요 | authorization code 교환과 token 보관 정책을 정하고 탈퇴 시 Apple `/auth/revoke` 수행·실패 처리 |
 | P0-03 | 앱 밖 계정 삭제 요청 URL | 선택 | 필수 | Web, BE API·보안 | 개발 필요 | 앱명, 삭제 범위, 보유 데이터·기간이 보이는 공개 URL에서 앱 없이 본인 확인 후 삭제 요청 가능 |
-| P0-04 | 일정 공유 UGC 안전장치 또는 기능 비활성화 | 필수 | 필수 | FE, BE, DB, 운영 | 개발 필요 | 신고, 부적절 콘텐츠 필터, 사용자 차단, 공개 연락처·적시 운영 대응을 구현하거나 심사 빌드에서 공유 비활성화 |
+| P0-04 | 일정 공유 UGC 안전장치 또는 기능 비활성화 | 필수 | 필수 | FE, BE, DB, 운영 | 부분 완료 | FE `adfd489a`, BE `94696033`의 전역 off와 dormant 보존은 승인됨. 서명 store build, 모든 prod 인스턴스 `DISABLED`, 직접 API 차단 probe, provider 호출 0·row 무변경을 스테이징/운영에서 증명 |
 | P0-05 | 운영 DB migration 체계 | 공통 운영 | 공통 운영 | BE, DB, CI/CD | 부분 완료 | 버전 SQL, production schema guard와 rollout runbook을 실제 MySQL 8에 적용하고 marker, roll-forward/rollback, backup/restore를 스테이징에서 검증 |
 | P0-06 | Distribution Archive와 서명 AAB | 필수 | 필수 | FE 네이티브, CI, secret 운영 | 미완료 | 영구 ID의 iOS Distribution Archive와 Android release AAB를 생성·설치하고 스토어 사전 검사 통과 |
 | P0-07 | 실기기 ETA·알림 acceptance | 필수 | 필수 | 실패 시 FE/BE 수정 | 미완료 | iPhone과 Android 12/13+에서 실제 TMAP·FCM·APNs로 상태·권한·액션 매트릭스 통과 |
@@ -54,6 +57,9 @@ ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통�
 | 완료-03 | BE ETA·푸시 통합 | 완료 | `3986d84552a162281986432d62295bc404153b09`: 768 tests 중 765 실행 통과, MySQL Docker 3건 조건부 스킵, 실패 0 |
 | 완료-04 | BE exact commit 독립 감사 | 완료 | ETA 결합과 push 보안·상태 머신 두 감사 모두 P0 0 / P1 0 승인 |
 | 완료-05 | 원본 변경 보호 | 완료 | 기존 dirty FE/BE 작업 트리를 유지하고 별도 integration worktree에서 통합 |
+| 완료-06 | FE 일정 공유 production-off | 완료 | `adfd489a52175d4fe4301f26dffec1746ba7a991`: release config·typecheck 통과, lint 오류 0, 176 suites / 1,384 tests |
+| 완료-07 | BE 일정 공유 production-off | 완료 | `946960331d4f4c6cf7a8770cb93eac2e271c4a0c`: 806 tests, 실패·오류 0, MySQL Docker 3건 조건부 스킵 |
+| 완료-08 | P0-04 독립 감사와 A–D 회귀 | 완료 | exact 구현 감사 P0 0 / P1 0, A 58·B 99·C 60·D 71 representative tests 통과 |
 
 위 `완료`는 소스와 자동검증 범위다. 실기기·운영·콘솔 게이트가 남아 있으므로 앱 전체 출시 준비가 완료됐다는 뜻은 아니다.
 
@@ -105,7 +111,7 @@ ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통�
 ## 제출 순서
 
 1. 영구 앱 ID 확정 및 모든 provider 재매핑
-2. Apple revoke, Play 외부 탈퇴 URL, UGC 구현 또는 공유 비활성화
+2. Apple revoke와 Play 외부 탈퇴 URL 구현, 통합된 공유 비활성화의 서명·운영 증거 확보
 3. DB migration 체계와 MySQL 8 스테이징 구성
 4. iOS Archive와 Android AAB 서명·설치
 5. TestFlight / Play internal에서 실제 provider와 실기기 매트릭스 수행
@@ -119,7 +125,8 @@ ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통�
 
 - 영구 앱 ID, signing, provider 설정이 하나의 release identity로 연결돼 있다.
 - Apple 로그인 탈퇴 revoke와 Play 외부 탈퇴 URL이 실제 계정으로 동작한다.
-- 공유가 켜져 있으면 신고·필터·차단·연락처·운영 대응이 동작한다.
+- 공유를 켜면 신고·필터·차단·연락처·운영 대응이 동작한다. 현재 off 후보는 서명 앱과
+  모든 BE 인스턴스가 동일하게 off이고 기존 공유 데이터·알림을 노출하지 않음을 증명한다.
 - App Privacy, Data safety, 개인정보처리방침이 실제 앱·SDK 동작과 일치한다.
 - signed build의 iPhone/Android 알림 매트릭스와 실제 TMAP·FCM·APNs가 통과한다.
 - MySQL 8 migration·다중 인스턴스·장애 복구가 통과한다.
