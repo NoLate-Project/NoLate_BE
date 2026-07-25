@@ -27,6 +27,7 @@ import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.dao.CannotAcquireLockException
+import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import java.util.concurrent.atomic.AtomicReference
@@ -41,8 +42,10 @@ import java.time.Instant
     ScheduleCalendarService::class,
     ScheduleTravelAccessCleanupService::class,
     ScheduleAccessPolicy::class,
+    ScheduleSharingAvailabilityPolicy::class,
     ScheduleCalendarMemberFenceTestConfig::class,
 )
+@TestPropertySource(properties = ["schedule.sharing.enabled=true"])
 class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
     private val service: ScheduleCalendarService,
     private val memberRepository: MemberRepository,

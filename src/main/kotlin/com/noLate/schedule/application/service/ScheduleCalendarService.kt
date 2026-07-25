@@ -33,6 +33,7 @@ class ScheduleCalendarService(
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
     private val mutationFenceObserver: ScheduleCalendarMutationFenceObserver? = null,
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) {
 
     @Transactional
@@ -43,6 +44,7 @@ class ScheduleCalendarService(
         defaultContentMode: ScheduleShareContentMode?,
         presentedSessionGeneration: Long,
     ): ScheduleCalendarDto {
+        sharingAvailabilityPolicy.requireEnabled()
         lockCalendarMembers(
             memberIds = listOf(ownerMemberId),
             actorMemberId = ownerMemberId,
@@ -70,6 +72,7 @@ class ScheduleCalendarService(
 
     @Transactional(readOnly = true)
     fun getCalendars(memberId: Long): List<ScheduleCalendarDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         val memberships = calendarMemberRepository
             .findAllByMemberIdAndStatusAndDeletedFalseOrderByIdAsc(memberId)
             .associateBy { it.calendarId }
@@ -88,6 +91,7 @@ class ScheduleCalendarService(
 
     @Transactional(readOnly = true)
     fun getCalendar(memberId: Long, calendarId: Long): ScheduleCalendarDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val calendar = findActiveCalendar(calendarId)
         val membership = findActiveMembership(calendarId, memberId)
         return calendar.toDto(
@@ -105,6 +109,7 @@ class ScheduleCalendarService(
         defaultContentMode: ScheduleShareContentMode?,
         presentedSessionGeneration: Long,
     ): ScheduleCalendarDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val previewMemberIds = calendarMemberRepository
             .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
             .map { it.memberId }
@@ -145,6 +150,7 @@ class ScheduleCalendarService(
 
     @Transactional(readOnly = true)
     fun getMembers(memberId: Long, calendarId: Long): List<ScheduleCalendarMemberDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         findActiveCalendar(calendarId)
         findActiveMembership(calendarId, memberId)
         val memberships = calendarMemberRepository
@@ -169,6 +175,7 @@ class ScheduleCalendarService(
         authenticatedActorMemberId: Long,
         presentedSessionGeneration: Long,
     ): ScheduleCalendarMemberDto {
+        sharingAvailabilityPolicy.requireEnabled()
         // 잠금 전에 target 엔티티를 persistence context에 올리면 lock 대기 중 withdrawal이
         // commit된 뒤에도 stale deleted=false 상태를 재사용할 수 있다. ID만 해석한 뒤
         // actor와 recipient를 함께 정렬 잠금하고, 잠긴 fresh Member로 상태를 검증한다.
@@ -222,6 +229,7 @@ class ScheduleCalendarService(
         role: ScheduleCalendarRole?,
         presentedSessionGeneration: Long,
     ): ScheduleCalendarMemberDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val lockedMembers = lockCalendarMembers(
             memberIds = listOf(ownerMemberId, targetMemberId),
             actorMemberId = ownerMemberId,
@@ -256,6 +264,7 @@ class ScheduleCalendarService(
         routeReminderEnabled: Boolean,
         presentedSessionGeneration: Long,
     ): ScheduleCalendarMemberDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val lockedMembers = lockCalendarMembers(
             memberIds = listOf(memberId),
             actorMemberId = memberId,
@@ -278,6 +287,7 @@ class ScheduleCalendarService(
         targetMemberId: Long,
         presentedSessionGeneration: Long,
     ) {
+        sharingAvailabilityPolicy.requireEnabled()
         lockCalendarMembers(
             memberIds = listOf(ownerMemberId, targetMemberId),
             actorMemberId = ownerMemberId,
@@ -303,6 +313,7 @@ class ScheduleCalendarService(
         calendarId: Long,
         presentedSessionGeneration: Long,
     ) {
+        sharingAvailabilityPolicy.requireEnabled()
         lockCalendarMembers(
             memberIds = listOf(memberId),
             actorMemberId = memberId,
@@ -334,6 +345,7 @@ class ScheduleCalendarService(
         targetMemberId: Long,
         presentedSessionGeneration: Long,
     ): ScheduleCalendarDto {
+        sharingAvailabilityPolicy.requireEnabled()
         lockCalendarMembers(
             memberIds = listOf(ownerMemberId, targetMemberId),
             actorMemberId = ownerMemberId,
@@ -382,6 +394,7 @@ class ScheduleCalendarService(
         calendarId: Long,
         presentedSessionGeneration: Long,
     ) {
+        sharingAvailabilityPolicy.requireEnabled()
         val previewMemberIds = calendarMemberRepository
             .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
             .map { it.memberId }

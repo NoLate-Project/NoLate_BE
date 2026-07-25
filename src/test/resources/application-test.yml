@@ -24,6 +24,9 @@ calendar:
     enabled: false
 
 schedule:
+  sharing:
+    # The Gradle test profile must not silently reopen schedule sharing.
+    enabled: false
   calendar-cache:
     enabled: false
   push:

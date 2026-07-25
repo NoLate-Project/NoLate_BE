@@ -20,7 +20,7 @@ class PushSendHistoryService(
     private val memberRepository: MemberRepository,
     private val objectMapper: ObjectMapper,
     private val clock: Clock,
-    private val recipientAuthorizationValidator: PushRecipientAuthorizationValidator? = null,
+    private val recipientAuthorizationValidator: PushRecipientAuthorizationValidator,
 ) {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -103,11 +103,23 @@ class PushSendHistoryService(
         calendarId = calendarId,
     )
 
-    fun getRecentByMember(memberId: Long, limit: Int = 50): List<PushSendHistory> =
-        repository.findAllByMemberIdOrderBySentAtDesc(
-            memberId = memberId,
-            pageable = PageRequest.of(0, limit.coerceIn(1, 100)),
-        )
+    @Transactional(readOnly = true)
+    fun getRecentByMember(memberId: Long, limit: Int = 50): List<PushSendHistory> {
+        val normalizedLimit = limit.coerceIn(1, 100)
+        val visible = mutableListOf<PushSendHistory>()
+        var page = 0
+        while (visible.size < normalizedLimit) {
+            val fetched = repository.findAllByMemberIdOrderBySentAtDesc(
+                memberId = memberId,
+                pageable = PageRequest.of(page, HISTORY_AUTHORIZATION_SCAN_BATCH_SIZE),
+            )
+            if (fetched.isEmpty()) break
+            fetched.filterTo(visible) { it.isCurrentlyVisibleTo(memberId) }
+            if (fetched.size < HISTORY_AUTHORIZATION_SCAN_BATCH_SIZE) break
+            page += 1
+        }
+        return visible.take(normalizedLimit)
+    }
 
     private fun save(
         memberId: Long,
@@ -128,13 +140,13 @@ class PushSendHistoryService(
         // that returns after account cleanup therefore cannot recreate private history payloads.
         memberRepository.findActiveNotificationRecipientForUpdate(memberId) ?: return null
         if (
-            recipientAuthorizationValidator?.canDispatch(
+            !recipientAuthorizationValidator.canDispatch(
                 memberId = memberId,
                 scheduleId = scheduleId,
                 categoryId = categoryId,
                 payloadType = data["type"],
                 calendarId = calendarId,
-            ) == false
+            )
         ) {
             return null
         }
@@ -158,6 +170,25 @@ class PushSendHistoryService(
             sentAt = Instant.now(clock),
         )
         return repository.save(history)
+    }
+
+    /**
+     * send-history도 inbox와 같은 title/body/dataJson을 보관한다. 새 history 저장만 막으면
+     * 배포 전에 쌓인 공유 payload가 조회 API에 남으므로 현재 authorization을 다시 적용한다.
+     * row 자체는 운영 증거와 향후 재승인을 위해 삭제하지 않는다.
+     */
+    private fun PushSendHistory.isCurrentlyVisibleTo(memberId: Long): Boolean =
+        this.memberId == memberId &&
+            recipientAuthorizationValidator.canDispatch(
+                memberId = memberId,
+                scheduleId = scheduleId,
+                categoryId = categoryId,
+                payloadType = payloadType,
+                calendarId = calendarId,
+            )
+
+    private companion object {
+        const val HISTORY_AUTHORIZATION_SCAN_BATCH_SIZE = 100
     }
 }
 

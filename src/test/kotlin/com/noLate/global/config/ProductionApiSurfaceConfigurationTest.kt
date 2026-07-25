@@ -37,4 +37,13 @@ class ProductionApiSurfaceConfigurationTest {
             properties.getProperty("schedule.push.enabled"),
         )
     }
+
+    @Test
+    fun `production profile keeps schedule sharing explicitly disabled`() {
+        val properties = YamlPropertiesFactoryBean().apply {
+            setResources(ClassPathResource("application-prod.yml"))
+        }.getObject() ?: error("application-prod.yml could not be loaded")
+
+        assertEquals("false", properties.getProperty("schedule.sharing.enabled"))
+    }
 }

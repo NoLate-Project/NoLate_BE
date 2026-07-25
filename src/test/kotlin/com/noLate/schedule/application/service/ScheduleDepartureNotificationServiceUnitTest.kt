@@ -31,6 +31,7 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import org.mockito.Mockito.lenient
+import org.springframework.mock.env.MockEnvironment
 import java.time.Instant
 
 @ExtendWith(MockitoExtension::class)
@@ -57,6 +58,10 @@ class ScheduleDepartureNotificationServiceUnitTest {
     @Mock
     lateinit var scheduleAccessPolicy: ScheduleAccessPolicy
 
+    private val sharingAvailability = ScheduleSharingAvailabilityPolicy(
+        MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+    )
+
     @BeforeEach
     fun setUpMemberLocks() {
         lenient().whenever(memberRepository.findByIdForUpdate(any())).thenAnswer { invocation ->
@@ -77,7 +82,28 @@ class ScheduleDepartureNotificationServiceUnitTest {
         categoryShareRepository = categoryShareRepository,
             departureStatusRepository = departureStatusRepository,
             pushEventOutboxService = pushEventOutboxService,
+            sharingAvailability = sharingAvailability,
         )
+
+    @Test
+    fun `sharing off rejects nudge before reading participants or creating an outbox event`() {
+        val disabledService = ScheduleDepartureNotificationService(
+            memberRepository = memberRepository,
+            scheduleRepository = scheduleRepository,
+            scheduleShareRepository = scheduleShareRepository,
+            categoryShareRepository = categoryShareRepository,
+            departureStatusRepository = departureStatusRepository,
+            pushEventOutboxService = pushEventOutboxService,
+            sharingAvailability = ScheduleSharingAvailabilityPolicy(MockEnvironment()),
+        )
+
+        val failure = assertThrows(BusinessException::class.java) {
+            disabledService.sendDepartureNudge(1L, 10L, 2L, 0L)
+        }
+
+        assertEquals(ErrorCode.FEATURE_DISABLED, failure.errorCode)
+        verifyNoInteractions(scheduleRepository, pushEventOutboxService)
+    }
 
     @Test
     fun `owner can send a departure nudge to an active direct share participant`() {
@@ -183,6 +209,7 @@ class ScheduleDepartureNotificationServiceUnitTest {
             categoryShareRepository = categoryShareRepository,
             departureStatusRepository = departureStatusRepository,
             pushEventOutboxService = pushEventOutboxService,
+            sharingAvailability = sharingAvailability,
             scheduleAccessPolicy = scheduleAccessPolicy,
         )
 
@@ -205,6 +232,7 @@ class ScheduleDepartureNotificationServiceUnitTest {
             categoryShareRepository = categoryShareRepository,
             departureStatusRepository = departureStatusRepository,
             pushEventOutboxService = pushEventOutboxService,
+            sharingAvailability = sharingAvailability,
             scheduleAccessPolicy = scheduleAccessPolicy,
         )
 

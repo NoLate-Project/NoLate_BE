@@ -14,6 +14,7 @@ import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.schedule.application.service.ScheduleAccessPolicy
+import com.noLate.schedule.application.service.ScheduleSharingAvailabilityPolicy
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCalendar
@@ -73,6 +74,7 @@ import org.springframework.transaction.support.TransactionTemplate
     AccountCleanupService::class,
     NotificationTokenRetirementService::class,
     ScheduleAccessPolicy::class,
+    ScheduleSharingAvailabilityPolicy::class,
     ScheduleTravelAccessCleanupService::class,
     AccountOwnerWithdrawalCleanupTestConfig::class,
 )

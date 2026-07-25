@@ -218,6 +218,9 @@ class ScheduleNotificationActionIdempotencyWriter(
             key,
         )
         requireActiveRecipient(memberId, presentedSessionGeneration)
+        // The receipt key proves retry identity, not current resource authority. An old
+        // participant receipt must not reopen a dormant sharing path after production-off.
+        scheduleService.getScheduleDetail(memberId, scheduleId)
         val existing = receiptRepository.findByKeyFingerprintForUpdate(key.fingerprint)
         if (existing != null) {
             validateScope(existing, memberId, scheduleId, ScheduleNotificationActionType.SNOOZE)

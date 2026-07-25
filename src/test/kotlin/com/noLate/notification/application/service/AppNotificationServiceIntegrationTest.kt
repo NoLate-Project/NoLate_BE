@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.support.AllowAllPushRecipientAuthorizationTestConfig
 import com.noLate.notification.support.ensureActivePushMember
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -34,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference
     AppNotificationService::class,
     AppNotificationWriter::class,
     AppNotificationTestConfig::class,
+    AllowAllPushRecipientAuthorizationTestConfig::class,
 )
 @TestPropertySource(
     properties = [

@@ -25,6 +25,7 @@ data class ScheduleShareGrantedEvent(
 @Component
 class ScheduleSharePushNotificationListener(
     private val pushEventOutboxService: PushEventOutboxService,
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) {
     /**
      * 공유 변경과 immutable payload/recipient manifest를 같은 transaction에 저장한다.
@@ -34,6 +35,11 @@ class ScheduleSharePushNotificationListener(
      */
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     fun onShareGranted(event: ScheduleShareGrantedEvent) {
+        // 숨겨진 FE 진입점만으로는 직접 API 호출이나 이미 실행 중인 구버전 클라이언트를
+        // 막을 수 없다. off에서는 기존 grant row를 복구 가능한 dormant 상태로 남기되,
+        // 새 immutable inbox/outbox source와 delivery manifest는 만들지 않는다.
+        if (!sharingAvailabilityPolicy.enabled) return
+
         val notification = notificationFor(event)
         pushEventOutboxService.enqueueDurable(
             memberId = event.targetMemberId,

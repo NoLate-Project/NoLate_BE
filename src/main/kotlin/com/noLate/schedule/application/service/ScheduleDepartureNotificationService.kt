@@ -30,6 +30,7 @@ class ScheduleDepartureNotificationService(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
     private val pushEventOutboxService: PushEventOutboxService,
+    private val sharingAvailability: ScheduleSharingAvailabilityPolicy,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
 ) {
 
@@ -40,6 +41,7 @@ class ScheduleDepartureNotificationService(
         targetMemberId: Long,
         presentedSessionGeneration: Long,
     ): NotificationSendResult {
+        sharingAvailability.requireEnabled()
         val lockedById = setOf(ownerMemberId, targetMemberId)
             .sorted()
             .associateWith(memberRepository::findByIdForUpdate)

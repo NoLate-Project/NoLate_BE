@@ -679,7 +679,27 @@ class ScheduleUseCaseUnitTest {
         )
 
         verify(memberService).getActiveMemberForUpdate(1L, 9L)
+        verify(scheduleService).getScheduleDetail(1L, 10L)
         verify(schedulePushJobService).snoozeDepartureReminder(1L, 10L)
+    }
+
+    @Test
+    fun `sharing off makes a dormant participant snooze fail before job mutation`() {
+        whenever(scheduleService.getScheduleDetail(2L, 10L))
+            .thenThrow(BusinessException(ErrorCode.SCHEDULE_NOT_FOUND))
+
+        val failure = assertThrows(BusinessException::class.java) {
+            scheduleUseCase.snoozeDepartureReminder(
+                memberId = 2L,
+                scheduleId = 10L,
+                idempotencyKey = null,
+                presentedSessionGeneration = 9L,
+            )
+        }
+
+        assertEquals(ErrorCode.SCHEDULE_NOT_FOUND, failure.errorCode)
+        verify(memberService).getActiveMemberForUpdate(2L, 9L)
+        verify(schedulePushJobService, never()).snoozeDepartureReminder(2L, 10L)
     }
 
     @Test

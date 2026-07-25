@@ -29,6 +29,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.check
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -69,6 +70,9 @@ class ScheduleShareInvitationServiceUnitTest {
             memberRepository = memberRepository,
             clock = clock,
             tokenGenerator = tokenGenerator,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
         org.mockito.Mockito.lenient().`when`(memberRepository.findByIdForUpdate(1L))
             .thenReturn(Member(id = 1L, name = "Owner", password = "Password1!", email = "owner@example.com"))

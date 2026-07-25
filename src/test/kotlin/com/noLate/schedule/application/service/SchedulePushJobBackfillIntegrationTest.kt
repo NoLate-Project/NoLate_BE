@@ -43,6 +43,7 @@ import java.time.ZoneOffset
     SchedulePushJobBackfill::class,
     SchedulePushJobService::class,
     ScheduleAccessPolicy::class,
+    ScheduleSharingAvailabilityPolicy::class,
     SchedulePushJobBackfillTestConfig::class,
 )
 @TestPropertySource(
@@ -51,6 +52,7 @@ import java.time.ZoneOffset
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "schedule.sharing.enabled=true",
     ],
 )
 @Transactional(propagation = Propagation.NOT_SUPPORTED)

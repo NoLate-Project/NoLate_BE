@@ -24,6 +24,10 @@ springdoc:
     enabled: false
 
 schedule:
+  sharing:
+    # Store production keeps existing share rows dormant. The central policy also
+    # rejects every prod-profile override, including CLI and system properties.
+    enabled: false
   push:
     # 최초 migration 기동은 false로 두어 guard/backfill/smoke가 끝나기 전에 어떤
     # @Scheduled worker도 시작하지 않게 한다. 검증 뒤 명시적 재시작에서만 true로 전환한다.

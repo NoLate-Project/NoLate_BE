@@ -36,6 +36,9 @@ calendar:
     enabled: false
 
 schedule:
+  sharing:
+    # Tests fail closed unless a sharing regression explicitly opts in.
+    enabled: false
   calendar-cache:
     enabled: false
   push:

@@ -3,6 +3,7 @@ package com.noLate.schedule.application.service
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleDepartureParticipantDto
 import com.noLate.schedule.domain.ScheduleDepartureParticipantRole
 import com.noLate.schedule.domain.ScheduleDepartureStatus
@@ -161,10 +162,8 @@ class ScheduleDepartureStatusService(
         memberId: Long,
         scheduleId: Long,
     ): com.noLate.schedule.domain.Schedule {
-        val visibleSchedule = scheduleRepository.findScheduleDetail(
-            scheduleId = scheduleId,
-            memberId = memberId,
-        ) ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        val visibleSchedule = findVisibleSchedule(memberId, scheduleId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
         scheduleAccessPolicy?.resolve(memberId, visibleSchedule)?.let { access ->
             if (!access.travelEnabled) {
                 throw BusinessException(ErrorCode.FORBIDDEN, "이 일정은 이동 기능을 공유하지 않습니다.")
@@ -228,9 +227,9 @@ class ScheduleDepartureStatusService(
         val ownerMemberId = scheduleDto.ownerMemberId ?: return scheduleDto
         val categoryId = scheduleDto.category.id?.toLongOrNull()
 
-        val schedule = scheduleRepository.findScheduleDetail(scheduleId, currentMemberId)
+        val schedule = findVisibleSchedule(currentMemberId, scheduleId)
         val access = schedule?.let { scheduleAccessPolicy?.resolve(currentMemberId, it) }
-        if (access?.travelEnabled == false) {
+        if (scheduleAccessPolicy != null && (schedule == null || access?.travelEnabled != true)) {
             return scheduleDto.copy(myDepartedAt = null, departureParticipants = emptyList())
         }
 
@@ -293,6 +292,20 @@ class ScheduleDepartureStatusService(
             myDepartedAt = myDepartedAt,
             departureParticipants = participants,
         )
+    }
+
+    /**
+     * Off 상태에서는 broad share-aware native query 자체를 실행하지 않는다. 이후 canView
+     * 재검증도 유지해 enabled 상태의 revoke/delete 경합에서 stale grant를 fail closed한다.
+     */
+    private fun findVisibleSchedule(memberId: Long, scheduleId: Long): Schedule? {
+        val schedule = if (scheduleAccessPolicy?.isSharingDisabled() == true) {
+            scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)
+        } else {
+            scheduleRepository.findScheduleDetail(scheduleId, memberId)
+        } ?: return null
+        val access = scheduleAccessPolicy?.resolve(memberId, schedule)
+        return schedule.takeUnless { access != null && !access.canView }
     }
 
     private fun legacyParticipantIds(schedule: com.noLate.schedule.domain.Schedule): LinkedHashSet<Long> =

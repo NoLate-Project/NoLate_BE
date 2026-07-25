@@ -28,6 +28,7 @@ import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleCategoryServiceUnitTest {
@@ -42,7 +43,13 @@ class ScheduleCategoryServiceUnitTest {
 
     @BeforeEach
     fun setUp() {
-        service = ScheduleCategoryService(categoryRepository, memberRepository)
+        service = ScheduleCategoryService(
+            categoryRepository,
+            memberRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+        )
         lenient().whenever(memberRepository.findByIdForUpdate(7L)).thenReturn(
             Member(id = 7L, name = "Member", password = "Password1!", email = "member@example.com")
         )
@@ -70,6 +77,9 @@ class ScheduleCategoryServiceUnitTest {
             categoryRepository = categoryRepository,
             memberRepository = memberRepository,
             categoryShareRepository = shareRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
         val owned = ScheduleCategory(id = 1L, memberId = memberId, title = "내 일정")
         val received = ScheduleCategory(id = 2L, memberId = 99L, title = "팀 일정")
@@ -101,6 +111,31 @@ class ScheduleCategoryServiceUnitTest {
         assertEquals(null, result.first { it.id == "1" }.sharePermission)
         assertEquals(true, result.first { it.id == "2" }.shared)
         assertEquals(ScheduleSharePermission.EDITOR, result.first { it.id == "2" }.sharePermission)
+    }
+
+    @Test
+    fun `global sharing off returns only owned categories without reading dormant grants`() {
+        val memberId = 7L
+        val shareRepository = mock<ScheduleCategoryShareRepository>()
+        val disabledService = ScheduleCategoryService(
+            categoryRepository = categoryRepository,
+            memberRepository = memberRepository,
+            categoryShareRepository = shareRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
+            ),
+        )
+        val owned = ScheduleCategory(id = 1L, memberId = memberId, title = "내 일정")
+        whenever(categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId))
+            .thenReturn(listOf(owned))
+
+        val result = disabledService.getCategories(memberId, presentedSessionGeneration = 0L)
+
+        assertEquals(listOf("1"), result.map { it.id })
+        assertTrue(result.none { it.shared })
+        verify(categoryRepository, never()).findVisibleCategories(memberId)
+        verify(shareRepository, never())
+            .findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(any(), any())
     }
 
     @Test
@@ -190,6 +225,9 @@ class ScheduleCategoryServiceUnitTest {
             memberRepository = memberRepository,
             categoryShareRepository = shareRepository,
             travelAccessCleanupService = cleanupService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
         val category = ScheduleCategory(id = 4L, memberId = 7L, title = "삭제 대상")
         val share = ScheduleCategoryShare(

@@ -13,13 +13,34 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.check
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleSharePushNotificationListenerUnitTest {
 
     @Mock
     lateinit var pushEventOutboxService: PushEventOutboxService
+
+    @Test
+    fun `fail closed sharing policy creates no inbox outbox or delivery manifest`() {
+        val listener = ScheduleSharePushNotificationListener(
+            pushEventOutboxService = pushEventOutboxService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(MockEnvironment()),
+        )
+
+        listener.onShareGranted(
+            ScheduleShareGrantedEvent(
+                targetMemberId = 2L,
+                resourceType = ScheduleShareResourceType.SCHEDULE,
+                resourceId = 10L,
+                resourceTitle = "dormant share",
+            )
+        )
+
+        verifyNoInteractions(pushEventOutboxService)
+    }
 
     @Test
     fun `schedule share event durably enqueues a detail deep link payload`() {
@@ -104,7 +125,10 @@ class ScheduleSharePushNotificationListenerUnitTest {
 
     @Test
     fun `outbox persistence failure escapes so the sharing transaction can roll back`() {
-        val listener = ScheduleSharePushNotificationListener(pushEventOutboxService)
+        val listener = ScheduleSharePushNotificationListener(
+            pushEventOutboxService,
+            enabledSharingPolicy(),
+        )
         whenever(
             pushEventOutboxService.enqueueDurable(
                 any(),
@@ -137,8 +161,15 @@ class ScheduleSharePushNotificationListenerUnitTest {
                 any(),
             )
         ).thenReturn(preparedEvent())
-        return ScheduleSharePushNotificationListener(pushEventOutboxService)
+        return ScheduleSharePushNotificationListener(
+            pushEventOutboxService,
+            enabledSharingPolicy(),
+        )
     }
+
+    private fun enabledSharingPolicy() = ScheduleSharingAvailabilityPolicy(
+        MockEnvironment().withProperty("schedule.sharing.enabled", "true")
+    )
 
     private fun preparedEvent(): PreparedPushEvent =
         PreparedPushEvent(

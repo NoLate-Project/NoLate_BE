@@ -27,6 +27,7 @@ class ScheduleCategoryService(
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
     private val categoryDeleteCoordinator: ScheduleCategoryDeleteCoordinator? = null,
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) {
     private val defaultCategories = listOf(
         DefaultScheduleCategory("업무", "#f44336", "briefcase-outline"),
@@ -54,7 +55,13 @@ class ScheduleCategoryService(
 
     private fun getCategoriesAfterFence(memberId: Long): List<ScheduleCategorySettingDto> {
         ensureDefaultCategories(memberId)
-        val visibleCategories = categoryRepository.findVisibleCategories(memberId)
+        val visibleCategories = if (sharingAvailabilityPolicy.enabled) {
+            categoryRepository.findVisibleCategories(memberId)
+        } else {
+            // 공유 row는 재활성화 가능한 dormant 상태로 남겨 두되, off 동안에는 그 grant를
+            // 조회 조건에 사용하지 않아 다른 회원의 카테고리 UGC가 응답에 섞이지 않게 한다.
+            categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId)
+        }
         val hasReceivedCategory = visibleCategories.any { it.memberId != memberId }
         val permissionByCategoryId = if (hasReceivedCategory) {
             categoryShareRepository

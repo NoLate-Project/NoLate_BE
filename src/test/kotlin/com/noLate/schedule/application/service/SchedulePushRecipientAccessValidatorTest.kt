@@ -19,7 +19,9 @@ import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 import java.time.Instant
 import java.util.Optional
 
@@ -32,6 +34,93 @@ class SchedulePushRecipientAccessValidatorTest {
     @Mock lateinit var categoryShareRepository: ScheduleCategoryShareRepository
     @Mock lateinit var calendarRepository: ScheduleCalendarRepository
     @Mock lateinit var calendarMemberRepository: ScheduleCalendarMemberRepository
+
+    @Test
+    fun `global off rejects every sharing-only payload even when frozen identity is missing`() {
+        listOf(
+            "SCHEDULE_SHARE_RECEIVED",
+            "CATEGORY_SHARE_RECEIVED",
+            "CALENDAR_SHARE_RECEIVED",
+            "SCHEDULE_PARTICIPANT_DEPARTED",
+            "SCHEDULE_DEPARTURE_NUDGE",
+        ).forEach { payloadType ->
+            assertFalse(
+                validator(sharingEnabled = false).canDispatch(
+                    memberId = 2L,
+                    scheduleId = null,
+                    categoryId = null,
+                    payloadType = payloadType,
+                    calendarId = null,
+                ),
+                payloadType,
+            )
+        }
+
+        verifyNoInteractions(
+            scheduleRepository,
+            accessPolicy,
+            categoryRepository,
+            categoryShareRepository,
+            calendarRepository,
+            calendarMemberRepository,
+        )
+    }
+
+    @Test
+    fun `global off preserves owner schedule push and rejects dormant shared recipient`() {
+        val schedule = schedule()
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        val validator = validator(sharingEnabled = false)
+
+        assertTrue(
+            validator.canDispatch(1L, 10L, null, "SCHEDULE_DEPARTURE_REMINDER")
+        )
+        assertFalse(
+            validator.canDispatch(2L, 10L, null, "SCHEDULE_DEPARTURE_REMINDER")
+        )
+
+        verify(accessPolicy, never()).resolve(2L, schedule)
+    }
+
+    @Test
+    fun `global off rejects legacy schedule payload when frozen schedule identity is missing`() {
+        listOf(
+            SchedulePushPayloadAccessPolicy.SCHEDULE_PUSH_PAYLOAD_TYPE,
+            "SCHEDULE_DETAIL",
+            "SCHEDULE_TRAFFIC",
+            "SCHEDULE_DEPARTURE_REMINDER",
+            "ROUTE_SETUP_REMINDER",
+        ).forEach { payloadType ->
+            assertFalse(
+                validator(sharingEnabled = false).canDispatch(
+                    memberId = 2L,
+                    scheduleId = null,
+                    categoryId = null,
+                    payloadType = payloadType,
+                    calendarId = null,
+                ),
+                payloadType,
+            )
+        }
+
+        assertTrue(
+            validator(sharingEnabled = false).canDispatch(
+                memberId = 2L,
+                scheduleId = null,
+                categoryId = null,
+                payloadType = "GENERAL",
+                calendarId = null,
+            )
+        )
+        verifyNoInteractions(
+            scheduleRepository,
+            accessPolicy,
+            categoryRepository,
+            categoryShareRepository,
+            calendarRepository,
+            calendarMemberRepository,
+        )
+    }
 
     @Test
     fun `travel payload rejects participant whose category travel grant was revoked`() {
@@ -166,13 +255,20 @@ class SchedulePushRecipientAccessValidatorTest {
         verify(scheduleRepository, never()).findById(10L)
     }
 
-    private fun validator() = SchedulePushRecipientAccessValidator(
+    private fun validator(sharingEnabled: Boolean = true) = SchedulePushRecipientAccessValidator(
         scheduleRepository = scheduleRepository,
         accessPolicy = accessPolicy,
         categoryRepository = categoryRepository,
         categoryShareRepository = categoryShareRepository,
         calendarRepository = calendarRepository,
         calendarMemberRepository = calendarMemberRepository,
+        sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+            MockEnvironment().apply {
+                if (sharingEnabled) {
+                    withProperty("schedule.sharing.enabled", "true")
+                }
+            }
+        ),
     )
 
     private fun schedule() = Schedule(

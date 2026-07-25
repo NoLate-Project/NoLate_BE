@@ -374,6 +374,9 @@ class ScheduleUseCase(
             return
         }
         memberService.getActiveMemberForUpdate(memberId, presentedSessionGeneration)
+        // A stale participant job can outlive a dormant share row. Re-resolve the schedule
+        // through the authoritative availability/access policy before mutating that job.
+        scheduleService.getScheduleDetail(memberId, scheduleId)
         schedulePushJobService.snoozeDepartureReminder(memberId, scheduleId)
     }
 

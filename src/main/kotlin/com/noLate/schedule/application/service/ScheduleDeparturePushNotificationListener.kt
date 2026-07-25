@@ -23,6 +23,7 @@ data class ScheduleParticipantDepartedEvent(
 @Component
 class ScheduleDeparturePushNotificationListener(
     private val pushEventOutboxService: PushEventOutboxService,
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) {
     /**
      * 출발 전이와 수신자별 immutable outbox를 같은 transaction에 저장한다. provider 호출은
@@ -30,6 +31,9 @@ class ScheduleDeparturePushNotificationListener(
      */
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     fun onParticipantDeparted(event: ScheduleParticipantDepartedEvent) {
+        // 정상 service 경로도 off에서 recipient를 owner-only로 줄이지만, listener 자체의
+        // 경계가 없으면 내부 event 재발행이 새 cross-user outbox를 만들 수 있다.
+        if (!sharingAvailabilityPolicy.enabled) return
         if (event.recipientMemberIds.isEmpty()) return
 
         event.recipientMemberIds.distinct().forEach { recipientMemberId ->

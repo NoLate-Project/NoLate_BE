@@ -33,6 +33,7 @@ import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
+import com.noLate.notification.support.AllowAllPushRecipientAuthorizationTestConfig
 import com.noLate.notification.support.registerAuthenticatedPushToken
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
@@ -94,6 +95,7 @@ import java.util.concurrent.atomic.AtomicReference
     SchedulePersistedPushDispatchFenceFactory::class,
     SchedulePushOutboxConfirmedDeliveryReconciler::class,
     SchedulePersistedPushSafetyTestConfig::class,
+    AllowAllPushRecipientAuthorizationTestConfig::class,
 )
 @TestPropertySource(
     properties = [

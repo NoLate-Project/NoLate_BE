@@ -18,9 +18,15 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
+import org.springframework.test.context.TestPropertySource
 
 @DataJpaTest
-@Import(ScheduleCalendarService::class, ScheduleShareService::class)
+@Import(
+    ScheduleCalendarService::class,
+    ScheduleShareService::class,
+    ScheduleSharingAvailabilityPolicy::class,
+)
+@TestPropertySource(properties = ["schedule.sharing.enabled=true"])
 class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
     private val calendarService: ScheduleCalendarService,
     private val shareService: ScheduleShareService,
