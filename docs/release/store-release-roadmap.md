@@ -1,15 +1,17 @@
 # App Store & Google Play Release Roadmap
 
-Last reviewed: 2026-07-25 KST
+Last reviewed: 2026-07-26 KST
 
 ## 현재 판정
 
 > **출시 준비 완료 아님.**
 
 ETA·푸시 신뢰성 코드는 통합 자동검증과 독립 재감사를 통과했고, 일정 공유는 store
-production에서 FE·BE 모두 fail-closed하도록 통합했다. 그러나 영구 앱 ID, Apple token
-revoke, Google Play 외부 탈퇴 URL, 공유-off 서명·운영 증거, 서명 산출물,
-실기기·실제 provider·MySQL 8 검증이 남아 있으므로 아직 production 제출 단계가 아니다.
+production에서 FE·BE 모두 fail-closed하도록 통합했다. A–D 회귀, FE·BE 전체 자동검증,
+MySQL 8 동시성 3건과 iOS Release Simulator·Android API 35 emulator·통합 BE 로컬
+런타임도 통과했다. 그러나 영구 앱 ID, Apple token revoke, Google Play 외부 탈퇴 URL,
+정상 health endpoint, 공유-off 서명·운영 증거, store-signed 실기기·실제 provider
+검증이 남아 있으므로 아직 production 제출 단계가 아니다.
 
 ## 상태 기준
 
@@ -24,14 +26,14 @@ revoke, Google Play 외부 탈퇴 URL, 공유-off 서명·운영 증거, 서명 
 
 | 우선순위 | 작업 | App Store | Play Store | 소스 영향 | 상태 | 완료 조건 |
 | --- | --- | --- | --- | --- | --- | --- |
-| P0-01 | 영구 Bundle ID / Package Name과 provider 매핑 | 필수 | 필수 | FE 네이티브·빌드, 외부 SDK | 개발 필요 | `com.anonymous.*`를 영구 ID로 바꾸고 메인 앱·확장·App Group·Keychain·Firebase·소셜·지도/교통 provider를 동일 ID로 재연결 |
-| P0-02 | Sign in with Apple 탈퇴 token revoke | 필수 | 해당 없음 | FE 인증, BE Apple 연동·보안 | 개발 필요 | authorization code 교환과 token 보관 정책을 정하고 탈퇴 시 Apple `/auth/revoke` 수행·실패 처리 |
-| P0-03 | 앱 밖 계정 삭제 요청 URL | 선택 | 필수 | Web, BE API·보안 | 개발 필요 | 앱명, 삭제 범위, 보유 데이터·기간이 보이는 공개 URL에서 앱 없이 본인 확인 후 삭제 요청 가능 |
-| P0-04 | 일정 공유 UGC 안전장치 또는 기능 비활성화 | 필수 | 필수 | FE, BE, DB, 운영 | 부분 완료 | FE `adfd489a`, BE `94696033`의 전역 off와 dormant 보존은 승인됨. 서명 store build, 모든 prod 인스턴스 `DISABLED`, 직접 API 차단 probe, provider 호출 0·row 무변경을 스테이징/운영에서 증명 |
+| P0-01 | 영구 Bundle ID / Package Name과 provider 매핑 | 필수 | 필수 | FE 네이티브·빌드, 외부 SDK | 개발 필요 | FE의 `com.anonymous.*`, App Group·Keychain·Firebase client 값을 영구 release identity로 바꾸고 Apple·Google·Kakao·Naver·TMAP/ODsay 콘솔을 같은 ID에 재연결 |
+| P0-02 | Sign in with Apple 탈퇴 token revoke | 필수 | 해당 없음 | FE 인증, BE Apple 연동·보안 | 개발 필요 | FE는 authorization code를 전달하지만 BE가 사용하지 않음. server-side code exchange, token 보호·보관, 탈퇴 시 Apple `/auth/revoke`, 실패·재시도 정책을 구현하고 실제 계정으로 검증 |
+| P0-03 | 앱 밖 계정 삭제 요청 URL | 선택 | 필수 | Web, BE API·보안 | 개발 필요 | 인증된 앱 내 `DELETE /api/member/withdraw`와 cleanup은 존재함. 앱명·삭제 범위·보유 기간이 보이는 공개 HTTPS 경로에서 앱 없이 본인 확인 후 삭제 요청 가능하게 구현 |
+| P0-04 | 일정 공유 UGC 안전장치 또는 기능 비활성화 | 필수 | 필수 | FE, BE, DB, 운영 | 부분 완료 | FE `adfd489a`, BE `e9e753c6`의 전역 off와 dormant 보존이 승인됨. 로컬 iOS Release Simulator·Android API 35 Debug·통합 BE에서 공유 UI/deep link가 닫히고 인증 API 8종이 `403 C006`, provider 호출 0임을 확인. store-signed·prod 증거는 남음 |
 | P0-05 | 운영 DB migration 체계 | 공통 운영 | 공통 운영 | BE, DB, CI/CD | 부분 완료 | 버전 SQL, production schema guard와 rollout runbook을 실제 MySQL 8에 적용하고 marker, roll-forward/rollback, backup/restore를 스테이징에서 검증 |
-| P0-06 | Distribution Archive와 서명 AAB | 필수 | 필수 | FE 네이티브, CI, secret 운영 | 미완료 | 영구 ID의 iOS Distribution Archive와 Android release AAB를 생성·설치하고 스토어 사전 검사 통과 |
-| P0-07 | 실기기 ETA·알림 acceptance | 필수 | 필수 | 실패 시 FE/BE 수정 | 미완료 | iPhone과 Android 12/13+에서 실제 TMAP·FCM·APNs로 상태·권한·액션 매트릭스 통과 |
-| P0-08 | MySQL 8 다중 인스턴스·장애 복구 | 공통 운영 | 공통 운영 | BE 운영·DB | 미완료 | migration, 중복 scheduler, lock/deadlock, lease 만료, 프로세스 중단·재시작 통과 |
+| P0-06 | Distribution Archive와 서명 AAB | 필수 | 필수 | FE 네이티브, CI, secret 운영 | 미완료 | iOS Simulator Release와 Android Debug APK는 실행됨. 영구 ID의 iOS Distribution Archive와 Android release AAB를 생성·설치하고 스토어 사전 검사 통과 |
+| P0-07 | 실기기 ETA·알림 acceptance | 필수 | 필수 | 실패 시 FE/BE 수정 | 미완료 | iOS 26.1 Simulator와 Android API 35 emulator의 앱 셸은 통과함. iPhone과 Android 12/13+ 물리 기기에서 실제 TMAP·FCM·APNs 상태·권한·액션 매트릭스 통과 |
+| P0-08 | MySQL 8 다중 인스턴스·장애 복구 | 공통 운영 | 공통 운영 | BE 운영·DB | 부분 완료 | MySQL 8.4 Testcontainers 동시성 3건은 3/3 통과함. migration, 중복 scheduler, lease 만료, 프로세스 중단·재시작을 운영 동등 환경에서 추가 검증 |
 | P0-09 | Firebase·Apple·Google·Kakao·Naver·TMAP 운영 설정 | 필수 | 필수 | 주로 외부 콘솔, 일부 FE 설정 | 미완료 | release ID·SHA·인증서·redirect·API 제한·APNs key로 실제 로그인·지도·푸시 성공 및 Google Calendar OAuth 공개 앱 검증 |
 | P0-10 | 심사 계정과 reviewer 경로 | 필수 | 필수 | 운영 데이터, 리뷰 노트 | 미완료 | 만료되지 않는 계정, 샘플 일정·공유 데이터, 비자명 기능 설명, 심사 기간 BE 가용성 준비 |
 | P0-11 | 스토어 메타데이터와 에셋 | 필수 | 필수 | 에셋, 콘솔 | 미완료 | 지원·개인정보 URL, 설명, 연령 등급, iPhone 스크린샷, Play 아이콘·feature graphic·스크린샷 준비 |
@@ -39,12 +41,13 @@ revoke, Google Play 외부 탈퇴 URL, 공유-off 서명·운영 증거, 서명 
 | P0-13 | 개인정보·약관·App Privacy·Data safety 정합성 | 필수 | 필수 | BE 법률 문서, FE fallback, 콘솔 | 부분 완료 | 위치·일정·검색·푸시 토큰·빠른 입력·Firebase/Groq 등 실제 SDK 흐름과 연령 정책을 단일 데이터 맵으로 대조하고 게시 |
 | P0-14 | ETA 출처·신선도·동일 경로 비교 | 공통 | 공통 | FE, BE, DB | 부분 완료 | 통합 코드는 승인됨. 실제 TMAP에서 live 증가·감소·timeout·fallback·stale·경로 변경을 운영 DB/UI까지 검증 |
 | P0-15 | 푸시 내구성·권한 fence·다기기 재시도 | 공통 | 공통 | FE, BE, DB | 부분 완료 | 통합 코드는 승인됨. 실제 FCM/APNs와 다중 인스턴스에서 중복·유실·계정 전환·부분 실패를 계측 |
-| P0-16 | FE auth epoch·로컬 purge·신뢰도 UI | 필수 | 필수 | FE JS·native storage | 부분 완료 | 자동 테스트는 승인됨. 서명 빌드에서 로그아웃·탈퇴·재로그인·강제 종료·오프라인 복구 확인 |
+| P0-16 | FE auth epoch·로컬 purge·신뢰도 UI | 필수 | 필수 | FE JS·native storage | 부분 완료 | 자동 테스트와 Simulator/AVD 더미 인증 cleanup은 확인됨. 서명 실기기에서 로그아웃·탈퇴·재로그인·계정 전환·강제 종료·오프라인 복구 확인 |
+| P0-17 | 배포 health check 계약 | 공통 운영 | 공통 운영 | BE, 배포 | 개발 필요 | 현재 `/health`의 `500 C000`과 `/actuator/health`의 `401`을 해소하고 인증 없는 liveness/readiness `200`, 배포 probe와 회귀 테스트 구현 |
 | P1-01 | 버전·빌드 번호와 release config | 필수 | 필수 | FE app config, Xcode, Gradle, CI | 부분 완료 | 영구 ID 전환 후 앱·확장·Android 버전 정책을 CI에서 검사하고 실제 업로드로 확인 |
 | P1-02 | 푸시·ETA 운영 관측과 호출 경보 | 권장 | 권장 | FE/BE metric·crash SDK, 운영 | 개발 필요 | actuator/micrometer 또는 동등 metric과 Crashlytics/Sentry를 붙이고 지연 job, lease, provider 실패율, ambiguous 발송에 dashboard·alert 연결 |
 | P1-03 | HTTPS Universal Link / App Link | 권장 | 권장 | FE 네이티브, Web | 개발 필요 | AASA/assetlinks와 HTTPS 초대 링크를 제공하고 설치·미설치 fallback 검증 |
 | P1-04 | Android adaptive icon | 해당 없음 | 권장 | FE Android resource/config | 부분 완료 | 원형·사각형 launcher와 Play listing에서 잘림 없는지 release 빌드로 확인 |
-| P1-05 | FE build/CLI 공급망과 간접 lodash | 권장 | 권장 | FE lock, CI Node/native build | 개발 필요 | 남은 CLI/build critical 3·high 8과 앱 전이 lodash high 1을 호환 패치로 정리하고 Node 22/24 LTS의 native release build로 검증 |
+| P1-05 | FE build/CLI 공급망과 간접 lodash | 권장 | 권장 | FE lock, CI Node/native build | 개발 필요 | iOS Simulator Release와 Android Debug native build는 성공함. 남은 CLI/build critical 3·high 8과 앱 전이 lodash high 1을 정리하고 Node 22/24 LTS의 store release build로 검증 |
 | P2-01 | 반복 일정 | 제품 선택 | 제품 선택 | FE, BE, DB | 개발 필요 | 초기 출시 차단 항목은 아님. UT에서 수요 확인 후 발생·수정·push job 정책 구현 |
 | P2-02 | 다중 시간대·DST | 제품 선택 | 제품 선택 | FE, BE, DB | 개발 필요 | 국내 MVP 비차단. 해외 확장 전 사용자 시간대·DST·종일 일정 규칙 구현 |
 
@@ -57,11 +60,29 @@ revoke, Google Play 외부 탈퇴 URL, 공유-off 서명·운영 증거, 서명 
 | 완료-03 | BE ETA·푸시 통합 | 완료 | `3986d84552a162281986432d62295bc404153b09`: 768 tests 중 765 실행 통과, MySQL Docker 3건 조건부 스킵, 실패 0 |
 | 완료-04 | BE exact commit 독립 감사 | 완료 | ETA 결합과 push 보안·상태 머신 두 감사 모두 P0 0 / P1 0 승인 |
 | 완료-05 | 원본 변경 보호 | 완료 | 기존 dirty FE/BE 작업 트리를 유지하고 별도 integration worktree에서 통합 |
-| 완료-06 | FE 일정 공유 production-off | 완료 | `adfd489a52175d4fe4301f26dffec1746ba7a991`: release config·typecheck 통과, lint 오류 0, 176 suites / 1,384 tests |
-| 완료-07 | BE 일정 공유 production-off | 완료 | `946960331d4f4c6cf7a8770cb93eac2e271c4a0c`: 806 tests, 실패·오류 0, MySQL Docker 3건 조건부 스킵 |
-| 완료-08 | P0-04 독립 감사와 A–D 회귀 | 완료 | exact 구현 감사 P0 0 / P1 0, A 58·B 99·C 60·D 71 representative tests 통과 |
+| 완료-06 | FE 일정 공유 production-off | 완료 | `adfd489a52175d4fe4301f26dffec1746ba7a991`: release config·typecheck 통과, lint 오류 0·경고 166, 176 suites / 1,384 tests |
+| 완료-07 | BE 일정 공유 production-off | 완료 | `e9e753c6a4c6372105bcf36b3f1b7e4c658b09ff`(공유-off 코드 `94696033`): 전체 회귀 803건 통과·MySQL 3건 조건부 스킵 후 동일 3건을 MySQL 8.4로 별도 실행해 3/3 통과, 미검증 0·실패 0 |
+| 완료-08 | P0-04 독립 감사와 A–D 회귀 | 완료 | exact FE/BE HEAD에서 A ETA 8 suites/58, B push 9/99, C detail/notification 6/60, D next-departure 3/71을 재실행해 skip·fail·error 0 |
+| 완료-09 | 공유-off 로컬 실제 런타임 | 완료 | iOS Release Simulator·Android API 35 Debug의 공유 UI 0·공유 deep link 4종 home fail-closed, 통합 BE 인증 공유 API 8종 `403 C006`, 외부 provider 호출 0 |
+| 완료-10 | 로컬 앱 안정성·번들 독립성 | 완료 | iOS Release embedded Hermes/Metro 접근 0·19분 이상 생존·치명 오류 0, Android 관측 구간 crash/ANR/ReactNativeJS E/F 0 |
 
-위 `완료`는 소스와 자동검증 범위다. 실기기·운영·콘솔 게이트가 남아 있으므로 앱 전체 출시 준비가 완료됐다는 뜻은 아니다.
+위 `완료`는 명시된 소스·자동·로컬 실행 범위다. iOS Simulator Release는
+Distribution Archive가 아니고 Android Debug APK는 서명 release AAB가 아니며,
+H2/Testcontainers는 스테이징·운영을 대체하지 않는다.
+
+## 2026-07-26 로컬 실제 실행 증거
+
+- iOS: iOS 26.1 Simulator용 Release를 production sharing-off로 빌드했다. embedded
+  Hermes bundle로 Metro 없이 실행됐고 인증 홈·알림·공유 deep link 4종 fail-closed,
+  19분 이상 프로세스 생존을 확인했다. 기록된 로컬 요청 141건 중 공유 API 호출은 0이었다.
+- Android: API 35 emulator의 Debug APK에서 인증 홈과 같은 deep link 4종 fail-closed를
+  확인했고 관측 구간의 fatal crash, ANR, ReactNativeJS error는 없었다.
+- BE: 실제 `NoLateApplicationKt`를 H2/전용 Redis로 기동해 sharing `DISABLED`,
+  인증 공유 API 8종 `403 C006`, 외부 provider/TCP 호출 0을 확인했다.
+- MySQL: Docker Desktop 29의 최소 API에 맞춰 `-Dapi.version=1.44`를 적용하고 MySQL
+  8.4 Testcontainers lock/deadlock/unique-key 동시성 3건을 실제 실행해 3/3 통과했다.
+- 한계: 앱 결과는 Simulator/Debug emulator이고 store-signed 물리 기기 검증이 아니다.
+  BE 로컬 실행은 H2 기반이며 `/health` 계약 결함도 함께 확인됐다.
 
 ## 실제 소스에 영향을 주는 묶음
 
@@ -112,12 +133,13 @@ revoke, Google Play 외부 탈퇴 URL, 공유-off 서명·운영 증거, 서명 
 
 1. 영구 앱 ID 확정 및 모든 provider 재매핑
 2. Apple revoke와 Play 외부 탈퇴 URL 구현, 통합된 공유 비활성화의 서명·운영 증거 확보
-3. DB migration 체계와 MySQL 8 스테이징 구성
-4. iOS Archive와 Android AAB 서명·설치
-5. TestFlight / Play internal에서 실제 provider와 실기기 매트릭스 수행
-6. 개인정보 문서·App Privacy·Data safety를 단일 데이터 맵으로 확정
-7. 해당 계정이면 Play closed test 12명·14일 수행
-8. 심사 계정·스토어 에셋·리뷰 노트를 준비하고 제출
+3. 정상 liveness/readiness endpoint와 배포 probe 구현
+4. DB migration 체계와 MySQL 8 스테이징 구성
+5. iOS Archive와 Android AAB 서명·설치
+6. TestFlight / Play internal에서 실제 provider와 실기기 매트릭스 수행
+7. 개인정보 문서·App Privacy·Data safety를 단일 데이터 맵으로 확정
+8. 해당 계정이면 Play closed test 12명·14일 수행
+9. 심사 계정·스토어 에셋·리뷰 노트를 준비하고 제출
 
 ## Release Gate
 
@@ -130,6 +152,7 @@ revoke, Google Play 외부 탈퇴 URL, 공유-off 서명·운영 증거, 서명 
 - App Privacy, Data safety, 개인정보처리방침이 실제 앱·SDK 동작과 일치한다.
 - signed build의 iPhone/Android 알림 매트릭스와 실제 TMAP·FCM·APNs가 통과한다.
 - MySQL 8 migration·다중 인스턴스·장애 복구가 통과한다.
+- 인증 없이 `200`을 반환하는 liveness/readiness endpoint가 실제 배포 probe와 일치한다.
 - 심사 계정, backend, 지원 URL과 리뷰 노트가 심사 기간 동안 가용하다.
 
 ## 공식 정책 참고
