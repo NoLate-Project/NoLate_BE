@@ -105,6 +105,45 @@ class ScheduleDepartureEtaServiceTest {
     }
 
     @Test
+    fun `global sharing off selects owner detail before ETA status lookup`() {
+        whenever(scheduleAccessPolicy.isSharingDisabled()).thenReturn(true)
+        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 2L)).thenReturn(null)
+
+        val error = assertThrows(BusinessException::class.java) {
+            service().getDepartureStatus(memberId = 2L, scheduleId = 10L)
+        }
+
+        assertEquals(ErrorCode.SCHEDULE_NOT_FOUND, error.errorCode)
+        verify(scheduleRepository).findOwnedScheduleDetail(10L, 2L)
+        verify(scheduleRepository, never()).findScheduleDetail(10L, 2L)
+        verify(pushJobRepository, never()).findByScheduleIdAndMemberId(any(), any())
+        verify(travelPlanRepository, never()).findByScheduleIdAndMemberIdAndDeletedFalse(any(), any())
+    }
+
+    @Test
+    fun `global sharing off preserves owner saved ETA status`() {
+        val schedule = schedule(memberId = 1L)
+        whenever(scheduleAccessPolicy.isSharingDisabled()).thenReturn(true)
+        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleAccessPolicy.resolve(1L, schedule)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = true,
+                travelEnabled = true,
+                canViewAllTravelPlans = true,
+            )
+        )
+
+        val result = service().getDepartureStatus(memberId = 1L, scheduleId = 10L)
+
+        assertEquals(30, result.travelMinutes)
+        assertEquals(schedule.startAt.minus(30, ChronoUnit.MINUTES), result.recommendedDepartureAt)
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        verify(scheduleRepository).findOwnedScheduleDetail(10L, 1L)
+        verify(scheduleRepository, never()).findScheduleDetail(10L, 1L)
+    }
+
+    @Test
     fun `저장된 timeout fallback snapshot은 이전 live 시각과 낮은 신뢰도를 노출한다`() {
         val schedule = schedule()
         val liveCheckedAt = queryAt.minus(20, ChronoUnit.MINUTES)

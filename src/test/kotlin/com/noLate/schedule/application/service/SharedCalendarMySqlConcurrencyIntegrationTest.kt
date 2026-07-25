@@ -20,6 +20,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
+import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import org.testcontainers.containers.MySQLContainer
@@ -45,10 +46,12 @@ class NoLateMySqlContainer(imageName: String) :
 @Import(
     ScheduleCalendarService::class,
     ScheduleShareService::class,
+    ScheduleSharingAvailabilityPolicy::class,
     ScheduleRouteSetupReminderWriter::class,
     ScheduleRouteSetupReminderRegistrar::class,
 )
 @Testcontainers(disabledWithoutDocker = true)
+@TestPropertySource(properties = ["schedule.sharing.enabled=true"])
 class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
     private val calendarService: ScheduleCalendarService,
     private val shareService: ScheduleShareService,

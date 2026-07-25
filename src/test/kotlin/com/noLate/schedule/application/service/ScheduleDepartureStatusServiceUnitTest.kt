@@ -205,6 +205,31 @@ class ScheduleDepartureStatusServiceUnitTest {
     }
 
     @Test
+    fun `global off uses owner detail query and hides dormant participant departure action`() {
+        whenever(scheduleAccessPolicy.isSharingDisabled()).thenReturn(true)
+        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 2L)).thenReturn(null)
+        val ownerOnlyService = ScheduleDepartureStatusService(
+            scheduleRepository = scheduleRepository,
+            departureStatusRepository = departureStatusRepository,
+            scheduleShareRepository = scheduleShareRepository,
+            categoryShareRepository = categoryShareRepository,
+            memberRepository = memberRepository,
+            eventPublisher = eventPublisher,
+            clock = clock,
+            scheduleAccessPolicy = scheduleAccessPolicy,
+        )
+
+        val error = assertThrows(BusinessException::class.java) {
+            ownerOnlyService.markDeparted(memberId = 2L, scheduleId = 10L)
+        }
+
+        assertEquals(ErrorCode.SCHEDULE_NOT_FOUND, error.errorCode)
+        verify(scheduleRepository).findOwnedScheduleDetail(10L, 2L)
+        verify(scheduleRepository, org.mockito.kotlin.never()).findScheduleDetail(10L, 2L)
+        verifyNoInteractions(departureStatusRepository, eventPublisher)
+    }
+
+    @Test
     fun `notification action locks every participant by member id before validating generation`() {
         val schedule = scheduleEntity(id = 10L, ownerMemberId = 20L)
         whenever(scheduleRepository.findScheduleDetail(10L, 30L)).thenReturn(schedule)

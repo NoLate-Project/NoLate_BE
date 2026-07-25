@@ -49,6 +49,7 @@ import java.util.concurrent.TimeUnit
     ScheduleDeparturePushNotificationListener::class,
     PushEventOutboxService::class,
     PushEventOutboxWriter::class,
+    ScheduleSharingAvailabilityPolicy::class,
     ScheduleDepartureConcurrencyTestConfig::class,
 )
 @TestPropertySource(
@@ -57,6 +58,7 @@ import java.util.concurrent.TimeUnit
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "schedule.sharing.enabled=true",
     ]
 )
 class ScheduleDepartureStatusConcurrencyIntegrationTest @Autowired constructor(

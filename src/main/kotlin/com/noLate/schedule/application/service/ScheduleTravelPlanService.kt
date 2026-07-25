@@ -503,9 +503,20 @@ class ScheduleTravelPlanService(
         return NormalizedNotification(leadMinutes, intervalMinutes)
     }
 
-    private fun findVisibleSchedule(memberId: Long, scheduleId: Long): Schedule =
-        scheduleRepository.findScheduleDetail(scheduleId, memberId)
-            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+    private fun findVisibleSchedule(memberId: Long, scheduleId: Long): Schedule {
+        val schedule = if (scheduleAccessPolicy?.isSharingDisabled() == true) {
+            // Returning an empty participant envelope after a dormant grant matched would still
+            // disclose that another member's schedule exists. Select the owner-only query first.
+            scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)
+        } else {
+            scheduleRepository.findScheduleDetail(scheduleId, memberId)
+        } ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        val access = scheduleAccessPolicy?.resolve(memberId, schedule)
+        if (access != null && !access.canView) {
+            throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        }
+        return schedule
+    }
 
     private fun canViewAllTravelPlans(memberId: Long, schedule: Schedule): Boolean {
         scheduleAccessPolicy?.let { return it.resolve(memberId, schedule).canViewAllTravelPlans }

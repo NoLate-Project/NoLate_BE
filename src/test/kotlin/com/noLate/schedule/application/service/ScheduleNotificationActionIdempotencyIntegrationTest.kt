@@ -176,6 +176,20 @@ class ScheduleNotificationActionIdempotencyIntegrationTest @Autowired constructo
     }
 
     @Test
+    fun `dormant participant cannot use a persisted action key to snooze`() {
+        whenever(scheduleService.getScheduleDetail(memberId, scheduleId))
+            .thenThrow(BusinessException(ErrorCode.SCHEDULE_NOT_FOUND))
+
+        val failure = assertThrows<BusinessException> {
+            service.snooze(memberId, scheduleId, snoozeKey, sessionGeneration)
+        }
+
+        assertEquals(ErrorCode.SCHEDULE_NOT_FOUND, failure.errorCode)
+        assertEquals(0, receiptRepository.count())
+        verify(pushJobService, never()).snoozeDepartureReminder(any(), any())
+    }
+
+    @Test
     fun `depart now retry returns authoritative current result without reapplying mutation`() {
         assertEquals(
             scheduleDto,

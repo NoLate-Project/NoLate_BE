@@ -69,6 +69,10 @@ server:
   port: 5522
 
 schedule:
+  sharing:
+    # Fail closed: missing/false/malformed values all disable server-side sharing.
+    # Local development must opt in explicitly with the exact string "true".
+    enabled: ${SCHEDULE_SHARING_ENABLED:}
   calendar-cache:
     enabled: ${SCHEDULE_CALENDAR_CACHE_ENABLED:true}
     ttl: ${SCHEDULE_CALENDAR_CACHE_TTL:15m}

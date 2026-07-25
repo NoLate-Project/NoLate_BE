@@ -36,6 +36,7 @@ import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.notification.support.registerAuthenticatedPushToken
 import com.noLate.notification.support.ensureActivePushMember
+import com.noLate.notification.support.AllowAllPushRecipientAuthorizationTestConfig
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -83,6 +84,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
     PushTokenProviderLeaseWriter::class,
     NotificationUseCase::class,
     PushDeliveryReliabilityTestConfig::class,
+    AllowAllPushRecipientAuthorizationTestConfig::class,
 )
 @TestPropertySource(
     properties = [

@@ -137,6 +137,18 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         value = """
         select s.*
         from schedules s
+        where s.deleted = false
+          and s.member_id = :memberId
+        order by s.start_at asc
+        """,
+        nativeQuery = true
+    )
+    fun findOwnedScheduleList(@Param("memberId") memberId: Long): List<Schedule>
+
+    @Query(
+        value = """
+        select s.*
+        from schedules s
         where s.id = :scheduleId
           and s.deleted = false
           and (
@@ -257,6 +269,24 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         select s.*
         from schedules s
         where s.deleted = false
+          and s.member_id = :memberId
+          and s.start_at <= :rangeEnd
+          and s.end_at >= :rangeStart
+        order by s.start_at asc
+        """,
+        nativeQuery = true
+    )
+    fun findOwnedOverlappingScheduleList(
+        @Param("memberId") memberId: Long,
+        @Param("rangeStart") rangeStart: Instant,
+        @Param("rangeEnd") rangeEnd: Instant,
+    ): List<Schedule>
+
+    @Query(
+        value = """
+        select s.*
+        from schedules s
+        where s.deleted = false
           and s.end_at >= :fromAt
           and (
             s.member_id = :memberId
@@ -307,6 +337,23 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         nativeQuery = true
     )
     fun findUpcomingScheduleList(
+        @Param("memberId") memberId: Long,
+        @Param("fromAt") fromAt: Instant,
+        pageable: Pageable,
+    ): List<Schedule>
+
+    @Query(
+        value = """
+        select s.*
+        from schedules s
+        where s.deleted = false
+          and s.member_id = :memberId
+          and s.end_at >= :fromAt
+        order by s.start_at asc
+        """,
+        nativeQuery = true
+    )
+    fun findOwnedUpcomingScheduleList(
         @Param("memberId") memberId: Long,
         @Param("fromAt") fromAt: Instant,
         pageable: Pageable,
@@ -386,6 +433,33 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         value = """
         select s.*
         from schedules s
+        left join schedule_routes sr on sr.schedule_id = s.id
+        left join schedule_category_snapshots sc on sc.schedule_id = s.id
+        where s.deleted = false
+          and s.member_id = :memberId
+          and (:keyword is null
+               or lower(s.title) like lower(concat('%', :keyword, '%'))
+               or lower(coalesce(sr.location_name, '')) like lower(concat('%', :keyword, '%'))
+               or lower(coalesce(s.notes, '')) like lower(concat('%', :keyword, '%')))
+          and (:categoryId is null or sc.category_id = :categoryId)
+          and (:rangeStart is null or s.end_at >= :rangeStart)
+          and (:rangeEnd is null or s.start_at <= :rangeEnd)
+        order by s.start_at asc
+        """,
+        nativeQuery = true
+    )
+    fun searchOwnedScheduleList(
+        @Param("memberId") memberId: Long,
+        @Param("keyword") keyword: String?,
+        @Param("categoryId") categoryId: String?,
+        @Param("rangeStart") rangeStart: Instant?,
+        @Param("rangeEnd") rangeEnd: Instant?,
+    ): List<Schedule>
+
+    @Query(
+        value = """
+        select s.*
+        from schedules s
         join schedule_routes sr on sr.schedule_id = s.id
         where s.deleted = false
           and s.start_at >= :fromAt
@@ -440,6 +514,26 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         nativeQuery = true
     )
     fun findDepartureReadyScheduleList(
+        @Param("memberId") memberId: Long,
+        @Param("fromAt") fromAt: Instant,
+        @Param("toAt") toAt: Instant,
+    ): List<Schedule>
+
+    @Query(
+        value = """
+        select s.*
+        from schedules s
+        join schedule_routes sr on sr.schedule_id = s.id
+        where s.deleted = false
+          and s.member_id = :memberId
+          and s.start_at >= :fromAt
+          and s.start_at <= :toAt
+          and (sr.depart_at is not null or sr.travel_minutes is not null or sr.route_json is not null)
+        order by s.start_at asc
+        """,
+        nativeQuery = true
+    )
+    fun findOwnedDepartureReadyScheduleList(
         @Param("memberId") memberId: Long,
         @Param("fromAt") fromAt: Instant,
         @Param("toAt") toAt: Instant,

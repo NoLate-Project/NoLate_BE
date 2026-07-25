@@ -31,6 +31,9 @@ class PushSendHistoryServiceTest {
     @Mock
     lateinit var memberRepository: MemberRepository
 
+    @Mock
+    lateinit var authorizationValidator: PushRecipientAuthorizationValidator
+
     private lateinit var service: PushSendHistoryService
 
     @BeforeEach
@@ -40,19 +43,22 @@ class PushSendHistoryServiceTest {
             memberRepository = memberRepository,
             objectMapper = ObjectMapper(),
             clock = Clock.fixed(Instant.parse("2026-06-18T00:00:00Z"), ZoneOffset.UTC),
-        )
-        whenever(memberRepository.findByIdForUpdate(1L)).thenReturn(
-            Member(
-                id = 1L,
-                name = "active",
-                password = "Password1!",
-                email = "active@example.com",
-            )
+            recipientAuthorizationValidator = authorizationValidator,
         )
     }
 
     @Test
     fun `성공 이력은 일정 ID와 payload type, FCM message id를 저장한다`() {
+        allowActiveRecipient()
+        whenever(
+            authorizationValidator.canDispatch(
+                memberId = 1L,
+                scheduleId = 13L,
+                categoryId = 17L,
+                payloadType = "SCHEDULE_TRAFFIC",
+                calendarId = 19L,
+            )
+        ).thenReturn(true)
         whenever(repository.save(any<PushSendHistory>())).thenAnswer { it.arguments[0] }
         val token = NotificationDeviceToken(
             id = 10L,
@@ -97,6 +103,16 @@ class PushSendHistoryServiceTest {
 
     @Test
     fun `토큰이 없으면 NO_TOKEN 이력을 저장한다`() {
+        allowActiveRecipient()
+        whenever(
+            authorizationValidator.canDispatch(
+                memberId = 1L,
+                scheduleId = 13L,
+                categoryId = null,
+                payloadType = "SCHEDULE_DEPARTURE_REMINDER",
+                calendarId = null,
+            )
+        ).thenReturn(true)
         whenever(repository.save(any<PushSendHistory>())).thenAnswer { it.arguments[0] }
         val history = requireNotNull(service.recordNoToken(
             memberId = 1L,
@@ -132,4 +148,68 @@ class PushSendHistoryServiceTest {
         assertEquals(null, history)
         verify(repository, never()).save(any<PushSendHistory>())
     }
+
+    @Test
+    fun `history query hides dormant sharing payload and keeps ordinary notification`() {
+        val hidden = history(
+            id = 1L,
+            payloadType = "SCHEDULE_SHARE_RECEIVED",
+            title = "private shared title",
+        )
+        val ordinary = history(
+            id = 2L,
+            payloadType = "GENERAL",
+            title = "ordinary title",
+        )
+        whenever(repository.findAllByMemberIdOrderBySentAtDesc(any(), any()))
+            .thenReturn(listOf(hidden, ordinary))
+        whenever(
+            authorizationValidator.canDispatch(
+                memberId = 1L,
+                scheduleId = null,
+                categoryId = null,
+                payloadType = "SCHEDULE_SHARE_RECEIVED",
+                calendarId = null,
+            )
+        ).thenReturn(false)
+        whenever(
+            authorizationValidator.canDispatch(
+                memberId = 1L,
+                scheduleId = null,
+                categoryId = null,
+                payloadType = "GENERAL",
+                calendarId = null,
+            )
+        ).thenReturn(true)
+
+        val result = service.getRecentByMember(1L, 10)
+
+        assertEquals(listOf("ordinary title"), result.map { it.title })
+    }
+
+    private fun allowActiveRecipient() {
+        whenever(memberRepository.findByIdForUpdate(1L)).thenReturn(
+            Member(
+                id = 1L,
+                name = "active",
+                password = "Password1!",
+                email = "active@example.com",
+            )
+        )
+    }
+
+    private fun history(
+        id: Long,
+        payloadType: String,
+        title: String,
+    ) = PushSendHistory(
+        id = id,
+        memberId = 1L,
+        payloadType = payloadType,
+        title = title,
+        body = "body",
+        dataJson = "{}",
+        status = PushSendStatus.SUCCESS,
+        sentAt = Instant.parse("2026-06-18T00:00:00Z"),
+    )
 }

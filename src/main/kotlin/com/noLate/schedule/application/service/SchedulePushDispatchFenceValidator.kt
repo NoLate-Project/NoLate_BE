@@ -79,6 +79,10 @@ class SchedulePushDispatchFenceValidator(
  * category/schedule/calendar revoke도 같은 member-first 순서를 사용하므로 revoke가 먼저
  * linearize되면 과거 PROCESSING job/outbox는 provider 경계를 넘지 못하고 terminal 처리된다.
  * 반대로 claim이 먼저 member lock을 얻으면 논리 발송이 먼저인 계약이며 revoke가 기다린다.
+ *
+ * FE에서 공유 화면만 숨겨도 이미 동결된 delivery는 남아 있으므로 충분하지 않다. 전역 off는
+ * 여기서도 다시 확인해 공유 row를 삭제하지 않고 dormant 상태로 보존하면서, 배포 전에 큐에
+ * 들어온 공유 알림을 provider 호출 없이 SUPERSEDED로 수렴시킨다.
  */
 @Service
 class SchedulePushRecipientAccessValidator(
@@ -88,6 +92,7 @@ class SchedulePushRecipientAccessValidator(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) : PushRecipientAuthorizationValidator {
     fun canDispatch(memberId: Long, scheduleId: Long): Boolean {
         return canDispatch(
@@ -106,6 +111,15 @@ class SchedulePushRecipientAccessValidator(
         payloadType: String?,
         calendarId: Long?,
     ): Boolean {
+        if (!sharingAvailabilityPolicy.enabled) {
+            return canDispatchWhileSharingDisabled(
+                memberId = memberId,
+                scheduleId = scheduleId,
+                categoryId = categoryId,
+                payloadType = payloadType,
+                calendarId = calendarId,
+            )
+        }
         if (payloadType == CALENDAR_SHARE_RECEIVED_PAYLOAD_TYPE) {
             return calendarId?.let { canDispatchCalendar(memberId, it) } ?: false
         }
@@ -123,6 +137,43 @@ class SchedulePushRecipientAccessValidator(
         }
         if (calendarId != null) {
             return canDispatchCalendar(memberId, calendarId)
+        }
+        return true
+    }
+
+    /**
+     * 공유 기능 off는 기존 grant를 revoke/delete하는 상태가 아니다. 공유 전용 payload는
+     * identity 유무와 관계없이 닫고, 일반 schedule/category/calendar 알림은 실제 소유자에게만
+     * 허용해 개인 일정 ETA와 일반 알림을 계속 전달한다.
+     */
+    private fun canDispatchWhileSharingDisabled(
+        memberId: Long,
+        scheduleId: Long?,
+        categoryId: Long?,
+        payloadType: String?,
+        calendarId: Long?,
+    ): Boolean {
+        if (payloadType in SHARING_ONLY_PAYLOAD_TYPES) return false
+        // Legacy schedule alerts without a frozen schedule identity cannot be proven owner-bound.
+        // Treating them as resource-free GENERAL would expose pre-deployment shared payloads.
+        if (payloadType in SCHEDULE_ID_REQUIRED_PAYLOAD_TYPES && scheduleId == null) return false
+        if (scheduleId != null) {
+            return scheduleRepository.findById(scheduleId)
+                .orElse(null)
+                ?.takeUnless { it.deleted }
+                ?.memberId == memberId
+        }
+        if (categoryId != null) {
+            return categoryRepository.findById(categoryId)
+                .orElse(null)
+                ?.takeUnless { it.deleted }
+                ?.memberId == memberId
+        }
+        if (calendarId != null) {
+            return calendarRepository.findByIdAndStatusAndDeletedFalse(
+                calendarId,
+                ScheduleCalendarStatus.ACTIVE,
+            )?.takeUnless { it.deleted }?.ownerMemberId == memberId
         }
         return true
     }
@@ -157,5 +208,19 @@ class SchedulePushRecipientAccessValidator(
 
     private companion object {
         const val CALENDAR_SHARE_RECEIVED_PAYLOAD_TYPE = "CALENDAR_SHARE_RECEIVED"
+        val SHARING_ONLY_PAYLOAD_TYPES = setOf(
+            "SCHEDULE_SHARE_RECEIVED",
+            "CATEGORY_SHARE_RECEIVED",
+            CALENDAR_SHARE_RECEIVED_PAYLOAD_TYPE,
+            "SCHEDULE_PARTICIPANT_DEPARTED",
+            "SCHEDULE_DEPARTURE_NUDGE",
+        )
+        val SCHEDULE_ID_REQUIRED_PAYLOAD_TYPES = setOf(
+            SchedulePushPayloadAccessPolicy.SCHEDULE_PUSH_PAYLOAD_TYPE,
+            "SCHEDULE_DETAIL",
+            "SCHEDULE_TRAFFIC",
+            "SCHEDULE_DEPARTURE_REMINDER",
+            "ROUTE_SETUP_REMINDER",
+        )
     }
 }

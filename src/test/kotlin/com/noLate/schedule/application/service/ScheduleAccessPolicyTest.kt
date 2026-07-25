@@ -22,6 +22,7 @@ import org.mockito.kotlin.mock
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 
 class ScheduleAccessPolicyTest {
     private val directShares = mock<ScheduleShareRepository>()
@@ -32,7 +33,15 @@ class ScheduleAccessPolicyTest {
 
     @BeforeEach
     fun setUp() {
-        policy = ScheduleAccessPolicy(directShares, categoryShares, calendars, calendarMembers)
+        policy = ScheduleAccessPolicy(
+            directShares,
+            categoryShares,
+            calendars,
+            calendarMembers,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+        )
     }
 
     @Test
@@ -125,6 +134,35 @@ class ScheduleAccessPolicyTest {
         assertTrue(access.travelEnabled)
         assertTrue(access.canViewAllTravelPlans)
         assertEquals(ScheduleSharePermission.OWNER, access.effectivePermission)
+    }
+
+    @Test
+    fun `global sharing off ignores retained grants while preserving owner access`() {
+        val disabledPolicy = ScheduleAccessPolicy(
+            directShares,
+            categoryShares,
+            calendars,
+            calendarMembers,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
+            ),
+        )
+        val schedule = routeSchedule(ownerId = 1L, calendarId = 30L)
+
+        val ownerAccess = disabledPolicy.resolve(memberId = 1L, schedule = schedule)
+        val retainedRecipientAccess = disabledPolicy.resolve(memberId = 2L, schedule = schedule)
+
+        assertTrue(ownerAccess.canView)
+        assertTrue(ownerAccess.canEdit)
+        assertTrue(ownerAccess.travelEnabled)
+        assertFalse(retainedRecipientAccess.canView)
+        assertFalse(retainedRecipientAccess.canEdit)
+        assertFalse(retainedRecipientAccess.travelEnabled)
+        assertEquals(listOf(1L), disabledPolicy.travelMemberIds(schedule))
+        verify(directShares, org.mockito.kotlin.never())
+            .findByScheduleIdAndTargetMemberId(10L, 2L)
+        verify(calendarMembers, org.mockito.kotlin.never())
+            .findByCalendarIdAndMemberId(30L, 2L)
     }
 
     @Test

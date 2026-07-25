@@ -56,10 +56,12 @@ class ScheduleShareService(
     private val calendarService: ScheduleCalendarService? = null,
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
     private val mutationFenceObserver: ScheduleShareMutationFenceObserver? = null,
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) {
 
     @Transactional
     fun getShareInbox(memberId: Long): ScheduleShareInboxDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val scheduleShares = scheduleShareRepository
             .findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
                 targetMemberId = memberId,
@@ -150,6 +152,7 @@ class ScheduleShareService(
 
     @Transactional
     fun getShareOutbox(ownerMemberId: Long): ScheduleShareOutboxDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val now = Instant.now(clock)
         val scheduleShares = scheduleShareRepository
             .findAllByOwnerMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
@@ -313,6 +316,7 @@ class ScheduleShareService(
         contentMode: ScheduleShareContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
         presentedSessionGeneration: Long,
     ): ScheduleShareDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val normalizedPermission = validateGrantablePermission(permission)
         // Resolve only the immutable member id before the member-row fence. Loading a Member
         // entity here would put deleted=false in the persistence context; if target withdrawal
@@ -362,6 +366,7 @@ class ScheduleShareService(
         contentMode: ScheduleShareContentMode? = null,
         presentedSessionGeneration: Long,
     ): ScheduleShareDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val normalizedPermission = validateGrantablePermission(permission)
         val preview = scheduleShareRepository.findByIdAndScheduleIdAndDeletedFalse(shareId, scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_NOT_FOUND)
@@ -394,6 +399,7 @@ class ScheduleShareService(
         shareId: Long,
         presentedSessionGeneration: Long,
     ) {
+        sharingAvailabilityPolicy.requireEnabled()
         val preview = scheduleShareRepository.findByIdAndScheduleIdAndDeletedFalse(shareId, scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_NOT_FOUND)
         lockMutationMembers(
@@ -418,6 +424,7 @@ class ScheduleShareService(
 
     @Transactional
     fun getScheduleShares(ownerMemberId: Long, scheduleId: Long): List<ScheduleShareDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         scheduleRepository.findOwnedScheduleDetail(scheduleId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
@@ -442,6 +449,7 @@ class ScheduleShareService(
         permission: ScheduleSharePermission,
         presentedSessionGeneration: Long,
     ): ScheduleShareDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val normalizedPermission = validateGrantablePermission(permission)
         val targetMemberId = resolveTargetMemberId(targetEmail, targetAppId)
         mutationFenceObserver?.afterTargetPreview(
@@ -485,6 +493,7 @@ class ScheduleShareService(
         permission: ScheduleSharePermission,
         presentedSessionGeneration: Long,
     ): ScheduleShareDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val normalizedPermission = validateGrantablePermission(permission)
         val preview = categoryShareRepository.findByIdAndCategoryIdAndDeletedFalse(shareId, categoryId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_SHARE_NOT_FOUND)
@@ -516,6 +525,7 @@ class ScheduleShareService(
         shareId: Long,
         presentedSessionGeneration: Long,
     ) {
+        sharingAvailabilityPolicy.requireEnabled()
         val preview = categoryShareRepository.findByIdAndCategoryIdAndDeletedFalse(shareId, categoryId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_SHARE_NOT_FOUND)
         lockMutationMembers(
@@ -540,6 +550,7 @@ class ScheduleShareService(
 
     @Transactional
     fun getCategoryShares(ownerMemberId: Long, categoryId: Long): List<ScheduleShareDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         categoryRepository.findByIdAndMemberIdAndDeletedFalse(categoryId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
 
@@ -560,6 +571,7 @@ class ScheduleShareService(
         maxAcceptCount: Int?,
         presentedSessionGeneration: Long,
     ): ScheduleShareInvitationDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val normalizedPermission = validateGrantablePermission(permission)
         lockMutationMembers(ownerMemberId, presentedSessionGeneration)
         scheduleRepository.findOwnedActiveForShareUpdate(scheduleId, ownerMemberId)
@@ -585,6 +597,7 @@ class ScheduleShareService(
         maxAcceptCount: Int?,
         presentedSessionGeneration: Long,
     ): ScheduleShareInvitationDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val normalizedPermission = validateGrantablePermission(permission)
         lockMutationMembers(ownerMemberId, presentedSessionGeneration)
         categoryRepository.findOwnedActiveForShareUpdate(categoryId, ownerMemberId)
@@ -609,6 +622,7 @@ class ScheduleShareService(
         maxAcceptCount: Int?,
         presentedSessionGeneration: Long,
     ): ScheduleShareInvitationDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val normalizedPermission = validateGrantablePermission(permission)
         lockMutationMembers(ownerMemberId, presentedSessionGeneration)
         val calendar = requireCalendarRepository().findActiveForUpdate(calendarId)
@@ -630,6 +644,7 @@ class ScheduleShareService(
 
     @Transactional
     fun getScheduleInvitations(ownerMemberId: Long, scheduleId: Long): List<ScheduleShareInvitationDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         scheduleRepository.findOwnedScheduleDetail(scheduleId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
         val effectiveAt = Instant.now(clock)
@@ -645,6 +660,7 @@ class ScheduleShareService(
 
     @Transactional
     fun getCategoryInvitations(ownerMemberId: Long, categoryId: Long): List<ScheduleShareInvitationDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         categoryRepository.findByIdAndMemberIdAndDeletedFalse(categoryId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
         val effectiveAt = Instant.now(clock)
@@ -660,6 +676,7 @@ class ScheduleShareService(
 
     @Transactional
     fun getCalendarInvitations(ownerMemberId: Long, calendarId: Long): List<ScheduleShareInvitationDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         val calendar = requireCalendarRepository().findByIdAndStatusAndDeletedFalse(calendarId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
         if (calendar.ownerMemberId != ownerMemberId) {
@@ -683,6 +700,7 @@ class ScheduleShareService(
         invitationId: Long,
         presentedSessionGeneration: Long,
     ) {
+        sharingAvailabilityPolicy.requireEnabled()
         lockMutationMembers(ownerMemberId, presentedSessionGeneration)
         val invitation = invitationRepository.findByIdForUpdate(invitationId)
             ?.takeIf {
@@ -710,6 +728,7 @@ class ScheduleShareService(
         token: String?,
         presentedSessionGeneration: Long,
     ): ScheduleShareInvitationAcceptDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val tokenHash = hashInvitationToken(normalizeToken(token))
         val preview = invitationRepository.findByTokenHashAndDeletedFalse(tokenHash)
             ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)

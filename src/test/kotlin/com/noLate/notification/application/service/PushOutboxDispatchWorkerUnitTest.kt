@@ -95,6 +95,28 @@ class PushOutboxDispatchWorkerUnitTest {
     }
 
     @Test
+    fun `authorization superseded sharing manifest completes instead of reopening the outbox`() {
+        val lease = lease(attempt = 1)
+        whenever(coordinator.recoverStale(any(), any(), any())).thenReturn(0)
+        whenever(coordinator.claimNextDue(any(), any())).thenReturn(lease, null)
+        whenever(notificationUseCase.redrivePersistedEvent(31L, "event:durable", lease))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 1,
+                    failedCount = 1,
+                    supersededCount = 1,
+                )
+            )
+        whenever(coordinator.complete(any(), any())).thenReturn(true)
+
+        assertEquals(1, worker().runDueEvents(now))
+
+        verify(coordinator).complete(lease, now)
+        verify(coordinator, never()).retry(any(), any(), any())
+        verify(coordinator, never()).fail(any(), any(), any())
+    }
+
+    @Test
     fun `zero-recipient frozen manifest completes without inventing a future recipient`() {
         val lease = lease(attempt = 1, recipientCount = 0)
         whenever(coordinator.recoverStale(any(), any(), any())).thenReturn(0)

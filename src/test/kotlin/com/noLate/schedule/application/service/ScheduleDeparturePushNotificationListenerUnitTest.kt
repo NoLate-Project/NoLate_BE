@@ -15,6 +15,7 @@ import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleDeparturePushNotificationListenerUnitTest {
@@ -65,7 +66,10 @@ class ScheduleDeparturePushNotificationListenerUnitTest {
 
     @Test
     fun `departure event with no other participants does not create an outbox event`() {
-        val listener = ScheduleDeparturePushNotificationListener(pushEventOutboxService)
+        val listener = ScheduleDeparturePushNotificationListener(
+            pushEventOutboxService,
+            enabledSharingPolicy(),
+        )
 
         listener.onParticipantDeparted(
             ScheduleParticipantDepartedEvent(
@@ -81,8 +85,31 @@ class ScheduleDeparturePushNotificationListenerUnitTest {
     }
 
     @Test
+    fun `global off suppresses participant departure outbox even for a prebuilt event`() {
+        val listener = ScheduleDeparturePushNotificationListener(
+            pushEventOutboxService,
+            ScheduleSharingAvailabilityPolicy(MockEnvironment()),
+        )
+
+        listener.onParticipantDeparted(
+            ScheduleParticipantDepartedEvent(
+                scheduleId = 10L,
+                scheduleTitle = "dormant shared schedule",
+                departedMemberId = 2L,
+                departedMemberLabel = "participant",
+                recipientMemberIds = listOf(1L),
+            )
+        )
+
+        verifyNoInteractions(pushEventOutboxService)
+    }
+
+    @Test
     fun `outbox persistence failure escapes so departure mutation can roll back`() {
-        val listener = ScheduleDeparturePushNotificationListener(pushEventOutboxService)
+        val listener = ScheduleDeparturePushNotificationListener(
+            pushEventOutboxService,
+            enabledSharingPolicy(),
+        )
         whenever(
             pushEventOutboxService.enqueueDurable(
                 any(),
@@ -125,6 +152,13 @@ class ScheduleDeparturePushNotificationListenerUnitTest {
                 fenceAccepted = true,
             )
         )
-        return ScheduleDeparturePushNotificationListener(pushEventOutboxService)
+        return ScheduleDeparturePushNotificationListener(
+            pushEventOutboxService,
+            enabledSharingPolicy(),
+        )
     }
+
+    private fun enabledSharingPolicy() = ScheduleSharingAvailabilityPolicy(
+        MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+    )
 }

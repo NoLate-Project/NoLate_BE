@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
     ScheduleCategoryDeleteWriter::class,
     ScheduleTravelAccessCleanupService::class,
     ScheduleAccessPolicy::class,
+    ScheduleSharingAvailabilityPolicy::class,
     ScheduleCategoryDeleteRaceTestConfig::class,
 )
 @RecordApplicationEvents
@@ -49,6 +50,7 @@ import java.util.concurrent.atomic.AtomicReference
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "schedule.sharing.enabled=true",
     ]
 )
 class ScheduleShareServiceConcurrencyIntegrationTest @Autowired constructor(

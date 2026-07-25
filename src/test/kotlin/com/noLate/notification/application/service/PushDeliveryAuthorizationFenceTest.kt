@@ -3,6 +3,7 @@ package com.noLate.notification.application.service
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.notification.application.PushClient
 import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.domain.PushDelivery
 import com.noLate.notification.domain.PushDeliveryStatus
@@ -15,12 +16,14 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
+import org.mockito.kotlin.any
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.Optional
 
 @ExtendWith(MockitoExtension::class)
 class PushDeliveryAuthorizationFenceTest {
@@ -32,6 +35,80 @@ class PushDeliveryAuthorizationFenceTest {
     @Mock lateinit var authorizationValidator: PushRecipientAuthorizationValidator
     @Mock lateinit var freshnessValidator: PushSourceFreshnessValidator
     @Mock lateinit var dispatchFenceValidator: PushDispatchFenceValidator
+    @Mock lateinit var pushClient: PushClient
+
+    @Test
+    fun `global off after delivery claim terminalizes at provider fence with zero provider calls`() {
+        val delivery = PushDelivery(
+            id = 121L,
+            memberId = 2L,
+            eventKey = "logical:sharing-disabled",
+            deviceKey = "device-sha256:sharing-disabled",
+            deviceTokenId = 122L,
+            tokenFingerprint = "f".repeat(64),
+            tokenOwnershipVersion = 1L,
+            platform = PushPlatform.ANDROID,
+            scheduleId = 10L,
+            payloadType = "SCHEDULE_SHARE_RECEIVED",
+        ).apply {
+            beginDispatch(NOW)
+        }
+        val source = AppNotification(
+            id = 123L,
+            memberId = 2L,
+            logicalEventKey = delivery.eventKey,
+            type = "SCHEDULE_SHARE_RECEIVED",
+            scheduleId = 10L,
+            title = "private dormant share",
+            body = "must not reach provider",
+            dataJson = "{}",
+            createdAt = NOW,
+        )
+        whenever(memberRepository.findActiveNotificationRecipientForUpdate(2L)).thenReturn(
+            Member(id = 2L, email = "recipient@example.com", password = "Password1!", name = "recipient")
+        )
+        whenever(deliveryRepository.findById(121L)).thenReturn(Optional.of(delivery))
+        whenever(
+            notificationRepository.findByMemberIdAndLogicalEventKeyForUpdate(
+                2L,
+                delivery.eventKey,
+            )
+        ).thenReturn(source)
+        whenever(deliveryRepository.findByIdForUpdate(121L)).thenReturn(delivery)
+        whenever(
+            authorizationValidator.canDispatch(
+                memberId = 2L,
+                scheduleId = 10L,
+                categoryId = null,
+                payloadType = "SCHEDULE_SHARE_RECEIVED",
+                calendarId = null,
+            )
+        ).thenReturn(false)
+        val service = PushTokenProviderLeaseService(
+            writer = providerLeaseWriter(),
+            pushClient = pushClient,
+        )
+
+        val result = service.sendIfOwned(
+            memberId = 2L,
+            claim = PushDeliveryClaim(
+                outcome = PushDeliveryClaimOutcome.SEND,
+                deliveryId = 121L,
+                tokenId = 122L,
+                tokenFingerprint = "f".repeat(64),
+                tokenOwnershipVersion = 1L,
+            ),
+            title = source.title,
+            body = source.body,
+            data = emptyMap(),
+        )
+
+        assertEquals(PushTokenProviderLeaseOutcome.SUPERSEDED, result.outcome)
+        assertEquals(PushDeliveryStatus.SUPERSEDED, delivery.status)
+        assertEquals("RECIPIENT_ACCESS_REVOKED", delivery.errorCode)
+        verify(tokenRepository, never()).findByIdForUpdate(122L)
+        verify(pushClient, never()).sendToToken(any(), any(), any(), any())
+    }
 
     @Test
     fun `revoked immutable source is terminal before token or provider boundary`() {
@@ -288,4 +365,18 @@ class PushDeliveryAuthorizationFenceTest {
         recipientAuthorizationValidator = authorizationValidator,
         sourceFreshnessValidator = freshnessValidator,
     )
+
+    private fun providerLeaseWriter() = PushTokenProviderLeaseWriter(
+        tokenRepository = tokenRepository,
+        deliveryRepository = deliveryRepository,
+        appNotificationRepository = notificationRepository,
+        memberRepository = memberRepository,
+        clock = CLOCK,
+        recipientAuthorizationValidator = authorizationValidator,
+    )
+
+    private companion object {
+        val NOW: Instant = Instant.parse("2026-07-24T00:00:00Z")
+        val CLOCK: Clock = Clock.fixed(NOW, ZoneOffset.UTC)
+    }
 }

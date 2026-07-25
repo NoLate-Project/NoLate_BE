@@ -45,7 +45,13 @@ class ScheduleDepartureEtaService(
 
     @Transactional(readOnly = true)
     fun getDepartureStatus(memberId: Long, scheduleId: Long): ScheduleDepartureEtaStatusDto {
-        val schedule = scheduleRepository.findScheduleDetail(scheduleId, memberId)
+        // ETA 계산 계약은 그대로 두고, sharing-off에서만 dormant grant를 포함하는 native
+        // detail query를 선택하지 않아 타 회원 일정의 존재 자체를 노출하지 않는다.
+        val schedule = if (scheduleAccessPolicy.isSharingDisabled()) {
+            scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)
+        } else {
+            scheduleRepository.findScheduleDetail(scheduleId, memberId)
+        }
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
         val access = scheduleAccessPolicy.resolve(memberId, schedule)
         if (!access.canView) {

@@ -25,13 +25,17 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 @DataJpaTest
-@Import(ScheduleShareService::class)
+@Import(
+    ScheduleShareService::class,
+    ScheduleSharingAvailabilityPolicy::class,
+)
 @TestPropertySource(
     properties = [
         "spring.datasource.url=jdbc:h2:mem:schedule-share-invitation;MODE=MySQL;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "schedule.sharing.enabled=true",
     ]
 )
 class ScheduleShareInvitationConcurrencyIntegrationTest @Autowired constructor(

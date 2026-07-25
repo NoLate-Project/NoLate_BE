@@ -27,8 +27,10 @@ import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
 import org.mockito.kotlin.check
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import java.time.Instant
 
@@ -99,6 +101,32 @@ class ScheduleTravelPlanServiceUnitTest {
 
         assertEquals(ErrorCode.INVALID_INPUT, error.errorCode)
         verify(travelPlanRepository, never()).saveAndFlush(any<ScheduleTravelPlan>())
+    }
+
+    @Test
+    fun `global off uses owner detail query and hides dormant participant overview`() {
+        val accessPolicy = mock<ScheduleAccessPolicy>()
+        val ownerOnlyService = ScheduleTravelPlanService(
+            scheduleRepository = scheduleRepository,
+            travelPlanRepository = travelPlanRepository,
+            scheduleShareRepository = scheduleShareRepository,
+            categoryShareRepository = categoryShareRepository,
+            memberRepository = memberRepository,
+            subscriptionPolicyService = subscriptionPolicyService,
+            objectMapper = jacksonObjectMapper(),
+            scheduleAccessPolicy = accessPolicy,
+        )
+        whenever(accessPolicy.isSharingDisabled()).thenReturn(true)
+        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 2L)).thenReturn(null)
+
+        val error = assertThrows(BusinessException::class.java) {
+            ownerOnlyService.getOverview(requesterMemberId = 2L, scheduleId = 10L)
+        }
+
+        assertEquals(ErrorCode.SCHEDULE_NOT_FOUND, error.errorCode)
+        verify(scheduleRepository).findOwnedScheduleDetail(10L, 2L)
+        verify(scheduleRepository, never()).findScheduleDetail(10L, 2L)
+        verifyNoInteractions(travelPlanRepository)
     }
 
     @Test

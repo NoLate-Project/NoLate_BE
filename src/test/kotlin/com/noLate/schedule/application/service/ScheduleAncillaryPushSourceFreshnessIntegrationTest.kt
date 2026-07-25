@@ -74,6 +74,7 @@ import java.util.concurrent.atomic.AtomicReference
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
         "schedule.push.enabled=false",
+        "schedule.sharing.enabled=true",
         "notification.push-outbox.enabled=true",
         "notification.push-outbox.batch-size=1",
         "notification.push-outbox.max-attempts=3",

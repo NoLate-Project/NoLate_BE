@@ -75,6 +75,7 @@ import org.springframework.context.annotation.Primary
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
+import org.springframework.mock.env.MockEnvironment
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -110,6 +111,7 @@ import java.util.concurrent.atomic.AtomicInteger
     PushOutboxDispatchWorker::class,
     AccountCleanupService::class,
     ScheduleAccessPolicy::class,
+    ScheduleSharingAvailabilityPolicy::class,
     RouteSetupReminderPolicy::class,
     SchedulePushSourceFreshnessValidator::class,
     ScheduleTravelAccessCleanupService::class,
@@ -123,6 +125,7 @@ import java.util.concurrent.atomic.AtomicInteger
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "schedule.sharing.enabled=true",
         "notification.push-outbox.enabled=true",
         "notification.push-outbox.batch-size=10",
         "notification.push-outbox.max-attempts=3",
@@ -1035,6 +1038,9 @@ class DurableScheduleNotificationOutboxTestConfig {
             calendarRepository = calendarRepository,
             calendarMemberRepository = calendarMemberRepository,
             categoryRepository = categoryRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true")
+            ),
         )
         val delegate = SchedulePushRecipientAccessValidator(
             scheduleRepository = scheduleRepository,
@@ -1043,6 +1049,9 @@ class DurableScheduleNotificationOutboxTestConfig {
             categoryShareRepository = categoryShareRepository,
             calendarRepository = calendarRepository,
             calendarMemberRepository = calendarMemberRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true")
+            ),
         )
         return object : PushRecipientAuthorizationValidator {
             override fun canDispatch(

@@ -22,6 +22,7 @@ import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCalendarMember
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleShareContentMode
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheService
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
@@ -43,6 +44,7 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 import org.springframework.data.domain.PageRequest
 import java.time.Instant
 import java.util.Optional
@@ -66,6 +68,9 @@ class ScheduleServiceUnitTest {
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
             subscriptionPolicyService = subscriptionPolicyService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
     }
 
@@ -212,6 +217,9 @@ class ScheduleServiceUnitTest {
             subscriptionPolicyService = subscriptionPolicyService,
             categoryRepository = categoryRepository,
             categoryShareRepository = shareRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
         whenever(categoryRepository.findById(1L)).thenReturn(
             Optional.of(ScheduleCategory(id = 1L, memberId = 99L, title = "공유", color = "#000000"))
@@ -270,17 +278,21 @@ class ScheduleServiceUnitTest {
             scheduleAccessPolicy = accessPolicy,
             categoryRepository = categoryRepository,
             categoryShareRepository = categoryShareRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
         whenever(scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)).thenReturn(existing)
-        whenever(accessPolicy.resolve(editorId, existing)).thenReturn(
-            ScheduleAccessDecision(
-                canView = true,
-                canEdit = true,
-                travelEnabled = false,
-                canViewAllTravelPlans = true,
-                effectivePermission = ScheduleSharePermission.EDITOR,
-            )
+        val editorAccess = ScheduleAccessDecision(
+            canView = true,
+            canEdit = true,
+            travelEnabled = false,
+            canViewAllTravelPlans = true,
+            effectivePermission = ScheduleSharePermission.EDITOR,
         )
+        whenever(accessPolicy.resolve(editorId, existing)).thenReturn(editorAccess)
+        whenever(accessPolicy.resolveAll(editorId, listOf(existing)))
+            .thenReturn(mapOf(scheduleId to editorAccess))
         whenever(scheduleRepository.save(existing)).thenReturn(existing)
 
         val result = securedService.updateSchedule(
@@ -311,6 +323,9 @@ class ScheduleServiceUnitTest {
             scheduleAccessPolicy = accessPolicy,
             calendarRepository = calendarRepository,
             calendarMemberRepository = calendarMemberRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
         val existing = scheduleEntity(id = scheduleId, memberId = 99L).apply {
             calendarId = sourceCalendarId
@@ -333,14 +348,15 @@ class ScheduleServiceUnitTest {
             role = ScheduleCalendarRole.EDITOR,
         )
         whenever(scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)).thenReturn(existing)
-        whenever(accessPolicy.resolve(memberId, existing)).thenReturn(
-            ScheduleAccessDecision(
-                canView = true,
-                canEdit = true,
-                travelEnabled = true,
-                canViewAllTravelPlans = true,
-            )
+        val editorAccess = ScheduleAccessDecision(
+            canView = true,
+            canEdit = true,
+            travelEnabled = true,
+            canViewAllTravelPlans = true,
         )
+        whenever(accessPolicy.resolve(memberId, existing)).thenReturn(editorAccess)
+        whenever(accessPolicy.resolveAll(memberId, listOf(existing)))
+            .thenReturn(mapOf(scheduleId to editorAccess))
         whenever(calendarRepository.findAllForUpdate(listOf(targetCalendarId, sourceCalendarId)))
             .thenReturn(listOf(targetCalendar, sourceCalendar))
         whenever(
@@ -522,6 +538,9 @@ class ScheduleServiceUnitTest {
             subscriptionPolicyService = subscriptionPolicyService,
             categoryShareRepository = categoryShareRepository,
             scheduleShareRepository = directShareRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
         val directViewer = scheduleEntity(id = 2L, memberId = 99L, categoryId = "10")
         val categoryEditor = scheduleEntity(id = 3L, memberId = 99L, categoryId = "20")
@@ -581,6 +600,107 @@ class ScheduleServiceUnitTest {
         assertEquals(ScheduleSharePermission.EDITOR, result.getValue(3L).category.sharePermission)
         // Direct VIEWER plus category EDITOR must expose the strongest effective permission.
         assertEquals(ScheduleSharePermission.EDITOR, result.getValue(4L).sharePermission)
+    }
+
+    @Test
+    fun `global sharing off uses owner queries and filters a defensive foreign row`() {
+        val memberId = 1L
+        val owner = scheduleEntity(id = 1L, memberId = memberId)
+        val retainedForeign = scheduleEntity(id = 2L, memberId = 99L)
+        val disabledService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
+            ),
+        )
+        whenever(scheduleRepository.findOwnedScheduleList(memberId))
+            .thenReturn(listOf(owner, retainedForeign))
+        whenever(scheduleRepository.findOwnedScheduleDetail(1L, memberId)).thenReturn(owner)
+
+        val list = disabledService.getScheduleList(memberId)
+        val detail = disabledService.getScheduleDetail(memberId, 1L)
+
+        assertEquals(listOf(1L), list.map { it.id })
+        assertEquals(1L, detail.id)
+        verify(scheduleRepository, never()).findScheduleList(memberId)
+        verify(scheduleRepository, never()).findScheduleDetail(any(), any())
+    }
+
+    @Test
+    fun `global sharing off bypasses calendar cache that may contain retained shared DTOs`() {
+        val memberId = 1L
+        val rangeStart = Instant.parse("2026-06-01T00:00:00Z")
+        val rangeEnd = Instant.parse("2026-06-30T23:59:59Z")
+        val cacheService = mock<ScheduleCalendarCacheService>()
+        val disabledService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            calendarCacheService = cacheService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
+            ),
+        )
+        whenever(
+            scheduleRepository.findOwnedOverlappingScheduleList(memberId, rangeStart, rangeEnd)
+        ).thenReturn(listOf(scheduleEntity(id = 1L, memberId = memberId)))
+
+        val result = disabledService.getCalendarScheduleList(
+            memberId,
+            rangeStart.toString(),
+            rangeEnd.toString(),
+        )
+
+        assertEquals(listOf(1L), result.map { it.id })
+        verify(cacheService, never()).getOrLoad(any(), any(), any(), any())
+        verify(scheduleRepository, never()).findOverlappingScheduleList(any(), any(), any())
+    }
+
+    @Test
+    fun `global sharing off rejects retained editor and foreign category or calendar mutations`() {
+        val memberId = 1L
+        val categoryRepository = mock<ScheduleCategoryRepository>()
+        val categoryShares = mock<ScheduleCategoryShareRepository>()
+        val calendars = mock<ScheduleCalendarRepository>()
+        val calendarMembers = mock<ScheduleCalendarMemberRepository>()
+        val disabledService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            categoryRepository = categoryRepository,
+            categoryShareRepository = categoryShares,
+            calendarRepository = calendars,
+            calendarMemberRepository = calendarMembers,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
+            ),
+        )
+        whenever(categoryRepository.findById(1L)).thenReturn(
+            Optional.of(ScheduleCategory(id = 1L, memberId = 99L, title = "dormant", color = "#000000")),
+            Optional.of(ScheduleCategory(id = 1L, memberId = memberId, title = "owned", color = "#000000")),
+        )
+
+        val editorFailure = assertThrows<BusinessException> {
+            disabledService.updateSchedule(memberId, 10L, scheduleDto())
+        }
+        val categoryFailure = assertThrows<BusinessException> {
+            disabledService.addSchedule(memberId, scheduleDto())
+        }
+        val calendarFailure = assertThrows<BusinessException> {
+            disabledService.addSchedule(
+                memberId,
+                scheduleDto().copy(calendarId = 30L),
+            )
+        }
+
+        assertEquals(com.noLate.global.error.ErrorCode.SCHEDULE_NOT_FOUND, editorFailure.errorCode)
+        assertEquals(com.noLate.global.error.ErrorCode.FEATURE_DISABLED, categoryFailure.errorCode)
+        assertEquals(com.noLate.global.error.ErrorCode.FEATURE_DISABLED, calendarFailure.errorCode)
+        verify(categoryShares, never()).findByCategoryIdAndTargetMemberId(any(), any())
+        verify(calendars, never()).findAllForUpdate(any())
+        verify(scheduleRepository, never()).save(any<Schedule>())
     }
 
     @Test
