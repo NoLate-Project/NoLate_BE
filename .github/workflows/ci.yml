@@ -17,6 +17,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Prometheus alert rules
+        env:
+          PROMETHEUS_IMAGE: "prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996"
+        run: |
+          # Pin the v3.5.0 manifest digest so a mutable image tag cannot change CI behavior.
+          docker run --rm --entrypoint /bin/promtool \
+            --volume "${GITHUB_WORKSPACE}/ops/prometheus:/work:ro" \
+            "${PROMETHEUS_IMAGE}" \
+            check rules /work/nolate-release-alerts.yml
+          docker run --rm --entrypoint /bin/promtool \
+            --volume "${GITHUB_WORKSPACE}/ops/prometheus:/work:ro" \
+            "${PROMETHEUS_IMAGE}" \
+            test rules /work/nolate-release-alerts.test.yml
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
