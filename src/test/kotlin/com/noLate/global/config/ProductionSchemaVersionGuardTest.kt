@@ -31,6 +31,27 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
+    fun `account deletion migration adds request schema before the production marker`() {
+        val migration = Files.readString(
+            Path.of("docs/member/migrations/2026-07-26-account-deletion-requests.sql"),
+        )
+        val table = migration.indexOf("CREATE TABLE account_deletion_requests")
+        val postcondition = migration.indexOf("CALL assert_account_deletion_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(migration.contains("2026-07-24-push-reliability-v4"))
+        assertTrue(migration.contains(ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSION))
+        assertTrue(table >= 0)
+        assertTrue(postcondition > table)
+        assertTrue(marker > postcondition)
+        assertTrue(migration.contains("verification_token_hash"))
+        assertTrue(migration.contains("deletion_grant_hash"))
+        assertTrue(migration.contains("retention_expires_at"))
+    }
+
+    @Test
     fun `production refuses automatic Hibernate schema mutation`() {
         val error = assertThrows(IllegalStateException::class.java) {
             guard(markerDatabase(), ddlMode = "update").afterSingletonsInstantiated()
@@ -46,6 +67,54 @@ class ProductionSchemaVersionGuardTest {
         }
 
         assertTrue(error.message!!.contains("sql.init.mode must be never"))
+    }
+
+    @Test
+    fun `production requires an explicit canonical HTTPS account deletion origin`() {
+        val jdbc = markerDatabase()
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            ProductionSchemaVersionGuard(
+                environment = MockEnvironment()
+                    .withProperty("spring.jpa.hibernate.ddl-auto", "validate")
+                    .withProperty("spring.sql.init.mode", "never")
+                    .withProperty("account-deletion.public-origin", ""),
+                jdbcTemplate = jdbc,
+            ).afterSingletonsInstantiated()
+        }
+
+        assertTrue(error.message!!.contains("canonical HTTPS origin"))
+    }
+
+    @Test
+    fun `enabled production account deletion refuses incomplete SMTP readiness`() {
+        val error = assertThrows(IllegalStateException::class.java) {
+            ProductionSchemaVersionGuard(
+                environment = MockEnvironment()
+                    .withProperty("spring.jpa.hibernate.ddl-auto", "validate")
+                    .withProperty("spring.sql.init.mode", "never")
+                    .withProperty(
+                        "account-deletion.public-origin",
+                        "https://delete.example",
+                    )
+                    .withProperty(
+                        "account-deletion.support-email",
+                        "privacy@example.com",
+                    )
+                    .withProperty("account-deletion.enabled", "true")
+                    .withProperty(
+                        "account-deletion.verification.email.enabled",
+                        "true",
+                    )
+                    .withProperty(
+                        "account-deletion.verification.email.from",
+                        "noreply@example.com",
+                    ),
+                jdbcTemplate = markerDatabase(),
+            ).afterSingletonsInstantiated()
+        }
+
+        assertTrue(error.message!!.contains("SMTP host"))
     }
 
     @Test
@@ -223,7 +292,15 @@ class ProductionSchemaVersionGuardTest {
         ProductionSchemaVersionGuard(
             environment = MockEnvironment()
                 .withProperty("spring.jpa.hibernate.ddl-auto", ddlMode)
-                .withProperty("spring.sql.init.mode", sqlInitMode),
+                .withProperty("spring.sql.init.mode", sqlInitMode)
+                .withProperty(
+                    "account-deletion.public-origin",
+                    "https://account-deletion.example",
+                )
+                .withProperty(
+                    "account-deletion.support-email",
+                    "privacy@example.com",
+                ),
             jdbcTemplate = jdbc,
         )
 

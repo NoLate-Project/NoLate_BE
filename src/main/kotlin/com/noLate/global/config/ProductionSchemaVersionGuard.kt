@@ -6,6 +6,7 @@ import org.springframework.core.env.Environment
 import org.springframework.dao.DataAccessException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Component
+import java.net.URI
 
 /**
  * Production schema changes are deliberately manual. Hibernate validation proves that
@@ -34,6 +35,91 @@ class ProductionSchemaVersionGuard(
             "Production startup blocked: spring.sql.init.mode must be never."
         }
 
+        val accountDeletionPublicOrigin =
+            environment.getProperty("account-deletion.public-origin")?.trim().orEmpty()
+        val publicOriginIsCanonicalHttps = runCatching {
+            val uri = URI(accountDeletionPublicOrigin)
+            uri.scheme.equals("https", ignoreCase = true) &&
+                !uri.host.isNullOrBlank() &&
+                uri.userInfo == null &&
+                uri.query == null &&
+                uri.fragment == null &&
+                (uri.path.isNullOrBlank() || uri.path == "/")
+        }.getOrDefault(false)
+        check(publicOriginIsCanonicalHttps) {
+            "Production startup blocked: account-deletion.public-origin must be an explicit " +
+                "canonical HTTPS origin."
+        }
+        val accountDeletionSupportEmail =
+            environment.getProperty("account-deletion.support-email")?.trim().orEmpty()
+        check(
+            accountDeletionSupportEmail.length in 3..254 &&
+                Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+                    .matches(accountDeletionSupportEmail)
+        ) {
+            "Production startup blocked: account-deletion.support-email must be explicit."
+        }
+        val accountDeletionEnabled =
+            environment.getProperty("account-deletion.enabled", Boolean::class.java, false)
+        if (accountDeletionEnabled) {
+            check(
+                environment.getProperty(
+                    "account-deletion.verification.email.enabled",
+                    Boolean::class.java,
+                    false,
+                )
+            ) {
+                "Production startup blocked: the account-deletion email verifier must be enabled."
+            }
+            val deletionEmailFrom =
+                environment.getProperty("account-deletion.verification.email.from")
+                    ?.trim()
+                    .orEmpty()
+            check(
+                deletionEmailFrom.length in 3..254 &&
+                    Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$").matches(deletionEmailFrom)
+            ) {
+                "Production startup blocked: the account-deletion sender address is invalid."
+            }
+            check(!environment.getProperty("spring.mail.host").isNullOrBlank()) {
+                "Production startup blocked: the account-deletion SMTP host is absent."
+            }
+            check(environment.getProperty("spring.mail.port", Int::class.java, 0) in 1..65_535) {
+                "Production startup blocked: the account-deletion SMTP port is invalid."
+            }
+            check(
+                !environment.getProperty("spring.mail.username").isNullOrBlank() &&
+                    !environment.getProperty("spring.mail.password").isNullOrBlank()
+            ) {
+                "Production startup blocked: authenticated account-deletion SMTP credentials are absent."
+            }
+            check(
+                environment.getProperty(
+                    "spring.mail.properties.mail.smtp.auth",
+                    Boolean::class.java,
+                    false,
+                ) &&
+                    environment.getProperty(
+                        "spring.mail.properties.mail.smtp.starttls.enable",
+                        Boolean::class.java,
+                        false,
+                    ) &&
+                    environment.getProperty(
+                        "spring.mail.properties.mail.smtp.starttls.required",
+                        Boolean::class.java,
+                        false,
+                    )
+            ) {
+                "Production startup blocked: authenticated required STARTTLS is mandatory for " +
+                    "account-deletion email."
+            }
+            check(
+                environment.getProperty("spring.mail.test-connection", Boolean::class.java, false)
+            ) {
+                "Production startup blocked: SMTP startup connection verification must be enabled."
+            }
+        }
+
         val markerCount = try {
             jdbcTemplate.queryForObject(
                 """
@@ -60,6 +146,6 @@ class ProductionSchemaVersionGuard(
     }
 
     companion object {
-        const val REQUIRED_SCHEMA_VERSION = "2026-07-24-push-reliability-v4"
+        const val REQUIRED_SCHEMA_VERSION = "2026-07-26-account-deletion-v1"
     }
 }

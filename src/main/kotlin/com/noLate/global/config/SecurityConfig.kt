@@ -115,6 +115,8 @@ class SecurityConfig(
                         "/api/calendar/days",
                         "/api/legal/**",
                         "/legal/**",
+                        "/account-deletion",
+                        "/account-deletion/**",
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
                         "/swagger-ui.html",

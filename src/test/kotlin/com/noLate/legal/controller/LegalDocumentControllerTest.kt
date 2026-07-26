@@ -31,6 +31,7 @@ class LegalDocumentControllerTest {
         assertTrue(html.contains("https://nolate.jinuk.dev/"))
         assertTrue(html.contains("How NoLate Uses Google Calendar Data"))
         assertTrue(html.contains("href=\"/legal/privacy-policy\""))
+        assertTrue(html.contains("href=\"/account-deletion\""))
     }
 
     @Test
@@ -57,6 +58,12 @@ class LegalDocumentControllerTest {
         assertTrue(document.sections.any { it.title.contains("외부 캘린더") })
         assertTrue(document.sections.any { section ->
             section.body.any { it.contains("Google Calendar") && it.contains("서버에는 저장하지 않습니다") }
+        })
+        assertTrue(document.sections.any { section ->
+            section.body.any { it.contains("/account-deletion") }
+        })
+        assertTrue(document.sections.any { section ->
+            section.body.any { it.contains("외부 계정 삭제 요청 기록") && it.contains("30일") }
         })
     }
 
