@@ -13,6 +13,11 @@ group = 'com'
 version = '0.0.1-NOLATESHOT'
 description = 'noLate'
 
+springBoot {
+    // The standalone readiness probe also has main(); never let bootWar select it as the app.
+    mainClass = 'com.noLate.NoLateApplicationKt'
+}
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)

@@ -48,9 +48,18 @@ class ContainerReadinessProbeTest {
     }
 
     @Test
-    fun `production image packages and runs the readiness probe`() {
+    fun `production image pins the application main and runs a separate readiness probe`() {
+        val build = Files.readString(Path.of("build.gradle"))
         val dockerfile = Files.readString(Path.of("Dockerfile"))
 
+        assertTrue(
+            build.contains("mainClass = 'com.noLate.NoLateApplicationKt'"),
+        )
+        assertTrue(
+            dockerfile.contains(
+                "ENTRYPOINT [\"java\", \"-jar\", \"/app/app.war\"]",
+            ),
+        )
         assertTrue(
             dockerfile.contains(
                 "--main-class com.noLate.global.health.ContainerReadinessProbe",
