@@ -4,6 +4,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.member.application.useCase.MemberUseCase
+import com.noLate.member.application.useCase.MemberWithdrawalResult
 import com.noLate.member.domain.consent.SignupConsentCommand
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.MemberDto
@@ -81,6 +82,65 @@ class MemberControllerTest {
     }
 
     @Test
+    fun `Apple registration status ignores the single-use authorization code`() {
+        val controller = controller()
+        whenever(
+            memberUseCase.isSnsMemberRegistered(
+                LoginType.APPLE,
+                "identity-token",
+                "nonce",
+            )
+        ).thenReturn(true)
+
+        val response = controller.getSnsRegistrationStatus(
+            SnsRegistrationRequest(
+                loginType = LoginType.APPLE,
+                providerToken = "identity-token",
+                authorizationCode = "single-use-code-must-remain-unused",
+                nonce = "nonce",
+            )
+        )
+
+        assertEquals(true, response.data?.registered)
+        verify(memberUseCase).isSnsMemberRegistered(
+            LoginType.APPLE,
+            "identity-token",
+            "nonce",
+        )
+    }
+
+    @Test
+    fun `Apple login forwards the single-use authorization code only to final login`() {
+        val controller = controller()
+        val saved = MemberDto(id = 8L, loginType = LoginType.APPLE, snsId = "apple-subject")
+        whenever(
+            memberUseCase.loginSns(
+                LoginType.APPLE,
+                "identity-token",
+                "nonce",
+                "authorization-code",
+            )
+        ).thenReturn(saved)
+
+        val response = controller.snsLogin(
+            SnsLoginRequest(
+                loginType = LoginType.APPLE,
+                providerToken = "identity-token",
+                authorizationCode = "authorization-code",
+                nonce = "nonce",
+            )
+        )
+
+        assertSame(saved, response.data)
+        verify(memberUseCase).loginSns(
+            loginType = LoginType.APPLE,
+            providerToken = "identity-token",
+            nonce = "nonce",
+            authorizationCode = "authorization-code",
+        )
+    }
+
+    @Test
     fun `sns signup passes profile and the same required consent`() {
         val controller = controller()
         val saved = MemberDto(id = 4L, loginType = LoginType.NAVER, snsId = "naver-1")
@@ -90,6 +150,7 @@ class MemberControllerTest {
                 eq("provider-token"),
                 isNull(),
                 any(),
+                isNull(),
             )
         ).thenReturn(saved)
 
@@ -107,6 +168,41 @@ class MemberControllerTest {
             providerToken = eq("provider-token"),
             nonce = eq(null),
             consents = eq(consentRequest.toCommand()),
+            authorizationCode = eq(null),
+        )
+    }
+
+    @Test
+    fun `Apple signup forwards authorization code to the final transactional signup`() {
+        val controller = controller()
+        val saved = MemberDto(id = 9L, loginType = LoginType.APPLE, snsId = "apple-subject")
+        whenever(
+            memberUseCase.signUpSns(
+                eq(LoginType.APPLE),
+                eq("identity-token"),
+                eq("nonce"),
+                any(),
+                eq("authorization-code"),
+            )
+        ).thenReturn(saved)
+
+        val response = controller.snsSignUp(
+            SnsSignUpRequest(
+                loginType = LoginType.APPLE,
+                providerToken = "identity-token",
+                authorizationCode = "authorization-code",
+                nonce = "nonce",
+                consents = consentRequest,
+            )
+        )
+
+        assertSame(saved, response.data)
+        verify(memberUseCase).signUpSns(
+            loginType = eq(LoginType.APPLE),
+            providerToken = eq("identity-token"),
+            nonce = eq("nonce"),
+            consents = eq(consentRequest.toCommand()),
+            authorizationCode = eq("authorization-code"),
         )
     }
 
@@ -246,6 +342,8 @@ class MemberControllerTest {
     // COMMON account password requirements are enforced by MemberUseCase, not the controller.
     fun `withdraw allows nullable password for sns members`() {
         val controller = controller()
+        whenever(memberUseCase.withdraw(1L, 8L, null))
+            .thenReturn(MemberWithdrawalResult(manualAppleRevocationRequired = true))
 
         val response = controller.withdraw(
             principal = principal,
@@ -253,6 +351,7 @@ class MemberControllerTest {
         )
 
         assertTrue(response.success)
+        assertEquals(true, response.data?.manualAppleRevocationRequired)
         verify(memberUseCase).withdraw(1L, 8L, null)
     }
 

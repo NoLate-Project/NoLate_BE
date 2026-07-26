@@ -95,6 +95,12 @@ observability:
   snapshot:
     enabled: false
 
+auth:
+  social:
+    apple:
+      token-lifecycle:
+        enabled: false
+
 logging:
   level:
     root: warn

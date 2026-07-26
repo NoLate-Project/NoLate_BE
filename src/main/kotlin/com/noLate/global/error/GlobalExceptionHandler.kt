@@ -28,6 +28,7 @@ class GlobalExceptionHandler {
             ErrorCode.INVALID_CREDENTIALS -> HttpStatus.UNAUTHORIZED
             ErrorCode.FORBIDDEN -> HttpStatus.FORBIDDEN
             ErrorCode.FEATURE_DISABLED -> HttpStatus.FORBIDDEN
+            ErrorCode.EXTERNAL_SERVICE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE
             ErrorCode.SUBSCRIPTION_LIMIT_EXCEEDED -> HttpStatus.FORBIDDEN
             ErrorCode.SUBSCRIPTION_POLICY_VIOLATION -> HttpStatus.FORBIDDEN
             ErrorCode.MEMBER_NOT_FOUND -> HttpStatus.NOT_FOUND

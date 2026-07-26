@@ -214,6 +214,30 @@ auth:
       app-id: ${SNS_KAKAO_APP_ID:}
     apple:
       audiences: ${SNS_APPLE_AUDIENCES:}
+      token-lifecycle:
+        enabled: ${APPLE_TOKEN_LIFECYCLE_ENABLED:false}
+        client-id: ${APPLE_TOKEN_CLIENT_ID:}
+        team-id: ${APPLE_TOKEN_TEAM_ID:}
+        key-id: ${APPLE_TOKEN_KEY_ID:}
+        private-key: ${APPLE_TOKEN_PRIVATE_KEY:}
+        redirect-uri: ${APPLE_TOKEN_REDIRECT_URI:}
+        base-url: ${APPLE_TOKEN_BASE_URL:https://appleid.apple.com}
+        client-secret-validity-seconds: ${APPLE_TOKEN_CLIENT_SECRET_VALIDITY_SECONDS:300}
+        encryption:
+          current-key-id: ${APPLE_TOKEN_ENCRYPTION_KEY_ID:}
+          current-key: ${APPLE_TOKEN_ENCRYPTION_KEY:}
+          previous-keys: ${APPLE_TOKEN_PREVIOUS_ENCRYPTION_KEYS:}
+        capture:
+          # Apple success 뒤 회원 transaction이 실패/종료될 때 revoke 보상으로 넘기는 상한.
+          binding-deadline-seconds: ${APPLE_TOKEN_CAPTURE_BINDING_DEADLINE_SECONDS:120}
+        revocation:
+          worker-enabled: ${APPLE_TOKEN_REVOCATION_WORKER_ENABLED:true}
+          fixed-delay-ms: ${APPLE_TOKEN_REVOCATION_FIXED_DELAY_MS:30000}
+          batch-size: ${APPLE_TOKEN_REVOCATION_BATCH_SIZE:20}
+          max-attempts: ${APPLE_TOKEN_REVOCATION_MAX_ATTEMPTS:12}
+          retry-delay-seconds: ${APPLE_TOKEN_REVOCATION_RETRY_DELAY_SECONDS:60}
+          max-retry-delay-seconds: ${APPLE_TOKEN_REVOCATION_MAX_RETRY_DELAY_SECONDS:21600}
+          processing-timeout-seconds: ${APPLE_TOKEN_REVOCATION_PROCESSING_TIMEOUT_SECONDS:120}
 
 ---
 # 테스트 profile에서는 저장소/로컬/운영 비밀 파일 자체를 import하지 않는다.

@@ -46,4 +46,22 @@ class ProductionApiSurfaceConfigurationTest {
 
         assertEquals("false", properties.getProperty("schedule.sharing.enabled"))
     }
+
+    @Test
+    fun `production profile cannot disable Apple token exchange and revoke worker`() {
+        val properties = YamlPropertiesFactoryBean().apply {
+            setResources(ClassPathResource("application-prod.yml"))
+        }.getObject() ?: error("application-prod.yml could not be loaded")
+
+        assertEquals(
+            "true",
+            properties.getProperty("auth.social.apple.token-lifecycle.enabled"),
+        )
+        assertEquals(
+            "true",
+            properties.getProperty(
+                "auth.social.apple.token-lifecycle.revocation.worker-enabled"
+            ),
+        )
+    }
 }

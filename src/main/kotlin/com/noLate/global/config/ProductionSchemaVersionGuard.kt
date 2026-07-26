@@ -60,6 +60,6 @@ class ProductionSchemaVersionGuard(
     }
 
     companion object {
-        const val REQUIRED_SCHEMA_VERSION = "2026-07-24-push-reliability-v4"
+        const val REQUIRED_SCHEMA_VERSION = "2026-07-26-apple-token-lifecycle-v1"
     }
 }
