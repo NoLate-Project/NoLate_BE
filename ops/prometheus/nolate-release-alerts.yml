@@ -2,7 +2,12 @@ groups:
   - name: nolate-release-observability
     rules:
       - alert: NoLateEtaBacklogDelayed
-        expr: nolate_eta_jobs_oldest_delay_seconds{application="noLate"} > 180
+        expr: |
+          max(
+            nolate_eta_jobs_oldest_delay_seconds{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 180
         for: 10m
         labels:
           severity: warning
@@ -11,7 +16,12 @@ groups:
           description: "The oldest due ETA job has remained more than three minutes late."
 
       - alert: NoLatePushOutboxBacklogDelayed
-        expr: nolate_push_outbox_oldest_delay_seconds{application="noLate"} > 120
+        expr: |
+          max(
+            nolate_push_outbox_oldest_delay_seconds{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 120
         for: 10m
         labels:
           severity: warning
@@ -20,7 +30,12 @@ groups:
           description: "The oldest due push outbox event has remained more than two minutes late."
 
       - alert: NoLatePushOutboxStaleLease
-        expr: nolate_push_outbox_leases_stale{application="noLate"} > 0
+        expr: |
+          max(
+            nolate_push_outbox_leases_stale{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 0
         for: 5m
         labels:
           severity: warning
@@ -29,7 +44,12 @@ groups:
           description: "At least one outbox lease is older than the configured processing timeout."
 
       - alert: NoLatePushAmbiguousDelivery
-        expr: nolate_push_deliveries_ambiguous{application="noLate"} > 0
+        expr: |
+          max(
+            nolate_push_deliveries_ambiguous{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 0
         for: 5m
         labels:
           severity: warning
@@ -38,7 +58,12 @@ groups:
           description: "At least one DISPATCHING delivery outlived the bounded provider call."
 
       - alert: NoLatePushTokenLeaseExpired
-        expr: nolate_push_token_leases_expired{application="noLate"} > 0
+        expr: |
+          max(
+            nolate_push_token_leases_expired{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 0
         for: 5m
         labels:
           severity: warning
@@ -82,10 +107,22 @@ groups:
           description: "Bounded live ETA failures exceeded 20% with at least 20 calls."
 
       - alert: NoLateObservabilitySnapshotFailure
-        expr: increase(nolate_observability_snapshot_failures_total{application="noLate"}[10m]) > 0
+        expr: sum(increase(nolate_observability_snapshot_failures_total{application="noLate"}[10m])) > 0
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "NoLate operational gauge sampling is failing"
           description: "Backlog gauges retain their last-known values until database sampling recovers."
+
+      - alert: NoLateObservabilitySnapshotStale
+        expr: |
+          min(
+            time() - nolate_observability_snapshot_last_success_seconds{application="noLate"}
+          ) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate operational gauge snapshots are stale"
+          description: "No application instance has published a fresh backlog snapshot for 90 seconds."

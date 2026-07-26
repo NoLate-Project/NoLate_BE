@@ -918,17 +918,20 @@ class SchedulePushJobWorkerTest {
     fun `모호한 전달은 이벤트 단계만 전진시키고 confirmed success 시각은 기록하지 않는다`() {
         val schedule = schedule(shortScheduleStartAt)
         val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
 
         stubDueJob(job, schedule, travelMinutes = 60)
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(
                 NotificationSendResult(
-                    requestedCount = 1,
-                    ambiguousCount = 1,
+                    requestedCount = 3,
+                    ambiguousCount = 3,
                 )
             )
 
-        worker().runDueJobs(testNow)
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
 
         assertEquals(1, job.checkCount)
         assertNull(job.departureNoticeSentAt)
@@ -939,6 +942,50 @@ class SchedulePushJobWorkerTest {
         assertNull(job.lastPushedAt)
         assertEquals(0, job.retryCount)
         assertEquals(testNow.plus(3, ChronoUnit.MINUTES), job.nextCheckAt)
+        assertEquals(
+            1.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "uncertain_delivery")
+                .counter()
+                .count(),
+        )
+    }
+
+    @Test
+    fun `모호한 전달 전이 저장이 실패하면 ETA 결과 카운터를 기록하지 않는다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 3,
+                    ambiguousCount = 3,
+                )
+            )
+        whenever(pushJobRepository.saveAndFlush(job))
+            .thenThrow(IllegalStateException("database unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEquals(
+            0.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "processed")
+                .counter()
+                .count(),
+        )
+        assertEquals(
+            0.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "uncertain_delivery")
+                .counter()
+                .count(),
+        )
     }
 
     @Test
@@ -1068,6 +1115,39 @@ class SchedulePushJobWorkerTest {
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals("등록된 푸시 토큰이 없습니다.", job.failureReason)
         assertEquals(1, job.retryCount)
+    }
+
+    @Test
+    fun `retry counter is not emitted when the durable transition fails`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult())
+        whenever(pushJobRepository.saveAndFlush(job))
+            .thenThrow(IllegalStateException("database unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEquals(1, job.retryCount)
+        assertEquals(
+            0.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "retry_scheduled")
+                .counter()
+                .count(),
+        )
+        assertEquals(
+            0.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "terminal_failure")
+                .counter()
+                .count(),
+        )
     }
 
     @Test

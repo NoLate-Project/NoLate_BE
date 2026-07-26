@@ -166,6 +166,12 @@ class NoLateOperationalMetrics(
     private val snapshotFailures = Counter.builder("nolate.observability.snapshot.failures")
         .description("Failures while sampling operational backlog gauges.")
         .register(registry)
+    private val snapshotLastSuccessEpochSeconds = gauge(
+        registry,
+        "nolate.observability.snapshot.last.success",
+        "Epoch time of the last successful operational backlog snapshot.",
+        "seconds",
+    )
 
     // Scrapes read only these in-memory values. Database sampling runs independently below so a
     // slow or unavailable database cannot make the Prometheus endpoint slow or unavailable.
@@ -256,6 +262,10 @@ class NoLateOperationalMetrics(
     fun recordSnapshotFailure() {
         snapshotFailures.increment()
     }
+
+    fun recordSnapshotSuccess(sampledAt: Instant) {
+        snapshotLastSuccessEpochSeconds.set(sampledAt.epochSecond.coerceAtLeast(0))
+    }
 }
 
 fun interface OperationalBacklogSnapshotReader {
@@ -332,10 +342,15 @@ class OperationalBacklogSampler(
     private val fixedDelayMillis: Long = 30_000,
     @Value("\${observability.snapshot.initial-delay-ms:30000}")
     private val initialDelayMillis: Long = 30_000,
+    @Value("\${observability.snapshot.shutdown-wait-ms:5000}")
+    private val shutdownWaitMillis: Long = 5_000,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val lifecycleMonitor = Any()
     @Volatile
     private var running = false
+    @Volatile
+    private var lifecycleGeneration = 0L
     private var executor: ScheduledExecutorService? = null
 
     fun sample() {
@@ -343,6 +358,16 @@ class OperationalBacklogSampler(
     }
 
     fun sample(now: Instant) {
+        sample(now) { publish ->
+            publish()
+            true
+        }
+    }
+
+    private fun sample(
+        now: Instant,
+        publishIfCurrent: (() -> Unit) -> Boolean,
+    ) {
         if (!enabled) return
         runCatching {
             reader.read(
@@ -353,39 +378,94 @@ class OperationalBacklogSampler(
                 ambiguousBefore = now.minusSeconds(providerMaxCallSeconds.coerceAtLeast(1)),
             )
         }.onSuccess { snapshot ->
-            metrics.recordSafely { updateBacklog(snapshot) }
+            publishIfCurrent {
+                metrics.recordSafely {
+                    updateBacklog(snapshot)
+                    recordSnapshotSuccess(now)
+                }
+            }
         }
             .onFailure { failure ->
-                metrics.recordSafely { recordSnapshotFailure() }
-                log.warn(
-                    "Operational backlog sampling failed. errorCode={}",
-                    failure.javaClass.simpleName,
-                )
+                publishIfCurrent {
+                    metrics.recordSafely { recordSnapshotFailure() }
+                    log.warn(
+                        "Operational backlog sampling failed. errorCode={}",
+                        failure.javaClass.simpleName,
+                    )
+                }
             }
     }
 
     override fun start() {
-        if (!enabled || running) return
-        val scheduledExecutor = Executors.newSingleThreadScheduledExecutor { task ->
-            Thread(task, "nolate-operational-snapshot").apply { isDaemon = true }
+        synchronized(lifecycleMonitor) {
+            if (!enabled || running) return
+            val scheduledExecutor = Executors.newSingleThreadScheduledExecutor { task ->
+                Thread(task, "nolate-operational-snapshot").apply { isDaemon = true }
+            }
+            val generation = lifecycleGeneration + 1
+            lifecycleGeneration = generation
+            executor = scheduledExecutor
+            running = true
+            try {
+                scheduledExecutor.scheduleWithFixedDelay(
+                    {
+                        if (isCurrentGeneration(generation)) {
+                            sample(Instant.now(clock)) { publish ->
+                                publishForGeneration(generation, publish)
+                            }
+                        }
+                    },
+                    initialDelayMillis.coerceAtLeast(0),
+                    fixedDelayMillis.coerceAtLeast(1_000),
+                    TimeUnit.MILLISECONDS,
+                )
+            } catch (failure: RuntimeException) {
+                running = false
+                lifecycleGeneration += 1
+                executor = null
+                scheduledExecutor.shutdownNow()
+                throw failure
+            }
         }
-        executor = scheduledExecutor
-        running = true
-        scheduledExecutor.scheduleWithFixedDelay(
-            ::sample,
-            initialDelayMillis.coerceAtLeast(0),
-            fixedDelayMillis.coerceAtLeast(1_000),
-            TimeUnit.MILLISECONDS,
-        )
     }
 
     override fun stop() {
-        executor?.shutdownNow()
-        executor = null
-        running = false
+        val stoppingExecutor = synchronized(lifecycleMonitor) {
+            running = false
+            lifecycleGeneration += 1
+            executor.also { executor = null }
+        } ?: return
+        stoppingExecutor.shutdownNow()
+        try {
+            if (!stoppingExecutor.awaitTermination(
+                    shutdownWaitMillis.coerceAtLeast(0),
+                    TimeUnit.MILLISECONDS,
+                )
+            ) {
+                log.warn("Operational backlog sampler did not stop within the shutdown bound.")
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     override fun isRunning(): Boolean = running
+
+    private fun isCurrentGeneration(generation: Long): Boolean =
+        running && lifecycleGeneration == generation
+
+    private fun publishForGeneration(
+        generation: Long,
+        publish: () -> Unit,
+    ): Boolean =
+        synchronized(lifecycleMonitor) {
+            if (!isCurrentGeneration(generation)) {
+                false
+            } else {
+                publish()
+                true
+            }
+        }
 }
 
 inline fun NoLateOperationalMetrics?.recordSafely(

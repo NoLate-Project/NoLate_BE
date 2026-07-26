@@ -15,13 +15,16 @@ The custom deployment probes remain unchanged:
 - `GET /health/readiness`
 
 They expose only application availability. Actuator health, metrics inventory, environment, and
-every other `/actuator/**` route remain denied.
+every other management endpoint remain denied by endpoint identity, including when an operator
+changes the Actuator base path or an endpoint path mapping.
 
 ## Scrape access
 
 The Prometheus registry is enabled, but the HTTP scrape route fails closed. Missing, false, and
-malformed values do not open it. The only public actuator request that can be enabled is the exact
-`GET /actuator/prometheus`.
+malformed values do not open it. The only public actuator request that can be enabled is `GET` on
+the Prometheus endpoint identity. With the default mapping this is exactly
+`GET /actuator/prometheus`; a configured base path or Prometheus path mapping moves the allowed
+route without allowing a different endpoint mapped to the old URL.
 
 ```text
 OBSERVABILITY_PROMETHEUS_PUBLIC_ENABLED=true
@@ -29,17 +32,23 @@ OBSERVABILITY_PROMETHEUS_PUBLIC_ENABLED=true
 
 Set this value only after the deployment ingress or private network restricts the path to the
 approved scraper. Do not expose an unauthenticated scrape route to the public Internet. A normal
-member JWT cannot unlock actuator routes when the flag is off, and enabling the flag does not open
-POST, a trailing-slash subpath, `/actuator/health`, or `/actuator/metrics`.
+member JWT cannot unlock management endpoints when the flag is off, and enabling the flag does not
+open POST, OPTIONS, a trailing-slash subpath, Actuator health, or Actuator metrics inventory. The
+same endpoint-aware security chain is integration-tested on a separate management port.
 
 To close the route, remove the value or set it to anything other than exact lowercase `true`, then
 restart the application.
 
 ## Metric contract
 
-Every meter has the stable `application` common tag. All metric-specific tags are finite enums
-controlled by source code. No metric tag contains a member, schedule, calendar, token, device,
-provider message ID, exception class, error message, title, body, or raw payload.
+All auto-configured meter registries are allowlisted to the application-owned `nolate.*` namespace.
+Spring/JVM/HTTP meters outside that namespace are intentionally denied at registration time, not
+merely hidden at the HTTP response, so they are unavailable for internal dashboards as well as the
+public scrape. This prevents dependency-added exception, URI, repository, pool, or similar
+dimensions from silently expanding the public contract. Every exported meter has the stable
+`application` common tag. All metric-specific tags are finite enums controlled by source code. No
+exported metric tag contains a member, schedule, calendar, token, device, provider message ID,
+exception class, error message, title, body, or raw payload.
 
 | Metric | Type | Bounded dimensions | Meaning |
 |---|---|---|---|
@@ -59,6 +68,7 @@ provider message ID, exception class, error message, title, body, or raw payload
 | `nolate_push_deliveries_ambiguous` | gauge | none | `DISPATCHING` deliveries older than the provider call bound |
 | `nolate_push_token_leases_expired` | gauge | none | Expired token leases awaiting cleanup |
 | `nolate_observability_snapshot_failures_total` | counter | none | Database snapshot sampling failures |
+| `nolate_observability_snapshot_last_success_seconds` | gauge | none | Epoch time of the last successful database snapshot |
 
 Backlog gauges never query the database during a scrape. A dedicated daemon sampler updates
 in-memory values every 30 seconds by default:
@@ -67,6 +77,7 @@ in-memory values every 30 seconds by default:
 OBSERVABILITY_SNAPSHOT_ENABLED=true
 OBSERVABILITY_SNAPSHOT_FIXED_DELAY_MS=30000
 OBSERVABILITY_SNAPSHOT_INITIAL_DELAY_MS=30000
+OBSERVABILITY_SNAPSHOT_SHUTDOWN_WAIT_MS=5000
 ```
 
 The queries use the existing state/time indexes:
@@ -80,7 +91,9 @@ The queries use the existing state/time indexes:
 They are read-only and do not acquire pessimistic locks. If sampling fails, application requests
 and provider state transitions continue, the gauges retain their last known values, and only the
 snapshot failure counter increases. Metric registry failures are also isolated from provider return
-values and durable state transitions.
+values and durable state transitions. Shutdown invalidates the sampler generation before interrupting
+the daemon and waits for the bounded interval, so a JDBC read that completes late cannot overwrite
+gauges after restart.
 
 ## Staging verification
 
@@ -99,7 +112,8 @@ values and durable state transitions.
    promtool check rules ops/prometheus/nolate-release-alerts.yml
    ```
 
-8. Tune thresholds from staging baseline, load the rules into the actual Prometheus-compatible
+8. Tune thresholds from staging baseline, including the 90-second freshness bound when changing
+   the default 30-second sampler delay. Load the rules into the actual Prometheus-compatible
    system, attach notification routing, and capture links/screenshots as external release evidence.
    Load them per environment, or add the monitoring system's environment/cluster labels to every
    selector before using a shared multi-environment rule evaluator.
@@ -107,6 +121,11 @@ values and durable state transitions.
 Recommended dashboard panels are ETA/outbox due count and oldest delay, stale/expired leases,
 ambiguous deliveries, push outcome rate and latency, live ETA provider failure rate and latency,
 and fallback quality ratio.
+
+The draft backlog alerts first discard per-instance snapshots older than 90 seconds and then take
+the cluster maximum. This produces one cluster-level alert instead of one duplicate alert per
+application instance. Snapshot-failure alerts are summed across instances. Load rules separately per
+environment, as noted above, so that aggregation never crosses environments.
 
 ## Incident response
 

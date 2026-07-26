@@ -8,8 +8,11 @@ import org.junit.jupiter.api.Test
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class NoLateOperationalMetricsTest {
@@ -116,5 +119,69 @@ class NoLateOperationalMetricsTest {
 
         assertEquals(0.0, registry.get("nolate.eta.jobs.due").gauge().value())
         assertEquals(0, reads.get())
+    }
+
+    @Test
+    fun `successful sampling publishes an epoch freshness gauge`() {
+        val registry = SimpleMeterRegistry()
+        val metrics = NoLateOperationalMetrics(registry)
+        val now = Instant.parse("2026-07-26T00:00:00Z")
+        val sampler = OperationalBacklogSampler(
+            reader = OperationalBacklogSnapshotReader { _, _, _ ->
+                OperationalBacklogSnapshot(1, 2, 3, 4, 5, 6, 7)
+            },
+            metrics = metrics,
+            clock = Clock.fixed(now, ZoneOffset.UTC),
+        )
+
+        sampler.sample(now)
+
+        assertEquals(
+            now.epochSecond.toDouble(),
+            registry.get("nolate.observability.snapshot.last.success").gauge().value(),
+        )
+    }
+
+    @Test
+    fun `an in-flight reader from a stopped generation cannot publish stale gauges`() {
+        val registry = SimpleMeterRegistry()
+        val metrics = NoLateOperationalMetrics(registry)
+        val readerStarted = CountDownLatch(1)
+        val releaseReader = CountDownLatch(1)
+        val readerFinished = CountDownLatch(1)
+        val sampler = OperationalBacklogSampler(
+            reader = OperationalBacklogSnapshotReader { _, _, _ ->
+                readerStarted.countDown()
+                try {
+                    while (releaseReader.count > 0) {
+                        try {
+                            releaseReader.await()
+                        } catch (_: InterruptedException) {
+                            // Simulate a JDBC driver that ignores interruption during shutdown.
+                        }
+                    }
+                    OperationalBacklogSnapshot(9, 9, 9, 9, 9, 9, 9)
+                } finally {
+                    readerFinished.countDown()
+                }
+            },
+            metrics = metrics,
+            clock = Clock.systemUTC(),
+            initialDelayMillis = 0,
+            shutdownWaitMillis = 10,
+        )
+
+        sampler.start()
+        assertTrue(readerStarted.await(1, TimeUnit.SECONDS))
+        sampler.stop()
+        assertFalse(sampler.isRunning)
+        releaseReader.countDown()
+        assertTrue(readerFinished.await(1, TimeUnit.SECONDS))
+
+        assertEquals(0.0, registry.get("nolate.eta.jobs.due").gauge().value())
+        assertEquals(
+            0.0,
+            registry.get("nolate.observability.snapshot.last.success").gauge().value(),
+        )
     }
 }

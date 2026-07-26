@@ -8,6 +8,7 @@ import com.noLate.global.security.JwtTokenProvider
 import com.noLate.member.application.service.MemberService
 import jakarta.servlet.DispatcherType
 import jakarta.servlet.http.HttpServletResponse
+import org.springframework.boot.actuate.autoconfigure.security.servlet.EndpointRequest
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
@@ -104,8 +105,6 @@ class SecurityConfig(
 
             .authorizeHttpRequests { auth ->
                 auth
-                    .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-
                     .dispatcherTypeMatchers(
                         DispatcherType.ASYNC,
                         DispatcherType.ERROR
@@ -122,8 +121,18 @@ class SecurityConfig(
                         observabilityEndpointAccessPolicy.publicPrometheusRequestMatcher
                     ).permitAll()
 
-                    // Actuator is an operator surface, not an authenticated member API.
-                    .requestMatchers("/actuator/**").denyAll()
+                    // Also reserve the configured non-root management namespace. This closes
+                    // trailing-slash and disabled-endpoint probes that have no endpoint identity.
+                    .requestMatchers(
+                        observabilityEndpointAccessPolicy.managementEndpointNamespacePattern
+                    ).denyAll()
+                    // Resolve actuator endpoint identities from the running management mapping.
+                    // This also remains fail-closed when the base path is configured as root.
+                    .requestMatchers(EndpointRequest.toAnyEndpoint()).denyAll()
+
+                    // CORS preflight remains public for application APIs, but the endpoint-aware
+                    // actuator deny above wins for every non-GET management request.
+                    .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
                     .requestMatchers(
                         "/",

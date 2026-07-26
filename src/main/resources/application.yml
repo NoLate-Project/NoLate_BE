@@ -60,7 +60,8 @@ logging:
 management:
   endpoints:
     web:
-      # SecurityConfig independently denies every actuator path except the exact opt-in scrape path.
+      # SecurityConfig resolves endpoint identities, so custom base/path mappings and a separate
+      # management port cannot turn an authenticated member route into an actuator route.
       exposure:
         include: health,prometheus
   endpoint:
@@ -82,6 +83,7 @@ observability:
     enabled: ${OBSERVABILITY_SNAPSHOT_ENABLED:true}
     fixed-delay-ms: ${OBSERVABILITY_SNAPSHOT_FIXED_DELAY_MS:30000}
     initial-delay-ms: ${OBSERVABILITY_SNAPSHOT_INITIAL_DELAY_MS:30000}
+    shutdown-wait-ms: ${OBSERVABILITY_SNAPSHOT_SHUTDOWN_WAIT_MS:5000}
 
 jwt:
   secret-key: ${JWT_SECRET_KEY}
