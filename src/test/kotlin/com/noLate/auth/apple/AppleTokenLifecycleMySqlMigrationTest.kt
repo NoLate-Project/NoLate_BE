@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
@@ -18,7 +19,7 @@ import java.util.concurrent.TimeUnit
 class AppleTokenLifecycleMySqlMigrationTest {
     @Test
     fun `reviewed migration accepts clean and reapply but rejects semantic and receipt drift`() {
-        assumeTrue(command("docker", "info").success, "Docker is required for MySQL 8.4 verification")
+        assumeTrue(dockerAvailable(), "Docker is required for MySQL 8.4 verification")
         val containerName = "nolate-apple-migration-${UUID.randomUUID()}"
         val started = command(
             "docker",
@@ -355,6 +356,14 @@ class AppleTokenLifecycleMySqlMigrationTest {
             .map(String::trim)
             .last { it.matches(Regex("\\d+")) }
     }
+
+    private fun dockerAvailable(): Boolean =
+        try {
+            // Dockerfile build stages may omit the CLI; that is an explicit skip, not a test error.
+            command("docker", "info").success
+        } catch (_: IOException) {
+            false
+        }
 
     private fun command(
         vararg command: String,
