@@ -99,18 +99,21 @@ class AccountDeletionPageControllerTest {
     }
 
     @Test
-    fun `support fallback is never rendered as deletion complete`() {
+    fun `all durable confirmation outcomes render the same generic public receipt`() {
         enableAutomaticFlow()
-        whenever(coordinator.confirm(eq("request"), eq("grant")))
-            .thenReturn(PublicAccountDeletionConfirmation.NEEDS_SUPPORT)
+        val responses = PublicAccountDeletionConfirmation.entries.map { outcome ->
+            whenever(coordinator.confirm(eq("request"), eq("grant"))).thenReturn(outcome)
+            controller.confirm("request", "grant", "true", trustedPost())
+        }
 
-        val response = controller.confirm("request", "grant", "true", trustedPost())
-        val html = requireNotNull(response.body)
-
-        assertEquals(HttpStatus.CONFLICT, response.statusCode)
-        assertTrue(html.contains("자동 삭제를 완료하지 못했습니다"))
-        assertFalse(html.contains("삭제 요청 처리가 끝났습니다"))
+        assertTrue(responses.all { it.statusCode == HttpStatus.ACCEPTED })
+        assertEquals(1, responses.map { it.body }.toSet().size)
+        val html = requireNotNull(responses.first().body)
+        assertTrue(html.contains("삭제 요청을 접수했습니다"))
+        assertTrue(html.contains("개별 처리 결과는 공개하지 않습니다"))
         assertTrue(html.contains("support@nolate.jinuk.dev"))
+        assertFalse(html.contains("삭제 요청 처리가 끝났습니다"))
+        assertFalse(html.contains("자동 삭제를 완료하지 못했습니다"))
     }
 
     @Test
@@ -157,6 +160,7 @@ class AccountDeletionPageControllerTest {
     private fun enableAutomaticFlow() {
         properties.enabled = true
         properties.retentionPolicyConfirmed = true
+        properties.commonMailboxProofPolicyApproved = true
         properties.hmacSecret = "account-deletion-test-hmac-secret-at-least-32-bytes"
         whenever(verificationPort.isConfigured()).thenReturn(true)
     }

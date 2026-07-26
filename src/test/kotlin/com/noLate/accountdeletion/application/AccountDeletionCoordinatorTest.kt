@@ -25,6 +25,7 @@ class AccountDeletionCoordinatorTest {
     private val properties = AccountDeletionProperties().apply {
         enabled = true
         retentionPolicyConfirmed = true
+        commonMailboxProofPolicyApproved = true
         hmacSecret = "account-deletion-test-hmac-secret-at-least-32-bytes"
         publicOrigin = "https://delete.example"
         supportEmail = "privacy@example.com"
@@ -259,6 +260,32 @@ class AccountDeletionCoordinatorTest {
         assertNotNull(receipt.requestId)
         verifyNoInteractions(memberRepository, store)
         verify(verificationPort, never()).deliver(any())
+    }
+
+    @Test
+    fun `uppercase UUID input is canonicalized before case sensitive verify and claim lookups`() {
+        val canonicalRequestId = "4ea3f0e9-6820-451a-8c9e-f3aef846ad65"
+        whenever(store.verifyAndMintGrant(eq(canonicalRequestId), eq("ABCD234567"), any()))
+            .thenReturn(true)
+        whenever(store.claimDeletion(eq(canonicalRequestId), eq("g".repeat(43))))
+            .thenReturn(
+                ClaimedAccountDeletion(
+                    requestId = canonicalRequestId,
+                    memberId = null,
+                    observedSessionGeneration = null,
+                    manualReviewRequired = false,
+                )
+            )
+        val coordinator = coordinator()
+
+        val verification = coordinator.verify(canonicalRequestId.uppercase(), "ABCD234567")
+        val confirmation = coordinator.confirm(canonicalRequestId.uppercase(), "g".repeat(43))
+
+        assertEquals(canonicalRequestId, verification.requestId)
+        assertNotNull(verification.deletionGrant)
+        assertEquals(PublicAccountDeletionConfirmation.ACCEPTED, confirmation)
+        verify(store).verifyAndMintGrant(eq(canonicalRequestId), eq("ABCD234567"), any())
+        verify(store).claimDeletion(eq(canonicalRequestId), eq("g".repeat(43)))
     }
 
     private fun coordinator() =

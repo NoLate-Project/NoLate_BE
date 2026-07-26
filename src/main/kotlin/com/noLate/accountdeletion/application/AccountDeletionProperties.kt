@@ -8,9 +8,15 @@ import java.time.Duration
 @Component
 @ConfigurationProperties("account-deletion")
 class AccountDeletionProperties {
-    /** Both switches must be true before a request is allowed to bind to a real member. */
+    /** Every explicit policy gate must be true before a request can bind to a real member. */
     var enabled: Boolean = false
     var retentionPolicyConfirmed: Boolean = false
+    /**
+     * COMMON signup does not currently persist a verified-email timestamp. Keep this false unless
+     * the service owner has explicitly approved current mailbox control as sufficient ownership
+     * proof for destructive account deletion.
+     */
+    var commonMailboxProofPolicyApproved: Boolean = false
     var hmacSecret: String = ""
     var publicOrigin: String = ""
     var appName: String = "NoLate"
@@ -34,9 +40,44 @@ class AccountDeletionProperties {
     fun corePolicyReady(): Boolean =
         enabled &&
             retentionPolicyConfirmed &&
+            commonMailboxProofPolicyApproved &&
             hmacSecret.toByteArray(Charsets.UTF_8).size >= 32 &&
             publicOriginReady() &&
-            supportEmailReady()
+            supportEmailReady() &&
+            operationalSettingsReady()
+
+    /**
+     * Runtime code clamps several unsafe values, but a destructive public flow must not silently
+     * reinterpret an operator typo. The published privacy policy promises exactly 30 days for the
+     * request record, so that value is intentionally not configurable while this policy version is
+     * active.
+     */
+    fun operationalSettingsReady(): Boolean {
+        if (
+            !verificationCodeTtl.isPositive() ||
+            !deletionGrantTtl.isPositive() ||
+            processingTimeout < MIN_PROCESSING_TIMEOUT ||
+            requestRecordRetention != REQUIRED_REQUEST_RECORD_RETENTION ||
+            !retentionCleanupInitialDelay.isPositive() ||
+            retentionCleanupInitialDelay > MAX_RETENTION_CLEANUP_DELAY ||
+            !retentionCleanupFixedDelay.isPositive() ||
+            retentionCleanupFixedDelay > MAX_RETENTION_CLEANUP_DELAY ||
+            maxVerificationAttempts !in 1..20 ||
+            identityRateLimit !in 1..100 ||
+            requesterRateLimit !in 1..1_000 ||
+            identityRateWindow < MIN_RATE_WINDOW ||
+            requesterRateWindow < MIN_RATE_WINDOW
+        ) {
+            return false
+        }
+
+        val maximumLifecycle = runCatching {
+            verificationCodeTtl
+                .plus(deletionGrantTtl)
+                .plus(processingTimeout)
+        }.getOrNull() ?: return false
+        return maximumLifecycle <= requestRecordRetention
+    }
 
     fun publicOriginReady(): Boolean =
         runCatching {
@@ -57,4 +98,11 @@ class AccountDeletionProperties {
             it.length in 3..254 &&
                 Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$").matches(it)
         }
+
+    companion object {
+        val REQUIRED_REQUEST_RECORD_RETENTION: Duration = Duration.ofDays(30)
+        val MIN_PROCESSING_TIMEOUT: Duration = Duration.ofMinutes(5)
+        val MIN_RATE_WINDOW: Duration = Duration.ofMinutes(1)
+        val MAX_RETENTION_CLEANUP_DELAY: Duration = Duration.ofDays(1)
+    }
 }

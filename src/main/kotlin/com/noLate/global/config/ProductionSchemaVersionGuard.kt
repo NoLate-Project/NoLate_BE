@@ -64,6 +64,16 @@ class ProductionSchemaVersionGuard(
         if (accountDeletionEnabled) {
             check(
                 environment.getProperty(
+                    "account-deletion.common-mailbox-proof-policy-approved",
+                    Boolean::class.java,
+                    false,
+                )
+            ) {
+                "Production startup blocked: current mailbox control is not explicitly approved " +
+                    "as COMMON account ownership proof."
+            }
+            check(
+                environment.getProperty(
                     "account-deletion.verification.email.enabled",
                     Boolean::class.java,
                     false,

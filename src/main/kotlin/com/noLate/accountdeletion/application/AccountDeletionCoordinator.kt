@@ -111,7 +111,7 @@ class AccountDeletionCoordinator(
         requestId: String?,
         verificationCode: String?,
     ): PublicAccountDeletionVerification {
-        val normalizedRequestId = requestId?.trim()?.takeIf(::isUuid)
+        val normalizedRequestId = canonicalUuid(requestId)
             ?: return PublicAccountDeletionVerification("", null)
         if (!operationallyReady()) {
             return PublicAccountDeletionVerification(normalizedRequestId, null)
@@ -135,7 +135,7 @@ class AccountDeletionCoordinator(
         if (!operationallyReady()) {
             return PublicAccountDeletionConfirmation.NEEDS_SUPPORT
         }
-        val normalizedRequestId = requestId?.trim()?.takeIf(::isUuid)
+        val normalizedRequestId = canonicalUuid(requestId)
             ?: return PublicAccountDeletionConfirmation.NEEDS_REVERIFICATION
         val grant = deletionGrant?.trim()?.takeIf { it.length in 32..128 }
             ?: return PublicAccountDeletionConfirmation.NEEDS_REVERIFICATION
@@ -190,10 +190,12 @@ class AccountDeletionCoordinator(
         }
     }
 
-    private fun isUuid(value: String): Boolean =
-        runCatching {
-            UUID.fromString(value).toString() == value.lowercase(Locale.ROOT)
-        }.getOrDefault(false)
+    private fun canonicalUuid(value: String?): String? {
+        val trimmed = value?.trim() ?: return null
+        val canonical = runCatching { UUID.fromString(trimmed).toString() }.getOrNull()
+            ?: return null
+        return canonical.takeIf { it == trimmed.lowercase(Locale.ROOT) }
+    }
 
     private fun operationallyReady(): Boolean =
         properties.corePolicyReady() && verificationPort.isConfigured()

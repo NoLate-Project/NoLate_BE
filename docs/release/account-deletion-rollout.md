@@ -45,7 +45,10 @@ result. A nonexistent decoy never reaches cleanup.
 - Set `ACCOUNT_DELETION_SUPPORT_EMAIL` to a monitored address with a documented manual
   identity-verification and deletion procedure.
 - Decide whether current email control is sufficient ownership proof for COMMON accounts; current
-  signup does not establish a verified-email timestamp. If approved, configure the bundled
+  signup does not establish a verified-email timestamp. Record that security, product, and legal
+  approval before setting `ACCOUNT_DELETION_COMMON_MAILBOX_PROOF_POLICY_APPROVED=true`. This gate
+  defaults to false and blocks startup when automatic deletion is enabled without that exact
+  approval. If approved, configure the bundled
   conditional SMTP `AccountDeletionIdentityVerificationPort` with
   `ACCOUNT_DELETION_EMAIL_VERIFICATION_ENABLED=true`, an explicit sender, authenticated SMTP,
   required STARTTLS, bounded timeouts, and startup connection testing.
@@ -55,6 +58,8 @@ result. A nonexistent decoy never reaches cleanup.
 - Name the selected SMTP/email processor and its handling period in the privacy policy before
   production enablement.
 - Generate a JWT-independent `ACCOUNT_DELETION_HMAC_SECRET` with at least 32 random bytes.
+- Keep `ACCOUNT_DELETION_REQUEST_RECORD_RETENTION=30d`. Enabled startup rejects any other value
+  because the published privacy-policy version promises exactly 30 days.
 - Confirm and publish the retention period for the anonymized member row, shared-calendar terminal
   membership/audit state, and any legally retained records. Then set
   `ACCOUNT_DELETION_RETENTION_POLICY_CONFIRMED=true`.
@@ -67,5 +72,6 @@ result. A nonexistent decoy never reaches cleanup.
 - Apply `docs/member/migrations/2026-07-26-account-deletion-requests.sql` during a maintenance
   window and verify the `2026-07-26-account-deletion-v1` schema marker.
 
-Only after all items are evidenced should operators set both
-`ACCOUNT_DELETION_ENABLED=true` and `ACCOUNT_DELETION_RETENTION_POLICY_CONFIRMED=true`.
+Only after all items are evidenced should operators set
+`ACCOUNT_DELETION_ENABLED=true`, `ACCOUNT_DELETION_RETENTION_POLICY_CONFIRMED=true`, and
+`ACCOUNT_DELETION_COMMON_MAILBOX_PROOF_POLICY_APPROVED=true`.

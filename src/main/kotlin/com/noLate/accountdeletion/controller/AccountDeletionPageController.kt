@@ -3,7 +3,6 @@ package com.noLate.accountdeletion.controller
 import com.noLate.accountdeletion.application.AccountDeletionCoordinator
 import com.noLate.accountdeletion.application.AccountDeletionIdentityVerificationPort
 import com.noLate.accountdeletion.application.AccountDeletionProperties
-import com.noLate.accountdeletion.application.PublicAccountDeletionConfirmation
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.http.CacheControl
 import org.springframework.http.HttpHeaders
@@ -179,63 +178,11 @@ class AccountDeletionPageController(
             )
         }
 
-        return when (coordinator.confirm(requestId, deletionGrant)) {
-            PublicAccountDeletionConfirmation.ACCEPTED ->
-                html(
-                    HttpStatus.OK,
-                    layout(
-                        title = "삭제 요청 처리 완료",
-                        body =
-                            """
-                            <p class="eyebrow">REQUEST COMPLETED</p>
-                            <h1>삭제 요청 처리가 끝났습니다.</h1>
-                            <p class="lead">
-                              보안을 위해 계정 존재 여부나 처리된 계정 세부정보는 표시하지 않습니다.
-                              동일한 확인 링크와 코드는 다시 사용할 수 없습니다.
-                            </p>
-                            <a class="button secondary" href="/">NoLate 홈으로</a>
-                            """.trimIndent(),
-                    ),
-                )
-
-            PublicAccountDeletionConfirmation.NEEDS_REVERIFICATION ->
-                html(
-                    HttpStatus.CONFLICT,
-                    layout(
-                        title = "본인확인 다시 필요",
-                        body =
-                            """
-                            <p class="eyebrow">VERIFICATION EXPIRED</p>
-                            <h1>새 본인확인이 필요합니다.</h1>
-                            <p class="lead">
-                              확인 정보가 만료되었거나 요청 뒤 계정의 로그인 상태가 변경되었습니다.
-                              보안을 위해 새 삭제 요청부터 다시 진행하세요.
-                            </p>
-                            <a class="button secondary" href="/account-deletion">새 요청 시작</a>
-                            """.trimIndent(),
-                    ),
-                )
-
-            PublicAccountDeletionConfirmation.NEEDS_SUPPORT ->
-                html(
-                    HttpStatus.CONFLICT,
-                    layout(
-                        title = "지원 조치 필요",
-                        body =
-                            """
-                            <p class="eyebrow">ACTION REQUIRED</p>
-                            <h1>자동 삭제를 완료하지 못했습니다.</h1>
-                            <p class="lead">
-                              활성 공유 캘린더 소유권처럼 다른 이용자에게 영향을 줄 수 있는 상태이거나
-                              안전한 정리가 완료되지 않았습니다. 같은 요청은 재사용할 수 없습니다.
-                            </p>
-                            <a class="button secondary" href="mailto:${escape(properties.supportEmail)}">
-                              ${escape(properties.supportEmail)}로 문의
-                            </a>
-                            """.trimIndent(),
-                    ),
-                )
-        }
+        // The durable result remains available to the internal workflow, but the public response
+        // must not distinguish a decoy, provider type, session change, owner state, or cleanup
+        // failure. In particular, this page never claims that account deletion completed.
+        coordinator.confirm(requestId, deletionGrant)
+        return genericTerminalReceipt()
     }
 
     private fun landingPage(): String {
@@ -328,6 +275,26 @@ class AccountDeletionPageController(
                       삭제 완료로 표시하지 않습니다. 아래 지원 절차를 이용하세요.
                     </p>
                     ${supportAction()}
+                    """.trimIndent(),
+            ),
+        )
+
+    private fun genericTerminalReceipt(): ResponseEntity<String> =
+        html(
+            HttpStatus.ACCEPTED,
+            layout(
+                title = "삭제 요청 접수",
+                body =
+                    """
+                    <p class="eyebrow">REQUEST RECEIVED</p>
+                    <h1>삭제 요청을 접수했습니다.</h1>
+                    <p class="lead">
+                      보안을 위해 계정 존재 여부, 로그인 방식과 개별 처리 결과는 공개하지 않습니다.
+                      자동 처리가 가능하면 안전하게 진행하며, 추가 본인확인이나 소유권 조치가
+                      필요하다고 판단되면 아래 지원 절차를 이용하세요.
+                    </p>
+                    ${supportAction()}
+                    <a class="button secondary" href="/">NoLate 홈으로</a>
                     """.trimIndent(),
             ),
         )

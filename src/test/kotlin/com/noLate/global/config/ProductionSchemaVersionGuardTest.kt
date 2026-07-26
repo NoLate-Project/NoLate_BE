@@ -103,6 +103,10 @@ class ProductionSchemaVersionGuardTest {
                     )
                     .withProperty("account-deletion.enabled", "true")
                     .withProperty(
+                        "account-deletion.common-mailbox-proof-policy-approved",
+                        "true",
+                    )
+                    .withProperty(
                         "account-deletion.verification.email.enabled",
                         "true",
                     )
@@ -115,6 +119,29 @@ class ProductionSchemaVersionGuardTest {
         }
 
         assertTrue(error.message!!.contains("SMTP host"))
+    }
+
+    @Test
+    fun `enabled production account deletion requires exact COMMON mailbox proof approval`() {
+        val error = assertThrows(IllegalStateException::class.java) {
+            ProductionSchemaVersionGuard(
+                environment = MockEnvironment()
+                    .withProperty("spring.jpa.hibernate.ddl-auto", "validate")
+                    .withProperty("spring.sql.init.mode", "never")
+                    .withProperty(
+                        "account-deletion.public-origin",
+                        "https://delete.example",
+                    )
+                    .withProperty(
+                        "account-deletion.support-email",
+                        "privacy@example.com",
+                    )
+                    .withProperty("account-deletion.enabled", "true"),
+                jdbcTemplate = markerDatabase(),
+            ).afterSingletonsInstantiated()
+        }
+
+        assertTrue(error.message!!.contains("COMMON account ownership proof"))
     }
 
     @Test

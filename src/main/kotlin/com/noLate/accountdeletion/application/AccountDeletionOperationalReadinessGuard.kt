@@ -19,6 +19,10 @@ class AccountDeletionOperationalReadinessGuard(
         check(properties.retentionPolicyConfirmed) {
             "Account deletion startup blocked: retention policy is not confirmed."
         }
+        check(properties.commonMailboxProofPolicyApproved) {
+            "Account deletion startup blocked: current mailbox control has not been approved " +
+                "as COMMON account ownership proof."
+        }
         check(properties.hmacSecret.toByteArray(Charsets.UTF_8).size >= 32) {
             "Account deletion startup blocked: a dedicated HMAC secret of at least 32 bytes is required."
         }
@@ -27,6 +31,10 @@ class AccountDeletionOperationalReadinessGuard(
         }
         check(properties.supportEmailReady()) {
             "Account deletion startup blocked: an explicit support email is required."
+        }
+        check(properties.operationalSettingsReady()) {
+            "Account deletion startup blocked: TTL, retention, attempt, or rate-limit settings " +
+                "violate the published operational policy."
         }
         check(verificationPort.isConfigured()) {
             "Account deletion startup blocked: no trusted identity-verification adapter is configured."
