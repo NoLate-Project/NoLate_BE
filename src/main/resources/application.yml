@@ -57,6 +57,36 @@ logging:
     com.noLate.global.logging.P6SpySqlErrorEventListener: info
     p6spy: "OFF"
 
+management:
+  endpoints:
+    web:
+      # SecurityConfig resolves endpoint identities, so custom base/path mappings and a separate
+      # management port cannot turn an authenticated member route into an actuator route.
+      exposure:
+        # Actuator health is also rejected by a code-level WebEndpoint filter. NoLate's public,
+        # opaque /health* controller is the only HTTP health contract.
+        include: prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+observability:
+  prometheus:
+    # Exact "true" is required. Missing, false, and malformed values all keep the scrape path closed.
+    public-enabled: ${OBSERVABILITY_PROMETHEUS_PUBLIC_ENABLED:}
+  snapshot:
+    enabled: ${OBSERVABILITY_SNAPSHOT_ENABLED:true}
+    fixed-delay-ms: ${OBSERVABILITY_SNAPSHOT_FIXED_DELAY_MS:30000}
+    initial-delay-ms: ${OBSERVABILITY_SNAPSHOT_INITIAL_DELAY_MS:30000}
+    shutdown-wait-ms: ${OBSERVABILITY_SNAPSHOT_SHUTDOWN_WAIT_MS:5000}
+
 jwt:
   secret-key: ${JWT_SECRET_KEY}
   #expiration: ${JWT_EXPIRATION}

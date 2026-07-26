@@ -1,5 +1,8 @@
 package com.noLate.notification.application.service
 
+import com.noLate.global.observability.NoLateOperationalMetrics
+import com.noLate.global.observability.PushOutboxMetricOutcome
+import com.noLate.global.observability.recordSafely
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.notification.application.useCase.NotificationUseCase
 import org.slf4j.LoggerFactory
@@ -47,6 +50,7 @@ class PushOutboxDispatchWorker(
     private val processingTimeoutSeconds: Long = 600,
     private val confirmedDeliveryReconcilers: List<PushOutboxConfirmedDeliveryReconciler> =
         emptyList(),
+    private val operationalMetrics: NoLateOperationalMetrics? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val workerId = "push-outbox-${UUID.randomUUID()}"
@@ -68,6 +72,9 @@ class PushOutboxDispatchWorker(
             processingTimeoutSeconds = processingTimeoutSeconds,
             batchSize = boundedBatchSize,
         )
+        operationalMetrics.recordSafely {
+            recordPushOutbox(PushOutboxMetricOutcome.STALE_LEASE_RECOVERED, recovered)
+        }
         if (recovered > 0) {
             log.warn(
                 "Recovered stale push outbox leases. count={}, checkedAt={}",
@@ -84,6 +91,9 @@ class PushOutboxDispatchWorker(
             val lease = coordinator.claimNextDue(claimAt, workerId)
                 ?: return claimed
             claimed += 1
+            operationalMetrics.recordSafely {
+                recordPushOutbox(PushOutboxMetricOutcome.CLAIMED)
+            }
             dispatch(lease, now)
         }
         return claimed
@@ -166,6 +176,15 @@ class PushOutboxDispatchWorker(
 
             isTerminal(lease, result) -> {
                 val persisted = coordinator.complete(lease, currentAtOrAfter(notBefore))
+                operationalMetrics.recordSafely {
+                    recordPushOutbox(
+                        if (persisted) {
+                            PushOutboxMetricOutcome.COMPLETED
+                        } else {
+                            PushOutboxMetricOutcome.LEASE_LOST
+                        }
+                    )
+                }
                 log.info(
                     "Push outbox terminal. notificationId={}, memberId={}, attempt={}, persisted={}, " +
                         "sent={}, existingSuccess={}, ambiguous={}, invalid={}, exhausted={}, superseded={}",
@@ -217,6 +236,17 @@ class PushOutboxDispatchWorker(
                 reason = reason,
             )
         }
+        operationalMetrics.recordSafely {
+            recordPushOutbox(
+                if (!persisted) {
+                    PushOutboxMetricOutcome.LEASE_LOST
+                } else if (terminal) {
+                    PushOutboxMetricOutcome.TERMINAL_FAILURE
+                } else {
+                    PushOutboxMetricOutcome.RETRY_SCHEDULED
+                }
+            )
+        }
         log.warn(
             "Push outbox retry state updated. notificationId={}, memberId={}, attempt={}, terminal={}, " +
                 "persisted={}, reason={}",
@@ -239,6 +269,15 @@ class PushOutboxDispatchWorker(
             nextAt = now.plusSeconds(retryDelaySeconds.coerceAtLeast(1)),
             reason = reason,
         )
+        operationalMetrics.recordSafely {
+            recordPushOutbox(
+                if (persisted) {
+                    PushOutboxMetricOutcome.DEFERRED
+                } else {
+                    PushOutboxMetricOutcome.LEASE_LOST
+                }
+            )
+        }
         log.info(
             "Push outbox deferred. notificationId={}, memberId={}, attempt={}, " +
                 "failureCount={}, persisted={}, reason={}",

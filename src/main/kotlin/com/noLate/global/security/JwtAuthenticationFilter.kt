@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource
+import org.springframework.security.web.util.matcher.RequestMatcher
 import org.springframework.web.filter.OncePerRequestFilter
 
 /**
@@ -26,6 +27,9 @@ import org.springframework.web.filter.OncePerRequestFilter
 class JwtAuthenticationFilter(
     private val jwtTokenProvider: JwtTokenProvider,
     private val memberService: MemberService,
+    private val applicationHealthRequestMatcher: RequestMatcher = RequestMatcher { request ->
+        request.method == "GET" && HealthEndpointPaths.contains(request.servletPath)
+    },
 ) : OncePerRequestFilter() {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -159,7 +163,7 @@ class JwtAuthenticationFilter(
                     request.method == "GET"
                         && (
                             request.servletPath == "/api/calendar/days"
-                                || HealthEndpointPaths.contains(request.servletPath)
+                                || applicationHealthRequestMatcher.matches(request)
                         )
                 )
     }

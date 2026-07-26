@@ -139,14 +139,14 @@ class SchedulePushJobCoordinator private constructor(
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun persist(job: SchedulePushJob, workerId: String) {
+    fun persist(job: SchedulePushJob, workerId: String): Boolean {
         if (memberRepository != null &&
             memberRepository.findByIdForUpdate(job.memberId)?.deleted != false
         ) {
-            return
+            return false
         }
         job.id?.let { jobId ->
-            val current = repository.findByIdForUpdate(jobId) ?: return
+            val current = repository.findByIdForUpdate(jobId) ?: return false
             check(
                 current.status == SchedulePushJobStatus.PROCESSING &&
                     current.lockedBy == workerId
@@ -156,6 +156,7 @@ class SchedulePushJobCoordinator private constructor(
             }
         }
         repository.saveAndFlush(job)
+        return true
     }
 
     /**

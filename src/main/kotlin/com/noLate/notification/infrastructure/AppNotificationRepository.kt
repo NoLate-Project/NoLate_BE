@@ -134,6 +134,42 @@ interface AppNotificationRepository : JpaRepository<AppNotification, Long> {
         pageable: Pageable,
     ): List<AppNotificationDispatchCandidate>
 
+    @Query(
+        """
+        select count(notification) from AppNotification notification
+        where notification.dispatchStatus = :dispatchStatus
+          and notification.nextDispatchAt <= :dueAt
+        """
+    )
+    fun countDueDispatches(
+        @Param("dispatchStatus") dispatchStatus: PushOutboxDispatchStatus,
+        @Param("dueAt") dueAt: Instant,
+    ): Long
+
+    @Query(
+        """
+        select min(notification.nextDispatchAt) from AppNotification notification
+        where notification.dispatchStatus = :dispatchStatus
+          and notification.nextDispatchAt <= :dueAt
+        """
+    )
+    fun findOldestDueDispatchAt(
+        @Param("dispatchStatus") dispatchStatus: PushOutboxDispatchStatus,
+        @Param("dueAt") dueAt: Instant,
+    ): Instant?
+
+    @Query(
+        """
+        select count(notification) from AppNotification notification
+        where notification.dispatchStatus = :dispatchStatus
+          and notification.dispatchLockedAt <= :staleBefore
+        """
+    )
+    fun countStaleDispatchLeases(
+        @Param("dispatchStatus") dispatchStatus: PushOutboxDispatchStatus,
+        @Param("staleBefore") staleBefore: Instant,
+    ): Long
+
     fun findByIdAndMemberId(id: Long, memberId: Long): AppNotification?
 
     fun findAllByMemberIdOrderByIdDesc(memberId: Long): List<AppNotification>

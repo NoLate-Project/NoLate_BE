@@ -1,12 +1,15 @@
 package com.noLate.global.config
 
+import com.noLate.global.health.ApplicationHealthRequestMatcher
 import com.noLate.global.health.HealthEndpointPaths
+import com.noLate.global.observability.ObservabilityEndpointAccessPolicy
 import com.noLate.global.security.JwtAuthenticationFilter
 import com.noLate.global.security.JwtTokenProvider
 
 import com.noLate.member.application.service.MemberService
 import jakarta.servlet.DispatcherType
 import jakarta.servlet.http.HttpServletResponse
+import org.springframework.boot.actuate.autoconfigure.security.servlet.EndpointRequest
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
@@ -35,6 +38,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 class SecurityConfig(
     private val jwtTokenProvider: JwtTokenProvider,
     private val memberService: MemberService,
+    private val observabilityEndpointAccessPolicy: ObservabilityEndpointAccessPolicy,
+    private val applicationHealthRequestMatcher: ApplicationHealthRequestMatcher,
 ) {
 
     /**
@@ -65,7 +70,11 @@ class SecurityConfig(
      */
     @Bean
     fun jwtAuthenticationFilter(): JwtAuthenticationFilter =
-        JwtAuthenticationFilter(jwtTokenProvider, memberService)
+        JwtAuthenticationFilter(
+            jwtTokenProvider,
+            memberService,
+            applicationHealthRequestMatcher,
+        )
 
 
     /**
@@ -102,19 +111,45 @@ class SecurityConfig(
 
             .authorizeHttpRequests { auth ->
                 auth
-                    .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-
                     .dispatcherTypeMatchers(
                         DispatcherType.ASYNC,
                         DispatcherType.ERROR
                     ).permitAll()
 
                     .requestMatchers(
+                        observabilityEndpointAccessPolicy.publicPrometheusRequestMatcher
+                    ).permitAll()
+
+                    // Also reserve the configured non-root management namespace. This closes
+                    // trailing-slash and disabled-endpoint probes that have no endpoint identity.
+                    .requestMatchers(
+                        observabilityEndpointAccessPolicy.managementEndpointNamespacePattern
+                    ).denyAll()
+                    // Resolve actuator endpoint identities from the running management mapping.
+                    // This also remains fail-closed when the base path is configured as root.
+                    .requestMatchers(EndpointRequest.toAnyEndpoint()).denyAll()
+
+                    // NoLate's opaque deployment probes are public application handlers. The
+                    // code-level web endpoint filter prevents Actuator health from being registered,
+                    // even if an operator includes it under a root/empty management base path.
+                    // Keeping this allow after endpoint denies makes any other path collision
+                    // fail closed instead of exposing the management handler.
+                    .requestMatchers(
+                        applicationHealthRequestMatcher
+                    ).permitAll()
+                    // On a separate management connector the custom controller is absent. Reserve
+                    // the same URLs so an anonymous request is challenged and a member JWT denied,
+                    // rather than falling through to a management/error handler.
+                    .requestMatchers(
                         HttpMethod.GET,
                         HealthEndpointPaths.ROOT,
                         HealthEndpointPaths.LIVENESS,
                         HealthEndpointPaths.READINESS,
-                    ).permitAll()
+                    ).denyAll()
+
+                    // CORS preflight remains public for application APIs, but the endpoint-aware
+                    // actuator deny above wins for every non-GET management request.
+                    .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
                     .requestMatchers(
                         "/",
@@ -126,7 +161,6 @@ class SecurityConfig(
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
                         "/swagger-ui.html",
-                        "/actuator/prometheus/**",
 
                         // ⭐ 엑셀 다운로드 허용
                         "/members/statistics/**"

@@ -2,6 +2,9 @@ package com.noLate.notification.application.useCase
 
 import com.noLate.notification.application.ConfirmedPushDeliveryException
 import com.noLate.notification.application.InvalidPushTokenException
+import com.noLate.global.observability.NoLateOperationalMetrics
+import com.noLate.global.observability.PushUncertainMetricReason
+import com.noLate.global.observability.recordSafely
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.service.AuthenticatedPushSessionFence
@@ -42,6 +45,7 @@ class NotificationUseCase(
     private val pushDeliveryService: PushDeliveryService,
     private val pushEventOutboxService: PushEventOutboxService,
     private val persistedPushDispatchFenceFactory: PersistedPushDispatchFenceFactory? = null,
+    private val operationalMetrics: NoLateOperationalMetrics? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -219,6 +223,7 @@ class NotificationUseCase(
                 fence = dispatchFence,
                 sessionFence = sessionFence,
             )
+            operationalMetrics.recordSafely { recordPushDeliveryClaim(claim.outcome) }
             result += when (claim.outcome) {
                 PushDeliveryClaimOutcome.SEND ->
                     sendClaimed(
@@ -236,8 +241,12 @@ class NotificationUseCase(
                         alreadyDeliveredAt = claim.deliveredAt,
                     )
 
-                PushDeliveryClaimOutcome.AMBIGUOUS ->
+                PushDeliveryClaimOutcome.AMBIGUOUS -> {
+                    operationalMetrics.recordSafely {
+                        recordPushUncertain(PushUncertainMetricReason.PREEXISTING_DISPATCH)
+                    }
                     NotificationSendResult(ambiguousCount = 1)
+                }
 
                 PushDeliveryClaimOutcome.INVALID_TOKEN ->
                     NotificationSendResult(invalidTokenCount = 1)
@@ -346,6 +355,11 @@ class NotificationUseCase(
                         sourceLease = sourceLease,
                     )
                 } ?: PushDeliveryFailureTransition.NOT_APPLIED
+                if (transition == PushDeliveryFailureTransition.NOT_APPLIED) {
+                    operationalMetrics.recordSafely {
+                        recordPushUncertain(PushUncertainMetricReason.LOCAL_FAILURE_NOT_RECORDED)
+                    }
+                }
                 return NotificationSendResult(
                     failedCount = 1,
                     retryableFailedCount =
@@ -365,7 +379,7 @@ class NotificationUseCase(
             // Provider 성공 직후 로컬 기록 전 종료되면 DISPATCHING이 남는다. 이를 재시도하지
             // 않는 것이 exactly-once를 거짓 주장하지 않는 at-most-once 경계다.
             deliveryId?.let {
-                runCatching {
+                val successRecorded = runCatching {
                     pushDeliveryService.markSuccess(
                         it,
                         providerResult.messageId,
@@ -380,6 +394,11 @@ class NotificationUseCase(
                         deliveryId,
                         failure.javaClass.simpleName,
                     )
+                }.getOrDefault(false)
+                if (!successRecorded) {
+                    operationalMetrics.recordSafely {
+                        recordPushUncertain(PushUncertainMetricReason.LOCAL_SUCCESS_NOT_RECORDED)
+                    }
                 }
             }
             recordSuccess(memberId, tokenEntity, snapshot, providerResult.messageId)
@@ -388,7 +407,7 @@ class NotificationUseCase(
             val errorCode = exception.javaClass.simpleName
             val errorMessage = exception.safeMessage(providerToken)
             deliveryId?.let {
-                runCatching {
+                val failureRecorded = runCatching {
                     pushDeliveryService.markInvalidToken(it, errorCode, errorMessage)
                 }.onFailure { failure ->
                     log.warn(
@@ -398,6 +417,11 @@ class NotificationUseCase(
                         deliveryId,
                         failure.javaClass.simpleName,
                     )
+                }.getOrDefault(false)
+                if (!failureRecorded) {
+                    operationalMetrics.recordSafely {
+                        recordPushUncertain(PushUncertainMetricReason.LOCAL_FAILURE_NOT_RECORDED)
+                    }
                 }
             }
             recordFailure(
@@ -458,6 +482,11 @@ class NotificationUseCase(
                     )
                 }.getOrDefault(PushDeliveryFailureTransition.NOT_APPLIED)
             } ?: PushDeliveryFailureTransition.NOT_APPLIED
+            if (transition == PushDeliveryFailureTransition.NOT_APPLIED) {
+                operationalMetrics.recordSafely {
+                    recordPushUncertain(PushUncertainMetricReason.LOCAL_FAILURE_NOT_RECORDED)
+                }
+            }
             recordFailure(
                 memberId,
                 tokenEntity,
@@ -504,6 +533,9 @@ class NotificationUseCase(
                 deliveryId,
                 errorCode,
             )
+            operationalMetrics.recordSafely {
+                recordPushUncertain(PushUncertainMetricReason.PROVIDER_OUTCOME_UNKNOWN)
+            }
             NotificationSendResult(attemptedCount = 1, ambiguousCount = 1)
         }
     }

@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.schedule.application.TrafficClient
@@ -21,6 +22,7 @@ import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -138,7 +140,13 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
-        assertEquals(1, worker().runDueJobs(testNow))
+        val registry = SimpleMeterRegistry()
+        assertEquals(
+            1,
+            worker(
+                operationalMetrics = NoLateOperationalMetrics(registry),
+            ).runDueJobs(testNow),
+        )
 
         verify(trafficClient, times(1)).getTravelMinutes(check<TrafficRequest> {
             assertEquals(37.1, it.originLat)
@@ -155,6 +163,22 @@ class SchedulePushJobWorkerTest {
         assertEquals(
             testNow.plus(notificationIntervalMinutes.toLong(), ChronoUnit.MINUTES),
             job.nextCheckAt,
+        )
+        assertEquals(
+            1.0,
+            registry.get("nolate.eta.jobs").tag("outcome", "claimed").counter().count(),
+        )
+        assertEquals(
+            1.0,
+            registry.get("nolate.eta.jobs").tag("outcome", "processed").counter().count(),
+        )
+        assertEquals(
+            1.0,
+            registry.get("nolate.eta.resolutions")
+                .tag("source", "live_provider")
+                .tag("quality", "fresh")
+                .counter()
+                .count(),
         )
     }
 
@@ -894,17 +918,20 @@ class SchedulePushJobWorkerTest {
     fun `모호한 전달은 이벤트 단계만 전진시키고 confirmed success 시각은 기록하지 않는다`() {
         val schedule = schedule(shortScheduleStartAt)
         val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
 
         stubDueJob(job, schedule, travelMinutes = 60)
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(
                 NotificationSendResult(
-                    requestedCount = 1,
-                    ambiguousCount = 1,
+                    requestedCount = 3,
+                    ambiguousCount = 3,
                 )
             )
 
-        worker().runDueJobs(testNow)
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
 
         assertEquals(1, job.checkCount)
         assertNull(job.departureNoticeSentAt)
@@ -915,6 +942,50 @@ class SchedulePushJobWorkerTest {
         assertNull(job.lastPushedAt)
         assertEquals(0, job.retryCount)
         assertEquals(testNow.plus(3, ChronoUnit.MINUTES), job.nextCheckAt)
+        assertEquals(
+            1.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "uncertain_delivery")
+                .counter()
+                .count(),
+        )
+    }
+
+    @Test
+    fun `모호한 전달 전이 저장이 실패하면 ETA 결과 카운터를 기록하지 않는다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 3,
+                    ambiguousCount = 3,
+                )
+            )
+        whenever(pushJobRepository.saveAndFlush(job))
+            .thenThrow(IllegalStateException("database unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEquals(
+            0.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "processed")
+                .counter()
+                .count(),
+        )
+        assertEquals(
+            0.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "uncertain_delivery")
+                .counter()
+                .count(),
+        )
     }
 
     @Test
@@ -1044,6 +1115,131 @@ class SchedulePushJobWorkerTest {
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals("등록된 푸시 토큰이 없습니다.", job.failureReason)
         assertEquals(1, job.retryCount)
+    }
+
+    @Test
+    fun `retry counter is not emitted when the durable transition fails`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult())
+        whenever(pushJobRepository.saveAndFlush(job))
+            .thenThrow(IllegalStateException("database unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEquals(1, job.retryCount)
+        assertEquals(
+            0.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "retry_scheduled")
+                .counter()
+                .count(),
+        )
+        assertEquals(
+            0.0,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", "terminal_failure")
+                .counter()
+                .count(),
+        )
+    }
+
+    @Test
+    fun `processing exception event and committed retry use separate meters`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenThrow(IllegalStateException("provider unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEtaProcessingExceptionCount(registry, 1.0)
+        assertEtaTransitionCount(registry, "retry_scheduled", 1.0)
+        assertEtaTransitionCount(registry, "terminal_failure", 0.0)
+        assertNull(
+            registry.find("nolate.eta.jobs")
+                .tag("outcome", "processing_exception")
+                .counter()
+        )
+    }
+
+    @Test
+    fun `processing exception commits only the terminal transition after retry limit`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule).apply {
+            retryLater("first failure", testNow)
+            retryLater("second failure", testNow)
+        }
+        val registry = SimpleMeterRegistry()
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenThrow(IllegalStateException("provider unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEtaProcessingExceptionCount(registry, 1.0)
+        assertEtaTransitionCount(registry, "retry_scheduled", 0.0)
+        assertEtaTransitionCount(registry, "terminal_failure", 1.0)
+    }
+
+    @Test
+    fun `processing exception persist throw records no durable transition`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenThrow(IllegalStateException("provider unavailable"))
+        whenever(pushJobRepository.saveAndFlush(job))
+            .thenThrow(IllegalStateException("database unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEtaProcessingExceptionCount(registry, 1.0)
+        assertEtaTransitionCount(registry, "retry_scheduled", 0.0)
+        assertEtaTransitionCount(registry, "terminal_failure", 0.0)
+    }
+
+    @Test
+    fun `processing exception persist false records no durable transition`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+        SchedulePushJob::class.java.getDeclaredField("id").apply {
+            isAccessible = true
+            set(job, 91L)
+        }
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenThrow(IllegalStateException("provider unavailable"))
+        whenever(pushJobRepository.findByIdForUpdate(91L)).thenReturn(null)
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEtaProcessingExceptionCount(registry, 1.0)
+        assertEtaTransitionCount(registry, "retry_scheduled", 0.0)
+        assertEtaTransitionCount(registry, "terminal_failure", 0.0)
+        verify(pushJobRepository, never()).saveAndFlush(job)
     }
 
     @Test
@@ -1354,6 +1550,7 @@ class SchedulePushJobWorkerTest {
         accessPolicy: ScheduleAccessPolicy? = null,
         liveComparatorMaxAgeMinutes: Long = 60,
         clock: Clock = Clock.fixed(testNow, ZoneOffset.UTC),
+        operationalMetrics: NoLateOperationalMetrics? = null,
     ) = SchedulePushJobWorker(
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -1373,7 +1570,35 @@ class SchedulePushJobWorkerTest {
         travelPlanRepository = travelPlanRepository,
         scheduleAccessPolicy = accessPolicy,
         clock = clock,
+        operationalMetrics = operationalMetrics,
     )
+
+    private fun assertEtaProcessingExceptionCount(
+        registry: SimpleMeterRegistry,
+        expected: Double,
+    ) {
+        assertEquals(
+            expected,
+            registry.get("nolate.eta.worker.events")
+                .tag("event", "processing_exception")
+                .counter()
+                .count(),
+        )
+    }
+
+    private fun assertEtaTransitionCount(
+        registry: SimpleMeterRegistry,
+        outcome: String,
+        expected: Double,
+    ) {
+        assertEquals(
+            expected,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", outcome)
+                .counter()
+                .count(),
+        )
+    }
 
     /**
      * 최종 출발 알림 시나리오에서 공통으로 사용하는 due job을 만든다.
@@ -1391,6 +1616,11 @@ class SchedulePushJobWorkerTest {
      * 테스트가 발송 결과에만 집중할 수 있도록 due job 조회와 ETA 응답을 한곳에서 준비한다.
      */
     private fun stubDueJob(job: SchedulePushJob, schedule: Schedule, travelMinutes: Int) {
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
+    }
+
+    private fun stubDueJobLookup(job: SchedulePushJob, schedule: Schedule) {
         whenever(
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
@@ -1399,7 +1629,6 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
     }
 
     private fun markDepartNowSent(

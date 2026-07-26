@@ -1,0 +1,111 @@
+rule_files:
+  - nolate-release-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: snapshot metric absence fails closed while the target is up
+    interval: 1m
+    input_series:
+      - series: 'up{job="nolate",instance="app-1"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NoLateObservabilitySnapshotStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "NoLate operational gauge snapshots are stale"
+              description: "Snapshots are stale or the environment-scoped NoLate scrape series is absent/down."
+
+  - name: all observed scrape targets down fails closed
+    interval: 1m
+    input_series:
+      - series: 'up{job="nolate",instance="app-1"}'
+        values: '0x10'
+      - series: 'up{job="nolate",instance="app-2"}'
+        values: '0x10'
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0 60 120 180 240 300 360 420 480 540'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NoLateObservabilitySnapshotStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "NoLate operational gauge snapshots are stale"
+              description: "Snapshots are stale or the environment-scoped NoLate scrape series is absent/down."
+
+  - name: one healthy scrape target does not declare a cluster outage
+    interval: 1m
+    input_series:
+      - series: 'up{job="nolate",instance="app-1"}'
+        values: '1x10'
+      - series: 'up{job="nolate",instance="app-2"}'
+        values: '0x10'
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0 60 120 180 240 300 360 420 480 540'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NoLateObservabilitySnapshotStale
+        exp_alerts: []
+
+  - name: scoped up series absence fails closed even with a recent snapshot sample
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0 60 120 180 240 300 360 420 480 540'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NoLateObservabilitySnapshotStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "NoLate operational gauge snapshots are stale"
+              description: "Snapshots are stale or the environment-scoped NoLate scrape series is absent/down."
+
+  - name: fresh snapshot and healthy scrape do not alert
+    interval: 1m
+    input_series:
+      - series: 'up{job="nolate",instance="app-1"}'
+        values: '1x10'
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0 60 120 180 240 300 360 420 480 540'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NoLateObservabilitySnapshotStale
+        exp_alerts: []
+
+  - name: one fresh instance keeps a stale peer from declaring a cluster snapshot outage
+    interval: 1m
+    input_series:
+      - series: 'up{job="nolate",instance="app-1"}'
+        values: '1x10'
+      - series: 'up{job="nolate",instance="app-2"}'
+        values: '1x10'
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0 60 120 180 240 300 360 420 480 540'
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-2"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NoLateObservabilitySnapshotStale
+        exp_alerts: []
+
+  - name: ETA processing event alerts independently from durable outcomes
+    interval: 1m
+    input_series:
+      - series: 'nolate_eta_worker_events_total{application="noLate",event="processing_exception",instance="app-1"}'
+        values: '0 0 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: NoLateEtaWorkerProcessingException
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "NoLate ETA worker is raising processing exceptions"
+              description: "At least one ETA execution failed before its retry or terminal transition."

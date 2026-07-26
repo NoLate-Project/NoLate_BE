@@ -1,6 +1,9 @@
 package com.noLate.schedule.infrastructure
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.noLate.global.observability.EtaProviderMetricOutcome
+import com.noLate.global.observability.NoLateOperationalMetrics
+import com.noLate.global.observability.recordSafely
 import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
@@ -31,6 +34,7 @@ class TmapTrafficClient(
     requestFactory: ClientHttpRequestFactory = externalHttpRequestFactory(),
     @Value("\${schedule.traffic.max-travel-minutes:1440}")
     private val maxTravelMinutes: Int = EtaTravelTimePolicy.DEFAULT_MAX_TRAVEL_MINUTES,
+    private val operationalMetrics: NoLateOperationalMetrics? = null,
 ) : TrafficClient {
     init {
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
@@ -68,6 +72,7 @@ class TmapTrafficClient(
             return request.fallbackResult(TrafficFailureReasons.SELECTED_ROUTE_OPTION_MISSING)
         }
 
+        val providerStartedAt = System.nanoTime()
         return runCatching {
             TrafficResult(
                 travelMinutes = getLiveTravelMinutes(request),
@@ -75,9 +80,27 @@ class TmapTrafficClient(
                 fetchedAt = Instant.now(clock),
                 stale = false,
             )
-        }.getOrElse { exception ->
-            request.fallbackResult(providerFailureReason(exception))
-        }
+        }.fold(
+            onSuccess = { result ->
+                operationalMetrics.recordSafely {
+                    recordEtaProviderCall(
+                        EtaProviderMetricOutcome.SUCCESS,
+                        System.nanoTime() - providerStartedAt,
+                    )
+                }
+                result
+            },
+            onFailure = { exception ->
+                val failureReason = providerFailureReason(exception)
+                operationalMetrics.recordSafely {
+                    recordEtaProviderCall(
+                        failureReason.metricOutcome(),
+                        System.nanoTime() - providerStartedAt,
+                    )
+                }
+                request.fallbackResult(failureReason)
+            },
+        )
     }
 
     private fun getLiveTravelMinutes(request: TrafficRequest): Int {
@@ -139,6 +162,14 @@ class TmapTrafficClient(
         }
     }
 }
+
+private fun String.metricOutcome(): EtaProviderMetricOutcome =
+    when (substringBefore(':')) {
+        "PROVIDER_TIMEOUT" -> EtaProviderMetricOutcome.TIMEOUT
+        "PROVIDER_HTTP_ERROR" -> EtaProviderMetricOutcome.HTTP_ERROR
+        "PROVIDER_INVALID_RESPONSE" -> EtaProviderMetricOutcome.INVALID_RESPONSE
+        else -> EtaProviderMetricOutcome.UNAVAILABLE
+    }
 
 internal fun validatedTmapTravelMinutes(
     totalTimeSeconds: Double,

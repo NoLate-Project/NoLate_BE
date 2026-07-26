@@ -1,6 +1,10 @@
 package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.global.observability.EtaJobMetricOutcome
+import com.noLate.global.observability.EtaWorkerMetricEvent
+import com.noLate.global.observability.NoLateOperationalMetrics
+import com.noLate.global.observability.recordSafely
 import com.noLate.notification.application.service.PushDispatchFence
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.application.EtaTravelTimePolicy
@@ -55,6 +59,7 @@ class SchedulePushJobWorker(
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
     private val clock: Clock = Clock.systemUTC(),
+    private val operationalMetrics: NoLateOperationalMetrics? = null,
 ) {
     init {
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
@@ -82,6 +87,9 @@ class SchedulePushJobWorker(
             deliveryGraceMinutes = deliveryGraceMinutes,
             batchSize = batchSize,
         )
+        operationalMetrics.recordSafely {
+            recordEtaJob(EtaJobMetricOutcome.STALE_LEASE_RECOVERED, recoveredCount)
+        }
         if (recoveredCount > 0) {
             log.warn(
                 "Recovered stale schedule push jobs. count={}, timeoutMinutes={}, checkedAt={}",
@@ -99,6 +107,7 @@ class SchedulePushJobWorker(
             val job = pushJobCoordinator.claimNextDueJob(claimAt, workerId)
                 ?: return claimedCount
             claimedCount += 1
+            operationalMetrics.recordSafely { recordEtaJob(EtaJobMetricOutcome.CLAIMED) }
             log.info(
                 "Claimed schedule push job. jobId={}, workerId={}, checkedAt={}",
                 job.id,
@@ -183,6 +192,12 @@ class SchedulePushJobWorker(
                 maxTravelMinutes = maxTravelMinutes,
             )
             val trafficResult = trafficClient.getTravelMinutes(request)
+            operationalMetrics.recordSafely {
+                recordEtaResolution(
+                    source = trafficResult.source,
+                    degraded = trafficResult.stale || trafficResult.failureReason != null,
+                )
+            }
             val travelMinutes = trafficResult.travelMinutes
             require(EtaTravelTimePolicy.isValid(travelMinutes, maxTravelMinutes)) {
                 "교통 조회 결과는 1~$maxTravelMinutes 사이여야 합니다."
@@ -347,25 +362,29 @@ class SchedulePushJobWorker(
                             else sendResult.alreadyDeliveredAt ?: now
                         )
                     }
-                    scheduleRetryAfterPushFailure(
+                    val transition = scheduleRetryAfterPushFailure(
                         job = job,
                         now = now,
                         requestedCount = sendResult.requestedCount,
                         failedCount = sendResult.retryableFailedCount,
                     )
-                    pushJobCoordinator.persist(job, workerId)
+                    persistMeasuredTransition(
+                        job = job,
+                        outcome = transition,
+                        uncertainDelivery = sendResult.ambiguousCount > 0,
+                    )
                     return
                 }
                 if (sendResult.durablyHandledCount == 0) {
                     // FCM/APNs가 한 기기에도 전달하지 못했다면 성공 이력을 기록하지 않는다.
                     // 특히 DEPART_NOW를 완료 처리하면 다시 보낼 방법이 없어 반드시 재시도해야 한다.
-                    scheduleRetryAfterPushFailure(
+                    val transition = scheduleRetryAfterPushFailure(
                         job = job,
                         now = now,
                         requestedCount = sendResult.requestedCount,
                         failedCount = sendResult.failedCount,
                     )
-                    pushJobCoordinator.persist(job, workerId)
+                    persistMeasuredTransition(job, transition)
                     return
                 }
                 SchedulePushOutcome(
@@ -453,8 +472,18 @@ class SchedulePushJobWorker(
                 liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
                 now = maxOf(now, Instant.now(clock), trafficResult.fetchedAt ?: now),
             )
-            pushJobCoordinator.persist(job, workerId)
+            persistMeasuredTransition(
+                job = job,
+                outcome = EtaJobMetricOutcome.PROCESSED,
+                uncertainDelivery = pushOutcome.uncertain,
+            )
         } catch (exception: Exception) {
+            operationalMetrics.recordSafely {
+                // This is an execution observation, not a durable state transition. The eventual
+                // RETRY_SCHEDULED or TERMINAL_FAILURE outcome is counted separately and only after
+                // the independent persistence transaction commits.
+                recordEtaWorkerEvent(EtaWorkerMetricEvent.PROCESSING_EXCEPTION)
+            }
             log.warn(
                 "Schedule push job failed. jobId={}, scheduleId={}, workerId={}, errorCode={}",
                 job.id,
@@ -462,21 +491,47 @@ class SchedulePushJobWorker(
                 workerId,
                 exception.javaClass.simpleName,
             )
-            retryOrFail(
+            val transition = retryOrFail(
                 job = job,
                 now = now,
                 reason = exception.message?.take(500) ?: exception.javaClass.simpleName,
             )
-            runCatching { pushJobCoordinator.persist(job, workerId) }
-                .onFailure {
-                    log.error(
-                        "Schedule push failure transition persistence failed. jobId={}, scheduleId={}, workerId={}, errorCode={}",
-                        job.id,
-                        job.scheduleId,
-                        workerId,
-                        it.javaClass.simpleName,
-                    )
-                }
+            persistMeasuredTransition(job, transition)
+        }
+    }
+
+    /**
+     * A transition counter is emitted only after the independent persistence transaction returns
+     * successfully. Persistence failures are swallowed here so the outer processing catch cannot
+     * mutate the same detached job and count a second retry transition.
+     */
+    private fun persistMeasuredTransition(
+        job: SchedulePushJob,
+        outcome: EtaJobMetricOutcome,
+        uncertainDelivery: Boolean = false,
+    ) {
+        val persisted = runCatching {
+            pushJobCoordinator.persist(job, workerId)
+        }.onFailure { failure ->
+            log.error(
+                "Schedule push state transition persistence failed. " +
+                    "jobId={}, scheduleId={}, workerId={}, outcome={}, errorCode={}",
+                job.id,
+                job.scheduleId,
+                workerId,
+                outcome,
+                failure.javaClass.simpleName,
+            )
+        }.getOrDefault(false)
+        if (!persisted) return
+
+        operationalMetrics.recordSafely { recordEtaJob(outcome) }
+        if (uncertainDelivery) {
+            // This metric is job-scoped: multiple ambiguous device deliveries in one job still
+            // represent one durably persisted uncertain ETA-job outcome.
+            operationalMetrics.recordSafely {
+                recordEtaJob(EtaJobMetricOutcome.UNCERTAIN_DELIVERY)
+            }
         }
     }
 
@@ -618,20 +673,24 @@ class SchedulePushJobWorker(
         now: Instant,
         requestedCount: Int,
         failedCount: Int,
-    ) {
+    ): EtaJobMetricOutcome {
         val reason = if (requestedCount == 0) {
             "등록된 푸시 토큰이 없습니다."
         } else {
             "푸시 공급자 발송에 실패했습니다. requested=$requestedCount, failed=$failedCount"
         }
-        retryOrFail(job, now, reason)
+        return retryOrFail(job, now, reason)
     }
 
     /**
      * 일시 장애는 제한 횟수만 재시도하고, 일정 시작 이후로 재시도가 밀리면 명시적으로 실패시킨다.
      * 다음 재시도 시각도 발송 가능 시간의 끝을 넘지 않도록 제한한다.
      */
-    private fun retryOrFail(job: SchedulePushJob, now: Instant, reason: String) {
+    private fun retryOrFail(
+        job: SchedulePushJob,
+        now: Instant,
+        reason: String,
+    ): EtaJobMetricOutcome {
         val deliveryDeadline = job.scheduleAt.plus(deliveryGraceMinutes, ChronoUnit.MINUTES)
         val nextRetryAt = now.plus(retryDelayMinutes, ChronoUnit.MINUTES)
         val retryLimitReached = job.retryCount + 1 >= maxRetryCount
@@ -639,13 +698,14 @@ class SchedulePushJobWorker(
 
         if (retryLimitReached || noRetryWindowLeft) {
             job.fail(reason)
-            return
+            return EtaJobMetricOutcome.TERMINAL_FAILURE
         }
 
         job.retryLater(
             reason = reason,
             nextCheckAt = minOf(nextRetryAt, deliveryDeadline),
         )
+        return EtaJobMetricOutcome.RETRY_SCHEDULED
     }
 }
 

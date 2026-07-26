@@ -44,6 +44,10 @@ routing:
 firebase:
   enabled: false
 
+observability:
+  snapshot:
+    enabled: false
+
 jwt:
   secret-key: test-only-secret-key-that-is-at-least-thirty-two-bytes
   issuer: nolate-test

@@ -1,10 +1,12 @@
 package com.noLate.schedule.infrastructure
 
+import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.TrafficSource
 import com.sun.net.httpserver.HttpServer
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -211,6 +213,43 @@ class TmapTrafficClientTest {
             assertTrue(result.stale)
             assertNull(result.fetchedAt)
             assertEquals(TrafficFailureReasons.PROVIDER_INVALID_RESPONSE, result.failureReason)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `provider invalid response records only the bounded ETA timer outcome`() {
+        val server = httpServer { exchange ->
+            val body = """{"features":[{"properties":{"totalTime":0}}]}""".toByteArray()
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        val registry = SimpleMeterRegistry()
+        val metrics = NoLateOperationalMetrics(registry)
+
+        try {
+            TmapTrafficClient(
+                appKey = "key",
+                baseUrl = server.baseUrl(),
+                clock = clock,
+                operationalMetrics = metrics,
+            ).getTravelMinutes(request(mode = ScheduleTravelMode.CAR))
+
+            assertEquals(
+                1L,
+                registry.get("nolate.eta.provider.duration")
+                    .tag("outcome", "invalid_response")
+                    .timer()
+                    .count(),
+            )
+            val tagKeys = registry.find("nolate.eta.provider.duration")
+                .meters()
+                .flatMap { it.id.tags }
+                .map { it.key }
+                .toSet()
+            assertTrue(tagKeys.all { it == "outcome" || it == "le" })
         } finally {
             server.stop(0)
         }

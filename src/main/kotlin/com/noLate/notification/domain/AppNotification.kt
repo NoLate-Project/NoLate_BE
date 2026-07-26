@@ -47,6 +47,14 @@ import java.time.Instant
             name = "idx_app_notifications_calendar_id",
             columnList = "calendar_id",
         ),
+        Index(
+            name = "idx_app_notifications_dispatch_due",
+            columnList = "dispatch_status, next_dispatch_at, id",
+        ),
+        Index(
+            name = "idx_app_notifications_dispatch_lease",
+            columnList = "dispatch_status, dispatch_locked_at, id",
+        ),
     ],
 )
 @DynamicUpdate
