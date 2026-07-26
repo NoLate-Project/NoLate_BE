@@ -147,8 +147,16 @@ class SecurityConfig(
                         HealthEndpointPaths.READINESS,
                     ).denyAll()
 
+                    // The application probe contract is GET-only. Keep this exact-path fallback
+                    // ahead of the global CORS rule so raw OPTIONS cannot expose probe handlers.
+                    .requestMatchers(
+                        HealthEndpointPaths.ROOT,
+                        HealthEndpointPaths.LIVENESS,
+                        HealthEndpointPaths.READINESS,
+                    ).denyAll()
+
                     // CORS preflight remains public for application APIs, but the endpoint-aware
-                    // actuator deny above wins for every non-GET management request.
+                    // actuator and exact health-path denies above win for reserved surfaces.
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
                     // The store-facing deletion flow is public by design, but only its exact
