@@ -1,6 +1,7 @@
 package com.noLate.auth.apple
 
 import com.noLate.global.config.ProductionSchemaVersionGuard
+import jakarta.persistence.Column
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -65,6 +66,33 @@ class AppleTokenLifecycleMigrationContractTest {
         val schemaCheck = schema.extractCheck("ck_apple_provider_credentials_status")
         assertEquals(normalizeCheck(schemaCheck), normalizeCheck(migrationCheck))
         assertEquals(normalizeCheck(schemaCheck), normalizeCheck(entityCheck))
+    }
+
+    @Test
+    fun `encrypted refresh token uses the reviewed ASCII varchar contract`() {
+        val expectedType = "VARCHAR(16384) CHARACTER SET ascii COLLATE ascii_bin"
+        val portableEntityType =
+            "VARCHAR(16384) /*!40100 CHARACTER SET ascii COLLATE ascii_bin */"
+        val entityColumn = requireNotNull(
+            AppleProviderCredential::class.java
+                .getDeclaredField("encryptedRefreshToken")
+                .getAnnotation(Column::class.java)
+        )
+
+        assertEquals(16384, entityColumn.length)
+        assertEquals(portableEntityType, entityColumn.columnDefinition)
+        assertEquals(
+            expectedType,
+            entityColumn.columnDefinition
+                .replace("/*!40100 ", "")
+                .replace(" */", ""),
+        )
+        listOf(
+            Files.readString(migrationPath),
+            Files.readString(Path.of("src/main/resources/schema.sql")),
+        ).forEach { ddl ->
+            assertTrue(ddl.contains("encrypted_refresh_token $expectedType"))
+        }
     }
 
     private fun String.extractCheck(name: String): String {

@@ -201,7 +201,14 @@ class AppleProviderCredential(
     @Column(name = "initialization_vector", length = 64)
     var initializationVector: String? = null,
 
-    @Column(name = "encrypted_refresh_token", length = 16384)
+    // AES-GCM ciphertext is Base64 ASCII. The MySQL executable comment pins its charset so a
+    // 16 KiB value is not budgeted as utf8mb4, while H2 can ignore the vendor-specific clause.
+    @Column(
+        name = "encrypted_refresh_token",
+        length = 16384,
+        columnDefinition =
+            "VARCHAR(16384) /*!40100 CHARACTER SET ascii COLLATE ascii_bin */",
+    )
     var encryptedRefreshToken: String? = null,
 
     @Enumerated(EnumType.STRING)
