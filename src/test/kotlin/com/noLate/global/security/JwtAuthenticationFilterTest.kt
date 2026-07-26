@@ -1,5 +1,6 @@
 package com.noLate.global.security
 
+import com.noLate.global.health.HealthEndpointPaths
 import com.noLate.member.application.service.MemberService
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -92,5 +93,33 @@ class JwtAuthenticationFilterTest {
             org.mockito.kotlin.any(),
         )
         kotlin.test.assertNull(SecurityContextHolder.getContext().authentication)
+    }
+
+    @Test
+    fun `health probes never query the member store even when a bearer token is present`() {
+        val token = tokenProvider.createAccessToken(1L, "member", 0)
+
+        listOf(
+            HealthEndpointPaths.ROOT,
+            HealthEndpointPaths.LIVENESS,
+            HealthEndpointPaths.READINESS,
+        ).forEach { path ->
+            SecurityContextHolder.clearContext()
+            val request = MockHttpServletRequest("GET", "/nolate$path").apply {
+                contextPath = "/nolate"
+                servletPath = path
+                addHeader("Authorization", "Bearer $token")
+            }
+
+            filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
+
+            kotlin.test.assertNull(SecurityContextHolder.getContext().authentication)
+        }
+
+        verify(memberService, never()).getPrincipalById(
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+        )
     }
 }
