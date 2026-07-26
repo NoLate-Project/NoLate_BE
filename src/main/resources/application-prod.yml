@@ -48,3 +48,13 @@ routing:
     enabled: ${TMAP_ENABLED:false}
 firebase:
   enabled: ${FIREBASE_ENABLED:true}
+
+auth:
+  social:
+    apple:
+      # Store builds that offer Apple account creation must never run without the
+      # server-side exchange, encrypted credential store, and durable revoke worker.
+      token-lifecycle:
+        enabled: true
+        revocation:
+          worker-enabled: true

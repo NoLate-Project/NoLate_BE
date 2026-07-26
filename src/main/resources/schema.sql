@@ -457,6 +457,48 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     INDEX idx_push_deliveries_calendar_id (calendar_id)
 ) COMMENT='Durable at-most-once per-device push delivery boundary';
 
+CREATE TABLE IF NOT EXISTS apple_provider_credentials (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Encrypted Apple provider credential primary key',
+    credential_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Random envelope AAD identifier',
+    member_id BIGINT NULL COMMENT 'Local account id retained only until provider revocation succeeds',
+    apple_subject_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'One-way Apple subject fingerprint',
+    authorization_code_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'Single-use authorization-code replay fingerprint',
+    refresh_token_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'One-way refresh-token deduplication fingerprint',
+    client_id VARCHAR(255) NOT NULL COMMENT 'Apple client id that issued this token',
+    encryption_key_id VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'Environment-owned envelope key id',
+    initialization_vector VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'Base64 AES-GCM initialization vector',
+    encrypted_refresh_token VARCHAR(16384) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'Base64 AES-256-GCM ciphertext; never plaintext',
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
+        COMMENT 'ACTIVE, PENDING, PROCESSING, BLOCKED, or REVOKED',
+    attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Physical Apple revoke attempts',
+    next_attempt_at DATETIME(6) NULL COMMENT 'Next revocation eligibility time',
+    locked_at DATETIME(6) NULL COMMENT 'Current revocation lease time',
+    locked_by VARCHAR(80) NULL COMMENT 'Current revocation worker id',
+    last_failure_code VARCHAR(120) NULL COMMENT 'Sanitized provider/local failure code',
+    revoked_at DATETIME(6) NULL COMMENT 'Provider-confirmed token deletion time',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_apple_provider_credentials_credential_key (credential_key),
+    UNIQUE KEY uk_apple_provider_credentials_authorization_code_hash (authorization_code_hash),
+    UNIQUE KEY uk_apple_provider_credentials_refresh_token_hash (refresh_token_hash),
+    INDEX idx_apple_provider_credentials_member_status (member_id, status, id),
+    INDEX idx_apple_provider_credentials_due (status, next_attempt_at, id),
+    INDEX idx_apple_provider_credentials_stale (status, locked_at, id)
+) COMMENT='Encrypted Sign in with Apple credentials and durable revoke leases';
+
 -- Production never runs schema.sql, but keeping the marker table in the executable
 -- development schema lets local schema inspection match the manual production DDL.
 -- The production marker row itself is inserted only by the final verified migration.

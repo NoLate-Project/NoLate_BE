@@ -91,6 +91,12 @@ notification:
     enabled: false
     fixed-delay-ms: 86400000
 
+auth:
+  social:
+    apple:
+      token-lifecycle:
+        enabled: false
+
 logging:
   level:
     root: warn

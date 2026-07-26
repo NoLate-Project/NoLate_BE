@@ -53,6 +53,7 @@ class MemberController(
             loginType = request.loginType,
             providerToken = request.providerToken,
             nonce = request.nonce,
+            authorizationCode = request.authorizationCode,
         )
         return ApiResponse.success(result)
     }
@@ -78,6 +79,7 @@ class MemberController(
             providerToken = request.providerToken,
             nonce = request.nonce,
             consents = request.consents.toCommand(),
+            authorizationCode = request.authorizationCode,
         )
         return ApiResponse.success(result)
     }
@@ -214,8 +216,8 @@ data class LoginRequest(
 )
 
 // 카카오/네이버는 access token, Apple은 identity token을 providerToken으로 보낸다.
-// authorizationCode는 향후 server-side code exchange를 위한 호환 필드이며 현재 인증 판단에는
-// 사용하지 않는다. Apple nonce를 사용한 클라이언트는 nonce도 반드시 함께 보낸다.
+// Apple authorizationCode는 가입 여부 조회에서 소비하지 않고 실제 로그인/가입에서만 서버가
+// 교환한다. Apple nonce를 사용한 클라이언트는 nonce도 반드시 함께 보낸다.
 data class SnsLoginRequest(
     val loginType: LoginType,
     val providerToken: String,

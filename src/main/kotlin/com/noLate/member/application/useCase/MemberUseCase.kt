@@ -1,6 +1,8 @@
 package com.noLate.member.application.useCase
 
 import com.noLate.auth.application.RefreshTokenService
+import com.noLate.auth.apple.AppleAuthorizationGrant
+import com.noLate.auth.apple.AppleTokenLifecycle
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.JwtTokenProvider
@@ -25,6 +27,7 @@ import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
 import java.util.Locale
+import java.util.Optional
 
 @Component
 class MemberUseCase(
@@ -39,6 +42,7 @@ class MemberUseCase(
     private val memberSessionFenceService: MemberSessionFenceService,
     private val accountCleanupService: AccountCleanupService,
     private val socialIdentityVerifier: SocialIdentityVerifier? = null,
+    private val appleTokenLifecycle: Optional<AppleTokenLifecycle> = Optional.empty(),
 ) {
 
     /**
@@ -109,12 +113,19 @@ class MemberUseCase(
         loginType: LoginType,
         providerToken: String?,
         nonce: String? = null,
+        authorizationCode: String? = null,
     ): MemberDto {
         val identity = verifySocialIdentity(loginType, providerToken, nonce)
         val member = memberService.findByLoginTypeAndSnsId(loginType, identity.subject)
             ?.apply { isNewMember = false }
             ?: throw BusinessException(ErrorCode.SNS_SIGNUP_REQUIRED)
-        return issueTokens(member)
+        return issueTokens(
+            memberDto = member,
+            verifiedIdentity = identity,
+            verifiedLoginType = loginType,
+            authorizationCode = authorizationCode,
+            nonce = nonce,
+        )
     }
 
     @Transactional(readOnly = true)
@@ -133,9 +144,16 @@ class MemberUseCase(
         providerToken: String?,
         nonce: String?,
         consents: SignupConsentCommand,
+        authorizationCode: String? = null,
     ): MemberDto {
         val identity = verifySocialIdentity(loginType, providerToken, nonce)
-        return signUpVerifiedSns(loginType, identity, consents)
+        return signUpVerifiedSns(
+            loginType = loginType,
+            identity = identity,
+            consents = consents,
+            authorizationCode = authorizationCode,
+            nonce = nonce,
+        )
     }
 
     private fun verifySocialIdentity(
@@ -150,6 +168,8 @@ class MemberUseCase(
         loginType: LoginType,
         identity: VerifiedSocialIdentity,
         consents: SignupConsentCommand,
+        authorizationCode: String?,
+        nonce: String?,
     ): MemberDto {
         memberConsentService.validateRequiredSignupConsents(consents)
         if (loginType == LoginType.COMMON) {
@@ -188,16 +208,71 @@ class MemberUseCase(
             consents = consents,
             source = MemberConsentSource.SNS_SIGNUP,
         )
-        return issueTokens(saved)
+        return issueTokens(
+            memberDto = saved,
+            verifiedIdentity = identity,
+            verifiedLoginType = loginType,
+            authorizationCode = authorizationCode,
+            nonce = nonce,
+        )
     }
 
-    private fun issueTokens(memberDto: MemberDto): MemberDto {
+    private fun exchangeAppleGrant(
+        memberId: Long,
+        loginType: LoginType,
+        identity: VerifiedSocialIdentity,
+        authorizationCode: String?,
+        nonce: String?,
+    ): AppleAuthorizationGrant? {
+        if (loginType != LoginType.APPLE) return null
+        val lifecycle = appleTokenLifecycle.orElseThrow {
+            BusinessException(
+                ErrorCode.INVALID_STATE,
+                "Apple 로그인 서버 token lifecycle 설정이 완료되지 않았습니다.",
+            )
+        }
+        return lifecycle.exchangeAuthorizationCode(
+            memberId = memberId,
+            identity = identity,
+            authorizationCode = authorizationCode,
+            nonce = nonce,
+        )
+    }
+
+    private fun storeAppleGrant(memberId: Long, grant: AppleAuthorizationGrant?) {
+        if (grant != null) {
+            appleTokenLifecycle.orElseThrow().storeGrant(memberId, grant)
+        }
+    }
+
+    private fun issueTokens(
+        memberDto: MemberDto,
+        verifiedIdentity: VerifiedSocialIdentity? = null,
+        verifiedLoginType: LoginType? = null,
+        authorizationCode: String? = null,
+        nonce: String? = null,
+    ): MemberDto {
         val memberId = requireNotNull(memberDto.id) { "member.id가 없습니다." }
         val memberName = requireNotNull(memberDto.name) { "member.name이 없습니다." }
         // Explicit login은 member -> refresh row 순서로 잠근다. 활성 A session을 교체하면
         // 새 generation을 열고, logout이 이미 다음 빈 generation을 열었다면 그 값을 사용한다.
         // tokenLogin/refresh rotation은 이 경계를 호출하지 않아 같은 generation을 유지한다.
         val sessionGeneration = memberSessionFenceService.beginExplicitLoginSession(memberId)
+
+        // Registration lookup intentionally did not consume Apple's five-minute single-use code.
+        // The member fence is acquired before exchange so concurrent withdrawal either revokes
+        // this new credential or makes the entire login transaction fail before provider use.
+        val appleGrant = verifiedIdentity?.let {
+            exchangeAppleGrant(
+                memberId = memberId,
+                loginType = requireNotNull(verifiedLoginType) {
+                    "검증된 SNS 로그인 유형이 없습니다."
+                },
+                identity = it,
+                authorizationCode = authorizationCode,
+                nonce = nonce,
+            )
+        }
 
         // 3) accessToken + refreshToken 발급
         val accessToken = jwtTokenProvider.createAccessToken(
@@ -214,6 +289,7 @@ class MemberUseCase(
         // 4) refreshToken 저장 (기존 것들 정리하는 정책은 RefreshTokenService 내에서 처리)
         val refreshExpiry = jwtTokenProvider.getRefreshTokenExpiryLocalDateTime()
         refreshTokenService.saveNewToken(memberId, refreshToken, refreshExpiry)
+        storeAppleGrant(memberId, appleGrant)
 
         return memberDto.apply {
             this.accessToken = accessToken
@@ -464,6 +540,12 @@ class MemberUseCase(
             memberId = id,
             presentedSessionGeneration = presentedSessionGeneration,
         )
+        if (member.loginType == LoginType.APPLE) {
+            // The queue write shares the account-cleanup transaction. A rollback therefore keeps
+            // both the active account and active provider credential; commit triggers the first
+            // provider attempt only after local cleanup is durable.
+            appleTokenLifecycle.orElse(null)?.queueRevocation(id)
+        }
         accountCleanupService.withdraw(withdrawalFence)
         memberService.updateMember(member)
     }

@@ -136,7 +136,8 @@ class SocialIdentityVerifier(
         }
         val claims = appleProcessor.process(identityToken, null)
         if (claims.issuer != APPLE_ISSUER) invalidSocialProof()
-        if (claims.audience.none(allowedAppleAudiences::contains)) invalidSocialProof()
+        val verifiedAudience = claims.audience.firstOrNull(allowedAppleAudiences::contains)
+            ?: invalidSocialProof()
         if (claims.expirationTime?.toInstant()?.isAfter(Instant.now()) != true) invalidSocialProof()
         if (claims.issueTime?.toInstant()?.isAfter(Instant.now().plusSeconds(60)) == true) invalidSocialProof()
         if (!nonce.isNullOrBlank() && claims.getStringClaim("nonce") != nonce) invalidSocialProof()
@@ -145,6 +146,7 @@ class SocialIdentityVerifier(
             subject = claims.subject?.takeIf(String::isNotBlank) ?: invalidSocialProof(),
             email = claims.getStringClaim("email")?.takeIf(String::isNotBlank),
             name = null,
+            audience = verifiedAudience,
         )
     }
 
@@ -163,6 +165,8 @@ data class VerifiedSocialIdentity(
     val subject: String,
     val email: String?,
     val name: String?,
+    /** Apple code exchange must use the exact audience/client-id proved by the signed ID token. */
+    val audience: String? = null,
 )
 
 internal fun isTrustedKakaoApp(tokenAppId: String, configuredAppId: String): Boolean =

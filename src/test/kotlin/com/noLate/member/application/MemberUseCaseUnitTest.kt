@@ -2,6 +2,8 @@
 package com.noLate.member.application
 
 import com.noLate.auth.application.RefreshTokenService
+import com.noLate.auth.apple.AppleAuthorizationGrant
+import com.noLate.auth.apple.AppleTokenLifecycle
 import com.noLate.auth.domain.RefreshToken
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
@@ -73,6 +75,9 @@ class MemberUseCaseUnitTest {
     @Mock
     lateinit var accountCleanupService: AccountCleanupService
 
+    @Mock
+    lateinit var appleTokenLifecycle: AppleTokenLifecycle
+
     private val signupConsents = SignupConsentCommand(
         termsVersion = "2026.07.16",
         privacyCollectionVersion = "2026.07.16",
@@ -96,6 +101,7 @@ class MemberUseCaseUnitTest {
             memberSessionFenceService = memberSessionFenceService,
             socialIdentityVerifier = socialIdentityVerifier,
             accountCleanupService = accountCleanupService,
+            appleTokenLifecycle = Optional.of(appleTokenLifecycle),
         )
     }
 
@@ -270,6 +276,172 @@ class MemberUseCaseUnitTest {
         assertEquals("access-token-sns", result.accessToken)
         assertEquals("refresh-token-sns", result.refreshToken)
         assertFalse(result.isNewMember)
+    }
+
+    @Test
+    fun `Apple 기존 회원 로그인은 authorization code를 교환하고 앱 세션과 함께 보호 저장한다`() {
+        val identity = VerifiedSocialIdentity(
+            subject = "apple-subject",
+            email = "relay@example.com",
+            name = null,
+            audience = "com.nolate.test",
+        )
+        val member = MemberDto(
+            id = 12L,
+            email = "relay@example.com",
+            name = "Apple 사용자",
+            loginType = LoginType.APPLE,
+            snsId = "apple-subject",
+        )
+        val grant = mock<AppleAuthorizationGrant>()
+        whenever(socialIdentityVerifier.verify(LoginType.APPLE, "identity-token", "nonce"))
+            .thenReturn(identity)
+        whenever(memberService.findByLoginTypeAndSnsId(LoginType.APPLE, "apple-subject"))
+            .thenReturn(member)
+        whenever(
+            appleTokenLifecycle.exchangeAuthorizationCode(
+                12L,
+                identity,
+                "authorization-code",
+                "nonce",
+            )
+        ).thenReturn(grant)
+        whenever(memberSessionFenceService.beginExplicitLoginSession(12L)).thenReturn(3L)
+        whenever(jwtTokenProvider.createAccessToken(12L, "Apple 사용자", 3L))
+            .thenReturn("access-token")
+        whenever(jwtTokenProvider.createRefreshToken(12L, "Apple 사용자", 3L))
+            .thenReturn("refresh-token")
+        whenever(jwtTokenProvider.getRefreshTokenExpiryLocalDateTime())
+            .thenReturn(LocalDateTime.now().plusDays(7))
+
+        memberUseCase.loginSns(
+            loginType = LoginType.APPLE,
+            providerToken = "identity-token",
+            nonce = "nonce",
+            authorizationCode = "authorization-code",
+        )
+
+        inOrder(memberSessionFenceService, appleTokenLifecycle) {
+            verify(memberSessionFenceService).beginExplicitLoginSession(12L)
+            verify(appleTokenLifecycle).exchangeAuthorizationCode(
+                12L,
+                identity,
+                "authorization-code",
+                "nonce",
+            )
+            verify(appleTokenLifecycle).storeGrant(12L, grant)
+        }
+    }
+
+    @Test
+    fun `withdrawal이 먼저 member fence를 닫으면 Apple authorization code를 소비하지 않는다`() {
+        val identity = VerifiedSocialIdentity(
+            subject = "withdrawn-apple-subject",
+            email = null,
+            name = null,
+            audience = "com.nolate.test",
+        )
+        whenever(socialIdentityVerifier.verify(LoginType.APPLE, "identity-token", "nonce"))
+            .thenReturn(identity)
+        whenever(
+            memberService.findByLoginTypeAndSnsId(LoginType.APPLE, "withdrawn-apple-subject")
+        ).thenReturn(
+            MemberDto(
+                id = 14L,
+                email = "withdrawn@social.local",
+                name = "종료된 Apple 사용자",
+                loginType = LoginType.APPLE,
+                snsId = "withdrawn-apple-subject",
+            )
+        )
+        whenever(memberSessionFenceService.beginExplicitLoginSession(14L))
+            .thenThrow(BusinessException(ErrorCode.UNAUTHORIZED))
+
+        assertThrows<BusinessException> {
+            memberUseCase.loginSns(
+                loginType = LoginType.APPLE,
+                providerToken = "identity-token",
+                nonce = "nonce",
+                authorizationCode = "single-use-code",
+            )
+        }
+
+        verify(appleTokenLifecycle, never()).exchangeAuthorizationCode(
+            any(),
+            any(),
+            any(),
+            any(),
+        )
+        verify(appleTokenLifecycle, never()).storeGrant(any(), any())
+    }
+
+    @Test
+    fun `Apple 신규 가입도 동의와 계정 저장 후 같은 transaction에서 code를 교환한다`() {
+        val identity = VerifiedSocialIdentity(
+            subject = "new-apple-subject",
+            email = "new-apple@privaterelay.appleid.com",
+            name = "Apple 신규",
+            audience = "com.nolate.test",
+        )
+        val grant = mock<AppleAuthorizationGrant>()
+        whenever(socialIdentityVerifier.verify(LoginType.APPLE, "identity-token", "nonce"))
+            .thenReturn(identity)
+        whenever(
+            memberService.findByLoginTypeAndSnsId(LoginType.APPLE, "new-apple-subject")
+        ).thenReturn(null)
+        whenever(memberService.findByEmail("new-apple@privaterelay.appleid.com"))
+            .thenReturn(null)
+        whenever(memberService.addMember(any<Member>())).thenAnswer {
+            it.getArgument<Member>(0).let { member ->
+                MemberDto(
+                    id = 13L,
+                    email = member.email,
+                    password = member.password,
+                    name = member.name,
+                    loginType = member.loginType,
+                    snsId = member.snsId,
+                )
+            }
+        }
+        whenever(memberSessionFenceService.beginExplicitLoginSession(13L)).thenReturn(1L)
+        whenever(
+            appleTokenLifecycle.exchangeAuthorizationCode(
+                13L,
+                identity,
+                "authorization-code",
+                "nonce",
+            )
+        ).thenReturn(grant)
+        whenever(jwtTokenProvider.createAccessToken(13L, "Apple 신규", 1L))
+            .thenReturn("access-token")
+        whenever(jwtTokenProvider.createRefreshToken(13L, "Apple 신규", 1L))
+            .thenReturn("refresh-token")
+        whenever(jwtTokenProvider.getRefreshTokenExpiryLocalDateTime())
+            .thenReturn(LocalDateTime.now().plusDays(7))
+
+        memberUseCase.signUpSns(
+            loginType = LoginType.APPLE,
+            providerToken = "identity-token",
+            nonce = "nonce",
+            consents = signupConsents,
+            authorizationCode = "authorization-code",
+        )
+
+        verify(memberConsentService).recordRequiredSignupConsents(
+            memberId = 13L,
+            consents = signupConsents,
+            source = MemberConsentSource.SNS_SIGNUP,
+        )
+        inOrder(memberSessionFenceService, appleTokenLifecycle) {
+            verify(memberSessionFenceService).beginExplicitLoginSession(13L)
+            verify(appleTokenLifecycle).exchangeAuthorizationCode(
+                13L,
+                identity,
+                "authorization-code",
+                "nonce",
+            )
+            verify(appleTokenLifecycle).storeGrant(13L, grant)
+        }
     }
 
     @Test
@@ -623,6 +795,38 @@ class MemberUseCaseUnitTest {
         verify(memberSessionFenceService).invalidateSessionForWithdrawal(memberId, 6L)
         verify(accountCleanupService).withdraw(withdrawalFence)
         verify(memberService).updateMember(member)
+        verify(appleTokenLifecycle, never()).queueRevocation(any())
+    }
+
+    @Test
+    fun `Apple withdraw는 session fence 뒤 provider revoke를 durable queue에 넣고 account cleanup한다`() {
+        val memberId = 22L
+        val member = Member(
+            id = memberId,
+            email = "apple@test.com",
+            password = "",
+            name = "Apple 사용자",
+            loginType = LoginType.APPLE,
+            snsId = "apple-subject",
+            sessionGeneration = 7,
+        )
+        val withdrawalFence = AccountWithdrawalFence(
+            member = member,
+            ownedScheduleIds = emptySet(),
+            lockedMemberIds = setOf(memberId),
+        )
+        whenever(accountCleanupService.lockWithdrawalFence(memberId, 7L))
+            .thenReturn(withdrawalFence)
+
+        memberUseCase.withdraw(memberId, 7L, null)
+
+        inOrder(memberSessionFenceService, appleTokenLifecycle, accountCleanupService) {
+            verify(memberSessionFenceService)
+                .invalidateSessionForWithdrawal(memberId, 7L)
+            verify(appleTokenLifecycle).queueRevocation(memberId)
+            verify(accountCleanupService).withdraw(withdrawalFence)
+        }
+        verify(passwordEncoder, never()).matches(any(), any())
     }
 
     @Test

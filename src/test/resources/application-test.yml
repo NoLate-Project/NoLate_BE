@@ -56,3 +56,5 @@ auth:
       app-id: test-app
     apple:
       audiences: com.nolate.test
+      token-lifecycle:
+        enabled: false
