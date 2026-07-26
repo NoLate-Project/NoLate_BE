@@ -10,6 +10,16 @@ import org.springframework.data.repository.query.Param
 
 interface NotificationDeviceTokenRepository : JpaRepository<NotificationDeviceToken, Long>{
 
+    @Query(
+        """
+        select count(token) from NotificationDeviceToken token
+        where token.dispatchLeaseId is not null
+          and token.dispatchLeaseUntil is not null
+          and token.dispatchLeaseUntil <= :now
+        """
+    )
+    fun countExpiredDispatchLeases(@Param("now") now: java.time.Instant): Long
+
     fun findAllByMemberId(memberId: Long): List<NotificationDeviceToken>
 
     fun findAllByMemberIdAndRetirementRequestedFalse(

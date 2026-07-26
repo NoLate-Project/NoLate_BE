@@ -2,6 +2,11 @@ package com.noLate.notification.application.service
 
 import com.noLate.notification.application.PushClient
 import com.noLate.notification.application.PushSendResult
+import com.noLate.notification.application.ConfirmedPushDeliveryException
+import com.noLate.notification.application.InvalidPushTokenException
+import com.noLate.global.observability.NoLateOperationalMetrics
+import com.noLate.global.observability.PushProviderMetricOutcome
+import com.noLate.global.observability.recordSafely
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.domain.PushDeliveryStatus
 import com.noLate.notification.infrastructure.AppNotificationRepository
@@ -49,6 +54,7 @@ class PushTokenProviderLeaseService(
     private val writer: PushTokenProviderLeaseWriter,
     private val pushClient: PushClient,
     private val observer: PushTokenProviderLeaseObserver? = null,
+    private val operationalMetrics: NoLateOperationalMetrics? = null,
 ) {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun sendIfOwned(
@@ -70,12 +76,16 @@ class PushTokenProviderLeaseService(
             dispatchFence = dispatchFence,
             sessionFence = sessionFence,
         )
+        operationalMetrics.recordSafely { recordPushTokenLease(lease.outcome) }
         if (lease.outcome != PushTokenProviderLeaseOutcome.ACQUIRED) {
             return PushTokenProviderSendResult(lease.outcome)
         }
 
+        val providerStartedAt = System.nanoTime()
+        var providerOutcome = PushProviderMetricOutcome.UNKNOWN
+        var providerDurationNanos = 0L
         return try {
-            PushTokenProviderSendResult(
+            val result = PushTokenProviderSendResult(
                 outcome = PushTokenProviderLeaseOutcome.ACQUIRED,
                 providerResult = pushClient.sendToToken(
                     token = requireNotNull(lease.providerToken),
@@ -84,14 +94,35 @@ class PushTokenProviderLeaseService(
                     data = data,
                 ),
             )
+            providerOutcome = PushProviderMetricOutcome.SUCCESS
+            providerDurationNanos = (System.nanoTime() - providerStartedAt).coerceAtLeast(1)
+            result
+        } catch (failure: Exception) {
+            providerDurationNanos = (System.nanoTime() - providerStartedAt).coerceAtLeast(1)
+            providerOutcome = when (failure) {
+                is InvalidPushTokenException -> PushProviderMetricOutcome.INVALID_TOKEN
+                is ConfirmedPushDeliveryException ->
+                    PushProviderMetricOutcome.CONFIRMED_FAILURE
+                else -> PushProviderMetricOutcome.UNKNOWN
+            }
+            throw failure
         } finally {
-            writer.release(
-                memberId = memberId,
-                tokenId = requireNotNull(lease.tokenId),
-                leaseId = requireNotNull(lease.leaseId),
-                tokenFingerprint = requireNotNull(claim.tokenFingerprint),
-                ownershipVersion = requireNotNull(claim.tokenOwnershipVersion),
-            )
+            try {
+                writer.release(
+                    memberId = memberId,
+                    tokenId = requireNotNull(lease.tokenId),
+                    leaseId = requireNotNull(lease.leaseId),
+                    tokenFingerprint = requireNotNull(claim.tokenFingerprint),
+                    ownershipVersion = requireNotNull(claim.tokenOwnershipVersion),
+                )
+            } finally {
+                operationalMetrics.recordSafely {
+                    recordPushProviderCall(
+                        providerOutcome,
+                        providerDurationNanos,
+                    )
+                }
+            }
         }
     }
 }

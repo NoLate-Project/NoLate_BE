@@ -6,8 +6,21 @@ import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
+import java.time.Instant
 
 interface PushDeliveryRepository : JpaRepository<PushDelivery, Long> {
+
+    @Query(
+        """
+        select count(delivery) from PushDelivery delivery
+        where delivery.status = :status
+          and delivery.lastAttemptedAt <= :attemptedBefore
+        """
+    )
+    fun countAmbiguousBefore(
+        @Param("status") status: com.noLate.notification.domain.PushDeliveryStatus,
+        @Param("attemptedBefore") attemptedBefore: Instant,
+    ): Long
 
     fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
 

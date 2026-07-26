@@ -1,0 +1,91 @@
+groups:
+  - name: nolate-release-observability
+    rules:
+      - alert: NoLateEtaBacklogDelayed
+        expr: nolate_eta_jobs_oldest_delay_seconds{application="noLate"} > 180
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate ETA jobs are delayed"
+          description: "The oldest due ETA job has remained more than three minutes late."
+
+      - alert: NoLatePushOutboxBacklogDelayed
+        expr: nolate_push_outbox_oldest_delay_seconds{application="noLate"} > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate push outbox is delayed"
+          description: "The oldest due push outbox event has remained more than two minutes late."
+
+      - alert: NoLatePushOutboxStaleLease
+        expr: nolate_push_outbox_leases_stale{application="noLate"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate push outbox has stale processing leases"
+          description: "At least one outbox lease is older than the configured processing timeout."
+
+      - alert: NoLatePushAmbiguousDelivery
+        expr: nolate_push_deliveries_ambiguous{application="noLate"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate has ambiguous push deliveries"
+          description: "At least one DISPATCHING delivery outlived the bounded provider call."
+
+      - alert: NoLatePushTokenLeaseExpired
+        expr: nolate_push_token_leases_expired{application="noLate"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate has expired token ownership leases"
+          description: "Expired provider ownership leases are still awaiting cleanup."
+
+      - alert: NoLatePushProviderFailureRate
+        expr: |
+          (
+            sum(rate(nolate_push_provider_duration_seconds_count{application="noLate",outcome=~"confirmed_failure|unknown"}[10m]))
+            /
+            clamp_min(
+              sum(rate(nolate_push_provider_duration_seconds_count{application="noLate",outcome=~"success|confirmed_failure|unknown"}[10m])),
+              0.001
+            )
+          ) > 0.05
+          and
+          sum(increase(nolate_push_provider_duration_seconds_count{application="noLate",outcome=~"success|confirmed_failure|unknown"}[10m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate push provider failure rate is elevated"
+          description: "Confirmed or unknown push outcomes exceeded 5% with at least 20 calls."
+
+      - alert: NoLateEtaProviderFailureRate
+        expr: |
+          (
+            sum(rate(nolate_eta_provider_duration_seconds_count{application="noLate",outcome!="success"}[10m]))
+            /
+            clamp_min(sum(rate(nolate_eta_provider_duration_seconds_count{application="noLate"}[10m])), 0.001)
+          ) > 0.20
+          and
+          sum(increase(nolate_eta_provider_duration_seconds_count{application="noLate"}[10m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate live ETA provider failure rate is elevated"
+          description: "Bounded live ETA failures exceeded 20% with at least 20 calls."
+
+      - alert: NoLateObservabilitySnapshotFailure
+        expr: increase(nolate_observability_snapshot_failures_total{application="noLate"}[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate operational gauge sampling is failing"
+          description: "Backlog gauges retain their last-known values until database sampling recovers."

@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.schedule.application.TrafficClient
@@ -21,6 +22,7 @@ import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -138,7 +140,13 @@ class SchedulePushJobWorkerTest {
         ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
-        assertEquals(1, worker().runDueJobs(testNow))
+        val registry = SimpleMeterRegistry()
+        assertEquals(
+            1,
+            worker(
+                operationalMetrics = NoLateOperationalMetrics(registry),
+            ).runDueJobs(testNow),
+        )
 
         verify(trafficClient, times(1)).getTravelMinutes(check<TrafficRequest> {
             assertEquals(37.1, it.originLat)
@@ -155,6 +163,22 @@ class SchedulePushJobWorkerTest {
         assertEquals(
             testNow.plus(notificationIntervalMinutes.toLong(), ChronoUnit.MINUTES),
             job.nextCheckAt,
+        )
+        assertEquals(
+            1.0,
+            registry.get("nolate.eta.jobs").tag("outcome", "claimed").counter().count(),
+        )
+        assertEquals(
+            1.0,
+            registry.get("nolate.eta.jobs").tag("outcome", "processed").counter().count(),
+        )
+        assertEquals(
+            1.0,
+            registry.get("nolate.eta.resolutions")
+                .tag("source", "live_provider")
+                .tag("quality", "fresh")
+                .counter()
+                .count(),
         )
     }
 
@@ -1354,6 +1378,7 @@ class SchedulePushJobWorkerTest {
         accessPolicy: ScheduleAccessPolicy? = null,
         liveComparatorMaxAgeMinutes: Long = 60,
         clock: Clock = Clock.fixed(testNow, ZoneOffset.UTC),
+        operationalMetrics: NoLateOperationalMetrics? = null,
     ) = SchedulePushJobWorker(
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -1373,6 +1398,7 @@ class SchedulePushJobWorkerTest {
         travelPlanRepository = travelPlanRepository,
         scheduleAccessPolicy = accessPolicy,
         clock = clock,
+        operationalMetrics = operationalMetrics,
     )
 
     /**

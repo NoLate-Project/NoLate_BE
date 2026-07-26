@@ -1,6 +1,7 @@
 package com.noLate.global.config
 
 import com.noLate.global.health.HealthEndpointPaths
+import com.noLate.global.observability.ObservabilityEndpointAccessPolicy
 import com.noLate.global.security.JwtAuthenticationFilter
 import com.noLate.global.security.JwtTokenProvider
 
@@ -35,6 +36,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 class SecurityConfig(
     private val jwtTokenProvider: JwtTokenProvider,
     private val memberService: MemberService,
+    private val observabilityEndpointAccessPolicy: ObservabilityEndpointAccessPolicy,
 ) {
 
     /**
@@ -117,6 +119,13 @@ class SecurityConfig(
                     ).permitAll()
 
                     .requestMatchers(
+                        observabilityEndpointAccessPolicy.publicPrometheusRequestMatcher
+                    ).permitAll()
+
+                    // Actuator is an operator surface, not an authenticated member API.
+                    .requestMatchers("/actuator/**").denyAll()
+
+                    .requestMatchers(
                         "/",
                         "/robots.txt",
                         "/api/member/auth/**",
@@ -126,7 +135,6 @@ class SecurityConfig(
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
                         "/swagger-ui.html",
-                        "/actuator/prometheus/**",
 
                         // ⭐ 엑셀 다운로드 허용
                         "/members/statistics/**"

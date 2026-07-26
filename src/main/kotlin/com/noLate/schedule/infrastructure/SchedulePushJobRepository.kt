@@ -32,6 +32,30 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
         @Param("scheduleIds") scheduleIds: Collection<Long>,
     ): List<Long>
 
+    @Query(
+        """
+        select count(job) from SchedulePushJob job
+        where job.status = :status
+          and job.nextCheckAt <= :dueAt
+        """
+    )
+    fun countDue(
+        @Param("status") status: SchedulePushJobStatus,
+        @Param("dueAt") dueAt: Instant,
+    ): Long
+
+    @Query(
+        """
+        select min(job.nextCheckAt) from SchedulePushJob job
+        where job.status = :status
+          and job.nextCheckAt <= :dueAt
+        """
+    )
+    fun findOldestDueAt(
+        @Param("status") status: SchedulePushJobStatus,
+        @Param("dueAt") dueAt: Instant,
+    ): Instant?
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select job from SchedulePushJob job where job.id = :id")
     fun findByIdForUpdate(@Param("id") id: Long): SchedulePushJob?

@@ -1,6 +1,9 @@
 package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.global.observability.EtaJobMetricOutcome
+import com.noLate.global.observability.NoLateOperationalMetrics
+import com.noLate.global.observability.recordSafely
 import com.noLate.notification.application.service.PushDispatchFence
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.application.EtaTravelTimePolicy
@@ -55,6 +58,7 @@ class SchedulePushJobWorker(
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
     private val clock: Clock = Clock.systemUTC(),
+    private val operationalMetrics: NoLateOperationalMetrics? = null,
 ) {
     init {
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
@@ -82,6 +86,9 @@ class SchedulePushJobWorker(
             deliveryGraceMinutes = deliveryGraceMinutes,
             batchSize = batchSize,
         )
+        operationalMetrics.recordSafely {
+            recordEtaJob(EtaJobMetricOutcome.STALE_LEASE_RECOVERED, recoveredCount)
+        }
         if (recoveredCount > 0) {
             log.warn(
                 "Recovered stale schedule push jobs. count={}, timeoutMinutes={}, checkedAt={}",
@@ -99,6 +106,7 @@ class SchedulePushJobWorker(
             val job = pushJobCoordinator.claimNextDueJob(claimAt, workerId)
                 ?: return claimedCount
             claimedCount += 1
+            operationalMetrics.recordSafely { recordEtaJob(EtaJobMetricOutcome.CLAIMED) }
             log.info(
                 "Claimed schedule push job. jobId={}, workerId={}, checkedAt={}",
                 job.id,
@@ -183,6 +191,12 @@ class SchedulePushJobWorker(
                 maxTravelMinutes = maxTravelMinutes,
             )
             val trafficResult = trafficClient.getTravelMinutes(request)
+            operationalMetrics.recordSafely {
+                recordEtaResolution(
+                    source = trafficResult.source,
+                    degraded = trafficResult.stale || trafficResult.failureReason != null,
+                )
+            }
             val travelMinutes = trafficResult.travelMinutes
             require(EtaTravelTimePolicy.isValid(travelMinutes, maxTravelMinutes)) {
                 "교통 조회 결과는 1~$maxTravelMinutes 사이여야 합니다."
@@ -338,6 +352,12 @@ class SchedulePushJobWorker(
                     sendResult.failedCount,
                     sendResult.retryableFailedCount,
                 )
+                operationalMetrics.recordSafely {
+                    recordEtaJob(
+                        EtaJobMetricOutcome.UNCERTAIN_DELIVERY,
+                        sendResult.ambiguousCount,
+                    )
+                }
                 if (sendResult.retryableFailedCount > 0) {
                     // 일부 기기가 성공했더라도 같은 generation/check event를 유지해야 다음
                     // 실행에서 SUCCESS는 건너뛰고 FAILED 기기만 다시 claim할 수 있다.
@@ -454,7 +474,11 @@ class SchedulePushJobWorker(
                 now = maxOf(now, Instant.now(clock), trafficResult.fetchedAt ?: now),
             )
             pushJobCoordinator.persist(job, workerId)
+            operationalMetrics.recordSafely { recordEtaJob(EtaJobMetricOutcome.PROCESSED) }
         } catch (exception: Exception) {
+            operationalMetrics.recordSafely {
+                recordEtaJob(EtaJobMetricOutcome.PROCESSING_EXCEPTION)
+            }
             log.warn(
                 "Schedule push job failed. jobId={}, scheduleId={}, workerId={}, errorCode={}",
                 job.id,
@@ -639,6 +663,9 @@ class SchedulePushJobWorker(
 
         if (retryLimitReached || noRetryWindowLeft) {
             job.fail(reason)
+            operationalMetrics.recordSafely {
+                recordEtaJob(EtaJobMetricOutcome.TERMINAL_FAILURE)
+            }
             return
         }
 
@@ -646,6 +673,7 @@ class SchedulePushJobWorker(
             reason = reason,
             nextCheckAt = minOf(nextRetryAt, deliveryDeadline),
         )
+        operationalMetrics.recordSafely { recordEtaJob(EtaJobMetricOutcome.RETRY_SCHEDULED) }
     }
 }
 
