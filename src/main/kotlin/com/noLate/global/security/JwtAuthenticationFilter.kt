@@ -1,5 +1,6 @@
 package com.noLate.global.security
 
+import com.noLate.global.health.HealthEndpointPaths
 import com.noLate.member.application.service.MemberService
 import jakarta.servlet.DispatcherType
 import jakarta.servlet.FilterChain
@@ -156,7 +157,10 @@ class JwtAuthenticationFilter(
                 || request.dispatcherType == DispatcherType.ASYNC
                 || (
                     request.method == "GET"
-                        && request.servletPath == "/api/calendar/days"
+                        && (
+                            request.servletPath == "/api/calendar/days"
+                                || HealthEndpointPaths.contains(request.servletPath)
+                        )
                 )
     }
 

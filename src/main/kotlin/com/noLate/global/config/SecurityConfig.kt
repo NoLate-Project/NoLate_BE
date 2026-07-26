@@ -1,5 +1,6 @@
 package com.noLate.global.config
 
+import com.noLate.global.health.HealthEndpointPaths
 import com.noLate.global.security.JwtAuthenticationFilter
 import com.noLate.global.security.JwtTokenProvider
 
@@ -109,6 +110,13 @@ class SecurityConfig(
                     ).permitAll()
 
                     .requestMatchers(
+                        HttpMethod.GET,
+                        HealthEndpointPaths.ROOT,
+                        HealthEndpointPaths.LIVENESS,
+                        HealthEndpointPaths.READINESS,
+                    ).permitAll()
+
+                    .requestMatchers(
                         "/",
                         "/robots.txt",
                         "/api/member/auth/**",
@@ -119,7 +127,6 @@ class SecurityConfig(
                         "/swagger-ui/**",
                         "/swagger-ui.html",
                         "/actuator/prometheus/**",
-                        "/health",
 
                         // ⭐ 엑셀 다운로드 허용
                         "/members/statistics/**"
