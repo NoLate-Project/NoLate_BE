@@ -359,6 +359,60 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `externally verified Apple withdrawal commits cleanup with durable revoke retry`() {
+        val member = memberRepository.saveAndFlush(
+            appleMember(
+                email = "external-apple-withdraw@example.com",
+                subject = "external-apple-withdraw-subject",
+                sessionGeneration = 14,
+            )
+        )
+        val memberId = requireNotNull(member.id)
+        val envelope = tokenCipher.encrypt(
+            "credential-external-withdraw",
+            "external-refresh-token",
+        )
+        val credential = credentialRepository.saveAndFlush(
+            AppleProviderCredential(
+                credentialKey = "credential-external-withdraw",
+                sourceReceiptKey = "receipt-external-withdraw",
+                memberId = memberId,
+                appleSubjectHash = sha256("external-apple-withdraw-subject"),
+                refreshTokenHash = sha256("external-refresh-token"),
+                clientId = "com.nolate.test",
+                encryptionKeyId = envelope.keyId,
+                initializationVector = envelope.initializationVector,
+                encryptedRefreshToken = envelope.ciphertext,
+                status = AppleProviderCredentialStatus.ACTIVE,
+            )
+        )
+        whenever(oauthClient.revokeRefreshToken("external-refresh-token")).thenThrow(
+            IllegalStateException("synthetic-external-provider-failure")
+        )
+
+        assertDoesNotThrow {
+            memberUseCase.withdrawAfterExternalIdentityVerification(memberId, 14L)
+        }
+
+        waitUntil(Duration.ofSeconds(5)) {
+            credentialRepository.findById(requireNotNull(credential.id))
+                .orElseThrow()
+                .let {
+                    it.status == AppleProviderCredentialStatus.PENDING &&
+                        it.attemptCount >= 1
+                }
+        }
+        val deletedMember = memberRepository.findById(memberId).orElseThrow()
+        assertEquals(true, deletedMember.deleted)
+        assertNull(deletedMember.snsId)
+
+        val retry = credentialRepository.findById(requireNotNull(credential.id)).orElseThrow()
+        assertEquals(AppleProviderCredentialStatus.PENDING, retry.status)
+        assertNotNull(retry.encryptedRefreshToken)
+        assertEquals("APPLE_REVOKE_ILLEGALSTATEEXCEPTION", retry.lastFailureCode)
+    }
+
+    @Test
     fun `slow provider revoke never extends authenticated withdrawal response latency`() {
         val member = memberRepository.saveAndFlush(
             appleMember(

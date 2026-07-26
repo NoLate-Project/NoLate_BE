@@ -737,3 +737,34 @@ CREATE TABLE IF NOT EXISTS public_holidays (
     UNIQUE KEY uk_public_holidays_date_name_type (holiday_date, name, holiday_type),
     INDEX idx_public_holidays_date (holiday_date)
 ) COMMENT='Shared Republic of Korea public holiday cache';
+
+CREATE TABLE IF NOT EXISTS account_deletion_requests (
+    id VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Opaque public request UUID',
+    identifier_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Domain-separated keyed digest of normalized account email',
+    requester_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Domain-separated keyed digest of requester network address',
+    member_id BIGINT NULL
+        COMMENT 'Internal binding; cleared after terminal processing and never exposed publicly',
+    observed_session_generation BIGINT NULL
+        COMMENT 'Session generation captured before external verification',
+    manual_review_required BOOLEAN NOT NULL DEFAULT FALSE
+        COMMENT 'Provider-aware support is required; this row cannot authorize cleanup',
+    status VARCHAR(40) NOT NULL,
+    verification_token_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    verification_attempt_count INT NOT NULL DEFAULT 0,
+    verification_expires_at DATETIME(6) NULL,
+    deletion_grant_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    deletion_grant_expires_at DATETIME(6) NULL,
+    processing_started_at DATETIME(6) NULL,
+    completed_at DATETIME(6) NULL,
+    failure_code VARCHAR(40) NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    retention_expires_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    INDEX idx_account_deletion_requests_status_expiry (status, verification_expires_at),
+    INDEX idx_account_deletion_requests_retention (retention_expires_at),
+    INDEX idx_account_deletion_requests_processing (status, processing_started_at)
+) COMMENT='Login-free account deletion verification and single-use grant state';

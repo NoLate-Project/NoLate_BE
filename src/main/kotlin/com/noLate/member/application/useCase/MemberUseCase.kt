@@ -15,6 +15,7 @@ import com.noLate.member.application.service.MemberValidator
 import com.noLate.member.application.service.SocialIdentityVerifier
 import com.noLate.member.application.service.VerifiedSocialIdentity
 import com.noLate.member.application.service.AccountCleanupService
+import com.noLate.member.application.service.AccountWithdrawalFence
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.domain.member.MemberDto
@@ -553,6 +554,34 @@ class MemberUseCase(
             }
         }
 
+        return completeWithdrawal(withdrawalFence, presentedSessionGeneration)
+    }
+
+    /**
+     * Public web controllers must never call this boundary directly.
+     *
+     * The account-deletion core invokes it only after consuming a short-lived verification secret
+     * and then a separate single-use deletion grant. The generation captured when verification was
+     * initiated is still checked by lockWithdrawalFence, so any intervening login invalidates the
+     * external proof instead of deleting a newer session.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun withdrawAfterExternalIdentityVerification(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        val withdrawalFence = accountCleanupService.lockWithdrawalFence(
+            memberId = memberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
+        completeWithdrawal(withdrawalFence, presentedSessionGeneration)
+    }
+
+    private fun completeWithdrawal(
+        withdrawalFence: AccountWithdrawalFence,
+        presentedSessionGeneration: Long,
+    ): MemberWithdrawalResult {
+        val member = withdrawalFence.member
         val id = requireNotNull(member.id) { "member.id 가 없습니다." }
         // Cleanup anonymizes this mutable entity. Freeze the provider decision before handing it
         // over so future cleanup changes cannot alter the response contract after deletion.

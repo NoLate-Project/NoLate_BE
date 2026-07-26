@@ -45,6 +45,24 @@ spring:
       timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
       repositories:
         enabled: false
+  mail:
+    host: ${ACCOUNT_DELETION_SMTP_HOST:}
+    port: ${ACCOUNT_DELETION_SMTP_PORT:587}
+    username: ${ACCOUNT_DELETION_SMTP_USERNAME:}
+    password: ${ACCOUNT_DELETION_SMTP_PASSWORD:}
+    # In production this must be true when the email verifier is enabled, making SMTP readiness
+    # part of startup instead of failing only after a user submits a destructive request.
+    test-connection: ${ACCOUNT_DELETION_SMTP_TEST_CONNECTION:false}
+    properties:
+      mail:
+        smtp:
+          auth: ${ACCOUNT_DELETION_SMTP_AUTH:true}
+          starttls:
+            enable: ${ACCOUNT_DELETION_SMTP_STARTTLS_ENABLE:true}
+            required: ${ACCOUNT_DELETION_SMTP_STARTTLS_REQUIRED:true}
+          connectiontimeout: ${ACCOUNT_DELETION_SMTP_CONNECTION_TIMEOUT_MS:5000}
+          timeout: ${ACCOUNT_DELETION_SMTP_READ_TIMEOUT_MS:5000}
+          writetimeout: ${ACCOUNT_DELETION_SMTP_WRITE_TIMEOUT_MS:5000}
 
 
 logging:
@@ -93,6 +111,40 @@ jwt:
   issuer: ${JWT_ISSUER}
   access-token-validity-in-seconds: 86400 # 1 day
   refresh-token-validity-in-seconds: 604800 # 7 days
+
+account-deletion:
+  # External deletion is fail-closed until policy, secret, and a trusted verification adapter
+  # are all explicitly ready. The public explanatory page remains available while disabled.
+  enabled: ${ACCOUNT_DELETION_ENABLED:false}
+  retention-policy-confirmed: ${ACCOUNT_DELETION_RETENTION_POLICY_CONFIRMED:false}
+  # COMMON signup에는 verified-email timestamp가 없다. 현재 mailbox control을 계정 소유권
+  # 증거로 인정한다는 보안·제품·법률 승인이 끝난 운영 환경에서만 true로 설정한다.
+  common-mailbox-proof-policy-approved: ${ACCOUNT_DELETION_COMMON_MAILBOX_PROOF_POLICY_APPROVED:false}
+  hmac-secret: ${ACCOUNT_DELETION_HMAC_SECRET:}
+  # No default: production must explicitly bind the canonical HTTPS origin.
+  public-origin: ${ACCOUNT_DELETION_PUBLIC_ORIGIN:}
+  app-name: ${ACCOUNT_DELETION_APP_NAME:NoLate}
+  developer-name: ${ACCOUNT_DELETION_DEVELOPER_NAME:NoLate}
+  # No default: the reviewed support owner/address must be explicit.
+  support-email: ${ACCOUNT_DELETION_SUPPORT_EMAIL:}
+  retention-summary: ${ACCOUNT_DELETION_RETENTION_SUMMARY:탈퇴한 회원 행은 참조 안정성을 위해 비식별 상태로 유지될 수 있습니다. 공유 캘린더 참여 종료 기록 등 별도 기록의 보유기간은 자동 삭제 기능을 활성화하기 전에 확정하여 고지합니다.}
+  verification-code-ttl: ${ACCOUNT_DELETION_VERIFICATION_CODE_TTL:10m}
+  deletion-grant-ttl: ${ACCOUNT_DELETION_GRANT_TTL:5m}
+  # 개인정보처리방침의 고정 고지와 맞추기 위해 enabled startup은 정확히 30d만 허용한다.
+  request-record-retention: ${ACCOUNT_DELETION_REQUEST_RECORD_RETENTION:30d}
+  processing-timeout: ${ACCOUNT_DELETION_PROCESSING_TIMEOUT:1h}
+  retention-cleanup-initial-delay: ${ACCOUNT_DELETION_RETENTION_CLEANUP_INITIAL_DELAY:1h}
+  retention-cleanup-fixed-delay: ${ACCOUNT_DELETION_RETENTION_CLEANUP_FIXED_DELAY:1d}
+  max-verification-attempts: ${ACCOUNT_DELETION_MAX_VERIFICATION_ATTEMPTS:5}
+  identity-rate-limit: ${ACCOUNT_DELETION_IDENTITY_RATE_LIMIT:3}
+  identity-rate-window: ${ACCOUNT_DELETION_IDENTITY_RATE_WINDOW:1d}
+  requester-rate-limit: ${ACCOUNT_DELETION_REQUESTER_RATE_LIMIT:10}
+  requester-rate-window: ${ACCOUNT_DELETION_REQUESTER_RATE_WINDOW:1h}
+  verification:
+    email:
+      # Conditional JavaMail adapter. Disabled means the support-only public page remains active.
+      enabled: ${ACCOUNT_DELETION_EMAIL_VERIFICATION_ENABLED:false}
+      from: ${ACCOUNT_DELETION_EMAIL_FROM:}
 
 
 server:

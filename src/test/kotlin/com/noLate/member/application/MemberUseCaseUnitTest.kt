@@ -860,6 +860,85 @@ class MemberUseCaseUnitTest {
     }
 
     @Test
+    fun `외부 본인확인 탈퇴는 비밀번호 재검증 없이 동일한 cleanup 경계를 사용한다`() {
+        val memberId = 22L
+        val member = Member(
+            id = memberId,
+            email = "external-withdraw@test.com",
+            password = "encoded-pw",
+            name = "외부탈퇴",
+            loginType = LoginType.COMMON,
+            snsId = null,
+            sessionGeneration = 12L,
+        )
+        val withdrawalFence = AccountWithdrawalFence(
+            member = member,
+            ownedScheduleIds = emptySet(),
+            lockedMemberIds = setOf(memberId),
+        )
+        whenever(accountCleanupService.lockWithdrawalFence(memberId, 12L))
+            .thenReturn(withdrawalFence)
+
+        memberUseCase.withdrawAfterExternalIdentityVerification(memberId, 12L)
+
+        verifyNoInteractions(passwordEncoder)
+        verify(memberSessionFenceService).invalidateSessionForWithdrawal(memberId, 12L)
+        verify(accountCleanupService).withdraw(withdrawalFence)
+        verify(memberService).updateMember(member)
+    }
+
+    @Test
+    fun `외부 본인확인 Apple 탈퇴도 session fence 뒤 revoke queue와 cleanup을 순서대로 수행한다`() {
+        val memberId = 24L
+        val member = Member(
+            id = memberId,
+            email = "external-apple-withdraw@test.com",
+            password = "",
+            name = "외부 Apple 탈퇴",
+            loginType = LoginType.APPLE,
+            snsId = "external-apple-subject",
+            sessionGeneration = 14L,
+        )
+        val withdrawalFence = AccountWithdrawalFence(
+            member = member,
+            ownedScheduleIds = emptySet(),
+            lockedMemberIds = setOf(memberId),
+        )
+        whenever(accountCleanupService.lockWithdrawalFence(memberId, 14L))
+            .thenReturn(withdrawalFence)
+        whenever(appleTokenLifecycle.queueRevocation(memberId, "external-apple-subject"))
+            .thenReturn(AppleRevocationQueueResult(false))
+
+        memberUseCase.withdrawAfterExternalIdentityVerification(memberId, 14L)
+
+        verifyNoInteractions(passwordEncoder)
+        inOrder(memberSessionFenceService, appleTokenLifecycle, accountCleanupService) {
+            verify(memberSessionFenceService)
+                .invalidateSessionForWithdrawal(memberId, 14L)
+            verify(appleTokenLifecycle)
+                .queueRevocation(memberId, "external-apple-subject")
+            verify(accountCleanupService).withdraw(withdrawalFence)
+        }
+        verify(memberService).updateMember(member)
+    }
+
+    @Test
+    fun `외부 본인확인 뒤 session generation이 바뀌면 cleanup 전에 fail closed한다`() {
+        val memberId = 23L
+        whenever(accountCleanupService.lockWithdrawalFence(memberId, 13L))
+            .thenThrow(BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다."))
+
+        val failure = assertThrows<BusinessException> {
+            memberUseCase.withdrawAfterExternalIdentityVerification(memberId, 13L)
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
+        verify(memberSessionFenceService, never()).invalidateSessionForWithdrawal(any(), any())
+        verify(accountCleanupService, never()).withdraw(any<AccountWithdrawalFence>())
+        verify(memberService, never()).updateMember(any())
+    }
+
+    @Test
     fun `getMyProfile은 회원이 존재하고 프로필이 있으면 그대로 반환하고 없으면 기본 프로필을 생성한다`() {
         val memberId = 30L
         val member = Member(

@@ -32,7 +32,7 @@ class AppleTokenLifecycleMigrationContractTest {
             "CALL assert_apple_token_lifecycle_postconditions();",
         )
         val marker = migration.indexOf(
-            "'${ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSION}'",
+            "'${ProductionSchemaVersionGuard.APPLE_TOKEN_LIFECYCLE_SCHEMA_VERSION}'",
             postcondition,
         )
         assertTrue(postcondition > tableEnd)

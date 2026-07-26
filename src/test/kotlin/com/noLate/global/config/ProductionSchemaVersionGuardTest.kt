@@ -17,17 +17,34 @@ class ProductionSchemaVersionGuardTest {
     @Test
     fun `verified manual migration marker allows production startup`() {
         val jdbc = markerDatabase()
-        jdbc.update(
-            """
-            INSERT INTO application_schema_migrations(version, description, applied_at)
-            VALUES (?, 'verified test schema', CURRENT_TIMESTAMP)
-            """.trimIndent(),
-            ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSION,
-        )
+        insertMarkers(jdbc, ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS)
 
         assertDoesNotThrow {
             guard(jdbc).afterSingletonsInstantiated()
         }
+    }
+
+    @Test
+    fun `account deletion migration adds request schema before the production marker`() {
+        val migration = Files.readString(
+            Path.of("docs/member/migrations/2026-07-26-account-deletion-requests.sql"),
+        )
+        val table = migration.indexOf("CREATE TABLE account_deletion_requests")
+        val postcondition = migration.indexOf("CALL assert_account_deletion_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(migration.contains("2026-07-24-push-reliability-v4"))
+        assertTrue(
+            migration.contains(ProductionSchemaVersionGuard.ACCOUNT_DELETION_SCHEMA_VERSION),
+        )
+        assertTrue(table >= 0)
+        assertTrue(postcondition > table)
+        assertTrue(marker > postcondition)
+        assertTrue(migration.contains("verification_token_hash"))
+        assertTrue(migration.contains("deletion_grant_hash"))
+        assertTrue(migration.contains("retention_expires_at"))
     }
 
     @Test
@@ -49,12 +66,94 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
-    fun `missing marker blocks startup`() {
+    fun `production requires an explicit canonical HTTPS account deletion origin`() {
+        val jdbc = markerDatabase()
+
         val error = assertThrows(IllegalStateException::class.java) {
-            guard(markerDatabase()).afterSingletonsInstantiated()
+            ProductionSchemaVersionGuard(
+                environment = MockEnvironment()
+                    .withProperty("spring.jpa.hibernate.ddl-auto", "validate")
+                    .withProperty("spring.sql.init.mode", "never")
+                    .withProperty("account-deletion.public-origin", ""),
+                jdbcTemplate = jdbc,
+            ).afterSingletonsInstantiated()
         }
 
-        assertTrue(error.message!!.contains(ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSION))
+        assertTrue(error.message!!.contains("canonical HTTPS origin"))
+    }
+
+    @Test
+    fun `enabled production account deletion refuses incomplete SMTP readiness`() {
+        val error = assertThrows(IllegalStateException::class.java) {
+            ProductionSchemaVersionGuard(
+                environment = MockEnvironment()
+                    .withProperty("spring.jpa.hibernate.ddl-auto", "validate")
+                    .withProperty("spring.sql.init.mode", "never")
+                    .withProperty(
+                        "account-deletion.public-origin",
+                        "https://delete.example",
+                    )
+                    .withProperty(
+                        "account-deletion.support-email",
+                        "privacy@example.com",
+                    )
+                    .withProperty("account-deletion.enabled", "true")
+                    .withProperty(
+                        "account-deletion.common-mailbox-proof-policy-approved",
+                        "true",
+                    )
+                    .withProperty(
+                        "account-deletion.verification.email.enabled",
+                        "true",
+                    )
+                    .withProperty(
+                        "account-deletion.verification.email.from",
+                        "noreply@example.com",
+                    ),
+                jdbcTemplate = markerDatabase(),
+            ).afterSingletonsInstantiated()
+        }
+
+        assertTrue(error.message!!.contains("SMTP host"))
+    }
+
+    @Test
+    fun `enabled production account deletion requires exact COMMON mailbox proof approval`() {
+        val error = assertThrows(IllegalStateException::class.java) {
+            ProductionSchemaVersionGuard(
+                environment = MockEnvironment()
+                    .withProperty("spring.jpa.hibernate.ddl-auto", "validate")
+                    .withProperty("spring.sql.init.mode", "never")
+                    .withProperty(
+                        "account-deletion.public-origin",
+                        "https://delete.example",
+                    )
+                    .withProperty(
+                        "account-deletion.support-email",
+                        "privacy@example.com",
+                    )
+                    .withProperty("account-deletion.enabled", "true"),
+                jdbcTemplate = markerDatabase(),
+            ).afterSingletonsInstantiated()
+        }
+
+        assertTrue(error.message!!.contains("COMMON account ownership proof"))
+    }
+
+    @Test
+    fun `missing one independently deployed marker blocks startup`() {
+        val jdbc = markerDatabase()
+        val missingMarker = ProductionSchemaVersionGuard.APPLE_TOKEN_LIFECYCLE_SCHEMA_VERSION
+        insertMarkers(
+            jdbc,
+            ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS - missingMarker,
+        )
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            guard(jdbc).afterSingletonsInstantiated()
+        }
+
+        assertTrue(error.message!!.contains(missingMarker))
     }
 
     @Test
@@ -223,7 +322,15 @@ class ProductionSchemaVersionGuardTest {
         ProductionSchemaVersionGuard(
             environment = MockEnvironment()
                 .withProperty("spring.jpa.hibernate.ddl-auto", ddlMode)
-                .withProperty("spring.sql.init.mode", sqlInitMode),
+                .withProperty("spring.sql.init.mode", sqlInitMode)
+                .withProperty(
+                    "account-deletion.public-origin",
+                    "https://account-deletion.example",
+                )
+                .withProperty(
+                    "account-deletion.support-email",
+                    "privacy@example.com",
+                ),
             jdbcTemplate = jdbc,
         )
 
@@ -245,6 +352,18 @@ class ProductionSchemaVersionGuardTest {
                 """.trimIndent(),
             )
         }
+
+    private fun insertMarkers(jdbc: JdbcTemplate, versions: Iterable<String>) {
+        versions.forEach { version ->
+            jdbc.update(
+                """
+                INSERT INTO application_schema_migrations(version, description, applied_at)
+                VALUES (?, 'verified test schema', CURRENT_TIMESTAMP)
+                """.trimIndent(),
+                version,
+            )
+        }
+    }
 
     companion object {
         private var databaseSequence: Int = 0

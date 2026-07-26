@@ -151,6 +151,17 @@ class SecurityConfig(
                     // actuator deny above wins for every non-GET management request.
                     .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
+                    // The store-facing deletion flow is public by design, but only its exact
+                    // page and form actions are anonymous. Do not expose future handlers under
+                    // this namespace through a broad wildcard.
+                    .requestMatchers(HttpMethod.GET, "/account-deletion").permitAll()
+                    .requestMatchers(
+                        HttpMethod.POST,
+                        "/account-deletion/requests",
+                        "/account-deletion/verify",
+                        "/account-deletion/confirm",
+                    ).permitAll()
+
                     .requestMatchers(
                         "/",
                         "/robots.txt",
