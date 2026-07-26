@@ -63,7 +63,9 @@ management:
       # SecurityConfig resolves endpoint identities, so custom base/path mappings and a separate
       # management port cannot turn an authenticated member route into an actuator route.
       exposure:
-        include: health,prometheus
+        # Actuator health is also rejected by a code-level WebEndpoint filter. NoLate's public,
+        # opaque /health* controller is the only HTTP health contract.
+        include: prometheus
   endpoint:
     health:
       show-details: never

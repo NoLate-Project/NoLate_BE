@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.observability.EtaJobMetricOutcome
+import com.noLate.global.observability.EtaWorkerMetricEvent
 import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.global.observability.recordSafely
 import com.noLate.notification.application.service.PushDispatchFence
@@ -478,7 +479,10 @@ class SchedulePushJobWorker(
             )
         } catch (exception: Exception) {
             operationalMetrics.recordSafely {
-                recordEtaJob(EtaJobMetricOutcome.PROCESSING_EXCEPTION)
+                // This is an execution observation, not a durable state transition. The eventual
+                // RETRY_SCHEDULED or TERMINAL_FAILURE outcome is counted separately and only after
+                // the independent persistence transaction commits.
+                recordEtaWorkerEvent(EtaWorkerMetricEvent.PROCESSING_EXCEPTION)
             }
             log.warn(
                 "Schedule push job failed. jobId={}, scheduleId={}, workerId={}, errorCode={}",

@@ -1,5 +1,6 @@
 package com.noLate.global.config
 
+import com.noLate.global.health.ApplicationHealthRequestMatcher
 import com.noLate.global.health.HealthEndpointPaths
 import com.noLate.global.observability.ObservabilityEndpointAccessPolicy
 import com.noLate.global.security.JwtAuthenticationFilter
@@ -38,6 +39,7 @@ class SecurityConfig(
     private val jwtTokenProvider: JwtTokenProvider,
     private val memberService: MemberService,
     private val observabilityEndpointAccessPolicy: ObservabilityEndpointAccessPolicy,
+    private val applicationHealthRequestMatcher: ApplicationHealthRequestMatcher,
 ) {
 
     /**
@@ -68,7 +70,11 @@ class SecurityConfig(
      */
     @Bean
     fun jwtAuthenticationFilter(): JwtAuthenticationFilter =
-        JwtAuthenticationFilter(jwtTokenProvider, memberService)
+        JwtAuthenticationFilter(
+            jwtTokenProvider,
+            memberService,
+            applicationHealthRequestMatcher,
+        )
 
 
     /**
@@ -111,13 +117,6 @@ class SecurityConfig(
                     ).permitAll()
 
                     .requestMatchers(
-                        HttpMethod.GET,
-                        HealthEndpointPaths.ROOT,
-                        HealthEndpointPaths.LIVENESS,
-                        HealthEndpointPaths.READINESS,
-                    ).permitAll()
-
-                    .requestMatchers(
                         observabilityEndpointAccessPolicy.publicPrometheusRequestMatcher
                     ).permitAll()
 
@@ -129,6 +128,24 @@ class SecurityConfig(
                     // Resolve actuator endpoint identities from the running management mapping.
                     // This also remains fail-closed when the base path is configured as root.
                     .requestMatchers(EndpointRequest.toAnyEndpoint()).denyAll()
+
+                    // NoLate's opaque deployment probes are public application handlers. The
+                    // code-level web endpoint filter prevents Actuator health from being registered,
+                    // even if an operator includes it under a root/empty management base path.
+                    // Keeping this allow after endpoint denies makes any other path collision
+                    // fail closed instead of exposing the management handler.
+                    .requestMatchers(
+                        applicationHealthRequestMatcher
+                    ).permitAll()
+                    // On a separate management connector the custom controller is absent. Reserve
+                    // the same URLs so an anonymous request is challenged and a member JWT denied,
+                    // rather than falling through to a management/error handler.
+                    .requestMatchers(
+                        HttpMethod.GET,
+                        HealthEndpointPaths.ROOT,
+                        HealthEndpointPaths.LIVENESS,
+                        HealthEndpointPaths.READINESS,
+                    ).denyAll()
 
                     // CORS preflight remains public for application APIs, but the endpoint-aware
                     // actuator deny above wins for every non-GET management request.

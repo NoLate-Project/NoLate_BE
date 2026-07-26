@@ -1151,6 +1151,98 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `processing exception event and committed retry use separate meters`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenThrow(IllegalStateException("provider unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEtaProcessingExceptionCount(registry, 1.0)
+        assertEtaTransitionCount(registry, "retry_scheduled", 1.0)
+        assertEtaTransitionCount(registry, "terminal_failure", 0.0)
+        assertNull(
+            registry.find("nolate.eta.jobs")
+                .tag("outcome", "processing_exception")
+                .counter()
+        )
+    }
+
+    @Test
+    fun `processing exception commits only the terminal transition after retry limit`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule).apply {
+            retryLater("first failure", testNow)
+            retryLater("second failure", testNow)
+        }
+        val registry = SimpleMeterRegistry()
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenThrow(IllegalStateException("provider unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEtaProcessingExceptionCount(registry, 1.0)
+        assertEtaTransitionCount(registry, "retry_scheduled", 0.0)
+        assertEtaTransitionCount(registry, "terminal_failure", 1.0)
+    }
+
+    @Test
+    fun `processing exception persist throw records no durable transition`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenThrow(IllegalStateException("provider unavailable"))
+        whenever(pushJobRepository.saveAndFlush(job))
+            .thenThrow(IllegalStateException("database unavailable"))
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEtaProcessingExceptionCount(registry, 1.0)
+        assertEtaTransitionCount(registry, "retry_scheduled", 0.0)
+        assertEtaTransitionCount(registry, "terminal_failure", 0.0)
+    }
+
+    @Test
+    fun `processing exception persist false records no durable transition`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        val registry = SimpleMeterRegistry()
+        SchedulePushJob::class.java.getDeclaredField("id").apply {
+            isAccessible = true
+            set(job, 91L)
+        }
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenThrow(IllegalStateException("provider unavailable"))
+        whenever(pushJobRepository.findByIdForUpdate(91L)).thenReturn(null)
+
+        worker(
+            operationalMetrics = NoLateOperationalMetrics(registry),
+        ).runDueJobs(testNow)
+
+        assertEtaProcessingExceptionCount(registry, 1.0)
+        assertEtaTransitionCount(registry, "retry_scheduled", 0.0)
+        assertEtaTransitionCount(registry, "terminal_failure", 0.0)
+        verify(pushJobRepository, never()).saveAndFlush(job)
+    }
+
+    @Test
     fun `최대 재시도 횟수에 도달하면 job을 실패 상태로 종료한다`() {
         val schedule = schedule(shortScheduleStartAt)
         val job = dueDepartureJob(schedule)
@@ -1481,6 +1573,33 @@ class SchedulePushJobWorkerTest {
         operationalMetrics = operationalMetrics,
     )
 
+    private fun assertEtaProcessingExceptionCount(
+        registry: SimpleMeterRegistry,
+        expected: Double,
+    ) {
+        assertEquals(
+            expected,
+            registry.get("nolate.eta.worker.events")
+                .tag("event", "processing_exception")
+                .counter()
+                .count(),
+        )
+    }
+
+    private fun assertEtaTransitionCount(
+        registry: SimpleMeterRegistry,
+        outcome: String,
+        expected: Double,
+    ) {
+        assertEquals(
+            expected,
+            registry.get("nolate.eta.jobs")
+                .tag("outcome", outcome)
+                .counter()
+                .count(),
+        )
+    }
+
     /**
      * 최종 출발 알림 시나리오에서 공통으로 사용하는 due job을 만든다.
      */
@@ -1497,6 +1616,11 @@ class SchedulePushJobWorkerTest {
      * 테스트가 발송 결과에만 집중할 수 있도록 due job 조회와 ETA 응답을 한곳에서 준비한다.
      */
     private fun stubDueJob(job: SchedulePushJob, schedule: Schedule, travelMinutes: Int) {
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
+    }
+
+    private fun stubDueJobLookup(job: SchedulePushJob, schedule: Schedule) {
         whenever(
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
@@ -1505,7 +1629,6 @@ class SchedulePushJobWorkerTest {
             )
         ).thenReturn(listOf(job), emptyList())
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
     }
 
     private fun markDepartNowSent(

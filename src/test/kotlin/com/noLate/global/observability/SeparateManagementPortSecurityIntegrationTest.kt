@@ -1,6 +1,8 @@
 package com.noLate.global.observability
 
 import com.noLate.global.security.JwtTokenProvider
+import com.noLate.global.health.HealthEndpointPaths
+import com.noLate.global.health.HealthStatus
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
@@ -9,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.client.TestRestTemplate
 import org.springframework.boot.test.web.server.LocalManagementPort
+import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.http.HttpEntity
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpMethod
@@ -19,8 +22,10 @@ import kotlin.test.assertEquals
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = [
         "management.server.port=0",
+        "management.endpoints.web.base-path=/",
         "observability.prometheus.public-enabled=true",
         "management.endpoints.web.exposure.include=health,prometheus",
+        "management.endpoint.health.access=unrestricted",
         "management.prometheus.metrics.export.enabled=true",
     ]
 )
@@ -33,38 +38,13 @@ class SeparateManagementPortSecurityIntegrationTest @Autowired constructor(
     @LocalManagementPort
     private var managementPort: Int = 0
 
+    @LocalServerPort
+    private var applicationPort: Int = 0
+
     @Test
     fun `separate management port keeps endpoint-aware allow and default deny`() {
-        val baseUrl = "http://127.0.0.1:$managementPort"
-
-        assertEquals(
-            200,
-            restTemplate.getForEntity("$baseUrl/actuator/prometheus", String::class.java)
-                .statusCode
-                .value(),
-        )
-        assertEquals(
-            401,
-            restTemplate.getForEntity("$baseUrl/actuator/health", String::class.java)
-                .statusCode
-                .value(),
-        )
-        assertEquals(
-            401,
-            restTemplate.exchange(
-                "$baseUrl/actuator/prometheus",
-                HttpMethod.OPTIONS,
-                null,
-                String::class.java,
-            ).statusCode.value(),
-        )
-        assertEquals(
-            401,
-            restTemplate.getForEntity("$baseUrl/actuator/prometheus/", String::class.java)
-                .statusCode
-                .value(),
-        )
-
+        val managementBaseUrl = "http://127.0.0.1:$managementPort"
+        val applicationBaseUrl = "http://127.0.0.1:$applicationPort"
         val key = UUID.randomUUID().toString()
         val member = memberRepository.saveAndFlush(
             Member(
@@ -85,14 +65,60 @@ class SeparateManagementPortSecurityIntegrationTest @Autowired constructor(
                 setBearerAuth(accessToken)
             }
         )
+
         assertEquals(
-            403,
+            200,
+            restTemplate.getForEntity("$managementBaseUrl/prometheus", String::class.java)
+                .statusCode
+                .value(),
+        )
+        assertEquals(
+            401,
             restTemplate.exchange(
-                "$baseUrl/actuator/health",
-                HttpMethod.GET,
-                memberRequest,
+                "$managementBaseUrl/prometheus",
+                HttpMethod.OPTIONS,
+                null,
                 String::class.java,
             ).statusCode.value(),
         )
+        assertEquals(
+            401,
+            restTemplate.getForEntity("$managementBaseUrl/prometheus/", String::class.java)
+                .statusCode
+                .value(),
+        )
+
+        listOf(
+            HealthEndpointPaths.ROOT,
+            HealthEndpointPaths.LIVENESS,
+            HealthEndpointPaths.READINESS,
+        ).forEach { path ->
+            assertEquals(
+                401,
+                restTemplate.getForEntity("$managementBaseUrl$path", String::class.java)
+                    .statusCode
+                    .value(),
+            )
+            assertEquals(
+                403,
+                restTemplate.exchange(
+                    "$managementBaseUrl$path",
+                    HttpMethod.GET,
+                    memberRequest,
+                    String::class.java,
+                ).statusCode.value(),
+            )
+            listOf(HttpEntity<Void>(HttpHeaders()), memberRequest).forEach { request ->
+                val response = restTemplate.exchange(
+                    "$applicationBaseUrl$path",
+                    HttpMethod.GET,
+                    request,
+                    String::class.java,
+                )
+                assertEquals(200, response.statusCode.value())
+                assertEquals("no-store", response.headers.cacheControl)
+                assertEquals("""{"status":"${HealthStatus.UP.name}"}""", response.body)
+            }
+        }
     }
 }

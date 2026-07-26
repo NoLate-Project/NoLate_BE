@@ -106,6 +106,23 @@ groups:
           summary: "NoLate live ETA provider failure rate is elevated"
           description: "Bounded live ETA failures exceeded 20% with at least 20 calls."
 
+      - alert: NoLateEtaWorkerProcessingException
+        expr: |
+          sum(
+            increase(
+              nolate_eta_worker_events_total{
+                application="noLate",
+                event="processing_exception"
+              }[10m]
+            )
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate ETA worker is raising processing exceptions"
+          description: "At least one ETA execution failed before its retry or terminal transition."
+
       - alert: NoLateObservabilitySnapshotFailure
         expr: sum(increase(nolate_observability_snapshot_failures_total{application="noLate"}[10m])) > 0
         for: 5m
@@ -117,12 +134,35 @@ groups:
 
       - alert: NoLateObservabilitySnapshotStale
         expr: |
-          min(
-            time() - nolate_observability_snapshot_last_success_seconds{application="noLate"}
-          ) > 90
+          (
+            (
+              min(
+                time() - nolate_observability_snapshot_last_success_seconds{application="noLate"}
+              ) > bool 90
+            ) or vector(0)
+          )
+          +
+          (
+            sum(
+              absent(nolate_observability_snapshot_last_success_seconds{application="noLate"})
+            ) or vector(0)
+          )
+          +
+          (
+            (
+              max(up{job="nolate"}) == bool 0
+            ) or vector(0)
+          )
+          +
+          (
+            sum(
+              absent(up{job="nolate"})
+            ) or vector(0)
+          )
+          > 0
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "NoLate operational gauge snapshots are stale"
-          description: "No application instance has published a fresh backlog snapshot for 90 seconds."
+          description: "Snapshots are stale or the environment-scoped NoLate scrape series is absent/down."

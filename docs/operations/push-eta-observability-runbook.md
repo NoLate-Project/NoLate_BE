@@ -18,6 +18,16 @@ They expose only application availability. Actuator health, metrics inventory, e
 every other management endpoint remain denied by endpoint identity, including when an operator
 changes the Actuator base path or an endpoint path mapping.
 
+Actuator health is additionally removed from HTTP endpoint discovery by a code-level web filter.
+This is not overridable through
+`MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,prometheus` or
+`MANAGEMENT_ENDPOINT_HEALTH_ACCESS=unrestricted`; it prevents root or empty Actuator base paths
+from registering a competing `/health*` handler. The filter is web-specific, so it does not change
+JMX endpoint discovery. On a separate management connector, `/health*` is reserved and denied;
+the three custom probes remain available only on the application connector. Remapping another
+exposed endpoint or the Actuator discovery base onto one of these reserved paths fails application
+startup with an explicit collision error.
+
 ## Scrape access
 
 The Prometheus registry is enabled, but the HTTP scrape route fails closed. Missing, false, and
@@ -57,7 +67,8 @@ exception class, error message, title, body, or raw payload.
 | `nolate_push_provider_duration_seconds` | histogram/timer | `outcome` | FCM/provider call result and latency |
 | `nolate_push_token_lease_total` | counter | `outcome` | Token ownership lease acquired, busy, deferred, or superseded |
 | `nolate_push_outbox_events_total` | counter | `outcome` | Claim, completion, retry, terminal failure, deferral, recovery, or lost lease |
-| `nolate_eta_jobs_total` | counter | `outcome` | ETA worker claim, processing, retry, recovery, failure, and uncertain delivery |
+| `nolate_eta_jobs_total` | counter | `outcome` | Durably committed ETA claim, processing, retry, recovery, failure, and uncertain-delivery transitions |
+| `nolate_eta_worker_events_total` | counter | `event` | Bounded non-transition observations such as `processing_exception` |
 | `nolate_eta_resolutions_total` | counter | `source`, `quality` | Live, selected-route, or saved fallback resolution |
 | `nolate_eta_provider_duration_seconds` | histogram/timer | `outcome` | Live TMAP request latency and stable failure category |
 | `nolate_eta_jobs_due` | gauge | none | Number of ETA jobs whose next check is overdue |
@@ -110,9 +121,14 @@ gauges after restart.
 
    ```bash
    promtool check rules ops/prometheus/nolate-release-alerts.yml
+   promtool test rules ops/prometheus/nolate-release-alerts.test.yml
    ```
 
-8. Tune thresholds from staging baseline, including the 90-second freshness bound when changing
+8. Give every NoLate scrape target the environment-local Prometheus target label `job="nolate"`.
+   The draft freshness rule uses this label to fail closed when the custom snapshot series is
+   absent or the scrape target is down. Keep each rule evaluator scoped to one environment, or add
+   that environment's label to both the `up` and application-metric selectors.
+9. Tune thresholds from staging baseline, including the 90-second freshness bound when changing
    the default 30-second sampler delay. Load the rules into the actual Prometheus-compatible
    system, attach notification routing, and capture links/screenshots as external release evidence.
    Load them per environment, or add the monitoring system's environment/cluster labels to every
@@ -124,7 +140,10 @@ and fallback quality ratio.
 
 The draft backlog alerts first discard per-instance snapshots older than 90 seconds and then take
 the cluster maximum. This produces one cluster-level alert instead of one duplicate alert per
-application instance. Snapshot-failure alerts are summed across instances. Load rules separately per
+application instance. Snapshot-failure and ETA processing-event alerts are summed across instances.
+The snapshot-stale alert also aggregates to one alert and fails closed when the snapshot series is
+absent, all observed `job="nolate"` targets are down, or the scoped `up` series is itself absent.
+One healthy target plus a fresh snapshot keeps the cluster alert clear. Load rules separately per
 environment, as noted above, so that aggregation never crosses environments.
 
 ## Incident response
@@ -139,6 +158,9 @@ environment, as noted above, so that aggregation never crosses environments.
   remains non-retryable unless operator evidence proves non-acceptance.
 - Snapshot failure: treat gauges as stale, inspect database connectivity separately, and use the
   existing SQL rollout checks until sampling recovers.
+- ETA processing exception: use the event counter for execution failures and the ETA job outcome
+  counter for the independently committed retry or terminal transition. Do not add the two as if
+  they were the same unit.
 
 Crash reporting and alert delivery remain external release work. Connecting a selected SDK/account,
 uploading native symbols, defining retention/access, provisioning the scrape target, importing the

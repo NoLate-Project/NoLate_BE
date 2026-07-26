@@ -51,8 +51,11 @@ enum class EtaJobMetricOutcome {
     RETRY_SCHEDULED,
     TERMINAL_FAILURE,
     STALE_LEASE_RECOVERED,
-    PROCESSING_EXCEPTION,
     UNCERTAIN_DELIVERY,
+}
+
+enum class EtaWorkerMetricEvent {
+    PROCESSING_EXCEPTION,
 }
 
 enum class EtaProviderMetricOutcome {
@@ -130,9 +133,18 @@ class NoLateOperationalMetrics(
         counter(
             registry,
             "nolate.eta.jobs",
-            "ETA worker transitions by bounded outcome.",
+            "Durably committed ETA job transitions by bounded outcome.",
             "outcome",
             outcome.metricTag(),
+        )
+    }
+    private val etaWorkerEvents = EtaWorkerMetricEvent.entries.associateWith { event ->
+        counter(
+            registry,
+            "nolate.eta.worker.events",
+            "ETA worker observations that are not durable job transitions.",
+            "event",
+            event.metricTag(),
         )
     }
     private val etaResolutions =
@@ -235,6 +247,10 @@ class NoLateOperationalMetrics(
 
     fun recordEtaJob(outcome: EtaJobMetricOutcome, count: Int = 1) {
         etaJobs.getValue(outcome).incrementPositive(count)
+    }
+
+    fun recordEtaWorkerEvent(event: EtaWorkerMetricEvent, count: Int = 1) {
+        etaWorkerEvents.getValue(event).incrementPositive(count)
     }
 
     fun recordEtaResolution(source: TrafficSource, degraded: Boolean) {

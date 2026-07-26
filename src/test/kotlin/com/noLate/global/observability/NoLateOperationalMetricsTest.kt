@@ -28,6 +28,7 @@ class NoLateOperationalMetricsTest {
         metrics.recordPushProviderCall(PushProviderMetricOutcome.CONFIRMED_FAILURE, 42)
         metrics.recordPushOutbox(PushOutboxMetricOutcome.STALE_LEASE_RECOVERED, 3)
         metrics.recordEtaJob(EtaJobMetricOutcome.UNCERTAIN_DELIVERY, 4)
+        metrics.recordEtaWorkerEvent(EtaWorkerMetricEvent.PROCESSING_EXCEPTION)
         metrics.recordEtaResolution(TrafficSource.SAVED_FALLBACK, degraded = true)
         metrics.recordEtaProviderCall(EtaProviderMetricOutcome.TIMEOUT, 84)
         metrics.updateBacklog(
@@ -69,7 +70,7 @@ class NoLateOperationalMetricsTest {
             registry.get("nolate.push.outbox.oldest.delay").gauge().value(),
         )
 
-        val allowedTagKeys = setOf("outcome", "reason", "source", "quality", "le")
+        val allowedTagKeys = setOf("outcome", "event", "reason", "source", "quality", "le")
         registry.meters
             .filter { it.id.name.startsWith("nolate.") }
             .flatMap { it.id.tags }
