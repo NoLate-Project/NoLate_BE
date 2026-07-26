@@ -6,8 +6,11 @@ import com.nimbusds.jose.crypto.ECDSASigner
 import com.nimbusds.jwt.JWTClaimsSet
 import com.nimbusds.jwt.SignedJWT
 import org.springframework.stereotype.Component
+import java.security.AlgorithmParameters
 import java.security.KeyFactory
 import java.security.interfaces.ECPrivateKey
+import java.security.spec.ECGenParameterSpec
+import java.security.spec.ECParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
 import java.time.Clock
 import java.util.Base64
@@ -44,7 +47,11 @@ class AppleClientSecretSigner(
 
     fun validateKey() {
         properties.requireReady()
-        signer()
+        // Startup validation performs a real ES256 signature, not only a parser/signer
+        // construction. This catches unusable provider-backed keys before accepting traffic.
+        check(SignedJWT.parse(create()).signature.decode().isNotEmpty()) {
+            "Apple private-key could not produce an ES256 signature."
+        }
     }
 
     private fun parsePkcs8PrivateKey(configured: String): ECPrivateKey {
@@ -74,7 +81,14 @@ class AppleClientSecretSigner(
     }
 
     private fun signer(): ECDSASigner {
-        check(signingKey.params.curve.field.fieldSize == P_256_FIELD_BITS) {
+        val actual = signingKey.params
+        val expected = p256Parameters
+        check(
+            actual.curve == expected.curve &&
+                actual.generator == expected.generator &&
+                actual.order == expected.order &&
+                actual.cofactor == expected.cofactor
+        ) {
             "Apple private-key must use the P-256 curve required by ES256."
         }
         return ECDSASigner(signingKey)
@@ -95,6 +109,10 @@ class AppleClientSecretSigner(
     private companion object {
         const val APPLE_AUDIENCE = "https://appleid.apple.com"
         const val BASE64_PREFIX = "base64:"
-        const val P_256_FIELD_BITS = 256
+        val p256Parameters: ECParameterSpec by lazy {
+            AlgorithmParameters.getInstance("EC")
+                .apply { init(ECGenParameterSpec("secp256r1")) }
+                .getParameterSpec(ECParameterSpec::class.java)
+        }
     }
 }

@@ -1,4 +1,4 @@
--- Sign in with Apple authorization-code / durable revoke migration (MySQL 8.x).
+-- Sign in with Apple authorization-code reservation/capture/revoke migration (MySQL 8.4).
 --
 -- Quiesce every old API instance first. Apply after
 -- 2026-07-24-push-delivery-linearization.sql and before deploying the application version whose
@@ -28,15 +28,30 @@ DELIMITER ;
 CALL assert_apple_token_lifecycle_preconditions();
 DROP PROCEDURE assert_apple_token_lifecycle_preconditions;
 
+CREATE TABLE IF NOT EXISTS apple_authorization_code_receipts (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Immutable authorization-code receipt primary key',
+    receipt_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Random non-secret receipt identifier',
+    authorization_code_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Single-use authorization-code replay fingerprint',
+    expected_subject_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Expected Apple subject fingerprint at reservation time',
+    client_id VARCHAR(255) NOT NULL COMMENT 'Expected Apple audience at reservation time',
+    reserved_at DATETIME(6) NOT NULL COMMENT 'Committed reservation time before provider I/O',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_apple_authorization_receipts_receipt_key (receipt_key),
+    UNIQUE KEY uk_apple_authorization_receipts_code_hash (authorization_code_hash)
+) COMMENT='Immutable Apple authorization-code consume receipts';
+
 CREATE TABLE IF NOT EXISTS apple_provider_credentials (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Encrypted Apple provider credential primary key',
     credential_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
         COMMENT 'Random envelope AAD identifier',
+    source_receipt_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'First immutable authorization-code receipt that captured this token',
     member_id BIGINT NULL COMMENT 'Local account id retained only until provider revocation succeeds',
     apple_subject_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
         COMMENT 'One-way Apple subject fingerprint',
-    authorization_code_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
-        COMMENT 'Single-use authorization-code replay fingerprint',
     refresh_token_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
         COMMENT 'One-way refresh-token deduplication fingerprint',
     client_id VARCHAR(255) NOT NULL COMMENT 'Apple client id that issued this token',
@@ -46,8 +61,9 @@ CREATE TABLE IF NOT EXISTS apple_provider_credentials (
         COMMENT 'Base64 AES-GCM initialization vector',
     encrypted_refresh_token VARCHAR(16384) CHARACTER SET ascii COLLATE ascii_bin NULL
         COMMENT 'Base64 AES-256-GCM ciphertext; never plaintext',
-    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
-        COMMENT 'ACTIVE, PENDING, PROCESSING, BLOCKED, or REVOKED',
+    status VARCHAR(20) NOT NULL DEFAULT 'CAPTURED'
+        COMMENT 'CAPTURED, ACTIVE, PENDING, PROCESSING, BLOCKED, MANUAL_ACTION, or REVOKED',
+    capture_expires_at DATETIME(6) NULL COMMENT 'Deadline for binding or compensation',
     attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Physical Apple revoke attempts',
     next_attempt_at DATETIME(6) NULL COMMENT 'Next revocation eligibility time',
     locked_at DATETIME(6) NULL COMMENT 'Current revocation lease time',
@@ -63,11 +79,117 @@ CREATE TABLE IF NOT EXISTS apple_provider_credentials (
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_apple_provider_credentials_credential_key (credential_key),
-    UNIQUE KEY uk_apple_provider_credentials_authorization_code_hash (authorization_code_hash),
     UNIQUE KEY uk_apple_provider_credentials_refresh_token_hash (refresh_token_hash),
     INDEX idx_apple_provider_credentials_member_status (member_id, status, id),
     INDEX idx_apple_provider_credentials_due (status, next_attempt_at, id),
-    INDEX idx_apple_provider_credentials_stale (status, locked_at, id)
+    INDEX idx_apple_provider_credentials_capture (status, capture_expires_at, id),
+    INDEX idx_apple_provider_credentials_stale (status, locked_at, id),
+    CONSTRAINT ck_apple_provider_credentials_status CHECK (
+        status IN (
+            'CAPTURED', 'ACTIVE', 'PENDING', 'PROCESSING',
+            'BLOCKED', 'MANUAL_ACTION', 'REVOKED'
+        )
+        AND attempt_count >= 0
+        AND (
+            (
+                status = 'CAPTURED'
+                AND source_receipt_key IS NOT NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NOT NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'ACTIVE'
+                AND source_receipt_key IS NOT NULL
+                AND member_id IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'PENDING'
+                AND source_receipt_key IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NOT NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'PROCESSING'
+                AND source_receipt_key IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NOT NULL
+                AND locked_at IS NOT NULL
+                AND locked_by IS NOT NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'BLOCKED'
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'MANUAL_ACTION'
+                AND source_receipt_key IS NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NULL
+                AND refresh_token_hash IS NULL
+                AND encryption_key_id IS NULL
+                AND initialization_vector IS NULL
+                AND encrypted_refresh_token IS NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND last_failure_code IS NOT NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'REVOKED'
+                AND source_receipt_key IS NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NULL
+                AND refresh_token_hash IS NULL
+                AND encryption_key_id IS NULL
+                AND initialization_vector IS NULL
+                AND encrypted_refresh_token IS NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NOT NULL
+            )
+        )
+    )
 ) COMMENT='Encrypted Sign in with Apple credentials and durable revoke leases';
 
 DROP PROCEDURE IF EXISTS assert_apple_token_lifecycle_postconditions;
@@ -78,11 +200,11 @@ BEGIN
         SELECT COUNT(*)
         FROM information_schema.columns
         WHERE table_schema = DATABASE()
-          AND table_name = 'apple_provider_credentials'
-    ) <> 24 THEN
+          AND table_name = 'apple_authorization_code_receipts'
+    ) <> 6 THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
-                'apple token lifecycle migration failed: credential table shape is unexpected';
+                'apple token lifecycle migration failed: receipt table shape is unexpected';
     END IF;
 
     IF (
@@ -90,29 +212,10 @@ BEGIN
         FROM information_schema.columns
         WHERE table_schema = DATABASE()
           AND table_name = 'apple_provider_credentials'
-          AND column_name IN (
-              'credential_key',
-              'member_id',
-              'apple_subject_hash',
-              'authorization_code_hash',
-              'refresh_token_hash',
-              'client_id',
-              'encryption_key_id',
-              'initialization_vector',
-              'encrypted_refresh_token',
-              'status',
-              'attempt_count',
-              'next_attempt_at',
-              'locked_at',
-              'locked_by',
-              'last_failure_code',
-              'revoked_at',
-              'version'
-          )
-    ) <> 17 THEN
+    ) <> 25 THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
-                'apple token lifecycle migration failed: required credential columns are incomplete';
+                'apple token lifecycle migration failed: credential table shape is unexpected';
     END IF;
 
     IF (
@@ -132,10 +235,6 @@ BEGIN
             AND non_unique = 0
             AND indexed_columns = 'credential_key'
         ) OR (
-            index_name = 'uk_apple_provider_credentials_authorization_code_hash'
-            AND non_unique = 0
-            AND indexed_columns = 'authorization_code_hash'
-        ) OR (
             index_name = 'uk_apple_provider_credentials_refresh_token_hash'
             AND non_unique = 0
             AND indexed_columns = 'refresh_token_hash'
@@ -148,6 +247,10 @@ BEGIN
             AND non_unique = 1
             AND indexed_columns = 'status,next_attempt_at,id'
         ) OR (
+            index_name = 'idx_apple_provider_credentials_capture'
+            AND non_unique = 1
+            AND indexed_columns = 'status,capture_expires_at,id'
+        ) OR (
             index_name = 'idx_apple_provider_credentials_stale'
             AND non_unique = 1
             AND indexed_columns = 'status,locked_at,id'
@@ -158,16 +261,32 @@ BEGIN
                 'apple token lifecycle migration failed: required credential indexes are incomplete';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.table_constraints
+        WHERE table_schema = DATABASE()
+          AND table_name = 'apple_provider_credentials'
+          AND constraint_name = 'ck_apple_provider_credentials_status'
+          AND constraint_type = 'CHECK'
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'apple token lifecycle migration failed: state CHECK is absent';
+    END IF;
+
     IF EXISTS (
         SELECT 1
         FROM information_schema.key_column_usage
         WHERE table_schema = DATABASE()
-          AND table_name = 'apple_provider_credentials'
+          AND table_name IN (
+              'apple_authorization_code_receipts',
+              'apple_provider_credentials'
+          )
           AND referenced_table_name IS NOT NULL
     ) THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
-                'apple token lifecycle migration failed: credential retries must not have foreign keys';
+                'apple token lifecycle migration failed: durable receipts/retries must not have foreign keys';
     END IF;
 END//
 DELIMITER ;
@@ -178,12 +297,17 @@ DROP PROCEDURE assert_apple_token_lifecycle_postconditions;
 INSERT INTO application_schema_migrations(version, description, applied_at)
 VALUES (
     '2026-07-26-apple-token-lifecycle-v1',
-    'Encrypted Apple refresh credentials and durable idempotent account-deletion revocation',
+    'Immutable Apple code receipts, encrypted capture, and durable account-deletion revocation',
     CURRENT_TIMESTAMP(6)
 )
 ON DUPLICATE KEY UPDATE
     description = VALUES(description),
     applied_at = applied_at;
+
+SELECT COUNT(*) AS apple_authorization_receipt_column_count
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'apple_authorization_code_receipts';
 
 SELECT COUNT(*) AS apple_token_lifecycle_column_count
 FROM information_schema.columns

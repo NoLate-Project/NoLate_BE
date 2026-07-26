@@ -64,6 +64,37 @@ class AppleTokenLifecycleProductionGuardTest {
         assertTrue(failure.message!!.contains("P-256"))
     }
 
+    @Test
+    fun `production startup rejects localhost and IP redirect hosts`() {
+        listOf(
+            "https://localhost/apple/callback",
+            "https://signin.localhost/apple/callback",
+            "https://127.0.0.1/apple/callback",
+            "https://[::1]/apple/callback",
+            "https://2130706433/apple/callback",
+            "http://signin.example.com/apple/callback",
+        ).forEach { redirect ->
+            val properties = validProperties(redirectUri = redirect)
+            assertThrows<IllegalStateException> {
+                guard(properties, properties.clientId).afterSingletonsInstantiated()
+            }
+        }
+    }
+
+    @Test
+    fun `production startup rejects unsafe capture and worker retry invariants`() {
+        listOf(
+            validProperties(captureDeadlineSeconds = 9),
+            validProperties(fixedDelayMillis = 999),
+            validProperties(maxAttempts = 0),
+            validProperties(retryDelaySeconds = 120, maxRetryDelaySeconds = 60),
+        ).forEach { properties ->
+            assertThrows<IllegalStateException> {
+                guard(properties, properties.clientId).afterSingletonsInstantiated()
+            }
+        }
+    }
+
     private fun guard(
         properties: AppleTokenLifecycleProperties,
         audiences: String,
@@ -77,6 +108,12 @@ class AppleTokenLifecycleProductionGuardTest {
 
     private fun validProperties(
         curve: String = "secp256r1",
+        redirectUri: String = "",
+        captureDeadlineSeconds: Long = 120,
+        fixedDelayMillis: Long = 30_000,
+        maxAttempts: Int = 12,
+        retryDelaySeconds: Long = 60,
+        maxRetryDelaySeconds: Long = 21_600,
     ): AppleTokenLifecycleProperties {
         val keyPair = KeyPairGenerator.getInstance("EC").apply {
             initialize(ECGenParameterSpec(curve))
@@ -88,10 +125,16 @@ class AppleTokenLifecycleProductionGuardTest {
             keyId = "KEY1234567",
             privateKey =
                 "base64:${Base64.getEncoder().encodeToString(keyPair.private.encoded)}",
+            redirectUri = redirectUri,
             currentEncryptionKeyId = "token-v1",
             currentEncryptionKey =
                 Base64.getEncoder().encodeToString(ByteArray(32) { 9 }),
             workerEnabled = true,
+            captureBindingDeadlineSeconds = captureDeadlineSeconds,
+            fixedDelayMillis = fixedDelayMillis,
+            maxAttempts = maxAttempts,
+            retryDelaySeconds = retryDelaySeconds,
+            maxRetryDelaySeconds = maxRetryDelaySeconds,
         )
     }
 }

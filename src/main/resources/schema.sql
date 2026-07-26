@@ -457,15 +457,30 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     INDEX idx_push_deliveries_calendar_id (calendar_id)
 ) COMMENT='Durable at-most-once per-device push delivery boundary';
 
+CREATE TABLE IF NOT EXISTS apple_authorization_code_receipts (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Immutable authorization-code receipt primary key',
+    receipt_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Random non-secret receipt identifier',
+    authorization_code_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Single-use authorization-code replay fingerprint',
+    expected_subject_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Expected Apple subject fingerprint at reservation time',
+    client_id VARCHAR(255) NOT NULL COMMENT 'Expected Apple audience at reservation time',
+    reserved_at DATETIME(6) NOT NULL COMMENT 'Committed reservation time before provider I/O',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_apple_authorization_receipts_receipt_key (receipt_key),
+    UNIQUE KEY uk_apple_authorization_receipts_code_hash (authorization_code_hash)
+) COMMENT='Immutable Apple authorization-code consume receipts';
+
 CREATE TABLE IF NOT EXISTS apple_provider_credentials (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Encrypted Apple provider credential primary key',
     credential_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
         COMMENT 'Random envelope AAD identifier',
+    source_receipt_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'First immutable authorization-code receipt that captured this token',
     member_id BIGINT NULL COMMENT 'Local account id retained only until provider revocation succeeds',
     apple_subject_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
         COMMENT 'One-way Apple subject fingerprint',
-    authorization_code_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
-        COMMENT 'Single-use authorization-code replay fingerprint',
     refresh_token_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
         COMMENT 'One-way refresh-token deduplication fingerprint',
     client_id VARCHAR(255) NOT NULL COMMENT 'Apple client id that issued this token',
@@ -475,8 +490,9 @@ CREATE TABLE IF NOT EXISTS apple_provider_credentials (
         COMMENT 'Base64 AES-GCM initialization vector',
     encrypted_refresh_token VARCHAR(16384) CHARACTER SET ascii COLLATE ascii_bin NULL
         COMMENT 'Base64 AES-256-GCM ciphertext; never plaintext',
-    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'
-        COMMENT 'ACTIVE, PENDING, PROCESSING, BLOCKED, or REVOKED',
+    status VARCHAR(20) NOT NULL DEFAULT 'CAPTURED'
+        COMMENT 'CAPTURED, ACTIVE, PENDING, PROCESSING, BLOCKED, MANUAL_ACTION, or REVOKED',
+    capture_expires_at DATETIME(6) NULL COMMENT 'Deadline for binding or compensation',
     attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Physical Apple revoke attempts',
     next_attempt_at DATETIME(6) NULL COMMENT 'Next revocation eligibility time',
     locked_at DATETIME(6) NULL COMMENT 'Current revocation lease time',
@@ -492,11 +508,117 @@ CREATE TABLE IF NOT EXISTS apple_provider_credentials (
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_apple_provider_credentials_credential_key (credential_key),
-    UNIQUE KEY uk_apple_provider_credentials_authorization_code_hash (authorization_code_hash),
     UNIQUE KEY uk_apple_provider_credentials_refresh_token_hash (refresh_token_hash),
     INDEX idx_apple_provider_credentials_member_status (member_id, status, id),
     INDEX idx_apple_provider_credentials_due (status, next_attempt_at, id),
-    INDEX idx_apple_provider_credentials_stale (status, locked_at, id)
+    INDEX idx_apple_provider_credentials_capture (status, capture_expires_at, id),
+    INDEX idx_apple_provider_credentials_stale (status, locked_at, id),
+    CONSTRAINT ck_apple_provider_credentials_status CHECK (
+        status IN (
+            'CAPTURED', 'ACTIVE', 'PENDING', 'PROCESSING',
+            'BLOCKED', 'MANUAL_ACTION', 'REVOKED'
+        )
+        AND attempt_count >= 0
+        AND (
+            (
+                status = 'CAPTURED'
+                AND source_receipt_key IS NOT NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NOT NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'ACTIVE'
+                AND source_receipt_key IS NOT NULL
+                AND member_id IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'PENDING'
+                AND source_receipt_key IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NOT NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'PROCESSING'
+                AND source_receipt_key IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NOT NULL
+                AND locked_at IS NOT NULL
+                AND locked_by IS NOT NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'BLOCKED'
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'MANUAL_ACTION'
+                AND source_receipt_key IS NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NULL
+                AND refresh_token_hash IS NULL
+                AND encryption_key_id IS NULL
+                AND initialization_vector IS NULL
+                AND encrypted_refresh_token IS NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND last_failure_code IS NOT NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'REVOKED'
+                AND source_receipt_key IS NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NULL
+                AND refresh_token_hash IS NULL
+                AND encryption_key_id IS NULL
+                AND initialization_vector IS NULL
+                AND encrypted_refresh_token IS NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NOT NULL
+            )
+        )
+    )
 ) COMMENT='Encrypted Sign in with Apple credentials and durable revoke leases';
 
 -- Production never runs schema.sql, but keeping the marker table in the executable

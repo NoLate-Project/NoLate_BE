@@ -184,13 +184,17 @@ class MemberController(
     fun withdraw(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody(required = false) request: WithdrawRequest?,
-    ): ApiResponse<Unit> {
-        memberUseCase.withdraw(
+    ): ApiResponse<WithdrawResponse> {
+        val result = memberUseCase.withdraw(
             memberId = requireMemberId(principal),
             presentedSessionGeneration = requireSessionGeneration(principal),
             passwordForCheck = request?.password,
         )
-        return ApiResponse.success(Unit)
+        return ApiResponse.success(
+            WithdrawResponse(
+                manualAppleRevocationRequired = result.manualAppleRevocationRequired,
+            )
+        )
     }
 
     private fun requireMemberId(principal: MemberPrincipal?): Long =
@@ -279,6 +283,10 @@ data class ChangePasswordRequest(
 
 data class WithdrawRequest(
     val password: String? = null,
+)
+
+data class WithdrawResponse(
+    val manualAppleRevocationRequired: Boolean,
 )
 
 data class UpdateMemberRequest(

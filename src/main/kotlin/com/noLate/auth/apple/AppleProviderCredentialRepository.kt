@@ -8,10 +8,15 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.time.Instant
 
-interface AppleProviderCredentialRepository : JpaRepository<AppleProviderCredential, Long> {
-    fun findByAuthorizationCodeHash(authorizationCodeHash: String): AppleProviderCredential?
+interface AppleAuthorizationCodeReceiptRepository :
+    JpaRepository<AppleAuthorizationCodeReceipt, Long> {
+    fun existsByAuthorizationCodeHash(authorizationCodeHash: String): Boolean
+}
 
+interface AppleProviderCredentialRepository : JpaRepository<AppleProviderCredential, Long> {
     fun findByRefreshTokenHash(refreshTokenHash: String): AppleProviderCredential?
+
+    fun countByStatus(status: AppleProviderCredentialStatus): Long
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query(
@@ -60,14 +65,12 @@ interface AppleProviderCredentialRepository : JpaRepository<AppleProviderCredent
         """
         select credential.id
         from AppleProviderCredential credential
-        where credential.memberId = :memberId
-          and credential.status = :status
-          and credential.nextAttemptAt <= :now
-        order by credential.nextAttemptAt, credential.id
+        where credential.status = :status
+          and credential.captureExpiresAt <= :now
+        order by credential.captureExpiresAt, credential.id
         """
     )
-    fun findDueIdsByMemberId(
-        @Param("memberId") memberId: Long,
+    fun findExpiredCaptureIds(
         @Param("status") status: AppleProviderCredentialStatus,
         @Param("now") now: Instant,
         pageable: Pageable,

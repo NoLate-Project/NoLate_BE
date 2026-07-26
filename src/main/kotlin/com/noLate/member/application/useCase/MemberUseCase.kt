@@ -1,7 +1,7 @@
 package com.noLate.member.application.useCase
 
 import com.noLate.auth.application.RefreshTokenService
-import com.noLate.auth.apple.AppleAuthorizationGrant
+import com.noLate.auth.apple.AppleCredentialCapture
 import com.noLate.auth.apple.AppleTokenLifecycle
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
@@ -24,8 +24,10 @@ import com.noLate.member.domain.memberSetting.MemberSettingDto
 import com.noLate.member.domain.profile.MemberProfileDto
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Component
+import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionTemplate
 import java.util.Locale
 import java.util.Optional
 
@@ -43,6 +45,7 @@ class MemberUseCase(
     private val accountCleanupService: AccountCleanupService,
     private val socialIdentityVerifier: SocialIdentityVerifier? = null,
     private val appleTokenLifecycle: Optional<AppleTokenLifecycle> = Optional.empty(),
+    private val transactionManager: PlatformTransactionManager? = null,
 ) {
 
     /**
@@ -108,7 +111,6 @@ class MemberUseCase(
     }
 
     /** 공개 SNS 인증 경로. 클라이언트가 보낸 snsId/profile은 사용하지 않는다. */
-    @Transactional
     fun loginSns(
         loginType: LoginType,
         providerToken: String?,
@@ -119,13 +121,18 @@ class MemberUseCase(
         val member = memberService.findByLoginTypeAndSnsId(loginType, identity.subject)
             ?.apply { isNewMember = false }
             ?: throw BusinessException(ErrorCode.SNS_SIGNUP_REQUIRED)
-        return issueTokens(
-            memberDto = member,
-            verifiedIdentity = identity,
-            verifiedLoginType = loginType,
-            authorizationCode = authorizationCode,
-            nonce = nonce,
-        )
+        val capture = exchangeAppleCapture(loginType, identity, authorizationCode, nonce)
+        return completeWithCaptureCompensation(capture) {
+            inWriteTransaction {
+                // Re-read inside the final write transaction. A withdrawal/recreation that won
+                // while Apple responded must fail before the captured credential can be bound.
+                val current = memberService.findByLoginTypeAndSnsId(loginType, identity.subject)
+                    ?.takeIf { it.id == member.id }
+                    ?.apply { isNewMember = false }
+                    ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+                issueTokens(current, capture)
+            }
+        }
     }
 
     @Transactional(readOnly = true)
@@ -138,7 +145,6 @@ class MemberUseCase(
         return memberService.findByLoginTypeAndSnsId(loginType, identity.subject) != null
     }
 
-    @Transactional
     fun signUpSns(
         loginType: LoginType,
         providerToken: String?,
@@ -191,39 +197,55 @@ class MemberUseCase(
         if (verifiedEmail != null && memberService.findByEmail(email) != null) {
             throw BusinessException(ErrorCode.ACCOUNT_LINK_REQUIRED)
         }
-        val saved = memberService.addMember(
-            Member().apply {
-                snsId = identity.subject
-                this.name = name
-                this.loginType = loginType
-                this.email = email
-                password = ""
-            }
-        ).apply { isNewMember = true }
-        val memberId = requireNotNull(saved.id)
-        memberSettingService.createDefaultSetting(MemberSettingDto().apply { this.memberId = memberId })
-        memberProfileService.createDefaultProfile(memberId)
-        memberConsentService.recordRequiredSignupConsents(
-            memberId = memberId,
-            consents = consents,
-            source = MemberConsentSource.SNS_SIGNUP,
-        )
-        return issueTokens(
-            memberDto = saved,
-            verifiedIdentity = identity,
-            verifiedLoginType = loginType,
+        val capture = exchangeAppleCapture(
+            loginType = loginType,
+            identity = identity,
             authorizationCode = authorizationCode,
             nonce = nonce,
         )
+        return completeWithCaptureCompensation(capture) {
+            inWriteTransaction {
+                // Race-sensitive uniqueness is checked again after provider I/O. If a competing
+                // signup wins, local writes roll back and CAPTURED remains compensation-revocable.
+                if (memberService.findByLoginTypeAndSnsId(loginType, identity.subject) != null) {
+                    throw BusinessException(
+                        ErrorCode.DUPLICATE_MEMBER,
+                        "이미 가입된 SNS 계정입니다.",
+                    )
+                }
+                if (verifiedEmail != null && memberService.findByEmail(email) != null) {
+                    throw BusinessException(ErrorCode.ACCOUNT_LINK_REQUIRED)
+                }
+                val saved = memberService.addMember(
+                    Member().apply {
+                        snsId = identity.subject
+                        this.name = name
+                        this.loginType = loginType
+                        this.email = email
+                        password = ""
+                    }
+                ).apply { isNewMember = true }
+                val memberId = requireNotNull(saved.id)
+                memberSettingService.createDefaultSetting(
+                    MemberSettingDto().apply { this.memberId = memberId }
+                )
+                memberProfileService.createDefaultProfile(memberId)
+                memberConsentService.recordRequiredSignupConsents(
+                    memberId = memberId,
+                    consents = consents,
+                    source = MemberConsentSource.SNS_SIGNUP,
+                )
+                issueTokens(saved, capture)
+            }
+        }
     }
 
-    private fun exchangeAppleGrant(
-        memberId: Long,
+    private fun exchangeAppleCapture(
         loginType: LoginType,
         identity: VerifiedSocialIdentity,
         authorizationCode: String?,
         nonce: String?,
-    ): AppleAuthorizationGrant? {
+    ): AppleCredentialCapture? {
         if (loginType != LoginType.APPLE) return null
         val lifecycle = appleTokenLifecycle.orElseThrow {
             BusinessException(
@@ -231,26 +253,37 @@ class MemberUseCase(
                 "Apple 로그인 서버 token lifecycle 설정이 완료되지 않았습니다.",
             )
         }
-        return lifecycle.exchangeAuthorizationCode(
-            memberId = memberId,
+        return lifecycle.exchangeAndCapture(
             identity = identity,
             authorizationCode = authorizationCode,
             nonce = nonce,
         )
     }
 
-    private fun storeAppleGrant(memberId: Long, grant: AppleAuthorizationGrant?) {
-        if (grant != null) {
-            appleTokenLifecycle.orElseThrow().storeGrant(memberId, grant)
+    private fun <T> completeWithCaptureCompensation(
+        capture: AppleCredentialCapture?,
+        block: () -> T,
+    ): T {
+        try {
+            return block()
+        } catch (failure: Exception) {
+            if (capture != null) {
+                // Do not mask the original JWT/DB failure. The independently committed capture
+                // also has a deadline if this immediate REQUIRES_NEW transition cannot commit.
+                runCatching { appleTokenLifecycle.orElseThrow().abandonCapture(capture) }
+            }
+            throw failure
         }
+    }
+
+    private fun <T> inWriteTransaction(block: () -> T): T {
+        val manager = transactionManager ?: return block()
+        return requireNotNull(TransactionTemplate(manager).execute { block() })
     }
 
     private fun issueTokens(
         memberDto: MemberDto,
-        verifiedIdentity: VerifiedSocialIdentity? = null,
-        verifiedLoginType: LoginType? = null,
-        authorizationCode: String? = null,
-        nonce: String? = null,
+        appleCapture: AppleCredentialCapture? = null,
     ): MemberDto {
         val memberId = requireNotNull(memberDto.id) { "member.id가 없습니다." }
         val memberName = requireNotNull(memberDto.name) { "member.name이 없습니다." }
@@ -258,21 +291,6 @@ class MemberUseCase(
         // 새 generation을 열고, logout이 이미 다음 빈 generation을 열었다면 그 값을 사용한다.
         // tokenLogin/refresh rotation은 이 경계를 호출하지 않아 같은 generation을 유지한다.
         val sessionGeneration = memberSessionFenceService.beginExplicitLoginSession(memberId)
-
-        // Registration lookup intentionally did not consume Apple's five-minute single-use code.
-        // The member fence is acquired before exchange so concurrent withdrawal either revokes
-        // this new credential or makes the entire login transaction fail before provider use.
-        val appleGrant = verifiedIdentity?.let {
-            exchangeAppleGrant(
-                memberId = memberId,
-                loginType = requireNotNull(verifiedLoginType) {
-                    "검증된 SNS 로그인 유형이 없습니다."
-                },
-                identity = it,
-                authorizationCode = authorizationCode,
-                nonce = nonce,
-            )
-        }
 
         // 3) accessToken + refreshToken 발급
         val accessToken = jwtTokenProvider.createAccessToken(
@@ -289,7 +307,11 @@ class MemberUseCase(
         // 4) refreshToken 저장 (기존 것들 정리하는 정책은 RefreshTokenService 내에서 처리)
         val refreshExpiry = jwtTokenProvider.getRefreshTokenExpiryLocalDateTime()
         refreshTokenService.saveNewToken(memberId, refreshToken, refreshExpiry)
-        storeAppleGrant(memberId, appleGrant)
+        if (appleCapture != null) {
+            // Binding shares the final member/session transaction. Any later rollback restores
+            // CAPTURED, which remains independently durable for compensation.
+            appleTokenLifecycle.orElseThrow().bindCapture(memberId, appleCapture)
+        }
 
         return memberDto.apply {
             this.accessToken = accessToken
@@ -508,7 +530,7 @@ class MemberUseCase(
         memberId: Long,
         presentedSessionGeneration: Long,
         passwordForCheck: String?,
-    ) {
+    ): MemberWithdrawalResult {
         // 1) Owner와 소유 일정의 모든 알림 참가자 member row를 전역 ID 순서로 잠근 뒤
         // 인증 generation을 검증한다. Owner만 먼저 잠그면 더 낮은 participant ID를 나중에
         // 얻는 withdrawal이 participant mutation과 lock order를 뒤집을 수 있다.
@@ -532,6 +554,9 @@ class MemberUseCase(
         }
 
         val id = requireNotNull(member.id) { "member.id 가 없습니다." }
+        // Cleanup anonymizes this mutable entity. Freeze the provider decision before handing it
+        // over so future cleanup changes cannot alter the response contract after deletion.
+        val isAppleAccount = member.loginType == LoginType.APPLE
 
         // 위 member lock을 outer transaction 종료까지 유지한 상태에서 generation과 refresh
         // session만 먼저 닫는다. provider ownership row는 AccountCleanupService가
@@ -540,14 +565,21 @@ class MemberUseCase(
             memberId = id,
             presentedSessionGeneration = presentedSessionGeneration,
         )
-        if (member.loginType == LoginType.APPLE) {
+        val appleQueueResult = if (isAppleAccount) {
             // The queue write shares the account-cleanup transaction. A rollback therefore keeps
             // both the active account and active provider credential; commit triggers the first
             // provider attempt only after local cleanup is durable.
-            appleTokenLifecycle.orElse(null)?.queueRevocation(id)
+            appleTokenLifecycle.orElse(null)?.queueRevocation(id, member.snsId)
+        } else {
+            null
         }
         accountCleanupService.withdraw(withdrawalFence)
         memberService.updateMember(member)
+        return MemberWithdrawalResult(
+            manualAppleRevocationRequired =
+                isAppleAccount &&
+                    (appleQueueResult?.manualAppleRevocationRequired ?: true),
+        )
     }
 
 
@@ -583,3 +615,7 @@ class MemberUseCase(
         return memberProfileService.updateProfile(memberId, dto)
     }
 }
+
+data class MemberWithdrawalResult(
+    val manualAppleRevocationRequired: Boolean,
+)

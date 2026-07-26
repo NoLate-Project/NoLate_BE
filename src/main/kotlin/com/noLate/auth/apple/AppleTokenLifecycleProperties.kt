@@ -48,6 +48,8 @@ class AppleTokenLifecycleProperties(
     val maxRetryDelaySeconds: Long = 21_600,
     @Value("\${auth.social.apple.token-lifecycle.revocation.processing-timeout-seconds:120}")
     val processingTimeoutSeconds: Long = 120,
+    @Value("\${auth.social.apple.token-lifecycle.capture.binding-deadline-seconds:120}")
+    val captureBindingDeadlineSeconds: Long = 120,
 ) {
     fun requireReady() {
         check(enabled) {
@@ -91,6 +93,9 @@ class AppleTokenLifecycleProperties(
         }
         check(processingTimeoutSeconds in 10..3_600) {
             "Apple revocation processing-timeout-seconds must be between 10 and 3600."
+        }
+        check(captureBindingDeadlineSeconds in 10..600) {
+            "Apple capture binding-deadline-seconds must be between 10 and 600."
         }
 
         val providerUri = runCatching { URI(baseUrl.trim()) }.getOrNull()

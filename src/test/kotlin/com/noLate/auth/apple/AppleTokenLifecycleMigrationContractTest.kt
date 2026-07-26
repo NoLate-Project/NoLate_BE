@@ -2,8 +2,10 @@ package com.noLate.auth.apple
 
 import com.noLate.global.config.ProductionSchemaVersionGuard
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.hibernate.annotations.Check
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -38,6 +40,43 @@ class AppleTokenLifecycleMigrationContractTest {
         assertTrue(migration.contains("2026-07-24-push-reliability-v4"))
         assertTrue(migration.contains("indexed_columns = 'member_id,status,id'"))
         assertTrue(migration.contains("referenced_table_name IS NOT NULL"))
-        assertTrue(migration.contains("credential retries must not have foreign keys"))
+        assertTrue(migration.contains("durable receipts/retries must not have foreign keys"))
+        assertTrue(migration.contains("ck_apple_provider_credentials_status"))
+        assertTrue(migration.contains("apple_authorization_code_receipts"))
     }
+
+    @Test
+    fun `entity development schema and reviewed migration use the same state check`() {
+        val migration = Files.readString(migrationPath)
+        val schema = Files.readString(Path.of("src/main/resources/schema.sql"))
+        val entityCheck = requireNotNull(
+            AppleProviderCredential::class.java.getAnnotation(Check::class.java)
+        ).constraints
+
+        val migrationCheck = migration.extractCheck("ck_apple_provider_credentials_status")
+        val schemaCheck = schema.extractCheck("ck_apple_provider_credentials_status")
+        assertEquals(normalizeCheck(schemaCheck), normalizeCheck(migrationCheck))
+        assertEquals(normalizeCheck(schemaCheck), normalizeCheck(entityCheck))
+    }
+
+    private fun String.extractCheck(name: String): String {
+        val marker = "CONSTRAINT $name CHECK ("
+        val start = indexOf(marker)
+        check(start >= 0) { "missing $name" }
+        val expressionStart = start + marker.length
+        var depth = 1
+        for (index in expressionStart until length) {
+            when (this[index]) {
+                '(' -> depth += 1
+                ')' -> {
+                    depth -= 1
+                    if (depth == 0) return substring(expressionStart, index)
+                }
+            }
+        }
+        error("unterminated $name")
+    }
+
+    private fun normalizeCheck(value: String): String =
+        value.lowercase().replace(Regex("\\s+"), "")
 }

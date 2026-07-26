@@ -4,6 +4,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.member.application.useCase.MemberUseCase
+import com.noLate.member.application.useCase.MemberWithdrawalResult
 import com.noLate.member.domain.consent.SignupConsentCommand
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.MemberDto
@@ -341,6 +342,8 @@ class MemberControllerTest {
     // COMMON account password requirements are enforced by MemberUseCase, not the controller.
     fun `withdraw allows nullable password for sns members`() {
         val controller = controller()
+        whenever(memberUseCase.withdraw(1L, 8L, null))
+            .thenReturn(MemberWithdrawalResult(manualAppleRevocationRequired = true))
 
         val response = controller.withdraw(
             principal = principal,
@@ -348,6 +351,7 @@ class MemberControllerTest {
         )
 
         assertTrue(response.success)
+        assertEquals(true, response.data?.manualAppleRevocationRequired)
         verify(memberUseCase).withdraw(1L, 8L, null)
     }
 

@@ -197,6 +197,9 @@ auth:
           current-key-id: ${APPLE_TOKEN_ENCRYPTION_KEY_ID:}
           current-key: ${APPLE_TOKEN_ENCRYPTION_KEY:}
           previous-keys: ${APPLE_TOKEN_PREVIOUS_ENCRYPTION_KEYS:}
+        capture:
+          # Apple success 뒤 회원 transaction이 실패/종료될 때 revoke 보상으로 넘기는 상한.
+          binding-deadline-seconds: ${APPLE_TOKEN_CAPTURE_BINDING_DEADLINE_SECONDS:120}
         revocation:
           worker-enabled: ${APPLE_TOKEN_REVOCATION_WORKER_ENABLED:true}
           fixed-delay-ms: ${APPLE_TOKEN_REVOCATION_FIXED_DELAY_MS:30000}

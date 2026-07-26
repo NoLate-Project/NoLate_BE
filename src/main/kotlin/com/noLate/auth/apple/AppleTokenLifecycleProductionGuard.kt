@@ -38,6 +38,19 @@ class AppleTokenLifecycleProductionGuard(
             ) {
                 "Production Apple provider base-url must be https://appleid.apple.com."
             }
+            properties.redirectUri.trim().takeIf(String::isNotBlank)?.let { configured ->
+                val redirect = URI(configured)
+                val host = redirect.host.orEmpty().lowercase()
+                check(
+                    redirect.scheme == "https" &&
+                        host.isNotBlank() &&
+                        host != "localhost" &&
+                        !host.endsWith(".localhost") &&
+                        !host.isIpLiteral()
+                ) {
+                    "Production Apple redirect-uri must use HTTPS and not localhost or an IP literal."
+                }
+            }
             clientSecretSigner.validateKey()
             tokenCipher.validateKeys()
         } catch (failure: IllegalStateException) {
@@ -52,4 +65,7 @@ class AppleTokenLifecycleProductionGuard(
             )
         }
     }
+
+    private fun String.isIpLiteral(): Boolean =
+        contains(':') || (isNotEmpty() && all { it.isDigit() || it == '.' })
 }

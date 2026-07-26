@@ -113,13 +113,42 @@ class AppleRestOAuthClientTest {
             client.exchangeAuthorizationCode("single-use-code")
         }
 
-        assertEquals("APPLE_AUTH_TOKEN_HTTP_400", failure.safeCode)
+        assertEquals("APPLE_AUTH_TOKEN_HTTP_400_INVALID_GRANT", failure.safeCode)
+        assertEquals(AppleProviderError.INVALID_GRANT, failure.providerError)
         assertFalse(failure.message!!.contains("provider-body-secret"))
         assertFalse(failure.stackTraceToString().contains("provider-body-secret"))
     }
 
     @Test
-    fun `revoke HTTP 400 is retained as retryable without its provider body`() {
+    fun `successful response preserves refresh token when identity fields are missing`() {
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/auth/token") { exchange ->
+                exchange.requestBody.close()
+                exchange.respond(
+                    200,
+                    """{"refresh_token":"refresh-needing-compensation"}""",
+                )
+            }
+            start()
+        }
+        val properties = properties("http://127.0.0.1:${server!!.address.port}")
+        val client = AppleRestOAuthClient(
+            properties,
+            AppleClientSecretSigner(
+                properties,
+                Clock.fixed(Instant.parse("2026-07-26T00:00:00Z"), ZoneOffset.UTC),
+            ),
+        )
+
+        val result = client.exchangeAuthorizationCode("single-use-code")
+
+        assertEquals("refresh-needing-compensation", result.refreshToken)
+        assertEquals("", result.accessToken)
+        assertEquals("", result.identityToken)
+    }
+
+    @Test
+    fun `revoke invalid_client is retryable without retaining provider body`() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/auth/revoke") { exchange ->
                 exchange.requestBody.close()
@@ -143,9 +172,42 @@ class AppleRestOAuthClientTest {
             client.revokeRefreshToken("refresh-secret")
         }
 
-        assertEquals("APPLE_AUTH_REVOKE_HTTP_400", failure.safeCode)
+        assertEquals("APPLE_AUTH_REVOKE_HTTP_400_INVALID_CLIENT", failure.safeCode)
+        assertEquals(AppleProviderError.INVALID_CLIENT, failure.providerError)
         assertTrue(failure.retryable)
         assertFalse(failure.stackTraceToString().contains("revoke-provider-body-secret"))
+        assertFalse(failure.stackTraceToString().contains("refresh-secret"))
+    }
+
+    @Test
+    fun `oversized or unknown provider error is bounded and nonretryable`() {
+        val bodySecret = "provider-secret-".repeat(300)
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/auth/revoke") { exchange ->
+                exchange.requestBody.close()
+                exchange.respond(
+                    400,
+                    """{"error":"unknown_error","detail":"$bodySecret"}""",
+                )
+            }
+            start()
+        }
+        val properties = properties("http://127.0.0.1:${server!!.address.port}")
+        val client = AppleRestOAuthClient(
+            properties,
+            AppleClientSecretSigner(
+                properties,
+                Clock.fixed(Instant.parse("2026-07-26T00:00:00Z"), ZoneOffset.UTC),
+            ),
+        )
+
+        val failure = assertThrows<AppleProviderCallException> {
+            client.revokeRefreshToken("refresh-secret")
+        }
+
+        assertEquals(AppleProviderError.UNKNOWN, failure.providerError)
+        assertFalse(failure.retryable)
+        assertFalse(failure.stackTraceToString().contains(bodySecret))
         assertFalse(failure.stackTraceToString().contains("refresh-secret"))
     }
 

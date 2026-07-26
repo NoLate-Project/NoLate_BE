@@ -9,6 +9,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.application.service.SocialIdentityVerifier
 import com.noLate.member.application.service.VerifiedSocialIdentity
 import com.noLate.member.application.useCase.MemberUseCase
+import com.noLate.member.application.useCase.MemberWithdrawalResult
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
@@ -20,9 +21,11 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.reset
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -31,6 +34,9 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.mock.mockito.MockBean
 import org.springframework.test.annotation.DirtiesContext
+import org.springframework.transaction.support.TransactionSynchronizationManager
+import java.time.Duration
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -61,6 +67,7 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
     private val memberRepository: MemberRepository,
     private val refreshTokenRepository: RefreshTokenRepository,
     private val credentialRepository: AppleProviderCredentialRepository,
+    private val receiptRepository: AppleAuthorizationCodeReceiptRepository,
     private val tokenCipher: AppleTokenCipher,
 ) {
     @MockBean
@@ -73,6 +80,7 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
     fun cleanDatabase() {
         refreshTokenRepository.deleteAll()
         credentialRepository.deleteAll()
+        receiptRepository.deleteAll()
         memberRepository.deleteAll()
         reset(oauthClient, identityVerifier)
     }
@@ -136,11 +144,67 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
         assertEquals(AppleProviderCredentialStatus.ACTIVE, credential.status)
         assertFalse(credential.encryptedRefreshToken!!.contains("provider-refresh-token"))
         assertFalse(credential.encryptedRefreshToken!!.contains("provider-access-token"))
-        assertFalse(credential.authorizationCodeHash!!.contains("single-use-code"))
+        assertEquals(1, receiptRepository.count())
+        assertFalse(
+            receiptRepository.findAll().single().authorizationCodeHash.contains("single-use-code")
+        )
     }
 
     @Test
-    fun `login holding the member fence commits credential before concurrent withdrawal queues it`() {
+    fun `fresh codes reusing one refresh token retain every immutable replay receipt`() {
+        memberRepository.saveAndFlush(
+            appleMember(
+                email = "apple-repeat@example.com",
+                subject = "apple-repeat-subject",
+            )
+        )
+        val identity = VerifiedSocialIdentity(
+            subject = "apple-repeat-subject",
+            email = "apple-repeat@example.com",
+            name = null,
+            audience = "com.nolate.test",
+        )
+        whenever(identityVerifier.verify(eq(LoginType.APPLE), any(), eq("nonce")))
+            .thenReturn(identity)
+        whenever(oauthClient.exchangeAuthorizationCode(any())).thenReturn(
+            AppleTokenExchangeResult(
+                refreshToken = "same-long-lived-refresh",
+                accessToken = "ephemeral-access",
+                identityToken = "exchanged-identity",
+            )
+        )
+
+        memberUseCase.loginSns(
+            LoginType.APPLE,
+            "initial-one",
+            "nonce",
+            "fresh-code-one",
+        )
+        memberUseCase.loginSns(
+            LoginType.APPLE,
+            "initial-two",
+            "nonce",
+            "fresh-code-two",
+        )
+
+        assertEquals(2, receiptRepository.count())
+        assertEquals(1, credentialRepository.count())
+        val hashes = receiptRepository.findAll().map { it.authorizationCodeHash }.toSet()
+        assertEquals(setOf(sha256("fresh-code-one"), sha256("fresh-code-two")), hashes)
+        val replay = assertThrows<BusinessException> {
+            memberUseCase.loginSns(
+                LoginType.APPLE,
+                "initial-replay",
+                "nonce",
+                "fresh-code-one",
+            )
+        }
+        assertEquals(ErrorCode.INVALID_CREDENTIALS, replay.errorCode)
+        verify(oauthClient, times(2)).exchangeAuthorizationCode(any())
+    }
+
+    @Test
+    fun `Apple provider call holds no transaction or member lock and withdrawal may win`() {
         val member = memberRepository.saveAndFlush(
             appleMember(
                 email = "apple-login-withdraw@example.com",
@@ -160,7 +224,9 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
         ).thenReturn(identity)
         val exchangeEntered = CountDownLatch(1)
         val releaseExchange = CountDownLatch(1)
+        val providerSawTransaction = AtomicBoolean(true)
         whenever(oauthClient.exchangeAuthorizationCode("race-code")).thenAnswer {
+            providerSawTransaction.set(TransactionSynchronizationManager.isActualTransactionActive())
             exchangeEntered.countDown()
             check(releaseExchange.await(10, TimeUnit.SECONDS))
             AppleTokenExchangeResult(
@@ -185,16 +251,17 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
             }
             assertEquals(true, exchangeEntered.await(10, TimeUnit.SECONDS))
 
-            val withdrawalStarted = CountDownLatch(1)
-            val withdrawal = executor.submit {
-                withdrawalStarted.countDown()
+            val withdrawal = executor.submit<MemberWithdrawalResult> {
                 memberUseCase.withdraw(memberId, 5L, null)
             }
-            assertEquals(true, withdrawalStarted.await(5, TimeUnit.SECONDS))
+            // This completes while the Apple call is still blocked. A surrounding login
+            // transaction/member lock would make this timeout.
+            val withdrawalResult = withdrawal.get(5, TimeUnit.SECONDS)
+            assertEquals(true, withdrawalResult.manualAppleRevocationRequired)
             releaseExchange.countDown()
 
-            login.get(15, TimeUnit.SECONDS)
-            withdrawal.get(15, TimeUnit.SECONDS)
+            val loginFailure = runCatching { login.get(15, TimeUnit.SECONDS) }.exceptionOrNull()
+            assertNotNull(loginFailure)
         } finally {
             releaseExchange.countDown()
             executor.shutdownNow()
@@ -202,12 +269,26 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
 
         val deletedMember = memberRepository.findById(memberId).orElseThrow()
         assertEquals(true, deletedMember.deleted)
-        val queued = credentialRepository.findAll().single()
+        assertFalse(providerSawTransaction.get())
+        waitUntil(Duration.ofSeconds(5)) {
+            credentialRepository.findAll()
+                .any {
+                    it.status == AppleProviderCredentialStatus.PENDING &&
+                        it.attemptCount >= 1 &&
+                        it.encryptedRefreshToken != null
+                }
+        }
+        val queued = credentialRepository.findAll().single {
+            it.status != AppleProviderCredentialStatus.MANUAL_ACTION
+        }
         assertEquals(AppleProviderCredentialStatus.PENDING, queued.status)
-        assertEquals(1, queued.attemptCount)
         assertNotNull(queued.encryptedRefreshToken)
+        val manual = credentialRepository.findAll()
+            .single { it.status == AppleProviderCredentialStatus.MANUAL_ACTION }
+        assertNull(manual.memberId)
+        assertNull(manual.appleSubjectHash)
+        assertNull(manual.encryptedRefreshToken)
         verify(oauthClient, times(1)).exchangeAuthorizationCode("race-code")
-        verify(oauthClient, times(1)).revokeRefreshToken("race-provider-refresh")
     }
 
     @Test
@@ -224,14 +305,15 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
         val credential = credentialRepository.saveAndFlush(
             AppleProviderCredential(
                 credentialKey = "credential-withdraw",
+                sourceReceiptKey = "receipt-withdraw",
                 memberId = memberId,
-                appleSubjectHash = "a".repeat(64),
-                authorizationCodeHash = "b".repeat(64),
+                appleSubjectHash = sha256("apple-withdraw-subject"),
                 refreshTokenHash = "c".repeat(64),
                 clientId = "com.nolate.test",
                 encryptionKeyId = envelope.keyId,
                 initializationVector = envelope.initializationVector,
                 encryptedRefreshToken = envelope.ciphertext,
+                status = AppleProviderCredentialStatus.ACTIVE,
             )
         )
         whenever(oauthClient.revokeRefreshToken("refresh-secret-never-log")).thenThrow(
@@ -244,6 +326,14 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
         try {
             assertDoesNotThrow {
                 memberUseCase.withdraw(memberId, 5L, null)
+            }
+            waitUntil(Duration.ofSeconds(5)) {
+                credentialRepository.findById(requireNotNull(credential.id))
+                    .orElseThrow()
+                    .let {
+                        it.attemptCount >= 1 &&
+                            it.status == AppleProviderCredentialStatus.PENDING
+                    }
             }
         } finally {
             logger.detachAppender(appender)
@@ -268,6 +358,122 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
         assertFalse(renderedLogs.contains(envelope.ciphertext))
     }
 
+    @Test
+    fun `slow provider revoke never extends authenticated withdrawal response latency`() {
+        val member = memberRepository.saveAndFlush(
+            appleMember(
+                email = "apple-slow-revoke@example.com",
+                subject = "apple-slow-revoke-subject",
+                sessionGeneration = 9,
+            )
+        )
+        val memberId = requireNotNull(member.id)
+        val envelope = tokenCipher.encrypt("credential-slow-revoke", "slow-refresh-token")
+        credentialRepository.saveAndFlush(
+            AppleProviderCredential(
+                credentialKey = "credential-slow-revoke",
+                sourceReceiptKey = "receipt-slow-revoke",
+                memberId = memberId,
+                appleSubjectHash = sha256("apple-slow-revoke-subject"),
+                refreshTokenHash = sha256("slow-refresh-token"),
+                clientId = "com.nolate.test",
+                encryptionKeyId = envelope.keyId,
+                initializationVector = envelope.initializationVector,
+                encryptedRefreshToken = envelope.ciphertext,
+                status = AppleProviderCredentialStatus.ACTIVE,
+            )
+        )
+        val providerEntered = CountDownLatch(1)
+        val releaseProvider = CountDownLatch(1)
+        whenever(oauthClient.revokeRefreshToken("slow-refresh-token")).thenAnswer {
+            providerEntered.countDown()
+            check(releaseProvider.await(10, TimeUnit.SECONDS))
+            Unit
+        }
+
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val withdrawal = executor.submit<MemberWithdrawalResult> {
+                memberUseCase.withdraw(memberId, 9L, null)
+            }
+            val response = withdrawal.get(3, TimeUnit.SECONDS)
+            assertFalse(response.manualAppleRevocationRequired)
+            assertEquals(true, providerEntered.await(5, TimeUnit.SECONDS))
+        } finally {
+            releaseProvider.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `legacy Apple member without credential deletes locally and leaves value-free manual state`() {
+        val member = memberRepository.saveAndFlush(
+            appleMember(
+                email = "apple-legacy@example.com",
+                subject = "apple-legacy-subject",
+                sessionGeneration = 11,
+            )
+        )
+
+        val result = memberUseCase.withdraw(requireNotNull(member.id), 11L, null)
+
+        assertEquals(true, result.manualAppleRevocationRequired)
+        val tombstone = credentialRepository.findAll().single()
+        assertEquals(AppleProviderCredentialStatus.MANUAL_ACTION, tombstone.status)
+        assertNull(tombstone.memberId)
+        assertNull(tombstone.appleSubjectHash)
+        assertNull(tombstone.refreshTokenHash)
+        assertNull(tombstone.encryptedRefreshToken)
+        assertEquals(true, memberRepository.findById(member.id!!).orElseThrow().deleted)
+        verify(oauthClient, never()).revokeRefreshToken(any())
+    }
+
+    @Test
+    fun `withdrawal blocks mismatched Apple ownership and requires manual disconnect`() {
+        val member = memberRepository.saveAndFlush(
+            appleMember(
+                email = "apple-mismatch@example.com",
+                subject = "apple-member-subject",
+                sessionGeneration = 12,
+            )
+        )
+        val envelope = tokenCipher.encrypt("credential-mismatch", "mismatch-refresh")
+        val credential = credentialRepository.saveAndFlush(
+            AppleProviderCredential(
+                credentialKey = "credential-mismatch",
+                sourceReceiptKey = "receipt-mismatch",
+                memberId = requireNotNull(member.id),
+                appleSubjectHash = sha256("different-apple-subject"),
+                refreshTokenHash = sha256("mismatch-refresh"),
+                clientId = "com.nolate.test",
+                encryptionKeyId = envelope.keyId,
+                initializationVector = envelope.initializationVector,
+                encryptedRefreshToken = envelope.ciphertext,
+                status = AppleProviderCredentialStatus.ACTIVE,
+            )
+        )
+
+        val result = memberUseCase.withdraw(requireNotNull(member.id), 12L, null)
+
+        assertEquals(true, result.manualAppleRevocationRequired)
+        val blocked = credentialRepository.findById(credential.id!!).orElseThrow()
+        assertEquals(AppleProviderCredentialStatus.BLOCKED, blocked.status)
+        assertEquals("APPLE_MEMBER_CREDENTIAL_MISMATCH", blocked.lastFailureCode)
+        assertEquals(
+            1,
+            credentialRepository.countByStatus(AppleProviderCredentialStatus.MANUAL_ACTION),
+        )
+        verify(oauthClient, never()).revokeRefreshToken(any())
+    }
+
+    private fun waitUntil(timeout: Duration, condition: () -> Boolean) {
+        val deadline = System.nanoTime() + timeout.toNanos()
+        while (!condition()) {
+            check(System.nanoTime() < deadline) { "condition did not become true before timeout" }
+            Thread.sleep(20)
+        }
+    }
+
     private fun appleMember(
         email: String,
         subject: String,
@@ -281,4 +487,9 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
             snsId = subject,
             sessionGeneration = sessionGeneration,
         )
+
+    private fun sha256(value: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray())
+            .joinToString("") { "%02x".format(it) }
 }

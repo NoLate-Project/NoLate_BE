@@ -7,16 +7,21 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
 
 @DataJpaTest
-@Import(AppleTokenRevocationCoordinator::class)
+@Import(
+    AppleTokenRevocationCoordinator::class,
+    AppleRevocationRowTransaction::class,
+)
 @TestPropertySource(
     properties = [
         "spring.datasource.url=jdbc:h2:mem:apple-revoke-persistence;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
@@ -61,7 +66,6 @@ class AppleTokenRevocationPersistenceIntegrationTest @Autowired constructor(
         assertEquals(now.plusSeconds(61), revoked.revokedAt)
         assertNull(revoked.memberId)
         assertNull(revoked.appleSubjectHash)
-        assertNull(revoked.authorizationCodeHash)
         assertNull(revoked.refreshTokenHash)
         assertNull(revoked.encryptionKeyId)
         assertNull(revoked.initializationVector)
@@ -112,13 +116,56 @@ class AppleTokenRevocationPersistenceIntegrationTest @Autowired constructor(
         assertEquals("ciphertext", surviving.encryptedRefreshToken)
     }
 
+    @Test
+    fun `captured credential cannot be claimed before bind deadline and is promoted at deadline`() {
+        val capture = repository.saveAndFlush(
+            AppleProviderCredential(
+                sourceReceiptKey = "capture-receipt",
+                memberId = null,
+                appleSubjectHash = "a".repeat(64),
+                refreshTokenHash = "b".repeat(64),
+                clientId = "com.nolate.test",
+                encryptionKeyId = "token-v1",
+                initializationVector = "initialization-vector",
+                encryptedRefreshToken = "ciphertext",
+                status = AppleProviderCredentialStatus.CAPTURED,
+                captureExpiresAt = now.plusSeconds(60),
+            )
+        )
+
+        assertEquals(0, coordinator.promoteExpiredCaptures(now.plusSeconds(59), 10))
+        assertNull(coordinator.claimNextDue(now.plusSeconds(59), "early-worker"))
+        assertEquals(
+            AppleProviderCredentialStatus.CAPTURED,
+            repository.findById(capture.id!!).orElseThrow().status,
+        )
+
+        assertEquals(1, coordinator.promoteExpiredCaptures(now.plusSeconds(60), 10))
+        val lease = requireNotNull(
+            coordinator.claimNextDue(now.plusSeconds(60), "deadline-worker")
+        )
+        assertEquals(capture.id, lease.credentialId)
+    }
+
+    @Test
+    fun `database check rejects malformed pending provider envelope`() {
+        assertThrows<DataIntegrityViolationException> {
+            repository.saveAndFlush(
+                AppleProviderCredential(
+                    sourceReceiptKey = "malformed-pending-receipt",
+                    clientId = "com.nolate.test",
+                    status = AppleProviderCredentialStatus.PENDING,
+                    nextAttemptAt = now,
+                )
+            )
+        }
+    }
+
     private fun credential(memberId: Long): AppleProviderCredential =
         AppleProviderCredential(
+            sourceReceiptKey = java.util.UUID.randomUUID().toString(),
             memberId = memberId,
             appleSubjectHash = "a".repeat(64),
-            authorizationCodeHash = java.util.UUID.randomUUID().toString()
-                .replace("-", "")
-                .padEnd(64, '0'),
             refreshTokenHash = java.util.UUID.randomUUID().toString()
                 .replace("-", "")
                 .padEnd(64, '1'),
@@ -126,5 +173,6 @@ class AppleTokenRevocationPersistenceIntegrationTest @Autowired constructor(
             encryptionKeyId = "token-v1",
             initializationVector = "initialization-vector",
             encryptedRefreshToken = "ciphertext",
+            status = AppleProviderCredentialStatus.ACTIVE,
         )
 }

@@ -2,7 +2,8 @@
 package com.noLate.member.application
 
 import com.noLate.auth.application.RefreshTokenService
-import com.noLate.auth.apple.AppleAuthorizationGrant
+import com.noLate.auth.apple.AppleCredentialCapture
+import com.noLate.auth.apple.AppleRevocationQueueResult
 import com.noLate.auth.apple.AppleTokenLifecycle
 import com.noLate.auth.domain.RefreshToken
 import com.noLate.global.error.BusinessException
@@ -258,7 +259,7 @@ class MemberUseCaseUnitTest {
 
         // then
         verify(socialIdentityVerifier).verify(LoginType.KAKAO, "provider-token", null)
-        verify(memberService, times(1))
+        verify(memberService, times(2))
             .findByLoginTypeAndSnsId(LoginType.KAKAO, "kakao-123")
         verify(memberService, never()).addMember(any<Member>())
         verifyNoInteractions(memberSettingService, memberProfileService, memberConsentService)
@@ -293,19 +294,18 @@ class MemberUseCaseUnitTest {
             loginType = LoginType.APPLE,
             snsId = "apple-subject",
         )
-        val grant = mock<AppleAuthorizationGrant>()
+        val capture = mock<AppleCredentialCapture>()
         whenever(socialIdentityVerifier.verify(LoginType.APPLE, "identity-token", "nonce"))
             .thenReturn(identity)
         whenever(memberService.findByLoginTypeAndSnsId(LoginType.APPLE, "apple-subject"))
             .thenReturn(member)
         whenever(
-            appleTokenLifecycle.exchangeAuthorizationCode(
-                12L,
+            appleTokenLifecycle.exchangeAndCapture(
                 identity,
                 "authorization-code",
                 "nonce",
             )
-        ).thenReturn(grant)
+        ).thenReturn(capture)
         whenever(memberSessionFenceService.beginExplicitLoginSession(12L)).thenReturn(3L)
         whenever(jwtTokenProvider.createAccessToken(12L, "Apple 사용자", 3L))
             .thenReturn("access-token")
@@ -321,20 +321,19 @@ class MemberUseCaseUnitTest {
             authorizationCode = "authorization-code",
         )
 
-        inOrder(memberSessionFenceService, appleTokenLifecycle) {
-            verify(memberSessionFenceService).beginExplicitLoginSession(12L)
-            verify(appleTokenLifecycle).exchangeAuthorizationCode(
-                12L,
+        inOrder(appleTokenLifecycle, memberSessionFenceService) {
+            verify(appleTokenLifecycle).exchangeAndCapture(
                 identity,
                 "authorization-code",
                 "nonce",
             )
-            verify(appleTokenLifecycle).storeGrant(12L, grant)
+            verify(memberSessionFenceService).beginExplicitLoginSession(12L)
+            verify(appleTokenLifecycle).bindCapture(12L, capture)
         }
     }
 
     @Test
-    fun `withdrawal이 먼저 member fence를 닫으면 Apple authorization code를 소비하지 않는다`() {
+    fun `provider capture 뒤 member fence가 닫히면 독립 보상 큐로 넘긴다`() {
         val identity = VerifiedSocialIdentity(
             subject = "withdrawn-apple-subject",
             email = null,
@@ -354,6 +353,14 @@ class MemberUseCaseUnitTest {
                 snsId = "withdrawn-apple-subject",
             )
         )
+        val capture = mock<AppleCredentialCapture>()
+        whenever(
+            appleTokenLifecycle.exchangeAndCapture(
+                identity,
+                "single-use-code",
+                "nonce",
+            )
+        ).thenReturn(capture)
         whenever(memberSessionFenceService.beginExplicitLoginSession(14L))
             .thenThrow(BusinessException(ErrorCode.UNAUTHORIZED))
 
@@ -366,24 +373,24 @@ class MemberUseCaseUnitTest {
             )
         }
 
-        verify(appleTokenLifecycle, never()).exchangeAuthorizationCode(
-            any(),
-            any(),
-            any(),
-            any(),
+        verify(appleTokenLifecycle).exchangeAndCapture(
+            identity,
+            "single-use-code",
+            "nonce",
         )
-        verify(appleTokenLifecycle, never()).storeGrant(any(), any())
+        verify(appleTokenLifecycle).abandonCapture(capture)
+        verify(appleTokenLifecycle, never()).bindCapture(any(), any())
     }
 
     @Test
-    fun `Apple 신규 가입도 동의와 계정 저장 후 같은 transaction에서 code를 교환한다`() {
+    fun `Apple 신규 가입은 capture 뒤 계정 transaction에서 bind한다`() {
         val identity = VerifiedSocialIdentity(
             subject = "new-apple-subject",
             email = "new-apple@privaterelay.appleid.com",
             name = "Apple 신규",
             audience = "com.nolate.test",
         )
-        val grant = mock<AppleAuthorizationGrant>()
+        val capture = mock<AppleCredentialCapture>()
         whenever(socialIdentityVerifier.verify(LoginType.APPLE, "identity-token", "nonce"))
             .thenReturn(identity)
         whenever(
@@ -405,13 +412,12 @@ class MemberUseCaseUnitTest {
         }
         whenever(memberSessionFenceService.beginExplicitLoginSession(13L)).thenReturn(1L)
         whenever(
-            appleTokenLifecycle.exchangeAuthorizationCode(
-                13L,
+            appleTokenLifecycle.exchangeAndCapture(
                 identity,
                 "authorization-code",
                 "nonce",
             )
-        ).thenReturn(grant)
+        ).thenReturn(capture)
         whenever(jwtTokenProvider.createAccessToken(13L, "Apple 신규", 1L))
             .thenReturn("access-token")
         whenever(jwtTokenProvider.createRefreshToken(13L, "Apple 신규", 1L))
@@ -432,15 +438,14 @@ class MemberUseCaseUnitTest {
             consents = signupConsents,
             source = MemberConsentSource.SNS_SIGNUP,
         )
-        inOrder(memberSessionFenceService, appleTokenLifecycle) {
-            verify(memberSessionFenceService).beginExplicitLoginSession(13L)
-            verify(appleTokenLifecycle).exchangeAuthorizationCode(
-                13L,
+        inOrder(appleTokenLifecycle, memberSessionFenceService) {
+            verify(appleTokenLifecycle).exchangeAndCapture(
                 identity,
                 "authorization-code",
                 "nonce",
             )
-            verify(appleTokenLifecycle).storeGrant(13L, grant)
+            verify(memberSessionFenceService).beginExplicitLoginSession(13L)
+            verify(appleTokenLifecycle).bindCapture(13L, capture)
         }
     }
 
@@ -795,7 +800,7 @@ class MemberUseCaseUnitTest {
         verify(memberSessionFenceService).invalidateSessionForWithdrawal(memberId, 6L)
         verify(accountCleanupService).withdraw(withdrawalFence)
         verify(memberService).updateMember(member)
-        verify(appleTokenLifecycle, never()).queueRevocation(any())
+        verify(appleTokenLifecycle, never()).queueRevocation(any(), anyOrNull())
     }
 
     @Test
@@ -817,15 +822,24 @@ class MemberUseCaseUnitTest {
         )
         whenever(accountCleanupService.lockWithdrawalFence(memberId, 7L))
             .thenReturn(withdrawalFence)
+        whenever(appleTokenLifecycle.queueRevocation(memberId, "apple-subject"))
+            .thenReturn(AppleRevocationQueueResult(false))
+        doAnswer {
+            // Account cleanup anonymizes the same managed entity before withdraw returns.
+            member.loginType = null
+            member.snsId = null
+            null
+        }.whenever(accountCleanupService).withdraw(withdrawalFence)
 
-        memberUseCase.withdraw(memberId, 7L, null)
+        val result = memberUseCase.withdraw(memberId, 7L, null)
 
         inOrder(memberSessionFenceService, appleTokenLifecycle, accountCleanupService) {
             verify(memberSessionFenceService)
                 .invalidateSessionForWithdrawal(memberId, 7L)
-            verify(appleTokenLifecycle).queueRevocation(memberId)
+            verify(appleTokenLifecycle).queueRevocation(memberId, "apple-subject")
             verify(accountCleanupService).withdraw(withdrawalFence)
         }
+        assertFalse(result.manualAppleRevocationRequired)
         verify(passwordEncoder, never()).matches(any(), any())
     }
 
