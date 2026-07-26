@@ -207,13 +207,30 @@ class AppleTokenRevocationWorker(
         runDue(Instant.now(clock))
     }
 
-    fun runDue(now: Instant): Int {
-        if (!properties.enabled || !properties.workerEnabled) return 0
+    fun runDue(now: Instant): Int =
+        runDue(now) { true }
+
+    internal fun runDue(executionCurrent: () -> Boolean) {
+        runDue(Instant.now(clock), executionCurrent)
+    }
+
+    internal fun runDue(
+        now: Instant,
+        executionCurrent: () -> Boolean,
+    ): Int {
+        if (
+            !properties.enabled ||
+            !properties.workerEnabled ||
+            !executionCurrent.isAllowed()
+        ) {
+            return 0
+        }
         val boundedBatch = properties.batchSize.coerceIn(1, 200)
         val expired = coordinator.promoteExpiredCaptures(now, boundedBatch)
         if (expired > 0) {
             log.warn("Promoted expired Apple credential captures. count={}", expired)
         }
+        if (!executionCurrent.isAllowed()) return 0
         val recovered = coordinator.recoverStale(
             now = now,
             staleBefore = now.minusSeconds(properties.processingTimeoutSeconds.coerceAtLeast(10)),
@@ -222,31 +239,46 @@ class AppleTokenRevocationWorker(
         if (recovered > 0) {
             log.warn("Recovered or quarantined stale Apple revocation leases. count={}", recovered)
         }
-        val processed = drain(now, boundedBatch)
-        val blocked = coordinator.blockedCount()
-        if (blocked > 0) {
-            // Stable structured field doubles as the operational backlog gauge when log metrics
-            // are scraped; the runbook defines the SQL source-of-truth and alert threshold.
-            log.warn("Apple revocation blocked backlog. count={}", blocked)
+        if (!executionCurrent.isAllowed()) return 0
+        val processed = drain(now, boundedBatch, executionCurrent)
+        if (executionCurrent.isAllowed()) {
+            val blocked = coordinator.blockedCount()
+            if (blocked > 0) {
+                // Stable structured field doubles as the operational backlog gauge when log metrics
+                // are scraped; the runbook defines the SQL source-of-truth and alert threshold.
+                log.warn("Apple revocation blocked backlog. count={}", blocked)
+            }
         }
         return processed
     }
 
-    private fun drain(now: Instant, limit: Int): Int {
+    private fun drain(
+        now: Instant,
+        limit: Int,
+        executionCurrent: () -> Boolean,
+    ): Int {
         var claimed = 0
         repeat(limit) {
+            if (!executionCurrent.isAllowed()) return claimed
             val lease = coordinator.claimNextDue(
                 now = maxOf(now, Instant.now(clock)),
                 workerId = workerId,
             ) ?: return claimed
             claimed += 1
-            revoke(lease, maxOf(now, Instant.now(clock)))
+            if (!executionCurrent.isAllowed()) return claimed
+            revoke(lease, maxOf(now, Instant.now(clock)), executionCurrent)
         }
         return claimed
     }
 
-    private fun revoke(lease: AppleRevocationLease, now: Instant) {
+    private fun revoke(
+        lease: AppleRevocationLease,
+        now: Instant,
+        executionCurrent: () -> Boolean,
+    ) {
+        if (!executionCurrent.isAllowed()) return
         if (lease.clientId != properties.clientId) {
+            if (!executionCurrent.isAllowed()) return
             coordinator.block(lease, "APPLE_CLIENT_ID_MISMATCH")
             log.warn(
                 "Apple revocation blocked. credentialId={}, attempt={}, reason={}",
@@ -265,6 +297,7 @@ class AppleTokenRevocationWorker(
                 ciphertext = lease.encryptedRefreshToken,
             )
         } catch (_: Exception) {
+            if (!executionCurrent.isAllowed()) return
             coordinator.block(lease, "APPLE_TOKEN_DECRYPTION_FAILED")
             log.warn(
                 "Apple revocation blocked. credentialId={}, attempt={}, reason={}",
@@ -275,8 +308,13 @@ class AppleTokenRevocationWorker(
             return
         }
 
+        if (!executionCurrent.isAllowed()) return
         try {
             oauthClient.revokeRefreshToken(refreshToken)
+            // stop() invalidates this generation before its bounded wait. A provider call that
+            // ignores interruption must leave its lease PROCESSING for stale recovery instead of
+            // committing from an obsolete executor after shutdown or restart.
+            if (!executionCurrent.isAllowed()) return
             val persisted = coordinator.complete(lease, maxOf(now, Instant.now(clock)))
             log.info(
                 "Apple credential revocation confirmed. credentialId={}, attempt={}, persisted={}",
@@ -285,13 +323,20 @@ class AppleTokenRevocationWorker(
                 persisted,
             )
         } catch (failure: AppleProviderCallException) {
-            transitionFailure(lease, now, failure.safeCode, failure.retryable)
+            transitionFailure(
+                lease,
+                now,
+                failure.safeCode,
+                failure.retryable,
+                executionCurrent,
+            )
         } catch (failure: Exception) {
             transitionFailure(
                 lease,
                 now,
                 "APPLE_REVOKE_${failure.javaClass.simpleName}",
                 retryable = true,
+                executionCurrent = executionCurrent,
             )
         }
     }
@@ -301,7 +346,9 @@ class AppleTokenRevocationWorker(
         now: Instant,
         safeCode: String,
         retryable: Boolean,
+        executionCurrent: () -> Boolean,
     ) {
+        if (!executionCurrent.isAllowed()) return
         val exhausted = lease.attemptCount >= properties.maxAttempts.coerceAtLeast(1)
         val blocked = !retryable || exhausted
         val persisted = if (blocked) {
@@ -324,6 +371,9 @@ class AppleTokenRevocationWorker(
         )
     }
 
+    private fun (() -> Boolean).isAllowed(): Boolean =
+        runCatching { invoke() }.getOrDefault(false)
+
     private fun retryDelay(attempt: Int): Long {
         val exponent = (attempt - 1).coerceIn(0, 20)
         val multiplier = 1L shl exponent
@@ -336,8 +386,8 @@ class AppleTokenRevocationWorker(
 
 /**
  * A private single-thread executor keeps Apple cleanup independent from all request threads.
- * Immediate signals are represented by two booleans, so duplicate events never create an
- * unbounded executor queue.
+ * Each lifecycle generation owns two wake booleans, so duplicate events stay bounded and an
+ * obsolete executor cannot mutate the replacement generation's scheduling state.
  */
 @Component
 @ConditionalOnProperty(
@@ -350,93 +400,147 @@ class AppleTokenRevocationScheduler(
     private val worker: AppleTokenRevocationWorker,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
-    private val running = AtomicBoolean(false)
-    private val wakeRequested = AtomicBoolean(false)
-    private val wakeTaskScheduled = AtomicBoolean(false)
     @Volatile
-    private var executor: ScheduledExecutorService? = null
+    private var currentGeneration: ExecutorGeneration? = null
+    private var lastGenerationId: Long = 0
 
+    @Synchronized
     override fun start() {
-        if (!properties.workerEnabled || !running.compareAndSet(false, true)) return
+        if (!properties.workerEnabled || currentGeneration != null) return
+        lastGenerationId = Math.addExact(lastGenerationId, 1)
         val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
             Thread(runnable, "apple-token-revocation").apply { isDaemon = true }
         }
-        executor = scheduler
-        scheduler.scheduleWithFixedDelay(
-            { runSafely() },
-            properties.fixedDelayMillis,
-            properties.fixedDelayMillis,
-            TimeUnit.MILLISECONDS,
-        )
+        val generation = ExecutorGeneration(lastGenerationId, scheduler)
+        currentGeneration = generation
+        try {
+            scheduler.scheduleWithFixedDelay(
+                { runSafely(generation) },
+                properties.fixedDelayMillis,
+                properties.fixedDelayMillis,
+                TimeUnit.MILLISECONDS,
+            )
+        } catch (failure: Exception) {
+            currentGeneration = null
+            scheduler.shutdownNow()
+            throw failure
+        }
     }
 
     /**
      * Constant-time request-thread boundary: no DB read, decryption, network call, or wait.
      */
     fun wakeUp() {
-        if (!running.get()) return
-        wakeRequested.set(true)
-        scheduleWakeTask()
+        val generation = currentGeneration ?: return
+        generation.wakeRequested.set(true)
+        scheduleWakeTask(generation)
     }
 
+    @Synchronized
     override fun stop() {
-        if (!running.compareAndSet(true, false)) return
-        wakeRequested.set(false)
-        executor?.shutdownNow()
-        executor = null
-        wakeTaskScheduled.set(false)
+        val generation = currentGeneration ?: return
+        // Invalidate first. A provider call may ignore interruption, but its worker callback now
+        // observes an obsolete generation and cannot persist a late completion.
+        currentGeneration = null
+        generation.wakeRequested.set(false)
+        generation.executor.shutdownNow()
+        try {
+            if (
+                !generation.executor.awaitTermination(
+                    STOP_AWAIT_MILLIS,
+                    TimeUnit.MILLISECONDS,
+                )
+            ) {
+                log.warn(
+                    "Apple revocation executor did not terminate within shutdown bound. generation={}",
+                    generation.id,
+                )
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            log.warn(
+                "Apple revocation executor shutdown wait was interrupted. generation={}",
+                generation.id,
+            )
+        } finally {
+            generation.wakeTaskScheduled.set(false)
+        }
     }
 
-    override fun isRunning(): Boolean = running.get()
+    override fun isRunning(): Boolean = currentGeneration != null
 
     override fun isAutoStartup(): Boolean = true
 
     override fun getPhase(): Int = Int.MAX_VALUE - 100
 
-    private fun scheduleWakeTask() {
-        if (!running.get() || !wakeTaskScheduled.compareAndSet(false, true)) return
-        val scheduler = executor
-        if (scheduler == null) {
-            wakeTaskScheduled.set(false)
+    private fun scheduleWakeTask(generation: ExecutorGeneration) {
+        if (
+            !isCurrent(generation) ||
+            !generation.wakeTaskScheduled.compareAndSet(false, true)
+        ) {
             return
         }
         try {
-            scheduler.execute {
+            generation.executor.execute {
                 try {
                     // At most two coalesced passes per task. Continued traffic schedules one
                     // trailing task rather than growing this executor's queue.
                     repeat(MAX_COALESCED_PASSES) {
-                        wakeRequested.set(false)
-                        runSafely()
-                        if (!wakeRequested.get()) return@execute
+                        if (!isCurrent(generation)) return@execute
+                        generation.wakeRequested.set(false)
+                        runSafely(generation)
+                        if (
+                            !isCurrent(generation) ||
+                            !generation.wakeRequested.get()
+                        ) {
+                            return@execute
+                        }
                     }
                 } finally {
-                    wakeTaskScheduled.set(false)
-                    if (running.get() && wakeRequested.get()) scheduleWakeTask()
+                    generation.wakeTaskScheduled.set(false)
+                    if (
+                        isCurrent(generation) &&
+                        generation.wakeRequested.get()
+                    ) {
+                        scheduleWakeTask(generation)
+                    }
                 }
             }
         } catch (_: RejectedExecutionException) {
-            wakeTaskScheduled.set(false)
-            if (running.get()) {
+            generation.wakeTaskScheduled.set(false)
+            if (isCurrent(generation)) {
                 log.warn("Apple revocation wake signal rejected during executor transition.")
             }
         }
     }
 
-    private fun runSafely() {
-        if (!running.get()) return
+    private fun runSafely(generation: ExecutorGeneration) {
+        if (!isCurrent(generation)) return
         try {
-            worker.runDue()
+            worker.runDue { isCurrent(generation) }
         } catch (failure: Exception) {
-            log.warn(
-                "Apple revocation scheduler iteration failed. failureType={}",
-                failure.javaClass.simpleName,
-            )
+            if (isCurrent(generation)) {
+                log.warn(
+                    "Apple revocation scheduler iteration failed. failureType={}",
+                    failure.javaClass.simpleName,
+                )
+            }
         }
     }
 
+    private fun isCurrent(generation: ExecutorGeneration): Boolean =
+        currentGeneration === generation
+
+    private class ExecutorGeneration(
+        val id: Long,
+        val executor: ScheduledExecutorService,
+        val wakeRequested: AtomicBoolean = AtomicBoolean(false),
+        val wakeTaskScheduled: AtomicBoolean = AtomicBoolean(false),
+    )
+
     private companion object {
         const val MAX_COALESCED_PASSES = 2
+        const val STOP_AWAIT_MILLIS = 1_000L
     }
 }
 

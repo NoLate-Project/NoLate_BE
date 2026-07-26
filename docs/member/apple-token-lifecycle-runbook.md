@@ -64,13 +64,16 @@ Configuration invariants are fail-closed:
    [`migrations/2026-07-26-apple-token-lifecycle.sql`](migrations/2026-07-26-apple-token-lifecycle.sql).
 3. Confirm `apple_authorization_receipt_column_count=6`,
    `apple_token_lifecycle_column_count=25`, and no `missing_required_schema_marker` row.
-4. Confirm MySQL reports `ck_apple_provider_credentials_status`; malformed `PENDING` or
-   `PROCESSING` envelopes must be rejected.
-5. Inject production secrets and start one instance. Startup must fail for invalid keys,
+4. Confirm the receipt table has the reviewed six non-null columns, `PRIMARY(id)`, and unique
+   `receipt_key`/`authorization_code_hash` indexes. The migration rejects an existing near-match.
+5. Confirm MySQL reports the reviewed `ck_apple_provider_credentials_status`; malformed `PENDING`
+   or `PROCESSING` envelopes, identifying manual states, and value-bearing revoked states must be
+   rejected.
+6. Inject production secrets and start one instance. Startup must fail for invalid keys,
    audience/client ID, worker settings, redirect, or Apple endpoint.
-6. Complete Apple login. Only ciphertext/fingerprints may exist—never authorization code, access
+7. Complete Apple login. Only ciphertext/fingerprints may exist—never authorization code, access
    token, refresh token, identity token, or client secret.
-7. Withdraw the test account. The response finishes after local commit; Apple provider latency is
+8. Withdraw the test account. The response finishes after local commit; Apple provider latency is
    handled only on the dedicated executor. A confirmed `200` changes the row to `REVOKED` and
    clears member, subject, receipt pointer, token fingerprint, key id, IV, and ciphertext.
 
@@ -89,6 +92,11 @@ The worker scans multiple ordered candidates. A malformed legacy `PENDING`, `PRO
 expired `CAPTURED` row is changed to `BLOCKED`, then scanning continues. A contended candidate also
 does not stop later rows. Every provider call has a committed `PROCESSING` lease. A crash after
 Apple's `200` is safe because revoke is idempotent and stale-lease recovery retries it.
+
+Scheduler shutdown invalidates its executor generation before interruption, waits at most one
+second, and serializes a subsequent start. If provider code ignores interruption, its late result
+cannot update the database or schedule another wake under either the stopped or replacement
+generation; the retained `PROCESSING` lease is handled by normal stale recovery.
 
 `/auth/token` parses at most 2 KiB of error JSON. Only `invalid_grant` becomes an app credential
 error. `invalid_client`, malformed/unknown JSON, and other token failures remain operational

@@ -196,6 +196,9 @@ DROP PROCEDURE IF EXISTS assert_apple_token_lifecycle_postconditions;
 DELIMITER //
 CREATE PROCEDURE assert_apple_token_lifecycle_postconditions()
 BEGIN
+    DECLARE probe_key VARCHAR(36);
+    DECLARE probe_rejected BOOLEAN DEFAULT FALSE;
+
     IF (
         SELECT COUNT(*)
         FROM information_schema.columns
@@ -205,6 +208,87 @@ BEGIN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
                 'apple token lifecycle migration failed: receipt table shape is unexpected';
+    END IF;
+
+    IF (
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = 'apple_authorization_code_receipts'
+          AND (
+              (
+                  column_name = 'id'
+                  AND data_type = 'bigint'
+                  AND is_nullable = 'NO'
+                  AND extra = 'auto_increment'
+              ) OR (
+                  column_name = 'receipt_key'
+                  AND data_type = 'varchar'
+                  AND character_maximum_length = 36
+                  AND character_set_name = 'ascii'
+                  AND collation_name = 'ascii_bin'
+                  AND is_nullable = 'NO'
+              ) OR (
+                  column_name = 'authorization_code_hash'
+                  AND data_type = 'varchar'
+                  AND character_maximum_length = 64
+                  AND character_set_name = 'ascii'
+                  AND collation_name = 'ascii_bin'
+                  AND is_nullable = 'NO'
+              ) OR (
+                  column_name = 'expected_subject_hash'
+                  AND data_type = 'varchar'
+                  AND character_maximum_length = 64
+                  AND character_set_name = 'ascii'
+                  AND collation_name = 'ascii_bin'
+                  AND is_nullable = 'NO'
+              ) OR (
+                  column_name = 'client_id'
+                  AND data_type = 'varchar'
+                  AND character_maximum_length = 255
+                  AND is_nullable = 'NO'
+              ) OR (
+                  column_name = 'reserved_at'
+                  AND data_type = 'datetime'
+                  AND datetime_precision = 6
+                  AND is_nullable = 'NO'
+              )
+          )
+    ) <> 6 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'apple token lifecycle migration failed: receipt columns or nullability drifted';
+    END IF;
+
+    IF (
+        SELECT COUNT(*)
+        FROM (
+            SELECT
+                index_name,
+                MAX(non_unique) AS non_unique,
+                GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') AS indexed_columns
+            FROM information_schema.statistics
+            WHERE table_schema = DATABASE()
+              AND table_name = 'apple_authorization_code_receipts'
+            GROUP BY index_name
+        ) AS actual_receipt_indexes
+        WHERE (
+            index_name = 'PRIMARY'
+            AND non_unique = 0
+            AND indexed_columns = 'id'
+        ) OR (
+            index_name = 'uk_apple_authorization_receipts_receipt_key'
+            AND non_unique = 0
+            AND indexed_columns = 'receipt_key'
+        ) OR (
+            index_name = 'uk_apple_authorization_receipts_code_hash'
+            AND non_unique = 0
+            AND indexed_columns = 'authorization_code_hash'
+        )
+    ) <> 3 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'apple token lifecycle migration failed: required receipt indexes are incomplete';
     END IF;
 
     IF (
@@ -261,17 +345,32 @@ BEGIN
                 'apple token lifecycle migration failed: required credential indexes are incomplete';
     END IF;
 
-    IF NOT EXISTS (
-        SELECT 1
-        FROM information_schema.table_constraints
-        WHERE table_schema = DATABASE()
-          AND table_name = 'apple_provider_credentials'
-          AND constraint_name = 'ck_apple_provider_credentials_status'
-          AND constraint_type = 'CHECK'
-    ) THEN
+    IF (
+        SELECT COUNT(*)
+        FROM information_schema.table_constraints AS table_constraint
+        JOIN information_schema.check_constraints AS check_constraint
+          ON check_constraint.constraint_schema = table_constraint.constraint_schema
+         AND check_constraint.constraint_name = table_constraint.constraint_name
+        WHERE table_constraint.table_schema = DATABASE()
+          AND table_constraint.table_name = 'apple_provider_credentials'
+          AND table_constraint.constraint_name = 'ck_apple_provider_credentials_status'
+          AND table_constraint.constraint_type = 'CHECK'
+          AND LOWER(check_constraint.check_clause) LIKE '%captured%'
+          AND LOWER(check_constraint.check_clause) LIKE '%active%'
+          AND LOWER(check_constraint.check_clause) LIKE '%pending%'
+          AND LOWER(check_constraint.check_clause) LIKE '%processing%'
+          AND LOWER(check_constraint.check_clause) LIKE '%blocked%'
+          AND LOWER(check_constraint.check_clause) LIKE '%manual_action%'
+          AND LOWER(check_constraint.check_clause) LIKE '%revoked%'
+          AND LOWER(check_constraint.check_clause) LIKE '%source_receipt_key%'
+          AND LOWER(check_constraint.check_clause) LIKE '%encrypted_refresh_token%'
+          AND LOWER(check_constraint.check_clause) LIKE '%attempt_count%'
+          AND LOWER(check_constraint.check_clause) LIKE '%locked_by%'
+          AND LOWER(check_constraint.check_clause) LIKE '%revoked_at%'
+    ) <> 1 THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
-                'apple token lifecycle migration failed: state CHECK is absent';
+                'apple token lifecycle migration failed: state CHECK meaning drifted';
     END IF;
 
     IF EXISTS (
@@ -287,6 +386,165 @@ BEGIN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT =
                 'apple token lifecycle migration failed: durable receipts/retries must not have foreign keys';
+    END IF;
+
+    -- Metadata alone can confirm a named CHECK while missing a critical branch. These probes use
+    -- unique non-secret keys and require MySQL itself to reject representative unsafe states.
+    SET probe_key = UUID();
+    SET probe_rejected = FALSE;
+    BEGIN
+        DECLARE CONTINUE HANDLER FOR 3819 SET probe_rejected = TRUE;
+        INSERT INTO apple_provider_credentials (
+            credential_key,
+            source_receipt_key,
+            client_id,
+            status,
+            attempt_count,
+            next_attempt_at,
+            version,
+            deleted
+        ) VALUES (
+            probe_key,
+            UUID(),
+            'com.nolate.schema-probe',
+            'PENDING',
+            0,
+            CURRENT_TIMESTAMP(6),
+            0,
+            FALSE
+        );
+    END;
+    IF probe_rejected = FALSE THEN
+        DELETE FROM apple_provider_credentials WHERE credential_key = probe_key;
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'apple token lifecycle migration failed: CHECK accepts incomplete PENDING';
+    END IF;
+
+    SET probe_key = UUID();
+    SET probe_rejected = FALSE;
+    BEGIN
+        DECLARE CONTINUE HANDLER FOR 3819 SET probe_rejected = TRUE;
+        INSERT INTO apple_provider_credentials (
+            credential_key,
+            member_id,
+            client_id,
+            status,
+            attempt_count,
+            last_failure_code,
+            version,
+            deleted
+        ) VALUES (
+            probe_key,
+            -1,
+            'com.nolate.schema-probe',
+            'MANUAL_ACTION',
+            0,
+            'SCHEMA_PROBE',
+            0,
+            FALSE
+        );
+    END;
+    IF probe_rejected = FALSE THEN
+        DELETE FROM apple_provider_credentials WHERE credential_key = probe_key;
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'apple token lifecycle migration failed: CHECK accepts identifying manual state';
+    END IF;
+
+    SET probe_key = UUID();
+    SET probe_rejected = FALSE;
+    BEGIN
+        DECLARE CONTINUE HANDLER FOR 3819 SET probe_rejected = TRUE;
+        INSERT INTO apple_provider_credentials (
+            credential_key,
+            source_receipt_key,
+            apple_subject_hash,
+            refresh_token_hash,
+            client_id,
+            encryption_key_id,
+            initialization_vector,
+            encrypted_refresh_token,
+            status,
+            attempt_count,
+            revoked_at,
+            version,
+            deleted
+        ) VALUES (
+            probe_key,
+            UUID(),
+            SHA2(UUID(), 256),
+            SHA2(UUID(), 256),
+            'com.nolate.schema-probe',
+            'schema-probe-key',
+            'schema-probe-iv',
+            'schema-probe-ciphertext',
+            'REVOKED',
+            1,
+            CURRENT_TIMESTAMP(6),
+            0,
+            FALSE
+        );
+    END;
+    IF probe_rejected = FALSE THEN
+        DELETE FROM apple_provider_credentials WHERE credential_key = probe_key;
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'apple token lifecycle migration failed: CHECK accepts provider material in REVOKED';
+    END IF;
+
+    SET probe_key = UUID();
+    SET probe_rejected = FALSE;
+    BEGIN
+        DECLARE CONTINUE HANDLER FOR 3819 SET probe_rejected = TRUE;
+        INSERT INTO apple_provider_credentials (
+            credential_key,
+            client_id,
+            status,
+            attempt_count,
+            version,
+            deleted
+        ) VALUES (
+            probe_key,
+            'com.nolate.schema-probe',
+            'BLOCKED',
+            -1,
+            0,
+            FALSE
+        );
+    END;
+    IF probe_rejected = FALSE THEN
+        DELETE FROM apple_provider_credentials WHERE credential_key = probe_key;
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'apple token lifecycle migration failed: CHECK accepts negative attempts';
+    END IF;
+
+    SET probe_key = UUID();
+    SET probe_rejected = FALSE;
+    BEGIN
+        DECLARE CONTINUE HANDLER FOR 3819 SET probe_rejected = TRUE;
+        INSERT INTO apple_provider_credentials (
+            credential_key,
+            client_id,
+            status,
+            attempt_count,
+            version,
+            deleted
+        ) VALUES (
+            probe_key,
+            'com.nolate.schema-probe',
+            'UNKNOWN',
+            0,
+            0,
+            FALSE
+        );
+    END;
+    IF probe_rejected = FALSE THEN
+        DELETE FROM apple_provider_credentials WHERE credential_key = probe_key;
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT =
+                'apple token lifecycle migration failed: CHECK accepts an unknown status';
     END IF;
 END//
 DELIMITER ;

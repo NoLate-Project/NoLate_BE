@@ -113,6 +113,24 @@ class AppleTokenRevocationWorkerTest {
         verify(coordinator, never()).retry(any(), any(), any())
     }
 
+    @Test
+    fun `obsolete executor generation leaves late provider success for stale recovery`() {
+        val lease = lease(attempt = 1)
+        var executionCurrent = true
+        whenever(coordinator.claimNextDue(eq(now), any(), isNull())).thenReturn(lease, null)
+        whenever(oauthClient.revokeRefreshToken("refresh-secret")).thenAnswer {
+            executionCurrent = false
+            Unit
+        }
+
+        assertEquals(1, worker().runDue(now) { executionCurrent })
+
+        verify(oauthClient).revokeRefreshToken("refresh-secret")
+        verify(coordinator, never()).complete(any(), any())
+        verify(coordinator, never()).retry(any(), any(), any())
+        verify(coordinator, never()).block(any(), any())
+    }
+
     private fun worker(): AppleTokenRevocationWorker =
         AppleTokenRevocationWorker(
             properties = properties,

@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
  */
 class AppleTokenLifecycleMySqlMigrationTest {
     @Test
-    fun `reviewed migration applies and MySQL rejects poison pending envelope`() {
+    fun `reviewed migration accepts clean and reapply but rejects semantic and receipt drift`() {
         assumeTrue(command("docker", "info").success, "Docker is required for MySQL 8.4 verification")
         val containerName = "nolate-apple-migration-${UUID.randomUUID()}"
         val started = command(
@@ -171,6 +171,131 @@ class AppleTokenLifecycleMySqlMigrationTest {
                 .filter { it.matches(Regex("\\d+")) }
                 .toList()
             assertEquals(listOf("1", "1"), counts.takeLast(2))
+
+            val reapplied = mysql(containerName, migration)
+            check(reapplied.success) {
+                "Reviewed Apple migration was not idempotent: ${reapplied.output.take(1_000)}"
+            }
+            assertEquals("1", markerCount(containerName))
+
+            val semanticDriftPrepared = mysql(
+                containerName,
+                """
+                ALTER TABLE apple_provider_credentials
+                    DROP CHECK ck_apple_provider_credentials_status;
+                ALTER TABLE apple_provider_credentials
+                    ADD CONSTRAINT ck_apple_provider_credentials_status CHECK (
+                        status IN (
+                            'CAPTURED', 'ACTIVE', 'PENDING', 'PROCESSING',
+                            'BLOCKED', 'MANUAL_ACTION', 'REVOKED'
+                        )
+                        AND attempt_count >= 0
+                        AND (source_receipt_key IS NULL OR source_receipt_key IS NOT NULL)
+                        AND (
+                            encrypted_refresh_token IS NULL
+                            OR encrypted_refresh_token IS NOT NULL
+                        )
+                        AND (locked_by IS NULL OR locked_by IS NOT NULL)
+                        AND (revoked_at IS NULL OR revoked_at IS NOT NULL)
+                    );
+                DELETE FROM application_schema_migrations
+                WHERE version = '2026-07-26-apple-token-lifecycle-v1';
+                """.trimIndent(),
+            )
+            check(semanticDriftPrepared.success) {
+                "Could not prepare semantic CHECK drift: " +
+                    semanticDriftPrepared.output.take(500)
+            }
+            val semanticDriftApply = mysql(containerName, migration)
+            assertEquals(
+                false,
+                semanticDriftApply.success,
+                "Migration approved a named but semantically weak provider CHECK",
+            )
+            assertTrue(semanticDriftApply.output.contains("CHECK accepts incomplete PENDING"))
+            assertEquals("0", markerCount(containerName))
+
+            val driftPrepared = mysql(
+                containerName,
+                """
+                ALTER TABLE apple_provider_credentials
+                    DROP CHECK ck_apple_provider_credentials_status;
+                """.trimIndent(),
+            )
+            check(driftPrepared.success) {
+                "Could not prepare CHECK drift fixture: ${driftPrepared.output.take(500)}"
+            }
+            val driftedApply = mysql(containerName, migration)
+            assertEquals(false, driftedApply.success, "Migration approved a drifted provider CHECK")
+            assertTrue(driftedApply.output.contains("state CHECK meaning drifted"))
+            assertEquals("0", markerCount(containerName))
+
+            val receiptDriftPrepared = mysql(
+                containerName,
+                """
+                DROP TABLE apple_provider_credentials;
+                DROP TABLE apple_authorization_code_receipts;
+                CREATE TABLE apple_authorization_code_receipts (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    receipt_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    authorization_code_hash
+                        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    expected_subject_hash
+                        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                    client_id VARCHAR(255) NOT NULL,
+                    reserved_at DATETIME(6) NOT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_apple_authorization_receipts_receipt_key (receipt_key),
+                    UNIQUE KEY uk_apple_authorization_receipts_code_hash
+                        (authorization_code_hash)
+                );
+                """.trimIndent(),
+            )
+            check(receiptDriftPrepared.success) {
+                "Could not prepare receipt nullability drift: " +
+                    receiptDriftPrepared.output.take(500)
+            }
+            val receiptDriftApply = mysql(containerName, migration)
+            assertEquals(
+                false,
+                receiptDriftApply.success,
+                "Migration approved a receipt table with nullable subject fingerprint",
+            )
+            assertTrue(
+                receiptDriftApply.output.contains("receipt columns or nullability drifted")
+            )
+            assertEquals("0", markerCount(containerName))
+
+            val nearMissPrepared = mysql(
+                containerName,
+                """
+                DROP TABLE apple_provider_credentials;
+                DROP TABLE apple_authorization_code_receipts;
+                CREATE TABLE apple_authorization_code_receipts (
+                    id BIGINT NOT NULL AUTO_INCREMENT,
+                    receipt_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    authorization_code_hash
+                        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    expected_subject_hash
+                        VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    client_id VARCHAR(255) NOT NULL,
+                    reserved_at DATETIME(6) NOT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_apple_authorization_receipts_receipt_key (receipt_key)
+                );
+                """.trimIndent(),
+            )
+            check(nearMissPrepared.success) {
+                "Could not prepare receipt near-miss fixture: ${nearMissPrepared.output.take(500)}"
+            }
+            val nearMissApply = mysql(containerName, migration)
+            assertEquals(
+                false,
+                nearMissApply.success,
+                "Migration approved a six-column receipt table without code-hash uniqueness",
+            )
+            assertTrue(nearMissApply.output.contains("required receipt indexes are incomplete"))
+            assertEquals("0", markerCount(containerName))
         } finally {
             command("docker", "rm", "--force", containerName, timeoutSeconds = 30)
         }
@@ -214,6 +339,22 @@ class AppleTokenLifecycleMySqlMigrationTest {
             stdin = sql,
             timeoutSeconds = 60,
         )
+
+    private fun markerCount(containerName: String): String {
+        val result = mysql(
+            containerName,
+            """
+            SELECT COUNT(*)
+            FROM application_schema_migrations
+            WHERE version = '2026-07-26-apple-token-lifecycle-v1';
+            """.trimIndent(),
+        )
+        check(result.success) { "Could not read Apple schema marker: ${result.output.take(500)}" }
+        return result.output
+            .lineSequence()
+            .map(String::trim)
+            .last { it.matches(Regex("\\d+")) }
+    }
 
     private fun command(
         vararg command: String,

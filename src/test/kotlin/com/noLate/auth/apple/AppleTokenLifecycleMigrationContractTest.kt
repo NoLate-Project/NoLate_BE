@@ -43,6 +43,14 @@ class AppleTokenLifecycleMigrationContractTest {
         assertTrue(migration.contains("durable receipts/retries must not have foreign keys"))
         assertTrue(migration.contains("ck_apple_provider_credentials_status"))
         assertTrue(migration.contains("apple_authorization_code_receipts"))
+        assertTrue(migration.contains("column_name = 'authorization_code_hash'"))
+        assertTrue(migration.contains("is_nullable = 'NO'"))
+        assertTrue(migration.contains("uk_apple_authorization_receipts_code_hash"))
+        assertTrue(migration.contains("indexed_columns = 'authorization_code_hash'"))
+        assertTrue(migration.contains("information_schema.check_constraints"))
+        assertTrue(migration.contains("CHECK accepts incomplete PENDING"))
+        assertTrue(migration.contains("CHECK accepts identifying manual state"))
+        assertTrue(migration.contains("CHECK accepts provider material in REVOKED"))
     }
 
     @Test
