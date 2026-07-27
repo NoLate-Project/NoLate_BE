@@ -5,6 +5,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheAudienceResolver
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheScope
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheService
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleDto
@@ -251,18 +252,20 @@ class ScheduleService(
                 },
             )
         }
-        // 배포 전에 채워진 Redis 월 캐시에는 이미 공유받은 DTO가 있을 수 있다. off에서는
-        // DB 쿼리만 바꿔도 cache hit로 UGC가 다시 노출되므로 캐시를 우회한다.
-        return if (sharingAvailabilityPolicy.enabled) {
-            calendarCacheService?.getOrLoad(memberId, rangeStart, rangeEnd, loader)
-                ?: loader(rangeStart, rangeEnd)
-        } else {
-            loader(rangeStart, rangeEnd)
-        }
+        // owner-only와 공유 포함 DTO는 Redis namespace가 다르다. 기능을 끈 인스턴스도
+        // 공유 결과를 재노출하지 않으면서 동일한 월 캐시를 안전하게 사용할 수 있다.
+        return calendarCacheService?.getOrLoad(
+            memberId = memberId,
+            scope = calendarCacheScope(),
+            rangeStart = rangeStart,
+            rangeEnd = rangeEnd,
+            loader = loader,
+        ) ?: loader(rangeStart, rangeEnd)
     }
 
     fun getCalendarCacheRevision(memberId: Long): Long =
-        calendarCacheService?.currentRevision(memberId) ?: 0L
+        calendarCacheService?.currentRevision(memberId, calendarCacheScope())
+            ?: calendarCacheScope().clientRevision(0L)
 
     @Transactional
     fun getDailyScheduleList(memberId: Long, date: String): List<ScheduleDto> {
@@ -406,22 +409,26 @@ class ScheduleService(
             val base = schedule.toDto(objectMapper)
             val access = schedule.id?.let(accessByScheduleId::get)
             val received = schedule.memberId != memberId
-            return scheduleTravelPlanService?.personalizeScheduleDto(
+            val personalized = scheduleTravelPlanService?.personalizeScheduleDto(
                 memberId = memberId,
                 schedule = schedule,
                 base = base,
                 plan = schedule.id?.let(myPlans::get),
                 access = access,
-            )?.copy(
+            ) ?: base
+            return personalized.copy(
                 sharePermission = access?.effectivePermission.takeIf { received },
                 shareContentMode = access?.effectiveContentMode.takeIf { received },
                 travelCollaborationEnabled = access?.travelEnabled,
                 canViewAllTravelPlans = access?.canViewAllTravelPlans,
-            ) ?: base.copy(
-                sharePermission = access?.effectivePermission.takeIf { received },
-                shareContentMode = access?.effectiveContentMode.takeIf { received },
-                travelCollaborationEnabled = access?.travelEnabled,
-                canViewAllTravelPlans = access?.canViewAllTravelPlans,
+                category = if (received) {
+                    personalized.category.copy(
+                        shared = access?.categoryPermission != null,
+                        sharePermission = access?.categoryPermission,
+                    )
+                } else {
+                    personalized.category
+                },
             )
         }
 
@@ -498,6 +505,9 @@ class ScheduleService(
         } else {
             setOf(schedule.memberId)
         }
+
+    private fun calendarCacheScope(): ScheduleCalendarCacheScope =
+        ScheduleCalendarCacheScope.fromSharingEnabled(sharingAvailabilityPolicy.enabled)
 
     private fun findActive(memberId: Long, scheduleId: Long): Schedule {
         val schedule = if (sharingAvailabilityPolicy.enabled) {

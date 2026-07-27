@@ -5,6 +5,8 @@ import com.noLate.member.domain.member.Member
 import com.noLate.member.domain.member.MemberDto
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.global.security.MemberPrincipal
+import com.noLate.schedule.domain.ScheduleCalendarCacheRevision
+import com.noLate.schedule.infrastructure.ScheduleCalendarCacheRevisionRepository
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service
 import java.util.Optional
@@ -12,13 +14,18 @@ import java.time.Instant
 
 @Service
 class MemberService(
-    private val memberRepository: MemberRepository
+    private val memberRepository: MemberRepository,
+    private val scheduleCalendarCacheRevisionRepository: ScheduleCalendarCacheRevisionRepository,
 ) {
 
 
     @Transactional
     fun addMember( member: Member)  : MemberDto {
-        return memberRepository.save(member).toDto();
+        val savedMember = memberRepository.save(member)
+        scheduleCalendarCacheRevisionRepository.save(
+            ScheduleCalendarCacheRevision(memberId = requireNotNull(savedMember.id))
+        )
+        return savedMember.toDto()
     }
 
     @Transactional

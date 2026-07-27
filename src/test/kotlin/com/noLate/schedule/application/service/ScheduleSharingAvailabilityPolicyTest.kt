@@ -82,15 +82,29 @@ class ScheduleSharingAvailabilityPolicyTest {
     }
 
     @Test
-    fun `production profile cannot be reopened by a higher priority true value`() {
+    fun `production profile honors an explicit exact true value`() {
         val environment = MockEnvironment()
             .withProperty("schedule.sharing.enabled", "true")
         environment.setActiveProfiles("prod")
 
         val policy = ScheduleSharingAvailabilityPolicy(environment)
 
-        assertFalse(policy.enabled)
-        assertEquals(ScheduleSharingOperationalState.DISABLED, policy.operationalState())
+        assertTrue(policy.enabled)
+        assertEquals(ScheduleSharingOperationalState.ENABLED, policy.operationalState())
+    }
+
+    @Test
+    fun `production profile still fails closed for false and malformed values`() {
+        listOf("false", "TRUE", "true ", "yes").forEach { raw ->
+            val environment = MockEnvironment()
+                .withProperty("schedule.sharing.enabled", raw)
+            environment.setActiveProfiles("prod")
+
+            assertFalse(
+                ScheduleSharingAvailabilityPolicy(environment).enabled,
+                "raw='$raw' must fail closed in production",
+            )
+        }
     }
 
     @Test

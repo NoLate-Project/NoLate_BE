@@ -17,6 +17,7 @@ services:
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-nolate-local-redis}
       SCHEDULE_CALENDAR_CACHE_ENABLED: "true"
+      SCHEDULE_SHARING_ENABLED: "${SCHEDULE_SHARING_ENABLED:-true}"
     volumes:
       - ${NOLATE_ENV_FILE:-./env.local.properties}:/config/env.properties:ro
       - ${FIREBASE_CREDENTIALS_FILE:?Set FIREBASE_CREDENTIALS_FILE}:/config/firebase.json:ro

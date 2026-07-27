@@ -26,12 +26,14 @@ import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCalendarStatus
 import com.noLate.schedule.domain.ScheduleShareStatus
 import org.springframework.dao.ConcurrencyFailureException
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
@@ -72,6 +74,7 @@ class AccountCleanupService(
     private val memberConsentRepository: MemberConsentRepository,
     private val notificationActionReceiptRepository: ScheduleNotificationActionReceiptRepository,
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService,
+    private val eventPublisher: ApplicationEventPublisher,
 ) {
     /**
      * Owner withdrawal and participant mutation share one member-row order. The first scan is only
@@ -233,6 +236,14 @@ class AccountCleanupService(
         lockedMember.snsId = null
         lockedMember.tokensValidAfter = java.time.Instant.now()
         lockedMember.softDelete()
+        // 일정 삭제, 직접/카테고리 공유 제거, 캘린더 탈퇴를 같은 transaction에서 마친 뒤
+        // frozen participant 전체의 durable revision을 BEFORE_COMMIT listener가 올린다.
+        eventPublisher.publishEvent(
+            ScheduleCalendarCacheInvalidationEvent(
+                memberIds = fence.lockedMemberIds,
+                reason = "account-withdrawn",
+            )
+        )
     }
 
     private fun leaveActiveCalendarMemberships(memberId: Long) {

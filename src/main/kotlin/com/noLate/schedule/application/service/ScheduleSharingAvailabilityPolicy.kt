@@ -5,7 +5,6 @@ import com.noLate.global.error.ErrorCode
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.core.env.Environment
-import org.springframework.core.env.Profiles
 import org.springframework.stereotype.Component
 
 enum class ScheduleSharingOperationalState {
@@ -25,9 +24,7 @@ enum class ScheduleSharingOperationalState {
 class ScheduleSharingAvailabilityPolicy(
     environment: Environment,
 ) {
-    val enabled: Boolean =
-        !environment.acceptsProfiles(Profiles.of("prod")) &&
-            environment.getProperty(PROPERTY_NAME) == "true"
+    val enabled: Boolean = environment.getProperty(PROPERTY_NAME) == "true"
 
     fun requireEnabled() {
         if (!enabled) {

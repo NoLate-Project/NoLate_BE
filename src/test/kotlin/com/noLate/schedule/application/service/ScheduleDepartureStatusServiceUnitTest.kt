@@ -4,6 +4,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleCategoryShare
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.check
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
@@ -131,13 +133,19 @@ class ScheduleDepartureStatusServiceUnitTest {
             assertEquals(now, it.departedAt)
         })
         assertEquals(now, result.departedAt)
-        verify(eventPublisher).publishEvent(check<ScheduleParticipantDepartedEvent> {
+        val publishedEvents = argumentCaptor<Any>()
+        verify(eventPublisher, times(2)).publishEvent(publishedEvents.capture())
+        publishedEvents.allValues.filterIsInstance<ScheduleParticipantDepartedEvent>().single().let {
             assertEquals(scheduleId, it.scheduleId)
             assertEquals("공유 일정", it.scheduleTitle)
             assertEquals(targetMemberId, it.departedMemberId)
             assertEquals("member2", it.departedMemberLabel)
             assertEquals(listOf(1L, 3L, 4L), it.recipientMemberIds)
-        })
+        }
+        publishedEvents.allValues.filterIsInstance<ScheduleCalendarCacheInvalidationEvent>().single().let {
+            assertEquals(setOf(1L, 2L, 3L, 4L), it.memberIds)
+            assertEquals("schedule-participant-departed", it.reason)
+        }
     }
 
     @Test
@@ -358,10 +366,16 @@ class ScheduleDepartureStatusServiceUnitTest {
 
         assertEquals(setOf(1L, 4L), memberFence.frozenRecipientMemberIds)
         verify(memberRepository, times(1)).findAllByIdsForUpdate(any())
-        verify(eventPublisher).publishEvent(check<ScheduleParticipantDepartedEvent> {
+        val publishedEvents = argumentCaptor<Any>()
+        verify(eventPublisher, times(2)).publishEvent(publishedEvents.capture())
+        publishedEvents.allValues.filterIsInstance<ScheduleParticipantDepartedEvent>().single().let {
             // 4번 revoke는 반영하되, preview 뒤 새 grant된 2번은 이번 action에 편입하지 않는다.
             assertEquals(listOf(1L), it.recipientMemberIds)
-        })
+        }
+        publishedEvents.allValues.filterIsInstance<ScheduleCalendarCacheInvalidationEvent>().single().let {
+            // revision audience도 최초 동결 집합 밖의 2번을 뒤늦게 편입하지 않는다.
+            assertEquals(setOf(1L, 3L, 4L), it.memberIds)
+        }
     }
 
     @Test

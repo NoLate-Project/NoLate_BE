@@ -2,6 +2,7 @@ package com.noLate.schedule.application.useCase
 
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
@@ -19,20 +20,28 @@ import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.never
 import org.mockito.kotlin.doThrow
+import org.mockito.kotlin.check
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.context.ApplicationEventPublisher
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleTravelPlanUseCaseTest {
     @Mock lateinit var travelPlanService: ScheduleTravelPlanService
     @Mock lateinit var scheduleService: ScheduleService
     @Mock lateinit var pushJobService: SchedulePushJobService
+    @Mock lateinit var eventPublisher: ApplicationEventPublisher
 
     private lateinit var useCase: ScheduleTravelPlanUseCase
 
     @BeforeEach
     fun setUp() {
-        useCase = ScheduleTravelPlanUseCase(travelPlanService, scheduleService, pushJobService)
+        useCase = ScheduleTravelPlanUseCase(
+            travelPlanService,
+            scheduleService,
+            pushJobService,
+            eventPublisher,
+        )
     }
 
     @Test
@@ -48,6 +57,10 @@ class ScheduleTravelPlanUseCaseTest {
         verify(pushJobService).lockForTravelPlanEdit(10L, 2L, 6L)
         verify(pushJobService).registerFromTravelPlanDto(2L, schedule, plan)
         verify(pushJobService, never()).cancelByScheduleIdAndMemberId(10L, 2L)
+        verify(eventPublisher).publishEvent(check<ScheduleCalendarCacheInvalidationEvent> {
+            assertEquals(setOf(2L), it.memberIds)
+            assertEquals("travel-plan-updated", it.reason)
+        })
     }
 
     @Test

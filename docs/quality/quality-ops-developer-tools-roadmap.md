@@ -1,6 +1,6 @@
 # Quality / Ops / Developer Tools Roadmap
 
-Last verified: 2026-07-24 KST
+Last verified: 2026-07-27 KST
 
 테스트, CI, 환경변수, 로컬 실행, 관측성, 개발 검증 도구의 상세 로드맵이다.
 
@@ -20,12 +20,12 @@ Last verified: 2026-07-24 KST
 - Xcode archive/export로 TestFlight IPA 생성 확인
 - App Store Connect API key 기반 `altool` 업로드 경로 확인
 - Redis 기반 캘린더 조회 캐시
-  - 사용자·revision·월 단위 일정 캐시, 기본 TTL 15분
+  - FK 없는 DB durable revision과 사용자·범위·월 단위 Redis payload, 기본 TTL 15분
   - 전 사용자 공용 음력/공휴일 월 캐시, 기본 TTL 24시간
   - Redis read/write 장애 시 기존 DB 조회 결과를 반환하는 fallback
   - 손상되거나 불완전한 메타데이터 월은 해당 월만 다시 적재
   - 같은 인스턴스의 동시 cold miss는 월별 striped lock으로 중복 적재 방지
-- 일정/공유 변경 트랜잭션 커밋 이후 영향 회원 cache revision 무효화
+- 일정/공유 변경 transaction의 terminal `BEFORE_COMMIT`에서 합친 영향 회원 durable revision 원자 무효화
 - HTTP Client 검증 파일
   - `http/schedule-parser.http`
   - `http/push-scenario-runner.http`

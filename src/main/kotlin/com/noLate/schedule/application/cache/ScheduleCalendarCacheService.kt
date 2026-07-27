@@ -12,6 +12,7 @@ import java.time.ZoneId
 @Service
 class ScheduleCalendarCacheService(
     private val store: ScheduleCalendarCacheStore,
+    private val revisionService: ScheduleCalendarCacheRevisionService,
     private val objectMapper: ObjectMapper,
     private val properties: ScheduleCalendarCacheProperties,
 ) {
@@ -21,6 +22,7 @@ class ScheduleCalendarCacheService(
 
     fun getOrLoad(
         memberId: Long,
+        scope: ScheduleCalendarCacheScope,
         rangeStart: Instant,
         rangeEnd: Instant,
         loader: (Instant, Instant) -> List<ScheduleDto>,
@@ -28,64 +30,32 @@ class ScheduleCalendarCacheService(
         if (!properties.enabled) return loader(rangeStart, rangeEnd)
 
         return runCatching {
-            getOrLoad(memberId, rangeStart, rangeEnd, loader, retry = true)
+            getOrLoad(memberId, scope, rangeStart, rangeEnd, loader, retry = true)
         }.getOrElse { error ->
             log.warn(
-                "Schedule calendar cache unavailable; falling back to DB. memberId={}, error={}",
+                "Schedule calendar cache unavailable; falling back to DB. memberId={}, scope={}, error={}",
                 memberId,
+                scope,
                 error.javaClass.simpleName,
             )
             loader(rangeStart, rangeEnd)
         }
     }
 
-    fun currentRevision(memberId: Long): Long {
-        if (!properties.enabled) return 0L
-        return runCatching { store.getRevision(memberId) }
-            .getOrElse { error ->
-                log.warn(
-                    "Schedule calendar cache revision unavailable. memberId={}, error={}",
-                    memberId,
-                    error.javaClass.simpleName,
-                )
-                0L
-            }
-    }
-
-    fun invalidateMembers(memberIds: Collection<Long>, reason: String) {
-        if (!properties.enabled) return
-        memberIds.distinct().forEach { memberId ->
-            runCatching {
-                store.incrementRevision(memberId, properties.revisionTtl)
-            }.onSuccess { revision ->
-                log.info(
-                    "Schedule calendar cache INVALIDATE memberId={}, revision={}, reason={}",
-                    memberId,
-                    revision,
-                    reason,
-                )
-            }.onFailure { error ->
-                // 변경 트랜잭션은 이미 커밋됐다. Redis 장애가 API 성공을 뒤집지 않도록 로그만 남긴다.
-                log.error(
-                    "Schedule calendar cache invalidation failed. memberId={}, reason={}",
-                    memberId,
-                    reason,
-                    error,
-                )
-            }
-        }
-    }
+    fun currentRevision(memberId: Long, scope: ScheduleCalendarCacheScope): Long =
+        scope.clientRevision(revisionService.currentRevision(memberId))
 
     private fun getOrLoad(
         memberId: Long,
+        scope: ScheduleCalendarCacheScope,
         rangeStart: Instant,
         rangeEnd: Instant,
         loader: (Instant, Instant) -> List<ScheduleDto>,
         retry: Boolean,
     ): List<ScheduleDto> {
-        val revision = store.getRevision(memberId)
+        val revision = revisionService.currentRevision(memberId)
         val months = monthRanges(rangeStart, rangeEnd)
-        val keys = months.associateWith { cacheKey(memberId, revision, it.yearMonth) }
+        val keys = months.associateWith { cacheKey(memberId, scope, revision, it.yearMonth) }
         val cachedJson = store.getAll(keys.values.toList())
         val cached = months.mapNotNull { month ->
             cachedJson[keys.getValue(month)]?.let { month to objectMapper.readValue(it, listType) }
@@ -94,8 +64,9 @@ class ScheduleCalendarCacheService(
 
         if (missingGroups.isEmpty()) {
             log.info(
-                "Schedule calendar cache HIT memberId={}, revision={}, months={}",
+                "Schedule calendar cache HIT memberId={}, scope={}, revision={}, months={}",
                 memberId,
+                scope,
                 revision,
                 months.joinToString(",") { it.yearMonth.toString() },
             )
@@ -103,8 +74,9 @@ class ScheduleCalendarCacheService(
         }
 
         log.info(
-            "Schedule calendar cache MISS memberId={}, revision={}, missingMonths={}",
+            "Schedule calendar cache MISS memberId={}, scope={}, revision={}, missingMonths={}",
             memberId,
+            scope,
             revision,
             missingGroups.flatten().joinToString(",") { it.yearMonth.toString() },
         )
@@ -117,16 +89,17 @@ class ScheduleCalendarCacheService(
             }
         }
 
-        val revisionAfterLoad = store.getRevision(memberId)
+        val revisionAfterLoad = revisionService.currentRevision(memberId)
         if (revisionAfterLoad != revision) {
             log.info(
-                "Schedule calendar cache fill skipped after revision change. memberId={}, before={}, after={}",
+                "Schedule calendar cache fill skipped after revision change. memberId={}, scope={}, before={}, after={}",
                 memberId,
+                scope,
                 revision,
                 revisionAfterLoad,
             )
             return if (retry) {
-                getOrLoad(memberId, rangeStart, rangeEnd, loader, retry = false)
+                getOrLoad(memberId, scope, rangeStart, rangeEnd, loader, retry = false)
             } else {
                 loader(rangeStart, rangeEnd)
             }
@@ -137,8 +110,9 @@ class ScheduleCalendarCacheService(
         }.toMap()
         store.putAll(values, properties.ttl)
         log.info(
-            "Schedule calendar cache STORE memberId={}, revision={}, months={}",
+            "Schedule calendar cache STORE memberId={}, scope={}, revision={}, months={}",
             memberId,
+            scope,
             revision,
             loadedByMonth.keys.joinToString(",") { it.yearMonth.toString() },
         )
@@ -193,8 +167,13 @@ class ScheduleCalendarCacheService(
 
     private fun parseInstant(value: String): Instant = Instant.parse(value)
 
-    private fun cacheKey(memberId: Long, revision: Long, month: YearMonth): String =
-        "nolate:schedules:v1:member:$memberId:rev:$revision:month:$month"
+    private fun cacheKey(
+        memberId: Long,
+        scope: ScheduleCalendarCacheScope,
+        revision: Long,
+        month: YearMonth,
+    ): String =
+        "nolate:schedules:v2:member:$memberId:scope:${scope.keySegment}:rev:$revision:month:$month"
 
     private data class MonthRange(
         val yearMonth: YearMonth,

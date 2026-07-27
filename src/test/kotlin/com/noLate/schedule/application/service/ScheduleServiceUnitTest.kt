@@ -23,6 +23,7 @@ import com.noLate.schedule.domain.ScheduleCalendarMember
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheService
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheScope
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
@@ -603,6 +604,48 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `central access policy preserves category share metadata in schedule responses`() {
+        val memberId = 1L
+        val scheduleId = 3L
+        val accessPolicy = mock<ScheduleAccessPolicy>()
+        val categorySharedSchedule = scheduleEntity(
+            id = scheduleId,
+            memberId = 99L,
+            categoryId = "20",
+        )
+        val securedService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            scheduleAccessPolicy = accessPolicy,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+        )
+        whenever(scheduleRepository.findScheduleList(memberId))
+            .thenReturn(listOf(categorySharedSchedule))
+        whenever(accessPolicy.resolveAll(memberId, listOf(categorySharedSchedule)))
+            .thenReturn(
+                mapOf(
+                    scheduleId to ScheduleAccessDecision(
+                        canView = true,
+                        canEdit = true,
+                        travelEnabled = false,
+                        canViewAllTravelPlans = true,
+                        effectivePermission = ScheduleSharePermission.EDITOR,
+                        categoryPermission = ScheduleSharePermission.EDITOR,
+                    )
+                )
+            )
+
+        val result = securedService.getScheduleList(memberId).single()
+
+        assertEquals(ScheduleSharePermission.EDITOR, result.sharePermission)
+        assertEquals(true, result.category.shared)
+        assertEquals(ScheduleSharePermission.EDITOR, result.category.sharePermission)
+    }
+
+    @Test
     fun `global sharing off uses owner queries and filters a defensive foreign row`() {
         val memberId = 1L
         val owner = scheduleEntity(id = 1L, memberId = memberId)
@@ -629,7 +672,7 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
-    fun `global sharing off bypasses calendar cache that may contain retained shared DTOs`() {
+    fun `global sharing off uses an owner-only cache scope and filters defensive foreign rows`() {
         val memberId = 1L
         val rangeStart = Instant.parse("2026-06-01T00:00:00Z")
         val rangeEnd = Instant.parse("2026-06-30T23:59:59Z")
@@ -645,7 +688,24 @@ class ScheduleServiceUnitTest {
         )
         whenever(
             scheduleRepository.findOwnedOverlappingScheduleList(memberId, rangeStart, rangeEnd)
-        ).thenReturn(listOf(scheduleEntity(id = 1L, memberId = memberId)))
+        ).thenReturn(
+            listOf(
+                scheduleEntity(id = 1L, memberId = memberId),
+                scheduleEntity(id = 2L, memberId = 99L),
+            )
+        )
+        whenever(
+            cacheService.getOrLoad(
+                eq(memberId),
+                eq(ScheduleCalendarCacheScope.OWNED_ONLY),
+                eq(rangeStart),
+                eq(rangeEnd),
+                any(),
+            )
+        ).thenAnswer { invocation ->
+            val loader = invocation.getArgument<(Instant, Instant) -> List<ScheduleDto>>(4)
+            loader(rangeStart, rangeEnd)
+        }
 
         val result = disabledService.getCalendarScheduleList(
             memberId,
@@ -654,8 +714,55 @@ class ScheduleServiceUnitTest {
         )
 
         assertEquals(listOf(1L), result.map { it.id })
-        verify(cacheService, never()).getOrLoad(any(), any(), any(), any())
+        verify(cacheService).getOrLoad(
+            eq(memberId),
+            eq(ScheduleCalendarCacheScope.OWNED_ONLY),
+            eq(rangeStart),
+            eq(rangeEnd),
+            any(),
+        )
         verify(scheduleRepository, never()).findOverlappingScheduleList(any(), any(), any())
+    }
+
+    @Test
+    fun `global sharing on uses the shared-visibility calendar cache scope`() {
+        val memberId = 1L
+        val rangeStart = Instant.parse("2026-06-01T00:00:00Z")
+        val rangeEnd = Instant.parse("2026-06-30T23:59:59Z")
+        val cacheService = mock<ScheduleCalendarCacheService>()
+        val enabledService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            calendarCacheService = cacheService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+        )
+        whenever(
+            cacheService.getOrLoad(
+                eq(memberId),
+                eq(ScheduleCalendarCacheScope.SHARING_ENABLED),
+                eq(rangeStart),
+                eq(rangeEnd),
+                any(),
+            )
+        ).thenReturn(emptyList())
+
+        enabledService.getCalendarScheduleList(
+            memberId,
+            rangeStart.toString(),
+            rangeEnd.toString(),
+        )
+
+        verify(cacheService).getOrLoad(
+            eq(memberId),
+            eq(ScheduleCalendarCacheScope.SHARING_ENABLED),
+            eq(rangeStart),
+            eq(rangeEnd),
+            any(),
+        )
+        verify(scheduleRepository, never()).findOwnedOverlappingScheduleList(any(), any(), any())
     }
 
     @Test

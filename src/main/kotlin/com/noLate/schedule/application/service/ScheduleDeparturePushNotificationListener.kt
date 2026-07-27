@@ -1,6 +1,8 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.notification.application.service.PushEventOutboxService
+import org.springframework.core.Ordered
+import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Component
 import org.springframework.transaction.event.TransactionPhase
 import org.springframework.transaction.event.TransactionalEventListener
@@ -29,6 +31,7 @@ class ScheduleDeparturePushNotificationListener(
      * 출발 전이와 수신자별 immutable outbox를 같은 transaction에 저장한다. provider 호출은
      * commit 이후 별도 drainer가 수행하므로 business transaction 안에서 외부 효과가 없다.
      */
+    @Order(Ordered.LOWEST_PRECEDENCE - 100)
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     fun onParticipantDeparted(event: ScheduleParticipantDepartedEvent) {
         // 정상 service 경로도 off에서 recipient를 owner-only로 줄이지만, listener 자체의

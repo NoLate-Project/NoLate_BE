@@ -39,12 +39,15 @@ class ProductionApiSurfaceConfigurationTest {
     }
 
     @Test
-    fun `production profile keeps schedule sharing explicitly disabled`() {
+    fun `production profile enables sharing by default with an explicit kill switch`() {
         val properties = YamlPropertiesFactoryBean().apply {
             setResources(ClassPathResource("application-prod.yml"))
         }.getObject() ?: error("application-prod.yml could not be loaded")
 
-        assertEquals("false", properties.getProperty("schedule.sharing.enabled"))
+        assertEquals(
+            "\${SCHEDULE_SHARING_ENABLED:true}",
+            properties.getProperty("schedule.sharing.enabled"),
+        )
     }
 
     @Test

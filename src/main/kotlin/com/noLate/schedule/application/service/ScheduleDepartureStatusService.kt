@@ -3,6 +3,7 @@ package com.noLate.schedule.application.service
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleDepartureParticipantDto
 import com.noLate.schedule.domain.ScheduleDepartureParticipantRole
@@ -152,6 +153,16 @@ class ScheduleDepartureStatusService(
                 departedMemberId = memberId,
                 recipientMemberIds = previewRecipients
                     .filter { it in activeLockedMemberIds && it in stillEligibleRecipients },
+            )
+            // 월 일정 DTO에는 본인의 출발 시각과 이동 알림 상태뿐 아니라 접근 가능한
+            // 참가자의 출발 상태도 들어간다. 오너가 아닌 공유 참가자의 depart-now는
+            // ScheduleService.markDeparted를 거치지 않으므로 여기서 동결·잠금한 audience의
+            // durable revision을 같은 transaction 안에서 함께 갱신한다.
+            eventPublisher.publishEvent(
+                ScheduleCalendarCacheInvalidationEvent(
+                    memberIds = activeLockedMemberIds,
+                    reason = "schedule-participant-departed",
+                )
             )
         }
 

@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.useCase
 
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
@@ -7,6 +8,7 @@ import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.domain.ScheduleTravelPlanOverviewDto
 import com.noLate.schedule.domain.ScheduleTravelPlanUpsertCommand
 import jakarta.transaction.Transactional
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Component
 
 @Component
@@ -14,6 +16,7 @@ class ScheduleTravelPlanUseCase(
     private val travelPlanService: ScheduleTravelPlanService,
     private val scheduleService: ScheduleService,
     private val pushJobService: SchedulePushJobService,
+    private val eventPublisher: ApplicationEventPublisher,
 ) {
     fun getOverview(memberId: Long, scheduleId: Long): ScheduleTravelPlanOverviewDto =
         travelPlanService.getOverview(memberId, scheduleId)
@@ -52,6 +55,14 @@ class ScheduleTravelPlanUseCase(
         } else {
             pushJobService.cancelByScheduleIdAndMemberId(scheduleId, memberId)
         }
+        // 월 일정 DTO에는 조회자 본인의 이동 계획이 투영된다. DB 저장과 push job 변경이
+        // 모두 성공한 transaction만 독립 row의 durable cache revision을 갱신한다.
+        eventPublisher.publishEvent(
+            ScheduleCalendarCacheInvalidationEvent(
+                memberIds = setOf(memberId),
+                reason = "travel-plan-updated",
+            )
+        )
         return plan
     }
 }

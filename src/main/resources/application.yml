@@ -152,13 +152,12 @@ server:
 
 schedule:
   sharing:
-    # Fail closed: missing/false/malformed values all disable server-side sharing.
-    # Local development must opt in explicitly with the exact string "true".
-    enabled: ${SCHEDULE_SHARING_ENABLED:}
+    # 공유는 기본 제공 기능이다. 운영 kill switch는 exact lowercase "true"만 허용하는
+    # 서버 정책을 거치므로 false/오타/공백 값은 모두 안전하게 비활성화된다.
+    enabled: ${SCHEDULE_SHARING_ENABLED:true}
   calendar-cache:
     enabled: ${SCHEDULE_CALENDAR_CACHE_ENABLED:true}
     ttl: ${SCHEDULE_CALENDAR_CACHE_TTL:15m}
-    revision-ttl: ${SCHEDULE_CALENDAR_CACHE_REVISION_TTL:7d}
   route-setup-reminder:
     enabled: ${SCHEDULE_ROUTE_SETUP_REMINDER_ENABLED:true}
     fixed-delay-ms: ${SCHEDULE_ROUTE_SETUP_REMINDER_FIXED_DELAY_MS:300000}

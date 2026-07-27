@@ -26,6 +26,7 @@ data class ScheduleAccessDecision(
     val canViewAllTravelPlans: Boolean,
     val effectivePermission: ScheduleSharePermission? = null,
     val effectiveContentMode: ScheduleShareContentMode? = null,
+    val categoryPermission: ScheduleSharePermission? = null,
     val calendarRole: ScheduleCalendarRole? = null,
 )
 
@@ -344,6 +345,7 @@ class ScheduleAccessPolicy(
             canViewAllTravelPlans = privileged,
             effectivePermission = permission,
             effectiveContentMode = contentMode,
+            categoryPermission = categoryPermission,
             calendarRole = calendarMember?.role,
         )
     }

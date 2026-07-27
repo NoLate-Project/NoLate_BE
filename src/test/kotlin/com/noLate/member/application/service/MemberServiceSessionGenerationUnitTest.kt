@@ -3,6 +3,7 @@ package com.noLate.member.application.service
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarCacheRevisionRepository
 import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -13,7 +14,8 @@ import org.mockito.kotlin.whenever
 
 class MemberServiceSessionGenerationUnitTest {
     private val repository = mock<MemberRepository>()
-    private val service = MemberService(repository)
+    private val cacheRevisionRepository = mock<ScheduleCalendarCacheRevisionRepository>()
+    private val service = MemberService(repository, cacheRevisionRepository)
 
     @Test
     fun `same second old generation is rejected while current generation is accepted`() {

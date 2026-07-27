@@ -135,7 +135,7 @@ class ProductionSchemaVersionGuard(
                 """
                 SELECT version, COUNT(*) AS marker_count
                 FROM application_schema_migrations
-                WHERE version IN (?, ?, ?)
+                WHERE version IN (?, ?, ?, ?)
                 GROUP BY version
                 """.trimIndent(),
                 { resultSet, _ ->
@@ -167,11 +167,14 @@ class ProductionSchemaVersionGuard(
         const val APPLE_TOKEN_LIFECYCLE_SCHEMA_VERSION =
             "2026-07-26-apple-token-lifecycle-v1"
         const val ACCOUNT_DELETION_SCHEMA_VERSION = "2026-07-26-account-deletion-v1"
+        const val SCHEDULE_CALENDAR_CACHE_REVISION_SCHEMA_VERSION =
+            "2026-07-27-schedule-calendar-cache-revision-v1"
 
         val REQUIRED_SCHEMA_VERSIONS = listOf(
             PUSH_RELIABILITY_SCHEMA_VERSION,
             APPLE_TOKEN_LIFECYCLE_SCHEMA_VERSION,
             ACCOUNT_DELETION_SCHEMA_VERSION,
+            SCHEDULE_CALENDAR_CACHE_REVISION_SCHEMA_VERSION,
         )
     }
 }

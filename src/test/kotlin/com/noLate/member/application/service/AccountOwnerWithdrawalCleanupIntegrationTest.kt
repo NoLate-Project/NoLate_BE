@@ -14,6 +14,7 @@ import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.schedule.application.service.ScheduleAccessPolicy
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.application.service.ScheduleSharingAvailabilityPolicy
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.Schedule
@@ -54,6 +55,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
+import org.springframework.context.event.EventListener
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.PlatformTransactionManager
@@ -67,6 +69,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.CopyOnWriteArrayList
 import org.springframework.transaction.support.TransactionTemplate
 
 @DataJpaTest
@@ -105,6 +108,7 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
     private val actionReceiptRepository: ScheduleNotificationActionReceiptRepository,
     private val transactionManager: PlatformTransactionManager,
+    private val invalidationRecorder: AccountCleanupInvalidationRecorder,
 ) {
 
     @Test
@@ -214,6 +218,12 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
                 scheduleId,
                 org.springframework.data.domain.PageRequest.of(0, 10),
             ).isEmpty()
+        )
+        assertTrue(
+            invalidationRecorder.events.any {
+                it.reason == "account-withdrawn" &&
+                    it.memberIds == setOf(ownerId, participantId)
+            }
         )
     }
 
@@ -708,4 +718,17 @@ class AccountOwnerWithdrawalCleanupTestConfig {
     @Bean
     fun accountOwnerWithdrawalCleanupClock(): Clock =
         Clock.fixed(Instant.parse("2026-07-24T00:00:00Z"), ZoneOffset.UTC)
+
+    @Bean
+    fun accountCleanupInvalidationRecorder(): AccountCleanupInvalidationRecorder =
+        AccountCleanupInvalidationRecorder()
+}
+
+class AccountCleanupInvalidationRecorder {
+    val events = CopyOnWriteArrayList<ScheduleCalendarCacheInvalidationEvent>()
+
+    @EventListener
+    fun onInvalidated(event: ScheduleCalendarCacheInvalidationEvent) {
+        events += event
+    }
 }

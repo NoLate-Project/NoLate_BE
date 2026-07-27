@@ -2,6 +2,8 @@ package com.noLate.schedule.application.service
 
 import com.noLate.notification.application.service.PushEventOutboxService
 import com.noLate.schedule.domain.ScheduleShareResourceType
+import org.springframework.core.Ordered
+import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Component
 import org.springframework.transaction.event.TransactionPhase
 import org.springframework.transaction.event.TransactionalEventListener
@@ -33,6 +35,7 @@ class ScheduleSharePushNotificationListener(
      * process crash로 알림 source event가 사라지는 창이 없고, outbox 저장 실패는 공유
      * transaction도 함께 rollback한다.
      */
+    @Order(Ordered.LOWEST_PRECEDENCE - 100)
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     fun onShareGranted(event: ScheduleShareGrantedEvent) {
         // 숨겨진 FE 진입점만으로는 직접 API 호출이나 이미 실행 중인 구버전 클라이언트를

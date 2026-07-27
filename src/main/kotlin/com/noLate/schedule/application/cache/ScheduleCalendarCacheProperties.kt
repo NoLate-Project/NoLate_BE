@@ -9,5 +9,4 @@ import java.time.Duration
 class ScheduleCalendarCacheProperties {
     var enabled: Boolean = true
     var ttl: Duration = Duration.ofMinutes(15)
-    var revisionTtl: Duration = Duration.ofDays(7)
 }

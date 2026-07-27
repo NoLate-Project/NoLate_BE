@@ -4,6 +4,7 @@ import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCalendarMember
 import com.noLate.schedule.domain.ScheduleCalendarRole
+import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleSharePermission
@@ -101,6 +102,27 @@ class ScheduleAccessPolicyTest {
 
         assertTrue(access.canView)
         assertFalse(access.travelEnabled)
+    }
+
+    @Test
+    fun `category grant remains identifiable in the combined access decision`() {
+        val schedule = routeSchedule(ownerId = 1L, calendarId = null).apply {
+            categoryId = 20L
+        }
+        whenever(categoryShares.findByCategoryIdAndTargetMemberId(20L, 2L)).thenReturn(
+            ScheduleCategoryShare(
+                categoryId = 20L,
+                ownerMemberId = 1L,
+                targetMemberId = 2L,
+                permission = ScheduleSharePermission.EDITOR,
+            )
+        )
+
+        val access = policy.resolve(memberId = 2L, schedule = schedule)
+
+        assertTrue(access.canView)
+        assertEquals(ScheduleSharePermission.EDITOR, access.effectivePermission)
+        assertEquals(ScheduleSharePermission.EDITOR, access.categoryPermission)
     }
 
     @Test

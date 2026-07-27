@@ -25,7 +25,7 @@ MVP 1차 완료 조건:
 
 
 FE 메인 캘린더의 공유함·알림 배지는 2026-07-24부터 45초 polling 대신 push 수신 이벤트로 갱신한다. 화면 최초 진입과 앱 foreground 복귀 시 서버 동기화를 보완하고, 실제 APNs/FCM 수신 시 두 배지가 즉시 갱신되는지는 TestFlight에서 최종 검증한다.
-월 이동 조회 성능 개선도 완료했다. 사용자·revision·월 단위 일정 Redis 캐시와 전 사용자 공용 음력/공휴일 월 캐시를 적용했고, 일정 생성·수정·삭제와 일정/카테고리/캘린더 공유 변경은 커밋 이후 영향 회원의 revision을 올린다. 실제 Redis 검증에서 warm metadata 조회는 회원·달력 SQL 없이 반환됐다.
+월 이동 조회 성능 개선도 완료했다. FK 없는 DB durable revision과 `owned/shared` 범위별·월 단위 Redis payload 캐시, 전 사용자 공용 음력/공휴일 월 캐시를 적용했다. 일정 생성·수정·삭제와 일정/카테고리/캘린더 공유 변경은 같은 transaction의 terminal `BEFORE_COMMIT`에서 합친 영향 회원 revision을 원자적으로 올린다. 실제 Redis 검증에서 warm metadata 조회는 회원·달력 SQL 없이 반환됐다.
 
 App Store와 Google Play 동시 출시 준비는 별도 릴리스 트랙으로 관리한다. 제출 전 P0는 영구 앱 ID와 서명 산출물 확정, Apple 탈퇴 토큰 철회, Play 외부 탈퇴 웹 경로, 일정 공유 UGC 신고·차단 방향, Google Calendar OAuth 검증, 개인정보 선언 일치다.
 

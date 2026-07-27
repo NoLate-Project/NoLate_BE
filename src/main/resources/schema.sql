@@ -631,6 +631,18 @@ CREATE TABLE IF NOT EXISTS application_schema_migrations (
     PRIMARY KEY (version)
 ) COMMENT='Manually verified production schema versions';
 
+CREATE TABLE IF NOT EXISTS schedule_calendar_cache_revisions (
+    member_id BIGINT NOT NULL COMMENT 'Member-scoped cache authority without a member FK',
+    revision BIGINT NOT NULL DEFAULT 0 COMMENT 'Durable monthly schedule cache generation',
+    PRIMARY KEY (member_id),
+    CONSTRAINT chk_schedule_calendar_cache_revision_nonnegative CHECK (revision >= 0)
+) COMMENT='Independent lock rows for durable schedule calendar cache generations';
+
+-- Production backfills every existing member through the reviewed migration below. This
+-- bootstrap table intentionally has no member FK, so cache lock ordering cannot acquire a member
+-- row through referential actions.
+-- docs/schedule/migrations/2026-07-27-schedule-calendar-cache-revision.sql
+
 CREATE TABLE IF NOT EXISTS favorite_place_categories (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Favorite place category primary key',
     member_id BIGINT NOT NULL COMMENT 'Owner member id',
