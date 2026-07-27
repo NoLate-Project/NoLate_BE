@@ -83,14 +83,16 @@ class ScheduleShareController(
         @PathVariable scheduleId: Long,
         @RequestBody request: CreateShareRequest,
     ): ApiResponse<ScheduleShareDto> {
+        val authenticated = requireSharePrincipal(principal)
         return ApiResponse.success(
             scheduleShareService.shareSchedule(
-                ownerMemberId = requireShareMemberId(principal),
+                ownerMemberId = authenticated.id,
                 scheduleId = scheduleId,
                 targetEmail = request.targetEmail,
                 targetAppId = request.targetAppId,
                 permission = request.permission ?: ScheduleSharePermission.VIEWER,
                 contentMode = request.contentMode ?: ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+                presentedSessionGeneration = requireShareSessionGeneration(authenticated),
             )
         )
     }
@@ -103,13 +105,15 @@ class ScheduleShareController(
         @PathVariable shareId: Long,
         @RequestBody request: UpdateShareRequest,
     ): ApiResponse<ScheduleShareDto> {
+        val authenticated = requireSharePrincipal(principal)
         return ApiResponse.success(
             scheduleShareService.updateScheduleShare(
-                ownerMemberId = requireShareMemberId(principal),
+                ownerMemberId = authenticated.id,
                 scheduleId = scheduleId,
                 shareId = shareId,
                 permission = request.permission,
                 contentMode = request.contentMode,
+                presentedSessionGeneration = requireShareSessionGeneration(authenticated),
             )
         )
     }
@@ -121,10 +125,12 @@ class ScheduleShareController(
         @PathVariable scheduleId: Long,
         @PathVariable shareId: Long,
     ): ApiResponse<Unit> {
+        val authenticated = requireSharePrincipal(principal)
         scheduleShareService.revokeScheduleShare(
-            ownerMemberId = requireShareMemberId(principal),
+            ownerMemberId = authenticated.id,
             scheduleId = scheduleId,
             shareId = shareId,
+            presentedSessionGeneration = requireShareSessionGeneration(authenticated),
         )
         return ApiResponse.success(Unit)
     }
@@ -150,14 +156,16 @@ class ScheduleShareController(
         @PathVariable scheduleId: Long,
         @RequestBody request: CreateShareInvitationRequest,
     ): ApiResponse<ScheduleShareInvitationDto> {
+        val authenticated = requireSharePrincipal(principal)
         return ApiResponse.success(
             scheduleShareService.createScheduleInvitation(
-                ownerMemberId = requireShareMemberId(principal),
+                ownerMemberId = authenticated.id,
                 scheduleId = scheduleId,
                 permission = request.permission ?: ScheduleSharePermission.VIEWER,
                 contentMode = request.contentMode ?: ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
                 ttlHours = request.ttlHours,
                 maxAcceptCount = request.maxAcceptCount,
+                presentedSessionGeneration = requireShareSessionGeneration(authenticated),
             )
         )
     }
@@ -169,11 +177,13 @@ class ScheduleShareController(
         @PathVariable scheduleId: Long,
         @PathVariable invitationId: Long,
     ): ApiResponse<Unit> {
+        val authenticated = requireSharePrincipal(principal)
         scheduleShareService.revokeInvitation(
-            ownerMemberId = requireShareMemberId(principal),
+            ownerMemberId = authenticated.id,
             resourceType = ScheduleShareResourceType.SCHEDULE,
             resourceId = scheduleId,
             invitationId = invitationId,
+            presentedSessionGeneration = requireShareSessionGeneration(authenticated),
         )
         return ApiResponse.success(Unit)
     }
@@ -206,13 +216,15 @@ class ScheduleCategoryShareController(
         @PathVariable categoryId: Long,
         @RequestBody request: CreateShareRequest,
     ): ApiResponse<ScheduleShareDto> {
+        val authenticated = requireSharePrincipal(principal)
         return ApiResponse.success(
             scheduleShareService.shareCategory(
-                ownerMemberId = requireShareMemberId(principal),
+                ownerMemberId = authenticated.id,
                 categoryId = categoryId,
                 targetEmail = request.targetEmail,
                 targetAppId = request.targetAppId,
                 permission = request.permission ?: ScheduleSharePermission.VIEWER,
+                presentedSessionGeneration = requireShareSessionGeneration(authenticated),
             )
         )
     }
@@ -225,12 +237,14 @@ class ScheduleCategoryShareController(
         @PathVariable shareId: Long,
         @RequestBody request: UpdateShareRequest,
     ): ApiResponse<ScheduleShareDto> {
+        val authenticated = requireSharePrincipal(principal)
         return ApiResponse.success(
             scheduleShareService.updateCategoryShare(
-                ownerMemberId = requireShareMemberId(principal),
+                ownerMemberId = authenticated.id,
                 categoryId = categoryId,
                 shareId = shareId,
                 permission = request.permission,
+                presentedSessionGeneration = requireShareSessionGeneration(authenticated),
             )
         )
     }
@@ -242,10 +256,12 @@ class ScheduleCategoryShareController(
         @PathVariable categoryId: Long,
         @PathVariable shareId: Long,
     ): ApiResponse<Unit> {
+        val authenticated = requireSharePrincipal(principal)
         scheduleShareService.revokeCategoryShare(
-            ownerMemberId = requireShareMemberId(principal),
+            ownerMemberId = authenticated.id,
             categoryId = categoryId,
             shareId = shareId,
+            presentedSessionGeneration = requireShareSessionGeneration(authenticated),
         )
         return ApiResponse.success(Unit)
     }
@@ -271,13 +287,15 @@ class ScheduleCategoryShareController(
         @PathVariable categoryId: Long,
         @RequestBody request: CreateShareInvitationRequest,
     ): ApiResponse<ScheduleShareInvitationDto> {
+        val authenticated = requireSharePrincipal(principal)
         return ApiResponse.success(
             scheduleShareService.createCategoryInvitation(
-                ownerMemberId = requireShareMemberId(principal),
+                ownerMemberId = authenticated.id,
                 categoryId = categoryId,
                 permission = request.permission ?: ScheduleSharePermission.VIEWER,
                 ttlHours = request.ttlHours,
                 maxAcceptCount = request.maxAcceptCount,
+                presentedSessionGeneration = requireShareSessionGeneration(authenticated),
             )
         )
     }
@@ -289,11 +307,13 @@ class ScheduleCategoryShareController(
         @PathVariable categoryId: Long,
         @PathVariable invitationId: Long,
     ): ApiResponse<Unit> {
+        val authenticated = requireSharePrincipal(principal)
         scheduleShareService.revokeInvitation(
-            ownerMemberId = requireShareMemberId(principal),
+            ownerMemberId = authenticated.id,
             resourceType = ScheduleShareResourceType.CATEGORY,
             resourceId = categoryId,
             invitationId = invitationId,
+            presentedSessionGeneration = requireShareSessionGeneration(authenticated),
         )
         return ApiResponse.success(Unit)
     }
@@ -311,10 +331,12 @@ class ShareInvitationController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable token: String,
     ): ApiResponse<ScheduleShareInvitationAcceptDto> {
+        val authenticated = requireSharePrincipal(principal)
         return ApiResponse.success(
             scheduleShareService.acceptInvitation(
-                currentMemberId = requireShareMemberId(principal),
+                currentMemberId = authenticated.id,
                 token = token,
+                presentedSessionGeneration = requireShareSessionGeneration(authenticated),
             )
         )
     }
@@ -345,3 +367,9 @@ data class CreateShareInvitationRequest(
 
 private fun requireShareMemberId(principal: MemberPrincipal?): Long =
     principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+private fun requireSharePrincipal(principal: MemberPrincipal?): MemberPrincipal =
+    principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+private fun requireShareSessionGeneration(principal: MemberPrincipal): Long =
+    principal.accessTokenSessionGeneration ?: throw BusinessException(ErrorCode.INVALID_TOKEN)

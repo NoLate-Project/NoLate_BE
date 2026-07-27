@@ -8,6 +8,7 @@ import com.noLate.favorite.infrastructure.FavoritePlaceCategoryRepository
 import com.noLate.favorite.infrastructure.FavoritePlaceRepository
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.member.application.service.MemberService
 import jakarta.transaction.Transactional
 import org.springframework.stereotype.Service
 import kotlin.math.abs
@@ -16,6 +17,7 @@ import kotlin.math.abs
 class FavoritePlaceService(
     private val categoryRepository: FavoritePlaceCategoryRepository,
     private val placeRepository: FavoritePlaceRepository,
+    private val memberService: MemberService,
 ) {
     private val defaultCategoryColor = "#5A96FF"
     private val samePlaceCoordinateTolerance = 0.000001
@@ -29,16 +31,21 @@ class FavoritePlaceService(
     @Transactional
     fun createCategory(
         memberId: Long,
+        presentedSessionGeneration: Long,
         name: String?,
         color: String?,
         iconKey: String?,
         sortOrder: Int?,
     ): FavoritePlaceCategoryDto {
+        val normalizedName = normalizeRequiredText(name, "name", maxLength = 80)
+        val normalizedColor = normalizeOptionalText(color, maxLength = 32) ?: defaultCategoryColor
+        val normalizedIconKey = normalizeOptionalText(iconKey, maxLength = 40)
+        fenceMutation(memberId, presentedSessionGeneration)
         val entity = FavoritePlaceCategory(
             memberId = memberId,
-            name = normalizeRequiredText(name, "name", maxLength = 80),
-            color = normalizeOptionalText(color, maxLength = 32) ?: defaultCategoryColor,
-            iconKey = normalizeOptionalText(iconKey, maxLength = 40),
+            name = normalizedName,
+            color = normalizedColor,
+            iconKey = normalizedIconKey,
             sortOrder = sortOrder ?: nextCategorySortOrder(memberId),
         )
 
@@ -48,12 +55,14 @@ class FavoritePlaceService(
     @Transactional
     fun updateCategory(
         memberId: Long,
+        presentedSessionGeneration: Long,
         categoryId: Long,
         name: String?,
         color: String?,
         iconKey: String?,
         sortOrder: Int?,
     ): FavoritePlaceCategoryDto {
+        fenceMutation(memberId, presentedSessionGeneration)
         val entity = findCategory(memberId, categoryId)
         entity.update(
             name = name?.let { normalizeRequiredText(it, "name", maxLength = 80) } ?: entity.name,
@@ -66,7 +75,12 @@ class FavoritePlaceService(
     }
 
     @Transactional
-    fun deleteCategory(memberId: Long, categoryId: Long) {
+    fun deleteCategory(
+        memberId: Long,
+        categoryId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        fenceMutation(memberId, presentedSessionGeneration)
         val entity = findCategory(memberId, categoryId)
         placeRepository.clearCategory(memberId, categoryId)
         entity.softDelete()
@@ -74,7 +88,12 @@ class FavoritePlaceService(
     }
 
     @Transactional
-    fun reorderCategories(memberId: Long, items: List<FavoritePlaceReorderItem>): List<FavoritePlaceCategoryDto> {
+    fun reorderCategories(
+        memberId: Long,
+        items: List<FavoritePlaceReorderItem>,
+        presentedSessionGeneration: Long,
+    ): List<FavoritePlaceCategoryDto> {
+        fenceMutation(memberId, presentedSessionGeneration)
         items.forEach { item ->
             val entity = findCategory(memberId, item.id)
             entity.sortOrder = item.sortOrder
@@ -105,6 +124,7 @@ class FavoritePlaceService(
     @Transactional
     fun saveDefaultOrigin(
         memberId: Long,
+        presentedSessionGeneration: Long,
         label: String?,
         placeName: String?,
         address: String?,
@@ -123,6 +143,7 @@ class FavoritePlaceService(
             ?: "기본 출발지"
         val normalizedProvider = normalizeOptionalText(provider, maxLength = 30)?.uppercase()
         val normalizedProviderPlaceId = normalizeOptionalText(providerPlaceId, maxLength = 128)
+        fenceMutation(memberId, presentedSessionGeneration)
         val existing = findMatchingPlace(
             memberId = memberId,
             lat = normalizedLat,
@@ -134,6 +155,7 @@ class FavoritePlaceService(
         if (existing == null) {
             return createPlace(
                 memberId = memberId,
+                presentedSessionGeneration = presentedSessionGeneration,
                 categoryId = null,
                 label = normalizedLabel,
                 placeName = normalizedPlaceName,
@@ -166,13 +188,18 @@ class FavoritePlaceService(
     }
 
     @Transactional
-    fun clearDefaultOrigin(memberId: Long) {
+    fun clearDefaultOrigin(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        fenceMutation(memberId, presentedSessionGeneration)
         placeRepository.clearDefaultOrigin(memberId)
     }
 
     @Transactional
     fun createPlace(
         memberId: Long,
+        presentedSessionGeneration: Long,
         categoryId: Long?,
         label: String?,
         placeName: String?,
@@ -192,6 +219,7 @@ class FavoritePlaceService(
             ?: normalizedPlaceName
             ?: normalizedAddress
             ?: "즐겨찾기 장소"
+        fenceMutation(memberId, presentedSessionGeneration)
         val category = categoryId?.let { findCategory(memberId, it) }
         val shouldBeDefaultOrigin = defaultOrigin == true
 
@@ -219,6 +247,7 @@ class FavoritePlaceService(
     @Transactional
     fun updatePlace(
         memberId: Long,
+        presentedSessionGeneration: Long,
         placeId: Long,
         categoryId: Long?,
         clearCategory: Boolean,
@@ -232,6 +261,7 @@ class FavoritePlaceService(
         defaultOrigin: Boolean?,
         sortOrder: Int?,
     ): FavoritePlaceDto {
+        fenceMutation(memberId, presentedSessionGeneration)
         val entity = findPlace(memberId, placeId)
         val category = when {
             clearCategory -> null
@@ -265,14 +295,24 @@ class FavoritePlaceService(
     }
 
     @Transactional
-    fun deletePlace(memberId: Long, placeId: Long) {
+    fun deletePlace(
+        memberId: Long,
+        placeId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        fenceMutation(memberId, presentedSessionGeneration)
         val entity = findPlace(memberId, placeId)
         entity.softDelete()
         placeRepository.save(entity)
     }
 
     @Transactional
-    fun setDefaultOrigin(memberId: Long, placeId: Long): FavoritePlaceDto {
+    fun setDefaultOrigin(
+        memberId: Long,
+        placeId: Long,
+        presentedSessionGeneration: Long,
+    ): FavoritePlaceDto {
+        fenceMutation(memberId, presentedSessionGeneration)
         val entity = findPlace(memberId, placeId)
         val category = entity.categoryId?.let { findCategory(memberId, it) }
         placeRepository.clearDefaultOrigin(memberId)
@@ -281,7 +321,12 @@ class FavoritePlaceService(
     }
 
     @Transactional
-    fun reorderPlaces(memberId: Long, items: List<FavoritePlaceReorderItem>): List<FavoritePlaceDto> {
+    fun reorderPlaces(
+        memberId: Long,
+        items: List<FavoritePlaceReorderItem>,
+        presentedSessionGeneration: Long,
+    ): List<FavoritePlaceDto> {
+        fenceMutation(memberId, presentedSessionGeneration)
         items.forEach { item ->
             val entity = findPlace(memberId, item.id)
             entity.sortOrder = item.sortOrder
@@ -294,6 +339,13 @@ class FavoritePlaceService(
     private fun findCategory(memberId: Long, categoryId: Long): FavoritePlaceCategory {
         return categoryRepository.findByIdAndMemberIdAndDeletedFalse(categoryId, memberId)
             ?: throw BusinessException(ErrorCode.FAVORITE_PLACE_CATEGORY_NOT_FOUND)
+    }
+
+    private fun fenceMutation(
+        memberId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        memberService.getActiveMemberForUpdate(memberId, presentedSessionGeneration)
     }
 
     private fun findPlace(memberId: Long, placeId: Long): FavoritePlace {

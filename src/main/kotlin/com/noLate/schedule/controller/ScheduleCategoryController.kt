@@ -30,7 +30,13 @@ class ScheduleCategoryController(
     fun getCategories(
         @AuthenticationPrincipal principal: MemberPrincipal?,
     ): ApiResponse<List<ScheduleCategorySettingDto>> {
-        return ApiResponse.success(scheduleCategoryService.getCategories(requireMemberId(principal)))
+        val authenticated = requireCategoryPrincipal(principal)
+        return ApiResponse.success(
+            scheduleCategoryService.getCategories(
+                memberId = authenticated.id,
+                presentedSessionGeneration = requireCategorySessionGeneration(authenticated),
+            )
+        )
     }
 
     @Operation(summary = "일정 카테고리 생성")
@@ -39,12 +45,14 @@ class ScheduleCategoryController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: CreateScheduleCategoryRequest,
     ): ApiResponse<ScheduleCategorySettingDto> {
+        val authenticated = requireCategoryPrincipal(principal)
         val result = scheduleCategoryService.createCategory(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
             title = request.title,
             color = request.color,
             iconKey = request.iconKey,
             sortOrder = request.sortOrder,
+            presentedSessionGeneration = requireCategorySessionGeneration(authenticated),
         )
         return ApiResponse.success(result)
     }
@@ -56,13 +64,15 @@ class ScheduleCategoryController(
         @PathVariable categoryId: Long,
         @RequestBody request: UpdateScheduleCategoryRequest,
     ): ApiResponse<ScheduleCategorySettingDto> {
+        val authenticated = requireCategoryPrincipal(principal)
         val result = scheduleCategoryService.updateCategory(
-            memberId = requireMemberId(principal),
+            memberId = authenticated.id,
             categoryId = categoryId,
             title = request.title,
             color = request.color,
             iconKey = request.iconKey,
             sortOrder = request.sortOrder,
+            presentedSessionGeneration = requireCategorySessionGeneration(authenticated),
         )
         return ApiResponse.success(result)
     }
@@ -73,7 +83,12 @@ class ScheduleCategoryController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable categoryId: Long,
     ): ApiResponse<Unit> {
-        scheduleCategoryService.deleteCategory(requireMemberId(principal), categoryId)
+        val authenticated = requireCategoryPrincipal(principal)
+        scheduleCategoryService.deleteCategory(
+            memberId = authenticated.id,
+            categoryId = categoryId,
+            presentedSessionGeneration = requireCategorySessionGeneration(authenticated),
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -83,10 +98,12 @@ class ScheduleCategoryController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: ReorderScheduleCategoriesRequest,
     ): ApiResponse<List<ScheduleCategorySettingDto>> {
+        val authenticated = requireCategoryPrincipal(principal)
         return ApiResponse.success(
             scheduleCategoryService.reorderCategories(
-                memberId = requireMemberId(principal),
+                memberId = authenticated.id,
                 items = request.items.map { it.toServiceItem() },
+                presentedSessionGeneration = requireCategorySessionGeneration(authenticated),
             )
         )
     }
@@ -119,5 +136,8 @@ data class ReorderScheduleCategoryItemRequest(
     }
 }
 
-private fun requireMemberId(principal: MemberPrincipal?): Long =
-    principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+private fun requireCategoryPrincipal(principal: MemberPrincipal?): MemberPrincipal =
+    principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+private fun requireCategorySessionGeneration(principal: MemberPrincipal): Long =
+    principal.accessTokenSessionGeneration ?: throw BusinessException(ErrorCode.INVALID_TOKEN)

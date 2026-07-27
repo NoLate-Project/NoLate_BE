@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
@@ -31,6 +32,7 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.context.ApplicationEventPublisher
+import org.springframework.mock.env.MockEnvironment
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -77,7 +79,12 @@ class ScheduleShareServiceUnitTest {
             eventPublisher = eventPublisher,
             clock = clock,
             travelAccessCleanupService = travelAccessCleanupService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
+        org.mockito.Mockito.lenient().`when`(memberRepository.findByIdForUpdate(1L))
+            .thenReturn(member(id = 1L, email = "owner@example.com"))
     }
 
     @Test
@@ -87,8 +94,9 @@ class ScheduleShareServiceUnitTest {
 
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
-        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com"))
-            .thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com"))
+            .thenReturn(2L)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L))
             .thenReturn(null)
         whenever(scheduleShareRepository.saveAndFlush(any<com.noLate.schedule.domain.ScheduleShare>()))
@@ -101,6 +109,7 @@ class ScheduleShareServiceUnitTest {
             scheduleId = 10L,
             targetEmail = " Friend@Example.com ",
             permission = ScheduleSharePermission.VIEWER,
+            presentedSessionGeneration = 0L,
         )
 
         verify(scheduleShareRepository).saveAndFlush(check {
@@ -128,7 +137,7 @@ class ScheduleShareServiceUnitTest {
 
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
-        whenever(memberRepository.findByIdAndDeletedFalse(2L)).thenReturn(target)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(null)
         whenever(scheduleShareRepository.saveAndFlush(any<ScheduleShare>()))
             .thenAnswer { invocation -> invocation.getArgument<ScheduleShare>(0).apply { id = 101L } }
@@ -139,11 +148,12 @@ class ScheduleShareServiceUnitTest {
             targetEmail = null,
             targetAppId = 2L,
             permission = ScheduleSharePermission.VIEWER,
+            presentedSessionGeneration = 0L,
         )
 
         assertEquals(2L, result.targetMemberId)
         assertEquals("friend@example.com", result.targetEmail)
-        verify(memberRepository).findByIdAndDeletedFalse(2L)
+        verify(memberRepository, never()).findByIdAndDeletedFalse(2L)
     }
 
     @Test
@@ -155,6 +165,7 @@ class ScheduleShareServiceUnitTest {
                 targetEmail = "friend@example.com",
                 targetAppId = 2L,
                 permission = ScheduleSharePermission.VIEWER,
+                presentedSessionGeneration = 0L,
             )
         }
 
@@ -177,7 +188,8 @@ class ScheduleShareServiceUnitTest {
 
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
-        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com")).thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com")).thenReturn(2L)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(existing)
         whenever(scheduleShareRepository.saveAndFlush(existing)).thenReturn(existing)
 
@@ -186,6 +198,7 @@ class ScheduleShareServiceUnitTest {
             scheduleId = 10L,
             targetEmail = "friend@example.com",
             permission = ScheduleSharePermission.EDITOR,
+            presentedSessionGeneration = 0L,
         )
 
         assertEquals(ScheduleSharePermission.EDITOR, existing.permission)
@@ -205,7 +218,8 @@ class ScheduleShareServiceUnitTest {
         )
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, 1L))
             .thenReturn(schedule(id = 10L, ownerId = 1L))
-        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com")).thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com")).thenReturn(2L)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(existing)
         whenever(scheduleShareRepository.saveAndFlush(existing)).thenReturn(existing)
 
@@ -215,6 +229,7 @@ class ScheduleShareServiceUnitTest {
             targetEmail = "friend@example.com",
             permission = ScheduleSharePermission.VIEWER,
             contentMode = ScheduleShareContentMode.SCHEDULE_ONLY,
+            presentedSessionGeneration = 0L,
         )
 
         assertEquals(ScheduleShareContentMode.SCHEDULE_ONLY, existing.contentMode)
@@ -228,7 +243,9 @@ class ScheduleShareServiceUnitTest {
 
         whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
-        whenever(memberRepository.findByEmailAndDeletedFalse("owner@example.com"))
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("owner@example.com"))
+            .thenReturn(ownerId)
+        whenever(memberRepository.findByIdForUpdate(ownerId))
             .thenReturn(member(id = ownerId, email = "owner@example.com"))
 
         assertThrows<BusinessException> {
@@ -237,10 +254,39 @@ class ScheduleShareServiceUnitTest {
                 scheduleId = 10L,
                 targetEmail = "owner@example.com",
                 permission = ScheduleSharePermission.VIEWER,
+                presentedSessionGeneration = 0L,
             )
         }
 
         verify(scheduleShareRepository, never()).saveAndFlush(any())
+    }
+
+    @Test
+    fun `revokeCategoryShare cleans every revoked participant schedule boundary`() {
+        val share = ScheduleCategoryShare(
+            id = 41L,
+            categoryId = 7L,
+            ownerMemberId = 1L,
+            targetMemberId = 2L,
+            permission = ScheduleSharePermission.VIEWER,
+        )
+        whenever(memberRepository.findByIdForUpdate(2L))
+            .thenReturn(member(id = 2L, email = "friend@example.com"))
+        whenever(categoryShareRepository.findByIdAndCategoryIdAndDeletedFalse(41L, 7L))
+            .thenReturn(share)
+        whenever(categoryRepository.findOwnedActiveForShareUpdate(7L, 1L))
+            .thenReturn(ScheduleCategory(id = 7L, memberId = 1L, title = "공유 카테고리"))
+        whenever(categoryShareRepository.saveAndFlush(share)).thenReturn(share)
+
+        service.revokeCategoryShare(
+            ownerMemberId = 1L,
+            categoryId = 7L,
+            shareId = 41L,
+            presentedSessionGeneration = 0L,
+        )
+
+        assertEquals(ScheduleShareStatus.REVOKED, share.status)
+        verify(travelAccessCleanupService).cancelRevokedForCategory(7L, listOf(2L))
     }
 
     @Test
@@ -258,8 +304,9 @@ class ScheduleShareServiceUnitTest {
 
         whenever(categoryRepository.findOwnedActiveForShareUpdate(7L, ownerId))
             .thenReturn(ScheduleCategory(id = 7L, memberId = ownerId, title = "팀"))
-        whenever(memberRepository.findByEmailAndDeletedFalse("friend@example.com"))
-            .thenReturn(target)
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com"))
+            .thenReturn(2L)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(categoryShareRepository.findByCategoryIdAndTargetMemberId(7L, 2L))
             .thenReturn(existing)
         whenever(categoryShareRepository.saveAndFlush(existing)).thenReturn(existing)
@@ -269,6 +316,7 @@ class ScheduleShareServiceUnitTest {
             categoryId = 7L,
             targetEmail = "friend@example.com",
             permission = ScheduleSharePermission.EDITOR,
+            presentedSessionGeneration = 0L,
         )
 
         assertEquals("30", result.id)
@@ -281,6 +329,35 @@ class ScheduleShareServiceUnitTest {
             assertEquals(2L, it.targetMemberId)
             assertEquals("팀", it.resourceTitle)
         })
+    }
+
+    @Test
+    fun `stale share request locks actor and target in id order then performs no domain write`() {
+        val target = member(id = 2L, email = "target@example.com")
+        val staleActor = member(id = 5L, email = "owner-5@example.com").apply {
+            sessionGeneration = 4L
+        }
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("target@example.com")).thenReturn(2L)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
+        whenever(memberRepository.findByIdForUpdate(5L)).thenReturn(staleActor)
+
+        val error = assertThrows<BusinessException> {
+            service.shareSchedule(
+                ownerMemberId = 5L,
+                scheduleId = 10L,
+                targetEmail = "target@example.com",
+                permission = ScheduleSharePermission.VIEWER,
+                presentedSessionGeneration = 3L,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, error.errorCode)
+        val lockOrder = org.mockito.Mockito.inOrder(memberRepository)
+        lockOrder.verify(memberRepository).findByIdForUpdate(2L)
+        lockOrder.verify(memberRepository).findByIdForUpdate(5L)
+        verify(scheduleRepository, never()).findOwnedActiveForShareUpdate(any(), any())
+        verify(scheduleShareRepository, never()).saveAndFlush(any())
+        verify(eventPublisher, never()).publishEvent(any())
     }
 
     @Test

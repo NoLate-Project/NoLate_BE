@@ -36,6 +36,9 @@ calendar:
     enabled: false
 
 schedule:
+  sharing:
+    # Tests fail closed unless a sharing regression explicitly opts in.
+    enabled: false
   calendar-cache:
     enabled: false
   push:
@@ -82,6 +85,21 @@ firebase:
   enabled: false
   credentials-path: ""
   project-id: nolate-test
+
+notification:
+  push-outbox:
+    enabled: false
+    fixed-delay-ms: 86400000
+
+observability:
+  snapshot:
+    enabled: false
+
+auth:
+  social:
+    apple:
+      token-lifecycle:
+        enabled: false
 
 logging:
   level:

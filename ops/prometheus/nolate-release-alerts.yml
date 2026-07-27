@@ -1,0 +1,168 @@
+groups:
+  - name: nolate-release-observability
+    rules:
+      - alert: NoLateEtaBacklogDelayed
+        expr: |
+          max(
+            nolate_eta_jobs_oldest_delay_seconds{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 180
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate ETA jobs are delayed"
+          description: "The oldest due ETA job has remained more than three minutes late."
+
+      - alert: NoLatePushOutboxBacklogDelayed
+        expr: |
+          max(
+            nolate_push_outbox_oldest_delay_seconds{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate push outbox is delayed"
+          description: "The oldest due push outbox event has remained more than two minutes late."
+
+      - alert: NoLatePushOutboxStaleLease
+        expr: |
+          max(
+            nolate_push_outbox_leases_stale{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate push outbox has stale processing leases"
+          description: "At least one outbox lease is older than the configured processing timeout."
+
+      - alert: NoLatePushAmbiguousDelivery
+        expr: |
+          max(
+            nolate_push_deliveries_ambiguous{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate has ambiguous push deliveries"
+          description: "At least one DISPATCHING delivery outlived the bounded provider call."
+
+      - alert: NoLatePushTokenLeaseExpired
+        expr: |
+          max(
+            nolate_push_token_leases_expired{application="noLate"}
+            and
+            (time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90)
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate has expired token ownership leases"
+          description: "Expired provider ownership leases are still awaiting cleanup."
+
+      - alert: NoLatePushProviderFailureRate
+        expr: |
+          (
+            sum(rate(nolate_push_provider_duration_seconds_count{application="noLate",outcome=~"confirmed_failure|unknown"}[10m]))
+            /
+            clamp_min(
+              sum(rate(nolate_push_provider_duration_seconds_count{application="noLate",outcome=~"success|confirmed_failure|unknown"}[10m])),
+              0.001
+            )
+          ) > 0.05
+          and
+          sum(increase(nolate_push_provider_duration_seconds_count{application="noLate",outcome=~"success|confirmed_failure|unknown"}[10m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate push provider failure rate is elevated"
+          description: "Confirmed or unknown push outcomes exceeded 5% with at least 20 calls."
+
+      - alert: NoLateEtaProviderFailureRate
+        expr: |
+          (
+            sum(rate(nolate_eta_provider_duration_seconds_count{application="noLate",outcome!="success"}[10m]))
+            /
+            clamp_min(sum(rate(nolate_eta_provider_duration_seconds_count{application="noLate"}[10m])), 0.001)
+          ) > 0.20
+          and
+          sum(increase(nolate_eta_provider_duration_seconds_count{application="noLate"}[10m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate live ETA provider failure rate is elevated"
+          description: "Bounded live ETA failures exceeded 20% with at least 20 calls."
+
+      - alert: NoLateEtaWorkerProcessingException
+        expr: |
+          sum(
+            increase(
+              nolate_eta_worker_events_total{
+                application="noLate",
+                event="processing_exception"
+              }[10m]
+            )
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate ETA worker is raising processing exceptions"
+          description: "At least one ETA execution failed before its retry or terminal transition."
+
+      - alert: NoLateObservabilitySnapshotFailure
+        expr: sum(increase(nolate_observability_snapshot_failures_total{application="noLate"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate operational gauge sampling is failing"
+          description: "Backlog gauges retain their last-known values until database sampling recovers."
+
+      - alert: NoLateObservabilitySnapshotStale
+        expr: |
+          (
+            (
+              min(
+                time() - nolate_observability_snapshot_last_success_seconds{application="noLate"}
+              ) > bool 90
+            ) or vector(0)
+          )
+          +
+          (
+            sum(
+              absent(nolate_observability_snapshot_last_success_seconds{application="noLate"})
+            ) or vector(0)
+          )
+          +
+          (
+            (
+              max(up{job="nolate"}) == bool 0
+            ) or vector(0)
+          )
+          +
+          (
+            sum(
+              absent(up{job="nolate"})
+            ) or vector(0)
+          )
+          > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate operational gauge snapshots are stale"
+          description: "Snapshots are stale or the environment-scoped NoLate scrape series is absent/down."

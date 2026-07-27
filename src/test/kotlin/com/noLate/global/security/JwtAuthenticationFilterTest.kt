@@ -1,5 +1,6 @@
 package com.noLate.global.security
 
+import com.noLate.global.health.HealthEndpointPaths
 import com.noLate.member.application.service.MemberService
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -29,27 +30,48 @@ class JwtAuthenticationFilterTest {
     @Test
     fun `refresh token is never accepted as bearer authentication`() {
         val request = MockHttpServletRequest().apply {
-            addHeader("Authorization", "Bearer ${tokenProvider.createRefreshToken(1L, "member")}")
+            addHeader("Authorization", "Bearer ${tokenProvider.createRefreshToken(1L, "member", 0)}")
         }
 
         filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
 
-        verify(memberService, never()).getPrincipalById(org.mockito.kotlin.any(), org.mockito.kotlin.any())
+        verify(memberService, never()).getPrincipalById(
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+        )
         kotlin.test.assertNull(SecurityContextHolder.getContext().authentication)
     }
 
     @Test
     fun `access token authenticates only an active non-revoked member`() {
-        val token = tokenProvider.createAccessToken(1L, "member")
-        whenever(memberService.getPrincipalById(org.mockito.kotlin.eq(1L), org.mockito.kotlin.any()))
-            .thenReturn(MemberPrincipal(1L, "member@example.com", "member"))
+        val token = tokenProvider.createAccessToken(1L, "member", 7)
+        val issuedAt = tokenProvider.getIssuedAt(token)
+        whenever(
+            memberService.getPrincipalById(
+                org.mockito.kotlin.eq(1L),
+                org.mockito.kotlin.eq(issuedAt),
+                org.mockito.kotlin.eq(7),
+            )
+        ).thenReturn(
+            MemberPrincipal(
+                1L,
+                "member@example.com",
+                "member",
+                issuedAt,
+                7,
+            )
+        )
         val request = MockHttpServletRequest().apply {
             addHeader("Authorization", "Bearer $token")
         }
 
         filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
 
-        kotlin.test.assertEquals(1L, (SecurityContextHolder.getContext().authentication?.principal as MemberPrincipal).id)
+        val principal = SecurityContextHolder.getContext().authentication?.principal as MemberPrincipal
+        kotlin.test.assertEquals(1L, principal.id)
+        kotlin.test.assertEquals(issuedAt, principal.accessTokenIssuedAt)
+        kotlin.test.assertEquals(7L, principal.accessTokenSessionGeneration)
     }
 
     @Test
@@ -59,13 +81,45 @@ class JwtAuthenticationFilterTest {
             servletPath = "/api/calendar/days"
             addHeader(
                 "Authorization",
-                "Bearer ${tokenProvider.createAccessToken(1L, "member")}",
+                "Bearer ${tokenProvider.createAccessToken(1L, "member", 0)}",
             )
         }
 
         filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
 
-        verify(memberService, never()).getPrincipalById(org.mockito.kotlin.any(), org.mockito.kotlin.any())
+        verify(memberService, never()).getPrincipalById(
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+        )
         kotlin.test.assertNull(SecurityContextHolder.getContext().authentication)
+    }
+
+    @Test
+    fun `health probes never query the member store even when a bearer token is present`() {
+        val token = tokenProvider.createAccessToken(1L, "member", 0)
+
+        listOf(
+            HealthEndpointPaths.ROOT,
+            HealthEndpointPaths.LIVENESS,
+            HealthEndpointPaths.READINESS,
+        ).forEach { path ->
+            SecurityContextHolder.clearContext()
+            val request = MockHttpServletRequest("GET", "/nolate$path").apply {
+                contextPath = "/nolate"
+                servletPath = path
+                addHeader("Authorization", "Bearer $token")
+            }
+
+            filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
+
+            kotlin.test.assertNull(SecurityContextHolder.getContext().authentication)
+        }
+
+        verify(memberService, never()).getPrincipalById(
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+            org.mockito.kotlin.any(),
+        )
     }
 }

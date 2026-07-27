@@ -34,13 +34,18 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 @DataJpaTest
-@Import(ScheduleTravelPlanService::class, ScheduleTravelPlanConcurrencyTestConfig::class)
+@Import(
+    ScheduleTravelPlanService::class,
+    ScheduleSharingAvailabilityPolicy::class,
+    ScheduleTravelPlanConcurrencyTestConfig::class,
+)
 @TestPropertySource(
     properties = [
         "spring.datasource.url=jdbc:h2:mem:schedule-travel-plan;MODE=MySQL;DB_CLOSE_DELAY=-1",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "schedule.sharing.enabled=true",
     ]
 )
 class ScheduleTravelPlanConcurrencyIntegrationTest @Autowired constructor(

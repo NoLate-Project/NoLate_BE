@@ -279,14 +279,30 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     last_recommended_departure_at DATETIME(6) NULL COMMENT 'Last recommended departure time',
     last_notified_departure_at DATETIME(6) NULL COMMENT 'Last departure time notified to the user',
     last_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last 5-minute reminder boundary time',
+    last_handled_departure_at DATETIME(6) NULL COMMENT 'Last confirmed or uncertain logical departure time',
+    last_handled_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last confirmed or uncertain logical reminder boundary',
     last_checked_at DATETIME(6) NULL COMMENT 'Last checked time',
+    last_live_fetched_at DATETIME(6) NULL COMMENT 'Last successful live provider fetch time',
+    last_live_travel_minutes INT NULL COMMENT 'Last trusted live provider travel minutes',
+    last_eta_source VARCHAR(30) NULL COMMENT 'LIVE_PROVIDER, SELECTED_ROUTE, or SAVED_FALLBACK',
+    last_eta_stale BOOLEAN NULL COMMENT 'Whether the last ETA used a stale snapshot',
+    last_eta_failure_reason VARCHAR(500) NULL COMMENT 'Stable fallback or provider failure code and safe message',
+    last_eta_route_fingerprint VARCHAR(64) NULL COMMENT 'Route fingerprint used by the latest ETA snapshot',
+    last_traffic_change_minutes INT NULL COMMENT 'Last comparable live-to-live ETA delta in minutes',
+    last_changed_at DATETIME(6) NULL COMMENT 'Time of the last comparable live-to-live ETA change',
     last_pushed_at DATETIME(6) NULL COMMENT 'Last push sent time',
     departure_notice_sent_at DATETIME(6) NULL COMMENT 'First depart-now notification sent time',
+    handled_departure_notice_at DATETIME(6) NULL COMMENT 'First confirmed or uncertain DEPART_NOW handling time',
     last_departure_reminder_stage VARCHAR(40) NULL COMMENT 'Last handled departure follow-up stage',
     last_departure_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last handled departure follow-up boundary',
+    last_handled_departure_reminder_stage VARCHAR(40) NULL COMMENT 'Last confirmed or uncertain follow-up stage',
+    last_handled_departure_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last confirmed or uncertain follow-up boundary',
+    last_uncertain_at DATETIME(6) NULL COMMENT 'Most recent ambiguous delivery handling time',
     snoozed_until DATETIME(6) NULL COMMENT 'User requested reminder time',
     check_count INT NOT NULL DEFAULT 0 COMMENT 'Traffic check count',
     retry_count INT NOT NULL DEFAULT 0 COMMENT 'Retry count',
+    notification_generation BIGINT NOT NULL DEFAULT 0 COMMENT 'Notification event generation incremented on schedule changes',
+    notification_input_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Deterministic notification semantic input SHA-256',
     locked_by VARCHAR(100) NULL COMMENT 'Worker id',
     locked_at DATETIME(6) NULL COMMENT 'Locked time',
     failure_reason VARCHAR(500) NULL COMMENT 'Last failure reason',
@@ -303,28 +319,317 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     INDEX idx_schedule_push_job_schedule_id (schedule_id)
 ) COMMENT='Schedule push jobs';
 
+CREATE TABLE IF NOT EXISTS schedule_notification_action_receipts (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Action receipt primary key',
+    key_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Case-sensitive SHA-256 of the unpersisted Idempotency-Key',
+    member_id BIGINT NOT NULL COMMENT 'Authenticated action member id',
+    schedule_id BIGINT NOT NULL COMMENT 'Bound schedule id',
+    action_type VARCHAR(24) NOT NULL COMMENT 'DEPART_NOW or SNOOZE',
+    result_departed_at DATETIME(6) NULL COMMENT 'Authoritative first departure time',
+    result_snoozed_until DATETIME(6) NULL COMMENT 'Snooze time returned by the one mutation',
+    completed_at DATETIME(6) NULL COMMENT 'Completion time committed atomically with mutation',
+    created_at DATETIME(6) NOT NULL COMMENT 'Receipt creation time',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_notification_action_key_fingerprint (key_fingerprint),
+    INDEX idx_schedule_notification_action_scope (member_id, schedule_id, action_type)
+) COMMENT='Durable idempotency receipts for schedule notification actions';
+
+CREATE TABLE IF NOT EXISTS push_device_token (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    member_id BIGINT NOT NULL,
+    device_id VARCHAR(100) NULL,
+    platform VARCHAR(20) NOT NULL,
+    token VARCHAR(500) NOT NULL,
+    token_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    ownership_version BIGINT NOT NULL DEFAULT 0,
+    dispatch_lease_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    dispatch_lease_until DATETIME(6) NULL,
+    retirement_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_push_device_token_token_fingerprint (token_fingerprint),
+    UNIQUE KEY uk_push_device_token_device_fingerprint (device_fingerprint),
+    INDEX idx_push_device_token_dispatch_lease (dispatch_lease_until, id)
+) COMMENT='Current global byte-exact installation ownership; raw opaque values are never indexed';
+
+CREATE TABLE IF NOT EXISTS push_send_history (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Provider attempt history primary key',
+    member_id BIGINT NOT NULL COMMENT 'Notification recipient member id',
+    device_token_id BIGINT NULL COMMENT 'Token row id at send time',
+    device_id VARCHAR(100) NULL COMMENT 'Legacy operational device label; never indexed',
+    platform VARCHAR(20) NOT NULL COMMENT 'Push platform',
+    schedule_id BIGINT NULL COMMENT 'Immutable schedule resource id when applicable',
+    logical_event_key VARCHAR(100) NULL COMMENT 'Canonical durable outbox/source event key',
+    category_id BIGINT NULL COMMENT 'Immutable category resource id when applicable',
+    calendar_id BIGINT NULL COMMENT 'Immutable shared-calendar resource id when applicable',
+    payload_type VARCHAR(80) NULL COMMENT 'Canonical push payload type',
+    title VARCHAR(200) NOT NULL COMMENT 'Provider payload title',
+    body VARCHAR(1000) NOT NULL COMMENT 'Provider payload body',
+    data_json LONGTEXT NOT NULL COMMENT 'Canonical provider data payload',
+    status VARCHAR(30) NOT NULL COMMENT 'SUCCESS, FAILED, UNKNOWN, INVALID_TOKEN, or NO_TOKEN',
+    fcm_message_id VARCHAR(300) NULL COMMENT 'Provider acceptance message id',
+    error_code VARCHAR(120) NULL COMMENT 'Sanitized provider/local error class or code',
+    error_message VARCHAR(1000) NULL COMMENT 'Sanitized failure detail',
+    sent_at DATETIME(6) NOT NULL COMMENT 'Provider result/history time',
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_push_send_history_member_event (member_id, logical_event_key),
+    INDEX idx_push_send_history_category_member (category_id, member_id),
+    INDEX idx_push_send_history_calendar_member (calendar_id, member_id)
+) COMMENT='Per-attempt push provider history with durable source identity';
+
 CREATE TABLE IF NOT EXISTS app_notifications (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'In-app notification primary key',
     member_id BIGINT NOT NULL COMMENT 'Notification recipient member id',
     deduplication_key VARCHAR(180) NULL COMMENT 'Logical event key used to merge concurrent delivery attempts',
+    logical_event_key VARCHAR(100) NOT NULL COMMENT 'Durable logical push/outbox event key',
     type VARCHAR(80) NOT NULL COMMENT 'Client navigation and presentation type',
     schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
     category_id BIGINT NULL COMMENT 'Related category id when applicable',
+    calendar_id BIGINT NULL COMMENT 'Immutable shared-calendar authorization resource id',
     title VARCHAR(200) NOT NULL COMMENT 'Notification title',
     body VARCHAR(1000) NOT NULL COMMENT 'Notification body',
     data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON',
     created_at DATETIME(6) NOT NULL COMMENT 'Logical notification creation time',
     read_at DATETIME(6) NULL COMMENT 'First read time',
+    manifest_state VARCHAR(24) NOT NULL DEFAULT 'INBOX_ONLY'
+        COMMENT 'INBOX_ONLY, OPEN, or immutable FROZEN recipient snapshot',
+    manifest_recipient_count INT NOT NULL DEFAULT 0
+        COMMENT 'Frozen delivery row count, including zero-device events',
+    manifest_frozen_at DATETIME(6) NULL COMMENT 'Recipient snapshot linearization time',
+    dispatch_status VARCHAR(24) NOT NULL DEFAULT 'NOT_REQUIRED'
+        COMMENT 'NOT_REQUIRED, PENDING, PROCESSING, COMPLETED, or FAILED',
+    dispatch_attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Durable outbox drainer claims',
+    dispatch_failure_count INT NOT NULL DEFAULT 0
+        COMMENT 'Actual retry-budget failures; expected deferrals do not increment',
+    next_dispatch_at DATETIME(6) NULL COMMENT 'Next bounded drainer eligibility time',
+    dispatch_locked_by VARCHAR(100) NULL COMMENT 'Outbox drainer lease owner',
+    dispatch_locked_at DATETIME(6) NULL COMMENT 'Outbox drainer lease time',
+    dispatch_completed_at DATETIME(6) NULL COMMENT 'Terminal drainer time',
+    dispatch_failure_reason VARCHAR(500) NULL COMMENT 'Sanitized last drainer outcome',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
     PRIMARY KEY (id),
     UNIQUE KEY uk_app_notifications_member_deduplication (member_id, deduplication_key),
+    UNIQUE KEY uk_app_notifications_member_logical_event (member_id, logical_event_key),
     INDEX idx_app_notifications_member_id_id (member_id, id),
-    INDEX idx_app_notifications_member_read_at (member_id, read_at)
+    INDEX idx_app_notifications_member_read_at (member_id, read_at),
+    INDEX idx_app_notifications_calendar_id (calendar_id),
+    INDEX idx_app_notifications_dispatch_due (dispatch_status, next_dispatch_at, id),
+    INDEX idx_app_notifications_dispatch_lease (dispatch_status, dispatch_locked_at, id)
 ) COMMENT='Durable user-facing in-app notification inbox';
 
 -- Existing environments may have created data_json with a smaller text type while the
 -- entity mapping was being introduced. Keep the executable bootstrap schema corrective.
 ALTER TABLE app_notifications
     MODIFY COLUMN data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON';
+
+CREATE TABLE IF NOT EXISTS push_deliveries (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Per-device logical push delivery primary key',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    member_id BIGINT NOT NULL COMMENT 'Notification recipient member id',
+    event_key VARCHAR(100) NOT NULL COMMENT 'Durable logical event identifier',
+    device_key VARCHAR(100) NOT NULL COMMENT 'Stable device id or one-way token fingerprint',
+    device_token_id BIGINT NULL COMMENT 'Token row id at dispatch time; no foreign key so invalid-token removal keeps evidence',
+    token_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'Case-sensitive token ownership snapshot',
+    token_ownership_version BIGINT NOT NULL COMMENT 'Token ownership version snapshot',
+    device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT 'One-way client device fingerprint',
+    platform VARCHAR(20) NOT NULL COMMENT 'Push platform',
+    schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
+    calendar_id BIGINT NULL COMMENT 'Frozen shared-calendar authorization resource id',
+    payload_type VARCHAR(80) NULL COMMENT 'Push payload type',
+    status VARCHAR(30) NOT NULL COMMENT 'PENDING, DISPATCHING, SUCCESS, FAILED, INVALID_TOKEN, or SUPERSEDED',
+    attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Provider call attempt count',
+    first_attempted_at DATETIME(6) NULL COMMENT 'First provider call boundary creation time',
+    last_attempted_at DATETIME(6) NULL COMMENT 'Most recent provider call boundary time',
+    delivered_at DATETIME(6) NULL COMMENT 'Provider success response time',
+    provider_message_id VARCHAR(300) NULL COMMENT 'Provider message id after confirmed success',
+    error_code VARCHAR(120) NULL COMMENT 'Provider or local transition failure class/code',
+    error_message VARCHAR(1000) NULL COMMENT 'Sanitized failure detail without raw push token',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_push_deliveries_member_event_device (member_id, event_key, device_key),
+    INDEX idx_push_deliveries_member_event (member_id, event_key),
+    INDEX idx_push_deliveries_status_attempted_at (status, last_attempted_at),
+    INDEX idx_push_deliveries_schedule_id (schedule_id),
+    INDEX idx_push_deliveries_calendar_id (calendar_id)
+) COMMENT='Durable at-most-once per-device push delivery boundary';
+
+CREATE TABLE IF NOT EXISTS apple_authorization_code_receipts (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Immutable authorization-code receipt primary key',
+    receipt_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Random non-secret receipt identifier',
+    authorization_code_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Single-use authorization-code replay fingerprint',
+    expected_subject_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Expected Apple subject fingerprint at reservation time',
+    client_id VARCHAR(255) NOT NULL COMMENT 'Expected Apple audience at reservation time',
+    reserved_at DATETIME(6) NOT NULL COMMENT 'Committed reservation time before provider I/O',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_apple_authorization_receipts_receipt_key (receipt_key),
+    UNIQUE KEY uk_apple_authorization_receipts_code_hash (authorization_code_hash)
+) COMMENT='Immutable Apple authorization-code consume receipts';
+
+CREATE TABLE IF NOT EXISTS apple_provider_credentials (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Encrypted Apple provider credential primary key',
+    credential_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Random envelope AAD identifier',
+    source_receipt_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'First immutable authorization-code receipt that captured this token',
+    member_id BIGINT NULL COMMENT 'Local account id retained only until provider revocation succeeds',
+    apple_subject_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'One-way Apple subject fingerprint',
+    refresh_token_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'One-way refresh-token deduplication fingerprint',
+    client_id VARCHAR(255) NOT NULL COMMENT 'Apple client id that issued this token',
+    encryption_key_id VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'Environment-owned envelope key id',
+    initialization_vector VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'Base64 AES-GCM initialization vector',
+    encrypted_refresh_token VARCHAR(16384) CHARACTER SET ascii COLLATE ascii_bin NULL
+        COMMENT 'Base64 AES-256-GCM ciphertext; never plaintext',
+    status VARCHAR(20) NOT NULL DEFAULT 'CAPTURED'
+        COMMENT 'CAPTURED, ACTIVE, PENDING, PROCESSING, BLOCKED, MANUAL_ACTION, or REVOKED',
+    capture_expires_at DATETIME(6) NULL COMMENT 'Deadline for binding or compensation',
+    attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Physical Apple revoke attempts',
+    next_attempt_at DATETIME(6) NULL COMMENT 'Next revocation eligibility time',
+    locked_at DATETIME(6) NULL COMMENT 'Current revocation lease time',
+    locked_by VARCHAR(80) NULL COMMENT 'Current revocation worker id',
+    last_failure_code VARCHAR(120) NULL COMMENT 'Sanitized provider/local failure code',
+    revoked_at DATETIME(6) NULL COMMENT 'Provider-confirmed token deletion time',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_apple_provider_credentials_credential_key (credential_key),
+    UNIQUE KEY uk_apple_provider_credentials_refresh_token_hash (refresh_token_hash),
+    INDEX idx_apple_provider_credentials_member_status (member_id, status, id),
+    INDEX idx_apple_provider_credentials_due (status, next_attempt_at, id),
+    INDEX idx_apple_provider_credentials_capture (status, capture_expires_at, id),
+    INDEX idx_apple_provider_credentials_stale (status, locked_at, id),
+    CONSTRAINT ck_apple_provider_credentials_status CHECK (
+        status IN (
+            'CAPTURED', 'ACTIVE', 'PENDING', 'PROCESSING',
+            'BLOCKED', 'MANUAL_ACTION', 'REVOKED'
+        )
+        AND attempt_count >= 0
+        AND (
+            (
+                status = 'CAPTURED'
+                AND source_receipt_key IS NOT NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NOT NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'ACTIVE'
+                AND source_receipt_key IS NOT NULL
+                AND member_id IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'PENDING'
+                AND source_receipt_key IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NOT NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'PROCESSING'
+                AND source_receipt_key IS NOT NULL
+                AND apple_subject_hash IS NOT NULL
+                AND refresh_token_hash IS NOT NULL
+                AND encryption_key_id IS NOT NULL
+                AND initialization_vector IS NOT NULL
+                AND encrypted_refresh_token IS NOT NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NOT NULL
+                AND locked_at IS NOT NULL
+                AND locked_by IS NOT NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'BLOCKED'
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'MANUAL_ACTION'
+                AND source_receipt_key IS NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NULL
+                AND refresh_token_hash IS NULL
+                AND encryption_key_id IS NULL
+                AND initialization_vector IS NULL
+                AND encrypted_refresh_token IS NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND last_failure_code IS NOT NULL
+                AND revoked_at IS NULL
+            )
+            OR (
+                status = 'REVOKED'
+                AND source_receipt_key IS NULL
+                AND member_id IS NULL
+                AND apple_subject_hash IS NULL
+                AND refresh_token_hash IS NULL
+                AND encryption_key_id IS NULL
+                AND initialization_vector IS NULL
+                AND encrypted_refresh_token IS NULL
+                AND capture_expires_at IS NULL
+                AND next_attempt_at IS NULL
+                AND locked_at IS NULL
+                AND locked_by IS NULL
+                AND revoked_at IS NOT NULL
+            )
+        )
+    )
+) COMMENT='Encrypted Sign in with Apple credentials and durable revoke leases';
+
+-- Production never runs schema.sql, but keeping the marker table in the executable
+-- development schema lets local schema inspection match the manual production DDL.
+-- The production marker row itself is inserted only by the final verified migration.
+CREATE TABLE IF NOT EXISTS application_schema_migrations (
+    version VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    description VARCHAR(255) NOT NULL,
+    applied_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (version)
+) COMMENT='Manually verified production schema versions';
 
 CREATE TABLE IF NOT EXISTS favorite_place_categories (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Favorite place category primary key',
@@ -432,3 +737,34 @@ CREATE TABLE IF NOT EXISTS public_holidays (
     UNIQUE KEY uk_public_holidays_date_name_type (holiday_date, name, holiday_type),
     INDEX idx_public_holidays_date (holiday_date)
 ) COMMENT='Shared Republic of Korea public holiday cache';
+
+CREATE TABLE IF NOT EXISTS account_deletion_requests (
+    id VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Opaque public request UUID',
+    identifier_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Domain-separated keyed digest of normalized account email',
+    requester_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Domain-separated keyed digest of requester network address',
+    member_id BIGINT NULL
+        COMMENT 'Internal binding; cleared after terminal processing and never exposed publicly',
+    observed_session_generation BIGINT NULL
+        COMMENT 'Session generation captured before external verification',
+    manual_review_required BOOLEAN NOT NULL DEFAULT FALSE
+        COMMENT 'Provider-aware support is required; this row cannot authorize cleanup',
+    status VARCHAR(40) NOT NULL,
+    verification_token_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    verification_attempt_count INT NOT NULL DEFAULT 0,
+    verification_expires_at DATETIME(6) NULL,
+    deletion_grant_hash VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    deletion_grant_expires_at DATETIME(6) NULL,
+    processing_started_at DATETIME(6) NULL,
+    completed_at DATETIME(6) NULL,
+    failure_code VARCHAR(40) NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    retention_expires_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    INDEX idx_account_deletion_requests_status_expiry (status, verification_expires_at),
+    INDEX idx_account_deletion_requests_retention (retention_expires_at),
+    INDEX idx_account_deletion_requests_processing (status, processing_started_at)
+) COMMENT='Login-free account deletion verification and single-use grant state';

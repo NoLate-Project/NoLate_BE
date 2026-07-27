@@ -18,9 +18,15 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
+import org.springframework.test.context.TestPropertySource
 
 @DataJpaTest
-@Import(ScheduleCalendarService::class, ScheduleShareService::class)
+@Import(
+    ScheduleCalendarService::class,
+    ScheduleShareService::class,
+    ScheduleSharingAvailabilityPolicy::class,
+)
+@TestPropertySource(properties = ["schedule.sharing.enabled=true"])
 class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
     private val calendarService: ScheduleCalendarService,
     private val shareService: ScheduleShareService,
@@ -38,6 +44,7 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
             title = "가족 이동",
             color = "#2F80FF",
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         val invitation = shareService.createCalendarInvitation(
             ownerMemberId = requireNotNull(owner.id),
@@ -45,9 +52,14 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
             permission = ScheduleSharePermission.EDITOR,
             ttlHours = 24,
             maxAcceptCount = 1,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
-        val accepted = shareService.acceptInvitation(requireNotNull(target.id), invitation.token)
+        val accepted = shareService.acceptInvitation(
+            requireNotNull(target.id),
+            invitation.token,
+            target.sessionGeneration,
+        )
 
         assertEquals(ScheduleShareResourceType.CALENDAR, accepted.invitation.resourceType)
         assertEquals(calendar.id.toString(), accepted.share.resourceId)
@@ -73,6 +85,7 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
             title = "종료할 캘린더",
             color = "#2F80FF",
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_ONLY,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         shareService.createCalendarInvitation(
             ownerMemberId = requireNotNull(owner.id),
@@ -80,9 +93,14 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
             permission = ScheduleSharePermission.VIEWER,
             ttlHours = 24,
             maxAcceptCount = 10,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
-        calendarService.archiveCalendar(requireNotNull(owner.id), calendar.id)
+        calendarService.archiveCalendar(
+            requireNotNull(owner.id),
+            calendar.id,
+            owner.sessionGeneration,
+        )
 
         assertEquals(ScheduleShareInvitationStatus.REVOKED, invitationRepository.findAll().single().status)
     }
@@ -97,6 +115,7 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
             title = "소유권 이전 캘린더",
             color = "#2F80FF",
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_ONLY,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         calendarService.addMember(
             ownerMemberId = requireNotNull(owner.id),
@@ -104,6 +123,8 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
             targetEmail = nextOwner.email,
             targetAppId = null,
             role = ScheduleCalendarRole.EDITOR,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         val invitation = shareService.createCalendarInvitation(
             ownerMemberId = requireNotNull(owner.id),
@@ -111,17 +132,23 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
             permission = ScheduleSharePermission.VIEWER,
             ttlHours = 24,
             maxAcceptCount = 10,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         calendarService.transferOwnership(
             ownerMemberId = requireNotNull(owner.id),
             calendarId = calendar.id,
             targetMemberId = requireNotNull(nextOwner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         assertEquals(ScheduleShareInvitationStatus.REVOKED, invitationRepository.findAll().single().status)
         val error = assertThrows(BusinessException::class.java) {
-            shareService.acceptInvitation(requireNotNull(invitee.id), invitation.token)
+            shareService.acceptInvitation(
+                requireNotNull(invitee.id),
+                invitation.token,
+                invitee.sessionGeneration,
+            )
         }
         assertEquals(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND, error.errorCode)
     }

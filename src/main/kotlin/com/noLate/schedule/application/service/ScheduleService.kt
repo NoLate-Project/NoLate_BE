@@ -52,6 +52,7 @@ class ScheduleService(
     private val calendarCacheService: ScheduleCalendarCacheService? = null,
     private val calendarCacheAudienceResolver: ScheduleCalendarCacheAudienceResolver? = null,
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
 
@@ -124,7 +125,7 @@ class ScheduleService(
 
         val savedEntity = scheduleRepository.save(entity)
         publishCalendarCacheInvalidation(
-            memberIds = calendarCacheAudienceResolver?.resolve(savedEntity).orEmpty() + memberId,
+            memberIds = cacheAudience(savedEntity) + memberId,
             reason = "schedule-created",
         )
 
@@ -134,7 +135,7 @@ class ScheduleService(
     @Transactional
     fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
         val existingSchedule = findEditableActive(memberId, scheduleId)
-        val previousAudience = calendarCacheAudienceResolver?.resolve(existingSchedule).orEmpty()
+        val previousAudience = cacheAudience(existingSchedule)
         val authorizedDto = withAuthorizedCalendar(
             memberId = memberId,
             scheduleDto = withAuthorizedCategory(memberId, scheduleDto, existingSchedule),
@@ -155,17 +156,36 @@ class ScheduleService(
         applyDto(existingSchedule, normalizedDto)
         val savedEntity = scheduleRepository.save(existingSchedule)
         publishCalendarCacheInvalidation(
-            memberIds = previousAudience + calendarCacheAudienceResolver?.resolve(savedEntity).orEmpty(),
+            memberIds = previousAudience + cacheAudience(savedEntity),
             reason = "schedule-updated",
         )
 
         return toVisibleDtos(memberId, listOf(savedEntity)).single()
     }
 
+    /**
+     * notification edit fence가 member와 push-job/gap을 잠근 다음 schedule row를 잠근다.
+     * 실제 mutation은 같은 outer transaction의 [updateSchedule]/[deleteSchedule]에서
+     * 권한과 active 상태를 다시 검증한다.
+     */
+    @Transactional
+    fun lockForNotificationEdit(memberId: Long, scheduleId: Long) {
+        val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        val policy = scheduleAccessPolicy
+        if (policy == null) {
+            if (schedule.memberId != memberId) {
+                throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+            }
+        } else if (!policy.resolve(memberId, schedule).canEdit) {
+            throw BusinessException(ErrorCode.FORBIDDEN, "일정을 수정할 권한이 없습니다.")
+        }
+    }
+
     @Transactional
     fun deleteSchedule(memberId: Long, scheduleId: Long) {
         val entity = findOwnedActive(memberId, scheduleId)
-        val affectedMemberIds = calendarCacheAudienceResolver?.resolve(entity).orEmpty() + memberId
+        val affectedMemberIds = cacheAudience(entity) + memberId
         // 삭제한 외부 일정은 사용자가 나중에 의도적으로 다시 가져올 수 있어야 한다.
         entity.externalSourceKey = null
         entity.softDelete()
@@ -176,7 +196,7 @@ class ScheduleService(
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
         val entity = findOwnedActive(memberId, scheduleId)
-        val affectedMemberIds = calendarCacheAudienceResolver?.resolve(entity).orEmpty() + memberId
+        val affectedMemberIds = cacheAudience(entity) + memberId
         // 출발 완료는 알림 액션에서 중복 호출될 수 있으므로 최초 완료 시각을 보존한다.
         // 경로 정보는 남겨 두고 해당 일정의 남은 실시간 알림만 비활성화한다.
         entity.route?.departedAt = entity.route?.departedAt ?: Instant.now()
@@ -191,7 +211,12 @@ class ScheduleService(
 
     @Transactional
     fun getScheduleList(memberId: Long): List<ScheduleDto> {
-        return toVisibleDtos(memberId, scheduleRepository.findScheduleList(memberId))
+        val schedules = if (sharingAvailabilityPolicy.enabled) {
+            scheduleRepository.findScheduleList(memberId)
+        } else {
+            scheduleRepository.findOwnedScheduleList(memberId)
+        }
+        return toVisibleDtos(memberId, schedules)
     }
 
     @Transactional
@@ -211,15 +236,29 @@ class ScheduleService(
         val loader = { loadStart: Instant, loadEnd: Instant ->
             toVisibleDtos(
                 memberId,
-                scheduleRepository.findOverlappingScheduleList(
-                    memberId = memberId,
-                    rangeStart = loadStart,
-                    rangeEnd = loadEnd,
-                ),
+                if (sharingAvailabilityPolicy.enabled) {
+                    scheduleRepository.findOverlappingScheduleList(
+                        memberId = memberId,
+                        rangeStart = loadStart,
+                        rangeEnd = loadEnd,
+                    )
+                } else {
+                    scheduleRepository.findOwnedOverlappingScheduleList(
+                        memberId = memberId,
+                        rangeStart = loadStart,
+                        rangeEnd = loadEnd,
+                    )
+                },
             )
         }
-        return calendarCacheService?.getOrLoad(memberId, rangeStart, rangeEnd, loader)
-            ?: loader(rangeStart, rangeEnd)
+        // 배포 전에 채워진 Redis 월 캐시에는 이미 공유받은 DTO가 있을 수 있다. off에서는
+        // DB 쿼리만 바꿔도 cache hit로 UGC가 다시 노출되므로 캐시를 우회한다.
+        return if (sharingAvailabilityPolicy.enabled) {
+            calendarCacheService?.getOrLoad(memberId, rangeStart, rangeEnd, loader)
+                ?: loader(rangeStart, rangeEnd)
+        } else {
+            loader(rangeStart, rangeEnd)
+        }
     }
 
     fun getCalendarCacheRevision(memberId: Long): Long =
@@ -237,11 +276,19 @@ class ScheduleService(
 
         return toVisibleDtos(
             memberId,
-            scheduleRepository.findOverlappingScheduleList(
-                memberId = memberId,
-                rangeStart = dayStart,
-                rangeEnd = dayEnd,
-            ),
+            if (sharingAvailabilityPolicy.enabled) {
+                scheduleRepository.findOverlappingScheduleList(
+                    memberId = memberId,
+                    rangeStart = dayStart,
+                    rangeEnd = dayEnd,
+                )
+            } else {
+                scheduleRepository.findOwnedOverlappingScheduleList(
+                    memberId = memberId,
+                    rangeStart = dayStart,
+                    rangeEnd = dayEnd,
+                )
+            },
         )
     }
 
@@ -252,11 +299,19 @@ class ScheduleService(
 
         return toVisibleDtos(
             memberId,
-            scheduleRepository.findUpcomingScheduleList(
-                memberId = memberId,
-                fromAt = normalizedFromAt,
-                pageable = PageRequest.of(0, normalizedLimit),
-            ),
+            if (sharingAvailabilityPolicy.enabled) {
+                scheduleRepository.findUpcomingScheduleList(
+                    memberId = memberId,
+                    fromAt = normalizedFromAt,
+                    pageable = PageRequest.of(0, normalizedLimit),
+                )
+            } else {
+                scheduleRepository.findOwnedUpcomingScheduleList(
+                    memberId = memberId,
+                    fromAt = normalizedFromAt,
+                    pageable = PageRequest.of(0, normalizedLimit),
+                )
+            },
         )
     }
 
@@ -270,13 +325,23 @@ class ScheduleService(
     ): List<ScheduleDto> {
         return toVisibleDtos(
             memberId,
-            scheduleRepository.searchScheduleList(
-                memberId = memberId,
-                keyword = keyword?.takeIf { it.isNotBlank() },
-                categoryId = categoryId?.takeIf { it.isNotBlank() },
-                rangeStart = startAt?.let { parseInstant(it, "startAt") },
-                rangeEnd = endAt?.let { parseInstant(it, "endAt") },
-            ),
+            if (sharingAvailabilityPolicy.enabled) {
+                scheduleRepository.searchScheduleList(
+                    memberId = memberId,
+                    keyword = keyword?.takeIf { it.isNotBlank() },
+                    categoryId = categoryId?.takeIf { it.isNotBlank() },
+                    rangeStart = startAt?.let { parseInstant(it, "startAt") },
+                    rangeEnd = endAt?.let { parseInstant(it, "endAt") },
+                )
+            } else {
+                scheduleRepository.searchOwnedScheduleList(
+                    memberId = memberId,
+                    keyword = keyword?.takeIf { it.isNotBlank() },
+                    categoryId = categoryId?.takeIf { it.isNotBlank() },
+                    rangeStart = startAt?.let { parseInstant(it, "startAt") },
+                    rangeEnd = endAt?.let { parseInstant(it, "endAt") },
+                )
+            },
         )
     }
 
@@ -292,11 +357,19 @@ class ScheduleService(
 
         return toVisibleDtos(
             memberId,
-            scheduleRepository.findDepartureReadyScheduleList(
-                memberId = memberId,
-                fromAt = normalizedFromAt,
-                toAt = normalizedToAt,
-            ),
+            if (sharingAvailabilityPolicy.enabled) {
+                scheduleRepository.findDepartureReadyScheduleList(
+                    memberId = memberId,
+                    fromAt = normalizedFromAt,
+                    toAt = normalizedToAt,
+                )
+            } else {
+                scheduleRepository.findOwnedDepartureReadyScheduleList(
+                    memberId = memberId,
+                    fromAt = normalizedFromAt,
+                    toAt = normalizedToAt,
+                )
+            },
         )
     }
 
@@ -308,9 +381,27 @@ class ScheduleService(
     private fun toVisibleDtos(memberId: Long, schedules: List<Schedule>): List<ScheduleDto> {
         if (schedules.isEmpty()) return emptyList()
 
-        val scheduleIds = schedules.mapNotNull { it.id }
+        val ownerScopedSchedules = if (sharingAvailabilityPolicy.enabled) {
+            schedules
+        } else {
+            schedules.filter { it.memberId == memberId }
+        }
+        if (ownerScopedSchedules.isEmpty()) return emptyList()
+
+        val accessByScheduleId = scheduleAccessPolicy
+            ?.resolveAll(memberId, ownerScopedSchedules)
+            .orEmpty()
+        val visibleSchedules = if (scheduleAccessPolicy == null) {
+            ownerScopedSchedules
+        } else {
+            ownerScopedSchedules.filter { schedule ->
+                schedule.id?.let(accessByScheduleId::get)?.canView == true
+            }
+        }
+        if (visibleSchedules.isEmpty()) return emptyList()
+
+        val scheduleIds = visibleSchedules.mapNotNull { it.id }
         val myPlans = scheduleTravelPlanService?.loadMyPlans(memberId, scheduleIds).orEmpty()
-        val accessByScheduleId = scheduleAccessPolicy?.resolveAll(memberId, schedules).orEmpty()
         fun personalizedDto(schedule: Schedule): ScheduleDto {
             val base = schedule.toDto(objectMapper)
             val access = schedule.id?.let(accessByScheduleId::get)
@@ -334,11 +425,11 @@ class ScheduleService(
             )
         }
 
-        val receivedSchedules = schedules.filter { it.memberId != memberId }
-        if (receivedSchedules.isEmpty()) return schedules.map(::personalizedDto)
+        val receivedSchedules = visibleSchedules.filter { it.memberId != memberId }
+        if (receivedSchedules.isEmpty()) return visibleSchedules.map(::personalizedDto)
 
         if (scheduleAccessPolicy != null) {
-            return schedules.map(::personalizedDto)
+            return visibleSchedules.map(::personalizedDto)
         }
 
         val directPermissionByScheduleId = scheduleShareRepository
@@ -356,7 +447,7 @@ class ScheduleService(
             ?.associate { it.categoryId to it.permission }
             .orEmpty()
 
-        return schedules.map { schedule ->
+        return visibleSchedules.map { schedule ->
             val dto = personalizedDto(schedule)
             if (schedule.memberId == memberId) return@map dto
 
@@ -401,8 +492,20 @@ class ScheduleService(
         )
     }
 
+    private fun cacheAudience(schedule: Schedule): Set<Long> =
+        if (sharingAvailabilityPolicy.enabled) {
+            calendarCacheAudienceResolver?.resolve(schedule).orEmpty()
+        } else {
+            setOf(schedule.memberId)
+        }
+
     private fun findActive(memberId: Long, scheduleId: Long): Schedule {
-        return scheduleRepository.findScheduleDetail(scheduleId, memberId)
+        val schedule = if (sharingAvailabilityPolicy.enabled) {
+            scheduleRepository.findScheduleDetail(scheduleId, memberId)
+        } else {
+            scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)
+        }
+        return schedule
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
     }
 
@@ -412,6 +515,8 @@ class ScheduleService(
     }
 
     private fun findEditableActive(memberId: Long, scheduleId: Long): Schedule {
+        if (!sharingAvailabilityPolicy.enabled) return findOwnedActive(memberId, scheduleId)
+
         val policy = scheduleAccessPolicy ?: return findOwnedActive(memberId, scheduleId)
         val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
@@ -431,6 +536,14 @@ class ScheduleService(
         scheduleDto: ScheduleDto,
         existingCalendarId: Long?,
     ): ScheduleDto {
+        if (!sharingAvailabilityPolicy.enabled) {
+            val requestedCalendarId = scheduleDto.calendarId
+            if (requestedCalendarId == null || requestedCalendarId == existingCalendarId) {
+                return scheduleDto
+            }
+            sharingAvailabilityPolicy.requireEnabled()
+        }
+
         val calendars = calendarRepository ?: return scheduleDto
         val memberships = calendarMemberRepository ?: return scheduleDto
 
@@ -482,6 +595,10 @@ class ScheduleService(
         val category = categories.findById(categoryId).orElse(null)
             ?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+
+        if (!sharingAvailabilityPolicy.enabled && category.memberId != memberId) {
+            sharingAvailabilityPolicy.requireEnabled()
+        }
 
         val writable = category.memberId == memberId || shares
             .findByCategoryIdAndTargetMemberId(categoryId, memberId)

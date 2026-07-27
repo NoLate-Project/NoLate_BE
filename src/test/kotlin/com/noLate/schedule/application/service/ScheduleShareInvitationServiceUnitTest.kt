@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
@@ -28,6 +29,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.check
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -68,7 +70,12 @@ class ScheduleShareInvitationServiceUnitTest {
             memberRepository = memberRepository,
             clock = clock,
             tokenGenerator = tokenGenerator,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
         )
+        org.mockito.Mockito.lenient().`when`(memberRepository.findByIdForUpdate(1L))
+            .thenReturn(Member(id = 1L, name = "Owner", password = "Password1!", email = "owner@example.com"))
     }
 
     @Test
@@ -86,6 +93,7 @@ class ScheduleShareInvitationServiceUnitTest {
             permission = ScheduleSharePermission.VIEWER,
             ttlHours = 24,
             maxAcceptCount = 1,
+            presentedSessionGeneration = 0L,
         )
 
         verify(invitationRepository).saveAndFlush(check {
@@ -117,7 +125,7 @@ class ScheduleShareInvitationServiceUnitTest {
             .thenReturn(invitation)
         whenever(invitationRepository.findActiveByTokenHashForUpdate(invitation.tokenHash))
             .thenReturn(invitation)
-        whenever(memberRepository.findByIdAndDeletedFalse(2L))
+        whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
         whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L))
             .thenReturn(schedule(10L, 1L))
@@ -132,6 +140,7 @@ class ScheduleShareInvitationServiceUnitTest {
         val result = service.acceptInvitation(
             currentMemberId = 2L,
             token = "plain-token",
+            presentedSessionGeneration = 0L,
         )
 
         verify(scheduleShareRepository).saveAndFlush(check {
@@ -160,11 +169,15 @@ class ScheduleShareInvitationServiceUnitTest {
             .thenReturn(invitation)
         whenever(invitationRepository.findActiveByTokenHashForUpdate(invitation.tokenHash))
             .thenReturn(invitation)
-        whenever(memberRepository.findByIdAndDeletedFalse(2L))
+        whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
 
         assertThrows<BusinessException> {
-            service.acceptInvitation(currentMemberId = 2L, token = "plain-token")
+            service.acceptInvitation(
+                currentMemberId = 2L,
+                token = "plain-token",
+                presentedSessionGeneration = 0L,
+            )
         }
         assertEquals(ScheduleShareInvitationStatus.PENDING, invitation.status)
         assertEquals(ScheduleShareInvitationStatus.EXPIRED, invitation.effectiveStatus(clock.instant()))
@@ -172,6 +185,34 @@ class ScheduleShareInvitationServiceUnitTest {
             ScheduleShareInvitationStatus.EXPIRED,
             invitation.toDto(effectiveAt = clock.instant()).status,
         )
+    }
+
+    @Test
+    fun `stale owner generation cannot create an invitation`() {
+        whenever(memberRepository.findByIdForUpdate(1L)).thenReturn(
+            Member(
+                id = 1L,
+                name = "Owner",
+                password = "Password1!",
+                email = "owner@example.com",
+                sessionGeneration = 2L,
+            )
+        )
+
+        val error = assertThrows<BusinessException> {
+            service.createScheduleInvitation(
+                ownerMemberId = 1L,
+                scheduleId = 10L,
+                permission = ScheduleSharePermission.VIEWER,
+                ttlHours = 24,
+                maxAcceptCount = 1,
+                presentedSessionGeneration = 1L,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, error.errorCode)
+        verify(scheduleRepository, org.mockito.kotlin.never()).findOwnedActiveForShareUpdate(any(), any())
+        verify(invitationRepository, org.mockito.kotlin.never()).saveAndFlush(any())
     }
 
     private fun schedule(id: Long, ownerId: Long): Schedule =

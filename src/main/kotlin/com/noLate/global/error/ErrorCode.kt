@@ -9,6 +9,10 @@ enum class ErrorCode(
     INVALID_INPUT("C001", "요청 값이 올바르지 않습니다."),
     INVALID_STATE("C002" ,"상태가 올바르지 않습니다."),
     CONCURRENT_MODIFICATION("C003", "다른 요청에서 먼저 변경했습니다. 새로고침 후 다시 시도해 주세요."),
+    INVALID_IDEMPOTENCY_KEY("C004", "Idempotency-Key 형식이 올바르지 않습니다."),
+    IDEMPOTENCY_KEY_CONFLICT("C005", "Idempotency-Key가 다른 요청 범위에서 이미 사용되었습니다."),
+    FEATURE_DISABLED("C006", "현재 사용할 수 없는 기능입니다."),
+    EXTERNAL_SERVICE_UNAVAILABLE("C007", "외부 인증 서비스를 일시적으로 사용할 수 없습니다."),
     UNAUTHORIZED("A001", "인증이 필요합니다."),
     FORBIDDEN("A002", "권한이 없습니다."),
 

@@ -5,17 +5,21 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.service.SchedulePushJobWorker
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.SchedulePushJob
+import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import jakarta.transaction.Transactional
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 @Component
+@Profile("!prod")
 @ConditionalOnProperty(
     prefix = "notification.push-schedule-scenario",
     name = ["enabled"],
@@ -129,6 +133,7 @@ class SchedulePushScenarioRunner(
                 ChronoUnit.MINUTES,
             )
             job.startProcessing("schedule-push-scenario")
+            val route = requireNotNull(schedule.route)
             job.finishCheck(
                 travelMinutes = previousTravelMinutes,
                 recommendedDepartureAt = previousRecommendedDepartureAt,
@@ -136,6 +141,17 @@ class SchedulePushScenarioRunner(
                 notifiedDepartureAt = null,
                 nextCheckAt = now,
                 completeAfterCheck = false,
+                etaSource = TrafficSource.LIVE_PROVIDER,
+                liveFetchedAt = now.minus(1, ChronoUnit.MINUTES),
+                etaStale = false,
+                etaRouteFingerprint = ScheduleEtaRouteFingerprint.calculate(
+                    schedule = schedule,
+                    travelMinutes = route.travelMinutes,
+                    travelMode = route.travelMode,
+                    originLat = route.originLat,
+                    originLng = route.originLng,
+                    routeJson = route.routeJson,
+                ),
                 now = now.minus(1, ChronoUnit.MINUTES),
             )
         }

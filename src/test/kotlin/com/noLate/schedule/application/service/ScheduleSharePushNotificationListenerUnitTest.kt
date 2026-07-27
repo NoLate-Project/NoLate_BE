@@ -1,39 +1,50 @@
 package com.noLate.schedule.application.service
 
-import com.noLate.notification.application.useCase.NotificationSendResult
-import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.notification.application.service.PreparedPushEvent
+import com.noLate.notification.application.service.PushEventOutboxService
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertDoesNotThrow
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
+import org.mockito.kotlin.any
 import org.mockito.kotlin.check
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
+import org.springframework.mock.env.MockEnvironment
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleSharePushNotificationListenerUnitTest {
 
     @Mock
-    lateinit var notificationUseCase: NotificationUseCase
+    lateinit var pushEventOutboxService: PushEventOutboxService
 
     @Test
-    fun `schedule share event sends a detail deep link payload to the target member`() {
-        val listener = ScheduleSharePushNotificationListener(notificationUseCase)
-        whenever(
-            notificationUseCase.sendToMember(
-                eq(2L),
-                eq("새 일정 공유"),
-                eq("'팀 회의' 일정이 공유됐어요."),
-                org.mockito.kotlin.any(),
-                eq("share-granted:schedule-share-event"),
-                eq(true),
+    fun `fail closed sharing policy creates no inbox outbox or delivery manifest`() {
+        val listener = ScheduleSharePushNotificationListener(
+            pushEventOutboxService = pushEventOutboxService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(MockEnvironment()),
+        )
+
+        listener.onShareGranted(
+            ScheduleShareGrantedEvent(
+                targetMemberId = 2L,
+                resourceType = ScheduleShareResourceType.SCHEDULE,
+                resourceId = 10L,
+                resourceTitle = "dormant share",
             )
         )
-            .thenReturn(NotificationSendResult(sentCount = 1))
+
+        verifyNoInteractions(pushEventOutboxService)
+    }
+
+    @Test
+    fun `schedule share event durably enqueues a detail deep link payload`() {
+        val listener = listenerWithSuccessfulEnqueue()
 
         listener.onShareGranted(
             ScheduleShareGrantedEvent(
@@ -45,7 +56,7 @@ class ScheduleSharePushNotificationListenerUnitTest {
             )
         )
 
-        verify(notificationUseCase).sendToMember(
+        verify(pushEventOutboxService).enqueueDurable(
             memberId = eq(2L),
             title = eq("새 일정 공유"),
             body = eq("'팀 회의' 일정이 공유됐어요."),
@@ -54,25 +65,13 @@ class ScheduleSharePushNotificationListenerUnitTest {
                 assertEquals("10", it["scheduleId"])
                 assertEquals("SCHEDULE", it["resourceType"])
             },
-            inboxDeduplicationKey = eq("share-granted:schedule-share-event"),
-            persistInInbox = eq(true),
+            deduplicationKey = eq("share-granted:schedule-share-event"),
         )
     }
 
     @Test
-    fun `category share event sends a share inbox payload to the target member`() {
-        val listener = ScheduleSharePushNotificationListener(notificationUseCase)
-        whenever(
-            notificationUseCase.sendToMember(
-                eq(3L),
-                eq("새 캘린더 공유"),
-                eq("'가족' 캘린더가 공유됐어요."),
-                org.mockito.kotlin.any(),
-                eq("share-granted:category-share-event"),
-                eq(true),
-            )
-        )
-            .thenReturn(NotificationSendResult(sentCount = 1))
+    fun `category share event durably enqueues a category payload`() {
+        val listener = listenerWithSuccessfulEnqueue()
 
         listener.onShareGranted(
             ScheduleShareGrantedEvent(
@@ -84,7 +83,7 @@ class ScheduleSharePushNotificationListenerUnitTest {
             )
         )
 
-        verify(notificationUseCase).sendToMember(
+        verify(pushEventOutboxService).enqueueDurable(
             memberId = eq(3L),
             title = eq("새 캘린더 공유"),
             body = eq("'가족' 캘린더가 공유됐어요."),
@@ -93,24 +92,13 @@ class ScheduleSharePushNotificationListenerUnitTest {
                 assertEquals("7", it["categoryId"])
                 assertEquals("CATEGORY", it["resourceType"])
             },
-            inboxDeduplicationKey = eq("share-granted:category-share-event"),
-            persistInInbox = eq(true),
+            deduplicationKey = eq("share-granted:category-share-event"),
         )
     }
 
     @Test
-    fun `calendar share event sends a shared calendar payload to the target member`() {
-        val listener = ScheduleSharePushNotificationListener(notificationUseCase)
-        whenever(
-            notificationUseCase.sendToMember(
-                eq(9L),
-                eq("새 공유 캘린더"),
-                eq("'가족 이동' 캘린더가 공유됐어요."),
-                org.mockito.kotlin.any(),
-                eq("share-granted:calendar-event"),
-                eq(true),
-            )
-        ).thenReturn(NotificationSendResult(sentCount = 1))
+    fun `calendar share event durably enqueues a shared calendar payload`() {
+        val listener = listenerWithSuccessfulEnqueue()
 
         listener.onShareGranted(
             ScheduleShareGrantedEvent(
@@ -122,7 +110,7 @@ class ScheduleSharePushNotificationListenerUnitTest {
             )
         )
 
-        verify(notificationUseCase).sendToMember(
+        verify(pushEventOutboxService).enqueueDurable(
             memberId = eq(9L),
             title = eq("새 공유 캘린더"),
             body = eq("'가족 이동' 캘린더가 공유됐어요."),
@@ -131,27 +119,27 @@ class ScheduleSharePushNotificationListenerUnitTest {
                 assertEquals("CALENDAR", it["resourceType"])
                 assertEquals("77", it["calendarId"])
             },
-            inboxDeduplicationKey = eq("share-granted:calendar-event"),
-            persistInInbox = eq(true),
+            deduplicationKey = eq("share-granted:calendar-event"),
         )
     }
 
     @Test
-    fun `push provider failure after commit does not escape the listener`() {
-        val listener = ScheduleSharePushNotificationListener(notificationUseCase)
-        whenever(
-            notificationUseCase.sendToMember(
-                eq(2L),
-                org.mockito.kotlin.any(),
-                org.mockito.kotlin.any(),
-                org.mockito.kotlin.any(),
-                org.mockito.kotlin.any(),
-                eq(true),
-            )
+    fun `outbox persistence failure escapes so the sharing transaction can roll back`() {
+        val listener = ScheduleSharePushNotificationListener(
+            pushEventOutboxService,
+            enabledSharingPolicy(),
         )
-            .thenThrow(IllegalStateException("provider unavailable"))
+        whenever(
+            pushEventOutboxService.enqueueDurable(
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+            )
+        ).thenThrow(IllegalStateException("outbox unavailable"))
 
-        assertDoesNotThrow {
+        assertThrows(IllegalStateException::class.java) {
             listener.onShareGranted(
                 ScheduleShareGrantedEvent(
                     targetMemberId = 2L,
@@ -162,4 +150,34 @@ class ScheduleSharePushNotificationListenerUnitTest {
             )
         }
     }
+
+    private fun listenerWithSuccessfulEnqueue(): ScheduleSharePushNotificationListener {
+        whenever(
+            pushEventOutboxService.enqueueDurable(
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+            )
+        ).thenReturn(preparedEvent())
+        return ScheduleSharePushNotificationListener(
+            pushEventOutboxService,
+            enabledSharingPolicy(),
+        )
+    }
+
+    private fun enabledSharingPolicy() = ScheduleSharingAvailabilityPolicy(
+        MockEnvironment().withProperty("schedule.sharing.enabled", "true")
+    )
+
+    private fun preparedEvent(): PreparedPushEvent =
+        PreparedPushEvent(
+            snapshot = null,
+            logicalEventKey = "event:test",
+            deliveryIds = emptyList(),
+            manifestRecipientCount = 0,
+            inboxCreated = true,
+            fenceAccepted = true,
+        )
 }

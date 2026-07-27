@@ -50,14 +50,18 @@ class ScheduleCalendarController(
     fun createCalendar(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @RequestBody request: CreateScheduleCalendarRequest,
-    ): ApiResponse<ScheduleCalendarDto> = ApiResponse.success(
-        calendarService.createCalendar(
-            ownerMemberId = requireCalendarMemberId(principal),
+    ): ApiResponse<ScheduleCalendarDto> {
+        val actor = requireCalendarActor(principal)
+        return ApiResponse.success(
+            calendarService.createCalendar(
+            ownerMemberId = actor.memberId,
             title = request.title,
             color = request.color,
             defaultContentMode = request.defaultContentMode,
+            presentedSessionGeneration = actor.sessionGeneration,
         )
-    )
+        )
+    }
 
     @Operation(summary = "공유 캘린더 상세 조회")
     @GetMapping("/{calendarId}")
@@ -74,15 +78,19 @@ class ScheduleCalendarController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable calendarId: Long,
         @RequestBody request: UpdateScheduleCalendarRequest,
-    ): ApiResponse<ScheduleCalendarDto> = ApiResponse.success(
-        calendarService.updateCalendar(
-            ownerMemberId = requireCalendarMemberId(principal),
+    ): ApiResponse<ScheduleCalendarDto> {
+        val actor = requireCalendarActor(principal)
+        return ApiResponse.success(
+            calendarService.updateCalendar(
+            ownerMemberId = actor.memberId,
             calendarId = calendarId,
             title = request.title,
             color = request.color,
             defaultContentMode = request.defaultContentMode,
+            presentedSessionGeneration = actor.sessionGeneration,
         )
-    )
+        )
+    }
 
     @Operation(summary = "공유 캘린더 보관")
     @DeleteMapping("/{calendarId}")
@@ -90,7 +98,12 @@ class ScheduleCalendarController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable calendarId: Long,
     ): ApiResponse<Unit> {
-        calendarService.archiveCalendar(requireCalendarMemberId(principal), calendarId)
+        val actor = requireCalendarActor(principal)
+        calendarService.archiveCalendar(
+            actor.memberId,
+            calendarId,
+            actor.sessionGeneration,
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -109,15 +122,20 @@ class ScheduleCalendarController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable calendarId: Long,
         @RequestBody request: AddScheduleCalendarMemberRequest,
-    ): ApiResponse<ScheduleCalendarMemberDto> = ApiResponse.success(
-        calendarService.addMember(
-            ownerMemberId = requireCalendarMemberId(principal),
+    ): ApiResponse<ScheduleCalendarMemberDto> {
+        val actor = requireCalendarActor(principal)
+        return ApiResponse.success(
+            calendarService.addMember(
+            ownerMemberId = actor.memberId,
             calendarId = calendarId,
             targetEmail = request.targetEmail,
             targetAppId = request.targetAppId,
             role = request.role ?: ScheduleCalendarRole.VIEWER,
+            authenticatedActorMemberId = actor.memberId,
+            presentedSessionGeneration = actor.sessionGeneration,
         )
-    )
+        )
+    }
 
     @Operation(summary = "공유 캘린더 멤버 권한 변경")
     @PatchMapping("/{calendarId}/members/{memberId}")
@@ -126,14 +144,18 @@ class ScheduleCalendarController(
         @PathVariable calendarId: Long,
         @PathVariable memberId: Long,
         @RequestBody request: UpdateScheduleCalendarMemberRequest,
-    ): ApiResponse<ScheduleCalendarMemberDto> = ApiResponse.success(
-        calendarService.updateMember(
-            ownerMemberId = requireCalendarMemberId(principal),
+    ): ApiResponse<ScheduleCalendarMemberDto> {
+        val actor = requireCalendarActor(principal)
+        return ApiResponse.success(
+            calendarService.updateMember(
+            ownerMemberId = actor.memberId,
             calendarId = calendarId,
             targetMemberId = memberId,
             role = request.role,
+            presentedSessionGeneration = actor.sessionGeneration,
         )
-    )
+        )
+    }
 
     @Operation(summary = "내 공유 캘린더 경로 알림 설정 변경")
     @PatchMapping("/{calendarId}/preferences")
@@ -141,13 +163,17 @@ class ScheduleCalendarController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable calendarId: Long,
         @RequestBody request: UpdateMyScheduleCalendarPreferencesRequest,
-    ): ApiResponse<ScheduleCalendarMemberDto> = ApiResponse.success(
-        calendarService.updateMyPreferences(
-            memberId = requireCalendarMemberId(principal),
+    ): ApiResponse<ScheduleCalendarMemberDto> {
+        val actor = requireCalendarActor(principal)
+        return ApiResponse.success(
+            calendarService.updateMyPreferences(
+            memberId = actor.memberId,
             calendarId = calendarId,
             routeReminderEnabled = request.routeReminderEnabled,
+            presentedSessionGeneration = actor.sessionGeneration,
         )
-    )
+        )
+    }
 
     @Operation(summary = "공유 캘린더 멤버 제거")
     @DeleteMapping("/{calendarId}/members/{memberId}")
@@ -156,7 +182,13 @@ class ScheduleCalendarController(
         @PathVariable calendarId: Long,
         @PathVariable memberId: Long,
     ): ApiResponse<Unit> {
-        calendarService.removeMember(requireCalendarMemberId(principal), calendarId, memberId)
+        val actor = requireCalendarActor(principal)
+        calendarService.removeMember(
+            actor.memberId,
+            calendarId,
+            memberId,
+            actor.sessionGeneration,
+        )
         return ApiResponse.success(Unit)
     }
 
@@ -166,7 +198,8 @@ class ScheduleCalendarController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable calendarId: Long,
     ): ApiResponse<Unit> {
-        calendarService.leaveCalendar(requireCalendarMemberId(principal), calendarId)
+        val actor = requireCalendarActor(principal)
+        calendarService.leaveCalendar(actor.memberId, calendarId, actor.sessionGeneration)
         return ApiResponse.success(Unit)
     }
 
@@ -176,13 +209,17 @@ class ScheduleCalendarController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable calendarId: Long,
         @RequestBody request: TransferScheduleCalendarOwnershipRequest,
-    ): ApiResponse<ScheduleCalendarDto> = ApiResponse.success(
-        calendarService.transferOwnership(
-            ownerMemberId = requireCalendarMemberId(principal),
+    ): ApiResponse<ScheduleCalendarDto> {
+        val actor = requireCalendarActor(principal)
+        return ApiResponse.success(
+            calendarService.transferOwnership(
+            ownerMemberId = actor.memberId,
             calendarId = calendarId,
             targetMemberId = request.targetMemberId,
+            presentedSessionGeneration = actor.sessionGeneration,
         )
-    )
+        )
+    }
 
     @Operation(summary = "공유 캘린더 초대 링크 목록 조회")
     @GetMapping("/{calendarId}/invitations")
@@ -199,15 +236,19 @@ class ScheduleCalendarController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable calendarId: Long,
         @RequestBody request: CreateScheduleCalendarInvitationRequest,
-    ): ApiResponse<ScheduleShareInvitationDto> = ApiResponse.success(
-        shareService.createCalendarInvitation(
-            ownerMemberId = requireCalendarMemberId(principal),
+    ): ApiResponse<ScheduleShareInvitationDto> {
+        val actor = requireCalendarActor(principal)
+        return ApiResponse.success(
+            shareService.createCalendarInvitation(
+            ownerMemberId = actor.memberId,
             calendarId = calendarId,
             permission = request.permission ?: ScheduleSharePermission.VIEWER,
             ttlHours = request.ttlHours,
             maxAcceptCount = request.maxAcceptCount,
+            presentedSessionGeneration = actor.sessionGeneration,
         )
-    )
+        )
+    }
 
     @Operation(summary = "공유 캘린더 초대 링크 폐기")
     @DeleteMapping("/{calendarId}/invitations/{invitationId}")
@@ -216,11 +257,13 @@ class ScheduleCalendarController(
         @PathVariable calendarId: Long,
         @PathVariable invitationId: Long,
     ): ApiResponse<Unit> {
+        val actor = requireCalendarActor(principal)
         shareService.revokeInvitation(
-            ownerMemberId = requireCalendarMemberId(principal),
+            ownerMemberId = actor.memberId,
             resourceType = ScheduleShareResourceType.CALENDAR,
             resourceId = calendarId,
             invitationId = invitationId,
+            presentedSessionGeneration = actor.sessionGeneration,
         )
         return ApiResponse.success(Unit)
     }
@@ -264,3 +307,15 @@ data class CreateScheduleCalendarInvitationRequest(
 
 private fun requireCalendarMemberId(principal: MemberPrincipal?): Long =
     principal?.id ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+
+private data class AuthenticatedCalendarActor(
+    val memberId: Long,
+    val sessionGeneration: Long,
+)
+
+private fun requireCalendarActor(principal: MemberPrincipal?): AuthenticatedCalendarActor {
+    val authenticated = principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)
+    val generation = authenticated.accessTokenSessionGeneration
+        ?: throw BusinessException(ErrorCode.INVALID_TOKEN, "세션 generation이 없는 access token입니다.")
+    return AuthenticatedCalendarActor(authenticated.id, generation)
+}

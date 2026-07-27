@@ -209,6 +209,7 @@ class HomePageController {
                 <a href="#screens">화면 예시</a>
                 <a href="#naver-login">네이버 로그인</a>
                 <a href="#service-info">서비스 정보</a>
+                <a href="/account-deletion">계정 삭제</a>
                 <a href="/legal/privacy-policy">개인정보처리방침</a>
               </div>
             </nav>
@@ -337,6 +338,7 @@ class HomePageController {
                   <div class="url-row"><strong>서비스 예정·소개 URL</strong><a href="https://nolate.jinuk.dev/">https://nolate.jinuk.dev/</a></div>
                   <div class="url-row"><strong>개인정보처리방침</strong><a href="/legal/privacy-policy">https://nolate.jinuk.dev/legal/privacy-policy</a></div>
                   <div class="url-row"><strong>서비스 이용약관</strong><a href="/legal/terms-of-service">https://nolate.jinuk.dev/legal/terms-of-service</a></div>
+                  <div class="url-row"><strong>계정 및 데이터 삭제</strong><a href="/account-deletion">현재 서비스 호스트의 /account-deletion</a></div>
                   <div class="url-row"><strong>서비스 문의</strong><a href="mailto:support@nolate.jinuk.dev">support@nolate.jinuk.dev</a></div>
                 </div>
               </div>
@@ -356,6 +358,7 @@ class HomePageController {
               <strong>NoLate</strong>
               <a href="/legal/privacy-policy">개인정보처리방침</a>
               <a href="/legal/terms-of-service">서비스 이용약관</a>
+              <a href="/account-deletion">계정 및 데이터 삭제</a>
             </div>
             <span>서비스 문의: support@nolate.jinuk.dev · 개인정보 문의: privacy@nolate.jinuk.dev</span>
           </footer>

@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
@@ -18,12 +19,18 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
+import org.springframework.dao.CannotAcquireLockException
+import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -35,7 +42,10 @@ import java.time.Instant
     ScheduleCalendarService::class,
     ScheduleTravelAccessCleanupService::class,
     ScheduleAccessPolicy::class,
+    ScheduleSharingAvailabilityPolicy::class,
+    ScheduleCalendarMemberFenceTestConfig::class,
 )
+@TestPropertySource(properties = ["schedule.sharing.enabled=true"])
 class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
     private val service: ScheduleCalendarService,
     private val memberRepository: MemberRepository,
@@ -43,7 +53,13 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
     private val scheduleRepository: ScheduleRepository,
     private val pushJobRepository: SchedulePushJobRepository,
+    private val mutationFenceObserver: BlockingScheduleCalendarMutationFenceObserver,
 ) {
+
+    @BeforeEach
+    fun resetMutationFenceObserver() {
+        mutationFenceObserver.reset()
+    }
 
     @Test
     fun `creating calendar also creates exactly one owner membership`() {
@@ -54,6 +70,7 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             title = "가족",
             color = "#2F80FF",
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         val memberships = calendarMemberRepository
@@ -62,6 +79,33 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
         assertEquals(requireNotNull(owner.id), memberships.single().memberId)
         assertEquals(ScheduleCalendarRole.OWNER, memberships.single().role)
         assertEquals(ScheduleCalendarRole.OWNER, result.myRole)
+    }
+
+    @Test
+    fun `logout 뒤 stale generation calendar mutation은 어떤 row도 바꾸지 않는다`() {
+        val owner = member("stale-calendar-owner")
+        val staleGeneration = owner.sessionGeneration
+        val calendar = createCalendar(owner)
+        owner.sessionGeneration = staleGeneration + 1
+        memberRepository.saveAndFlush(owner)
+
+        val failure = assertThrows(BusinessException::class.java) {
+            service.updateCalendar(
+                ownerMemberId = requireNotNull(owner.id),
+                calendarId = calendar.id,
+                title = "stale update",
+                color = null,
+                defaultContentMode = null,
+                presentedSessionGeneration = staleGeneration,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
+        assertEquals(
+            "공유 캘린더",
+            calendarRepository.findByIdAndStatusAndDeletedFalse(calendar.id)?.title,
+        )
+        assertEquals(1, calendarMemberRepository.count())
     }
 
     @Test
@@ -76,11 +120,14 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             targetEmail = target.email,
             targetAppId = null,
             role = ScheduleCalendarRole.VIEWER,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         service.removeMember(
             ownerMemberId = requireNotNull(owner.id),
             calendarId = calendar.id,
             targetMemberId = requireNotNull(target.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         val reactivated = service.addMember(
             ownerMemberId = requireNotNull(owner.id),
@@ -88,6 +135,8 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             targetEmail = null,
             targetAppId = target.id,
             role = ScheduleCalendarRole.EDITOR,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         assertEquals(first.id, reactivated.id)
@@ -108,12 +157,15 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             targetEmail = target.email,
             targetAppId = null,
             role = ScheduleCalendarRole.EDITOR,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         service.transferOwnership(
             ownerMemberId = requireNotNull(owner.id),
             calendarId = calendar.id,
             targetMemberId = requireNotNull(target.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         val storedCalendar = calendarRepository.findByIdAndStatusAndDeletedFalse(calendar.id)
@@ -131,7 +183,11 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
         val calendar = createCalendar(owner)
 
         assertThrows(BusinessException::class.java) {
-            service.leaveCalendar(requireNotNull(owner.id), calendar.id)
+            service.leaveCalendar(
+                requireNotNull(owner.id),
+                calendar.id,
+                owner.sessionGeneration,
+            )
         }
 
         val membership = calendarMemberRepository.findByCalendarIdAndMemberId(calendar.id, requireNotNull(owner.id))
@@ -149,8 +205,14 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             targetEmail = target.email,
             targetAppId = null,
             role = ScheduleCalendarRole.VIEWER,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
-        service.archiveCalendar(requireNotNull(owner.id), calendar.id)
+        service.archiveCalendar(
+            requireNotNull(owner.id),
+            calendar.id,
+            owner.sessionGeneration,
+        )
 
         assertTrue(service.getCalendars(requireNotNull(target.id)).isEmpty())
     }
@@ -166,12 +228,15 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             targetEmail = target.email,
             targetAppId = null,
             role = ScheduleCalendarRole.VIEWER,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         val updated = service.updateMyPreferences(
             memberId = requireNotNull(target.id),
             calendarId = calendar.id,
             routeReminderEnabled = false,
+            presentedSessionGeneration = target.sessionGeneration,
         )
 
         assertFalse(updated.routeReminderEnabled)
@@ -189,11 +254,14 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             targetEmail = target.email,
             targetAppId = null,
             role = ScheduleCalendarRole.VIEWER,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         service.updateMyPreferences(
             memberId = requireNotNull(target.id),
             calendarId = calendar.id,
             routeReminderEnabled = false,
+            presentedSessionGeneration = target.sessionGeneration,
         )
 
         val updated = service.updateMember(
@@ -201,6 +269,7 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             calendarId = calendar.id,
             targetMemberId = requireNotNull(target.id),
             role = ScheduleCalendarRole.EDITOR,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         assertEquals(ScheduleCalendarRole.EDITOR, updated.role)
@@ -218,6 +287,8 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             targetEmail = target.email,
             targetAppId = null,
             role = ScheduleCalendarRole.VIEWER,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         val schedule = scheduleRepository.saveAndFlush(
             Schedule(
@@ -248,12 +319,120 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
             title = null,
             color = null,
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_ONLY,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         assertEquals(
             SchedulePushJobStatus.CANCELED,
             pushJobRepository.findById(requireNotNull(job.id)).orElseThrow().status,
         )
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun `calendar update rejects a member added after its lock preview without touching that member job`() {
+        val owner = member("update-fence-owner")
+        val target = member("update-fence-target")
+        val calendar = calendarServiceWithTravel(owner)
+        val job = createTargetJob(owner, target, calendar.id)
+        val gate = mutationFenceObserver.arm(calendar.id)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            executor.submit {
+                runCatching {
+                    service.updateCalendar(
+                        ownerMemberId = requireNotNull(owner.id),
+                        calendarId = calendar.id,
+                        title = "잠금 집합 밖 변경",
+                        color = null,
+                        defaultContentMode = ScheduleShareContentMode.SCHEDULE_ONLY,
+                        presentedSessionGeneration = owner.sessionGeneration,
+                    )
+                }.onFailure(failures::add)
+            }
+            assertTrue(gate.previewed.await(5, TimeUnit.SECONDS))
+
+            service.addMember(
+                ownerMemberId = requireNotNull(owner.id),
+                calendarId = calendar.id,
+                targetEmail = target.email,
+                targetAppId = null,
+                role = ScheduleCalendarRole.VIEWER,
+                authenticatedActorMemberId = requireNotNull(owner.id),
+                presentedSessionGeneration = owner.sessionGeneration,
+            )
+            gate.resume.countDown()
+
+            executor.shutdown()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+            assertEquals(1, failures.size)
+            assertTrue(failures.single().hasCause<CannotAcquireLockException>())
+            assertEquals(
+                ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+                calendarRepository.findByIdAndStatusAndDeletedFalse(calendar.id)
+                    ?.defaultContentMode,
+            )
+            assertEquals(
+                SchedulePushJobStatus.ACTIVE,
+                pushJobRepository.findById(requireNotNull(job.id)).orElseThrow().status,
+            )
+        } finally {
+            gate.resume.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun `calendar archive rejects a member added after its lock preview without touching that member job`() {
+        val owner = member("archive-fence-owner")
+        val target = member("archive-fence-target")
+        val calendar = calendarServiceWithTravel(owner)
+        val job = createTargetJob(owner, target, calendar.id)
+        val gate = mutationFenceObserver.arm(calendar.id)
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            executor.submit {
+                runCatching {
+                    service.archiveCalendar(
+                        ownerMemberId = requireNotNull(owner.id),
+                        calendarId = calendar.id,
+                        presentedSessionGeneration = owner.sessionGeneration,
+                    )
+                }.onFailure(failures::add)
+            }
+            assertTrue(gate.previewed.await(5, TimeUnit.SECONDS))
+
+            service.addMember(
+                ownerMemberId = requireNotNull(owner.id),
+                calendarId = calendar.id,
+                targetEmail = target.email,
+                targetAppId = null,
+                role = ScheduleCalendarRole.VIEWER,
+                authenticatedActorMemberId = requireNotNull(owner.id),
+                presentedSessionGeneration = owner.sessionGeneration,
+            )
+            gate.resume.countDown()
+
+            executor.shutdown()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+            assertEquals(1, failures.size)
+            assertTrue(failures.single().hasCause<CannotAcquireLockException>())
+            assertTrue(calendarRepository.findByIdAndStatusAndDeletedFalse(calendar.id) != null)
+            assertEquals(
+                SchedulePushJobStatus.ACTIVE,
+                pushJobRepository.findById(requireNotNull(job.id)).orElseThrow().status,
+            )
+        } finally {
+            gate.resume.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
     }
 
     @Test
@@ -275,6 +454,8 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
                     targetEmail = target.email,
                     targetAppId = null,
                     role = ScheduleCalendarRole.VIEWER,
+                    authenticatedActorMemberId = requireNotNull(owner.id),
+                    presentedSessionGeneration = owner.sessionGeneration,
                 )
             },
             {
@@ -284,6 +465,8 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
                     targetEmail = null,
                     targetAppId = target.id,
                     role = ScheduleCalendarRole.EDITOR,
+                    authenticatedActorMemberId = requireNotNull(owner.id),
+                    presentedSessionGeneration = owner.sessionGeneration,
                 )
             },
         )
@@ -320,6 +503,7 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
         title = "공유 캘린더",
         color = "#2F80FF",
         defaultContentMode = ScheduleShareContentMode.SCHEDULE_ONLY,
+        presentedSessionGeneration = owner.sessionGeneration,
     )
 
     private fun calendarServiceWithTravel(owner: Member) = service.createCalendar(
@@ -327,7 +511,37 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
         title = "이동 공유 캘린더",
         color = "#2F80FF",
         defaultContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+        presentedSessionGeneration = owner.sessionGeneration,
     )
+
+    private fun createTargetJob(
+        owner: Member,
+        target: Member,
+        calendarId: Long,
+    ): SchedulePushJob {
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = requireNotNull(owner.id),
+                calendarId = calendarId,
+                scheduleType = ScheduleType.ROUTE,
+                title = "잠금 집합 검증 일정",
+                startAt = Instant.parse("2026-07-25T01:00:00Z"),
+                endAt = Instant.parse("2026-07-25T02:00:00Z"),
+            ).apply {
+                updateCategorySnapshot("1", "가족", "#2F80FF")
+            }
+        )
+        return pushJobRepository.saveAndFlush(
+            SchedulePushJob.create(
+                memberId = requireNotNull(target.id),
+                scheduleId = requireNotNull(schedule.id),
+                scheduleAt = schedule.startAt,
+                departureAt = schedule.startAt.minusSeconds(1_800),
+                monitorStartAt = schedule.startAt.minusSeconds(5_400),
+                intervalMinutes = 20,
+            )
+        )
+    }
 
     private fun member(label: String): Member {
         val suffix = System.nanoTime()
@@ -340,3 +554,46 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
         )
     }
 }
+
+private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean {
+    var current: Throwable? = this
+    val visited = mutableSetOf<Throwable>()
+    while (current != null && visited.add(current)) {
+        if (current is T) return true
+        current = current.cause
+    }
+    return false
+}
+
+@TestConfiguration
+class ScheduleCalendarMemberFenceTestConfig {
+    @Bean
+    fun blockingScheduleCalendarMutationFenceObserver() =
+        BlockingScheduleCalendarMutationFenceObserver()
+}
+
+class BlockingScheduleCalendarMutationFenceObserver : ScheduleCalendarMutationFenceObserver {
+    private val armed = AtomicReference<ScheduleCalendarMutationFenceGate?>()
+
+    fun arm(calendarId: Long): ScheduleCalendarMutationFenceGate =
+        ScheduleCalendarMutationFenceGate(calendarId).also {
+            check(armed.compareAndSet(null, it))
+        }
+
+    fun reset() {
+        armed.getAndSet(null)?.resume?.countDown()
+    }
+
+    override fun afterMembershipPreview(calendarId: Long) {
+        val gate = armed.get() ?: return
+        if (gate.calendarId != calendarId || !armed.compareAndSet(gate, null)) return
+        gate.previewed.countDown()
+        check(gate.resume.await(10, TimeUnit.SECONDS))
+    }
+}
+
+class ScheduleCalendarMutationFenceGate(
+    val calendarId: Long,
+    val previewed: CountDownLatch = CountDownLatch(1),
+    val resume: CountDownLatch = CountDownLatch(1),
+)

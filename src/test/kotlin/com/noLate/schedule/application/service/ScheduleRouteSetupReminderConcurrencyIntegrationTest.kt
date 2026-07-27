@@ -1,5 +1,7 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.member.domain.member.Member
+import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -28,11 +30,13 @@ import java.util.concurrent.TimeUnit
 class ScheduleRouteSetupReminderConcurrencyIntegrationTest @Autowired constructor(
     private val registrar: ScheduleRouteSetupReminderRegistrar,
     private val repository: ScheduleRouteSetupReminderRepository,
+    private val memberRepository: MemberRepository,
 ) {
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun `concurrent scanners create one marker for the same logical reminder`() {
+        val memberId = requireNotNull(activeMember("concurrent").id)
         val executor = Executors.newFixedThreadPool(2)
         val ready = CountDownLatch(2)
         val start = CountDownLatch(1)
@@ -48,7 +52,7 @@ class ScheduleRouteSetupReminderConcurrencyIntegrationTest @Autowired constructo
                     results.add(
                         registrar.register(
                             scheduleId = 10L,
-                            memberId = 2L,
+                            memberId = memberId,
                             fingerprint = "a".repeat(64),
                             now = Instant.parse("2026-07-23T00:00:00Z"),
                         )
@@ -71,4 +75,30 @@ class ScheduleRouteSetupReminderConcurrencyIntegrationTest @Autowired constructo
         assertEquals(1, results.count { !it })
         assertEquals(1, repository.count())
     }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun `withdrawn recipient cannot recreate a route setup marker`() {
+        val withdrawn = activeMember("withdrawn").apply { softDelete() }
+        memberRepository.saveAndFlush(withdrawn)
+
+        val created = registrar.register(
+            scheduleId = 11L,
+            memberId = requireNotNull(withdrawn.id),
+            fingerprint = "c".repeat(64),
+            now = Instant.parse("2026-07-23T00:00:00Z"),
+        )
+
+        assertEquals(false, created)
+        assertEquals(0, repository.findAll().count { it.memberId == withdrawn.id })
+    }
+
+    private fun activeMember(label: String): Member =
+        memberRepository.saveAndFlush(
+            Member(
+                name = label,
+                password = "Password1!",
+                email = "$label-${System.nanoTime()}@example.com",
+            )
+        )
 }

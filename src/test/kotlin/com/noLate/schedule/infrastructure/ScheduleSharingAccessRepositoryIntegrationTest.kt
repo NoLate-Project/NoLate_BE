@@ -22,6 +22,7 @@ import java.time.Instant
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "schedule.sharing.enabled=true",
     ]
 )
 class ScheduleSharingAccessRepositoryIntegrationTest @Autowired constructor(

@@ -19,7 +19,8 @@ spring:
 
   jpa:
     # 주기적으로 실행되는 스케줄 워커의 정상 쿼리는 출력하지 않는다.
-    # 그 외 쿼리는 P6Spy 리스너가 바인딩 값을 포함해 출력하며, 실패 SQL은 항상 출력한다.
+    # 그 외 쿼리도 P6Spy 리스너가 operation/table/elapsed만 출력한다. SQL 원문과
+    # 바인딩 값은 성공/실패 모두 default-deny 하고, 실패 시 안전한 JDBC code만 추가한다.
     show-sql: false
     properties:
       hibernate:
@@ -44,17 +45,65 @@ spring:
       timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
       repositories:
         enabled: false
+  mail:
+    host: ${ACCOUNT_DELETION_SMTP_HOST:}
+    port: ${ACCOUNT_DELETION_SMTP_PORT:587}
+    username: ${ACCOUNT_DELETION_SMTP_USERNAME:}
+    password: ${ACCOUNT_DELETION_SMTP_PASSWORD:}
+    # In production this must be true when the email verifier is enabled, making SMTP readiness
+    # part of startup instead of failing only after a user submits a destructive request.
+    test-connection: ${ACCOUNT_DELETION_SMTP_TEST_CONNECTION:false}
+    properties:
+      mail:
+        smtp:
+          auth: ${ACCOUNT_DELETION_SMTP_AUTH:true}
+          starttls:
+            enable: ${ACCOUNT_DELETION_SMTP_STARTTLS_ENABLE:true}
+            required: ${ACCOUNT_DELETION_SMTP_STARTTLS_REQUIRED:true}
+          connectiontimeout: ${ACCOUNT_DELETION_SMTP_CONNECTION_TIMEOUT_MS:5000}
+          timeout: ${ACCOUNT_DELETION_SMTP_READ_TIMEOUT_MS:5000}
+          writetimeout: ${ACCOUNT_DELETION_SMTP_WRITE_TIMEOUT_MS:5000}
 
 
 logging:
   level:
-    # SQL 출력은 P6Spy 리스너 한 곳으로 모아 중복 로그를 피한다.
+    # SQL 실행 메타데이터는 값 없는 P6Spy 리스너 한 곳으로 모아 중복 로그를 피한다.
     org.hibernate.SQL: "OFF"
     org.hibernate.orm.jdbc.bind: "OFF"
     # IDE 의존성 동기화 전에 P6Spy가 아직 없다면 Hibernate 오류 로그가 fallback이 된다.
     org.hibernate.engine.jdbc.spi.SqlExceptionHelper: error
     com.noLate.global.logging.P6SpySqlErrorEventListener: info
     p6spy: "OFF"
+
+management:
+  endpoints:
+    web:
+      # SecurityConfig resolves endpoint identities, so custom base/path mappings and a separate
+      # management port cannot turn an authenticated member route into an actuator route.
+      exposure:
+        # Actuator health is also rejected by a code-level WebEndpoint filter. NoLate's public,
+        # opaque /health* controller is the only HTTP health contract.
+        include: prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+observability:
+  prometheus:
+    # Exact "true" is required. Missing, false, and malformed values all keep the scrape path closed.
+    public-enabled: ${OBSERVABILITY_PROMETHEUS_PUBLIC_ENABLED:}
+  snapshot:
+    enabled: ${OBSERVABILITY_SNAPSHOT_ENABLED:true}
+    fixed-delay-ms: ${OBSERVABILITY_SNAPSHOT_FIXED_DELAY_MS:30000}
+    initial-delay-ms: ${OBSERVABILITY_SNAPSHOT_INITIAL_DELAY_MS:30000}
+    shutdown-wait-ms: ${OBSERVABILITY_SNAPSHOT_SHUTDOWN_WAIT_MS:5000}
 
 jwt:
   secret-key: ${JWT_SECRET_KEY}
@@ -63,11 +112,49 @@ jwt:
   access-token-validity-in-seconds: 86400 # 1 day
   refresh-token-validity-in-seconds: 604800 # 7 days
 
+account-deletion:
+  # External deletion is fail-closed until policy, secret, and a trusted verification adapter
+  # are all explicitly ready. The public explanatory page remains available while disabled.
+  enabled: ${ACCOUNT_DELETION_ENABLED:false}
+  retention-policy-confirmed: ${ACCOUNT_DELETION_RETENTION_POLICY_CONFIRMED:false}
+  # COMMON signup에는 verified-email timestamp가 없다. 현재 mailbox control을 계정 소유권
+  # 증거로 인정한다는 보안·제품·법률 승인이 끝난 운영 환경에서만 true로 설정한다.
+  common-mailbox-proof-policy-approved: ${ACCOUNT_DELETION_COMMON_MAILBOX_PROOF_POLICY_APPROVED:false}
+  hmac-secret: ${ACCOUNT_DELETION_HMAC_SECRET:}
+  # No default: production must explicitly bind the canonical HTTPS origin.
+  public-origin: ${ACCOUNT_DELETION_PUBLIC_ORIGIN:}
+  app-name: ${ACCOUNT_DELETION_APP_NAME:NoLate}
+  developer-name: ${ACCOUNT_DELETION_DEVELOPER_NAME:NoLate}
+  # No default: the reviewed support owner/address must be explicit.
+  support-email: ${ACCOUNT_DELETION_SUPPORT_EMAIL:}
+  retention-summary: ${ACCOUNT_DELETION_RETENTION_SUMMARY:탈퇴한 회원 행은 참조 안정성을 위해 비식별 상태로 유지될 수 있습니다. 공유 캘린더 참여 종료 기록 등 별도 기록의 보유기간은 자동 삭제 기능을 활성화하기 전에 확정하여 고지합니다.}
+  verification-code-ttl: ${ACCOUNT_DELETION_VERIFICATION_CODE_TTL:10m}
+  deletion-grant-ttl: ${ACCOUNT_DELETION_GRANT_TTL:5m}
+  # 개인정보처리방침의 고정 고지와 맞추기 위해 enabled startup은 정확히 30d만 허용한다.
+  request-record-retention: ${ACCOUNT_DELETION_REQUEST_RECORD_RETENTION:30d}
+  processing-timeout: ${ACCOUNT_DELETION_PROCESSING_TIMEOUT:1h}
+  retention-cleanup-initial-delay: ${ACCOUNT_DELETION_RETENTION_CLEANUP_INITIAL_DELAY:1h}
+  retention-cleanup-fixed-delay: ${ACCOUNT_DELETION_RETENTION_CLEANUP_FIXED_DELAY:1d}
+  max-verification-attempts: ${ACCOUNT_DELETION_MAX_VERIFICATION_ATTEMPTS:5}
+  identity-rate-limit: ${ACCOUNT_DELETION_IDENTITY_RATE_LIMIT:3}
+  identity-rate-window: ${ACCOUNT_DELETION_IDENTITY_RATE_WINDOW:1d}
+  requester-rate-limit: ${ACCOUNT_DELETION_REQUESTER_RATE_LIMIT:10}
+  requester-rate-window: ${ACCOUNT_DELETION_REQUESTER_RATE_WINDOW:1h}
+  verification:
+    email:
+      # Conditional JavaMail adapter. Disabled means the support-only public page remains active.
+      enabled: ${ACCOUNT_DELETION_EMAIL_VERIFICATION_ENABLED:false}
+      from: ${ACCOUNT_DELETION_EMAIL_FROM:}
+
 
 server:
   port: 5522
 
 schedule:
+  sharing:
+    # Fail closed: missing/false/malformed values all disable server-side sharing.
+    # Local development must opt in explicitly with the exact string "true".
+    enabled: ${SCHEDULE_SHARING_ENABLED:}
   calendar-cache:
     enabled: ${SCHEDULE_CALENDAR_CACHE_ENABLED:true}
     ttl: ${SCHEDULE_CALENDAR_CACHE_TTL:15m}
@@ -81,13 +168,22 @@ schedule:
   push:
     enabled: ${SCHEDULE_PUSH_ENABLED:true}
     fixed-delay-ms: ${SCHEDULE_PUSH_FIXED_DELAY_MS:60000}
+    # 한 번의 claim transaction이 잠그는 due job 수를 제한해 backlog가 lease timeout으로
+    # 복구되는 동안 다른 인스턴스가 다음 batch를 처리할 수 있게 한다.
+    batch-size: ${SCHEDULE_PUSH_BATCH_SIZE:50}
     retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:5}
     # 푸시 공급자의 일시 장애가 지속될 때 무한 재시도를 막는 작업 단위 한도다.
     max-retry-count: ${SCHEDULE_PUSH_MAX_RETRY_COUNT:3}
+    delivery-grace-minutes: ${SCHEDULE_PUSH_DELIVERY_GRACE_MINUTES:10}
+    processing-timeout-minutes: ${SCHEDULE_PUSH_PROCESSING_TIMEOUT_MINUTES:10}
     departure-alert-lead-minutes: ${SCHEDULE_PUSH_DEPARTURE_ALERT_LEAD_MINUTES:15}
     departure-reminder-interval-minutes: ${SCHEDULE_PUSH_DEPARTURE_REMINDER_INTERVAL_MINUTES:5}
     departure-snooze-minutes: ${SCHEDULE_PUSH_DEPARTURE_SNOOZE_MINUTES:5}
   traffic:
+    # provider 오응답이 과도하게 이른 출발 알림으로 승격되지 않도록 하는 제품 상한이다.
+    max-travel-minutes: ${SCHEDULE_TRAFFIC_MAX_TRAVEL_MINUTES:1440}
+    # fallback 사이에도 유지하는 마지막 live 비교 기준의 최대 신선도다.
+    live-comparator-max-age-minutes: ${SCHEDULE_TRAFFIC_LIVE_COMPARATOR_MAX_AGE_MINUTES:60}
     tmap:
       enabled: ${TMAP_ENABLED:false}
       app-key: ${TMAP_APP_KEY:}
@@ -139,6 +235,30 @@ firebase:
   enabled: ${FIREBASE_ENABLED:false}
   credentials-path: ${FIREBASE_CREDENTIALS_PATH:}
   project-id: ${FIREBASE_PROJECT_ID:}
+  # strict invariant:
+  # connect+read+write < provider-max-call < dispatch-lease,
+  # firebase-admin 9.8.0 worst case ((connect+read+write)*5 + 60s*4) < dispatch-lease,
+  # dispatch-lease-wait > provider-max-call. 등호나 0/음수는 startup에서 거절한다.
+  connect-timeout-millis: ${FIREBASE_CONNECT_TIMEOUT_MILLIS:5000}
+  read-timeout-millis: ${FIREBASE_READ_TIMEOUT_MILLIS:30000}
+  write-timeout-millis: ${FIREBASE_WRITE_TIMEOUT_MILLIS:5000}
+
+notification:
+  push-token:
+    provider-max-call-seconds: ${NOTIFICATION_PUSH_PROVIDER_MAX_CALL_SECONDS:60}
+    dispatch-lease-seconds: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_SECONDS:600}
+    dispatch-lease-wait-millis: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_WAIT_MILLIS:70000}
+    dispatch-lease-poll-millis: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_POLL_MILLIS:25}
+    retirement-reaper-enabled: ${NOTIFICATION_PUSH_TOKEN_RETIREMENT_REAPER_ENABLED:true}
+    retirement-reaper-fixed-delay-millis: ${NOTIFICATION_PUSH_TOKEN_RETIREMENT_REAPER_FIXED_DELAY_MILLIS:30000}
+  push-outbox:
+    enabled: ${NOTIFICATION_PUSH_OUTBOX_ENABLED:true}
+    fixed-delay-ms: ${NOTIFICATION_PUSH_OUTBOX_FIXED_DELAY_MS:30000}
+    # provider 호출 직전에 한 건씩 claim하며 한 run의 최대 처리량만 제한한다.
+    batch-size: ${NOTIFICATION_PUSH_OUTBOX_BATCH_SIZE:50}
+    max-attempts: ${NOTIFICATION_PUSH_OUTBOX_MAX_ATTEMPTS:5}
+    retry-delay-seconds: ${NOTIFICATION_PUSH_OUTBOX_RETRY_DELAY_SECONDS:60}
+    processing-timeout-seconds: ${NOTIFICATION_PUSH_OUTBOX_PROCESSING_TIMEOUT_SECONDS:600}
 
 auth:
   social:
@@ -146,6 +266,30 @@ auth:
       app-id: ${SNS_KAKAO_APP_ID:}
     apple:
       audiences: ${SNS_APPLE_AUDIENCES:}
+      token-lifecycle:
+        enabled: ${APPLE_TOKEN_LIFECYCLE_ENABLED:false}
+        client-id: ${APPLE_TOKEN_CLIENT_ID:}
+        team-id: ${APPLE_TOKEN_TEAM_ID:}
+        key-id: ${APPLE_TOKEN_KEY_ID:}
+        private-key: ${APPLE_TOKEN_PRIVATE_KEY:}
+        redirect-uri: ${APPLE_TOKEN_REDIRECT_URI:}
+        base-url: ${APPLE_TOKEN_BASE_URL:https://appleid.apple.com}
+        client-secret-validity-seconds: ${APPLE_TOKEN_CLIENT_SECRET_VALIDITY_SECONDS:300}
+        encryption:
+          current-key-id: ${APPLE_TOKEN_ENCRYPTION_KEY_ID:}
+          current-key: ${APPLE_TOKEN_ENCRYPTION_KEY:}
+          previous-keys: ${APPLE_TOKEN_PREVIOUS_ENCRYPTION_KEYS:}
+        capture:
+          # Apple success 뒤 회원 transaction이 실패/종료될 때 revoke 보상으로 넘기는 상한.
+          binding-deadline-seconds: ${APPLE_TOKEN_CAPTURE_BINDING_DEADLINE_SECONDS:120}
+        revocation:
+          worker-enabled: ${APPLE_TOKEN_REVOCATION_WORKER_ENABLED:true}
+          fixed-delay-ms: ${APPLE_TOKEN_REVOCATION_FIXED_DELAY_MS:30000}
+          batch-size: ${APPLE_TOKEN_REVOCATION_BATCH_SIZE:20}
+          max-attempts: ${APPLE_TOKEN_REVOCATION_MAX_ATTEMPTS:12}
+          retry-delay-seconds: ${APPLE_TOKEN_REVOCATION_RETRY_DELAY_SECONDS:60}
+          max-retry-delay-seconds: ${APPLE_TOKEN_REVOCATION_MAX_RETRY_DELAY_SECONDS:21600}
+          processing-timeout-seconds: ${APPLE_TOKEN_REVOCATION_PROCESSING_TIMEOUT_SECONDS:120}
 
 ---
 # 테스트 profile에서는 저장소/로컬/운영 비밀 파일 자체를 import하지 않는다.

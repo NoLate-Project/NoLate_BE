@@ -27,6 +27,8 @@ class GlobalExceptionHandler {
             ErrorCode.INVALID_TOKEN -> HttpStatus.UNAUTHORIZED
             ErrorCode.INVALID_CREDENTIALS -> HttpStatus.UNAUTHORIZED
             ErrorCode.FORBIDDEN -> HttpStatus.FORBIDDEN
+            ErrorCode.FEATURE_DISABLED -> HttpStatus.FORBIDDEN
+            ErrorCode.EXTERNAL_SERVICE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE
             ErrorCode.SUBSCRIPTION_LIMIT_EXCEEDED -> HttpStatus.FORBIDDEN
             ErrorCode.SUBSCRIPTION_POLICY_VIOLATION -> HttpStatus.FORBIDDEN
             ErrorCode.MEMBER_NOT_FOUND -> HttpStatus.NOT_FOUND
@@ -42,6 +44,7 @@ class GlobalExceptionHandler {
             ErrorCode.DUPLICATE_MEMBER -> HttpStatus.CONFLICT
             ErrorCode.ACCOUNT_LINK_REQUIRED -> HttpStatus.CONFLICT
             ErrorCode.INVALID_STATE,
+            ErrorCode.IDEMPOTENCY_KEY_CONFLICT,
             ErrorCode.SNS_SIGNUP_REQUIRED -> HttpStatus.CONFLICT
             else -> HttpStatus.BAD_REQUEST
         }
@@ -77,7 +80,13 @@ class GlobalExceptionHandler {
         MissingServletRequestParameterException::class,
     )
     fun handleMalformedRequest(ex: Exception): ResponseEntity<ApiResponse<Nothing>> {
-        log.debug("Malformed request rejected", ex)
+        // Jackson/Spring exception messages can echo the malformed request body. Push token
+        // registration payloads therefore must never be attached as throwable/message logs.
+        log.debug(
+            "Malformed request rejected. failureType={}, rootType={}",
+            ex.javaClass.simpleName,
+            ex.rootCauseType(),
+        )
         return ResponseEntity.badRequest().body(
             ApiResponse.failure(
                 ErrorCode.INVALID_INPUT.message,
@@ -88,8 +97,13 @@ class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException::class)
     fun handleDataIntegrityViolation(ex: DataIntegrityViolationException): ResponseEntity<ApiResponse<Nothing>> {
-        log.warn("Database uniqueness/constraint violation rejected")
-        log.debug("Constraint violation details", ex)
+        // Driver/Hibernate messages may contain SQL literals. P6Spy emits only value-free
+        // operation/table/SQLState/vendor-code metadata; the HTTP boundary records class metadata only.
+        log.warn(
+            "Database uniqueness/constraint violation rejected. failureType={}, rootType={}",
+            ex.javaClass.simpleName,
+            ex.rootCauseType(),
+        )
         return ResponseEntity.status(HttpStatus.CONFLICT).body(
             ApiResponse.failure(
                 "이미 사용 중인 계정 또는 데이터입니다.",
@@ -114,16 +128,35 @@ class GlobalExceptionHandler {
     @ExceptionHandler(AsyncRequestNotUsableException::class)
     fun handleDisconnectedClient(ex: AsyncRequestNotUsableException) {
         // 응답을 받을 클라이언트가 이미 연결을 끊었으므로 추가 응답을 작성하지 않는다.
-        log.debug("Client disconnected before the response completed", ex)
+        log.debug(
+            "Client disconnected before the response completed. failureType={}",
+            ex.javaClass.simpleName,
+        )
     }
 
     @ExceptionHandler(Exception::class)
     fun handleException(ex: Exception): ResponseEntity<ApiResponse<Nothing>> {
-        log.error("Unhandled exception", ex)
+        // A generic persistence/provider exception can carry raw token/deviceId in its message
+        // and therefore in every stack-frame rendering. Keep the operational classification
+        // without attaching the throwable; subsystem boundaries log sanitized structured data.
+        log.error(
+            "Unhandled exception. failureType={}, rootType={}",
+            ex.javaClass.simpleName,
+            ex.rootCauseType(),
+        )
         val body = ApiResponse.failure<Nothing>(
             ErrorCode.INTERNAL_SERVER_ERROR.message,
             ErrorCode.INTERNAL_SERVER_ERROR.code,
         )
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body)
     }
+}
+
+private fun Throwable.rootCauseType(): String {
+    var current: Throwable = this
+    val visited = mutableSetOf<Throwable>()
+    while (current.cause != null && visited.add(current)) {
+        current = current.cause ?: break
+    }
+    return current.javaClass.simpleName
 }

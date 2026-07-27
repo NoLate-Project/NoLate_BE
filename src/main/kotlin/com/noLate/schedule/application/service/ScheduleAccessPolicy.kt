@@ -14,6 +14,7 @@ import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.springframework.stereotype.Component
@@ -42,10 +43,18 @@ class ScheduleAccessPolicy(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val categoryRepository: ScheduleCategoryRepository? = null,
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) {
+    /**
+     * 보조 travel/participant 서비스도 dormant grant를 포함하는 native detail query를
+     * 선택하지 않도록 중앙 availability 결정을 그대로 노출한다. 별도 설정 해석은 하지 않는다.
+     */
+    fun isSharingDisabled(): Boolean = !sharingAvailabilityPolicy.enabled
 
     fun resolve(memberId: Long, schedule: Schedule): ScheduleAccessDecision {
         if (schedule.memberId == memberId) return ownerDecision(schedule)
+        if (!sharingAvailabilityPolicy.enabled) return NO_ACCESS
 
         val scheduleId = requireNotNull(schedule.id)
         val direct = scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, memberId)
@@ -70,6 +79,16 @@ class ScheduleAccessPolicy(
      */
     fun resolveAll(memberId: Long, schedules: Collection<Schedule>): Map<Long, ScheduleAccessDecision> {
         if (schedules.isEmpty()) return emptyMap()
+        if (!sharingAvailabilityPolicy.enabled) {
+            return schedules.mapNotNull { schedule ->
+                val scheduleId = schedule.id ?: return@mapNotNull null
+                scheduleId to if (schedule.memberId == memberId) {
+                    ownerDecision(schedule)
+                } else {
+                    NO_ACCESS
+                }
+            }.toMap()
+        }
 
         val directBySchedule = scheduleShareRepository
             .findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(memberId, ScheduleShareStatus.ACTIVE)
@@ -108,6 +127,8 @@ class ScheduleAccessPolicy(
      */
     fun travelMemberIds(schedule: Schedule): List<Long> {
         if (!isRouteSchedule(schedule)) return emptyList()
+        if (!sharingAvailabilityPolicy.enabled) return listOf(schedule.memberId)
+
         val ids = linkedSetOf(schedule.memberId)
         val scheduleId = requireNotNull(schedule.id)
 
@@ -138,6 +159,27 @@ class ScheduleAccessPolicy(
     }
 
     /**
+     * Schedule PUT may detach or move a schedule away from its current calendar. Cleanup must
+     * freeze the whole current calendar audience, including members whose stale notification rows
+     * outlive a previous content-mode change, before it changes the schedule's calendar id.
+     */
+    fun activeCalendarMemberIds(calendarId: Long): List<Long> {
+        if (!sharingAvailabilityPolicy.enabled) return emptyList()
+
+        if (
+            calendarRepository.findByIdAndStatusAndDeletedFalse(
+                calendarId,
+                ScheduleCalendarStatus.ACTIVE,
+            ) == null
+        ) {
+            return emptyList()
+        }
+        return calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+    }
+
+    /**
      * 캘린더 멤버는 자신의 D-3 알림을 끌 수 있다. 같은 일정에 직접 공유나 legacy 카테고리
      * 공유가 겹치면 그 grant에는 별도 opt-out이 없으므로 활성 경로 공유를 우선한다.
      */
@@ -151,6 +193,8 @@ class ScheduleAccessPolicy(
                 ?.routeReminderEnabled
                 ?: true
         }
+        if (!sharingAvailabilityPolicy.enabled) return false
+
         val scheduleId = requireNotNull(schedule.id)
         val directTravel = scheduleShareRepository
             .findByScheduleIdAndTargetMemberId(scheduleId, memberId)
@@ -180,6 +224,27 @@ class ScheduleAccessPolicy(
     fun routeReminderMemberIdsAll(schedules: Collection<Schedule>): Map<Long, List<Long>> {
         val routeSchedules = schedules.filter(::isRouteSchedule)
         if (routeSchedules.isEmpty()) return emptyMap()
+        if (!sharingAvailabilityPolicy.enabled) {
+            val calendarIds = routeSchedules.mapNotNull { it.calendarId }.distinct()
+            val ownerMemberships = if (calendarIds.isEmpty()) {
+                emptyMap()
+            } else {
+                calendarMemberRepository
+                    .findAllByCalendarIdInAndStatusAndDeletedFalseOrderByCalendarIdAscIdAsc(calendarIds)
+                    .associateBy { it.calendarId to it.memberId }
+            }
+            return routeSchedules.associate { schedule ->
+                val ownerReminderEnabled = schedule.calendarId
+                    ?.let { ownerMemberships[it to schedule.memberId]?.routeReminderEnabled }
+                    ?: true
+                requireNotNull(schedule.id) to if (ownerReminderEnabled) {
+                    listOf(schedule.memberId)
+                } else {
+                    emptyList()
+                }
+            }
+        }
+
         val scheduleIds = routeSchedules.mapNotNull { it.id }
         val categoryIds = routeSchedules.mapNotNull(::categoryId).distinct()
         val calendarIds = routeSchedules.mapNotNull { it.calendarId }.distinct()
@@ -301,7 +366,14 @@ class ScheduleAccessPolicy(
         schedule.scheduleType == ScheduleType.ROUTE || schedule.route != null || schedule.routeSetupRequired
 
     private fun categoryId(schedule: Schedule): Long? =
-        schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+        (schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull())
+            ?.takeIf { categoryId ->
+                categoryRepository
+                    ?.findById(categoryId)
+                    ?.orElse(null)
+                    ?.takeUnless { it.deleted } != null ||
+                    categoryRepository == null
+            }
 
     private fun isActive(share: ScheduleShare): Boolean =
         !share.deleted && share.status == ScheduleShareStatus.ACTIVE

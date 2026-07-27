@@ -20,6 +20,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
+import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import org.testcontainers.containers.MySQLContainer
@@ -45,10 +46,12 @@ class NoLateMySqlContainer(imageName: String) :
 @Import(
     ScheduleCalendarService::class,
     ScheduleShareService::class,
+    ScheduleSharingAvailabilityPolicy::class,
     ScheduleRouteSetupReminderWriter::class,
     ScheduleRouteSetupReminderRegistrar::class,
 )
 @Testcontainers(disabledWithoutDocker = true)
+@TestPropertySource(properties = ["schedule.sharing.enabled=true"])
 class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
     private val calendarService: ScheduleCalendarService,
     private val shareService: ScheduleShareService,
@@ -69,6 +72,7 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
             title = "MySQL 공유 캘린더",
             color = "#2F80FF",
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
 
         runConcurrently(
@@ -79,6 +83,8 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
                     targetEmail = target.email,
                     targetAppId = null,
                     role = ScheduleCalendarRole.VIEWER,
+                    authenticatedActorMemberId = requireNotNull(owner.id),
+                    presentedSessionGeneration = owner.sessionGeneration,
                 )
             },
             {
@@ -88,6 +94,8 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
                     targetEmail = null,
                     targetAppId = target.id,
                     role = ScheduleCalendarRole.EDITOR,
+                    authenticatedActorMemberId = requireNotNull(owner.id),
+                    presentedSessionGeneration = owner.sessionGeneration,
                 )
             },
         )
@@ -102,13 +110,14 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun `reminder unique key makes concurrent MySQL scanners elect one creator`() {
+        val recipientMemberId = requireNotNull(member("mysql-reminder-recipient").id)
         val created = ConcurrentLinkedQueue<Boolean>()
         runConcurrently(
             {
                 created.add(
                     registrar.register(
                         scheduleId = 100L,
-                        memberId = 200L,
+                        memberId = recipientMemberId,
                         fingerprint = "b".repeat(64),
                         now = Instant.parse("2026-07-23T00:00:00Z"),
                     )
@@ -118,7 +127,7 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
                 created.add(
                     registrar.register(
                         scheduleId = 100L,
-                        memberId = 200L,
+                        memberId = recipientMemberId,
                         fingerprint = "b".repeat(64),
                         now = Instant.parse("2026-07-23T00:00:00Z"),
                     )
@@ -142,6 +151,7 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
             title = "수락 보관 경합",
             color = "#2F80FF",
             defaultContentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         val invitation = shareService.createCalendarInvitation(
             ownerMemberId = ownerId,
@@ -149,13 +159,18 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
             permission = ScheduleSharePermission.VIEWER,
             ttlHours = 24,
             maxAcceptCount = 1,
+            presentedSessionGeneration = owner.sessionGeneration,
         )
         val accepted = AtomicBoolean(false)
 
         runConcurrently(
             {
                 try {
-                    shareService.acceptInvitation(requireNotNull(target.id), invitation.token)
+                    shareService.acceptInvitation(
+                        requireNotNull(target.id),
+                        invitation.token,
+                        target.sessionGeneration,
+                    )
                     accepted.set(true)
                 } catch (error: BusinessException) {
                     assertTrue(
@@ -166,7 +181,13 @@ class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
                     )
                 }
             },
-            { calendarService.archiveCalendar(ownerId, calendar.id) },
+            {
+                calendarService.archiveCalendar(
+                    ownerId,
+                    calendar.id,
+                    owner.sessionGeneration,
+                )
+            },
         )
 
         val persistedInvitation = invitationRepository.findAll().single()

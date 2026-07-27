@@ -20,6 +20,7 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import org.springframework.context.ApplicationEventPublisher
+import org.springframework.dao.CannotAcquireLockException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -31,6 +32,8 @@ class ScheduleCalendarService(
     private val invitationRepository: ScheduleShareInvitationRepository? = null,
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
+    private val mutationFenceObserver: ScheduleCalendarMutationFenceObserver? = null,
+    private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
 ) {
 
     @Transactional
@@ -39,9 +42,14 @@ class ScheduleCalendarService(
         title: String?,
         color: String?,
         defaultContentMode: ScheduleShareContentMode?,
+        presentedSessionGeneration: Long,
     ): ScheduleCalendarDto {
-        memberRepository.findByIdAndDeletedFalse(ownerMemberId)
-            ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
+        sharingAvailabilityPolicy.requireEnabled()
+        lockCalendarMembers(
+            memberIds = listOf(ownerMemberId),
+            actorMemberId = ownerMemberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
 
         val calendar = calendarRepository.saveAndFlush(
             ScheduleCalendar(
@@ -64,6 +72,7 @@ class ScheduleCalendarService(
 
     @Transactional(readOnly = true)
     fun getCalendars(memberId: Long): List<ScheduleCalendarDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         val memberships = calendarMemberRepository
             .findAllByMemberIdAndStatusAndDeletedFalseOrderByIdAsc(memberId)
             .associateBy { it.calendarId }
@@ -82,6 +91,7 @@ class ScheduleCalendarService(
 
     @Transactional(readOnly = true)
     fun getCalendar(memberId: Long, calendarId: Long): ScheduleCalendarDto {
+        sharingAvailabilityPolicy.requireEnabled()
         val calendar = findActiveCalendar(calendarId)
         val membership = findActiveMembership(calendarId, memberId)
         return calendar.toDto(
@@ -97,8 +107,23 @@ class ScheduleCalendarService(
         title: String?,
         color: String?,
         defaultContentMode: ScheduleShareContentMode?,
+        presentedSessionGeneration: Long,
     ): ScheduleCalendarDto {
+        sharingAvailabilityPolicy.requireEnabled()
+        val previewMemberIds = calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+        mutationFenceObserver?.afterMembershipPreview(calendarId)
+        val lockedMembers = lockCalendarMembers(
+            memberIds = previewMemberIds + ownerMemberId,
+            actorMemberId = ownerMemberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
         val calendar = lockOwnedCalendar(calendarId, ownerMemberId)
+        val affectedMemberIds = requireFrozenCalendarMemberFence(
+            calendarId,
+            lockedMembers.keys,
+        )
         val ownerMembership = findActiveMembership(calendarId, ownerMemberId)
         val previousContentMode = calendar.defaultContentMode
         calendar.updateSettings(
@@ -107,9 +132,6 @@ class ScheduleCalendarService(
             defaultContentMode = defaultContentMode ?: calendar.defaultContentMode,
         )
         calendarRepository.saveAndFlush(calendar)
-        val affectedMemberIds = calendarMemberRepository
-            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
-            .map { it.memberId }
         publishCalendarCacheInvalidation(affectedMemberIds, "calendar-settings-updated")
         if (
             previousContentMode == ScheduleShareContentMode.SCHEDULE_AND_TRAVEL &&
@@ -128,6 +150,7 @@ class ScheduleCalendarService(
 
     @Transactional(readOnly = true)
     fun getMembers(memberId: Long, calendarId: Long): List<ScheduleCalendarMemberDto> {
+        sharingAvailabilityPolicy.requireEnabled()
         findActiveCalendar(calendarId)
         findActiveMembership(calendarId, memberId)
         val memberships = calendarMemberRepository
@@ -149,10 +172,23 @@ class ScheduleCalendarService(
         targetEmail: String?,
         targetAppId: Long?,
         role: ScheduleCalendarRole,
+        authenticatedActorMemberId: Long,
+        presentedSessionGeneration: Long,
     ): ScheduleCalendarMemberDto {
+        sharingAvailabilityPolicy.requireEnabled()
+        // 잠금 전에 target 엔티티를 persistence context에 올리면 lock 대기 중 withdrawal이
+        // commit된 뒤에도 stale deleted=false 상태를 재사용할 수 있다. ID만 해석한 뒤
+        // actor와 recipient를 함께 정렬 잠금하고, 잠긴 fresh Member로 상태를 검증한다.
+        val targetMemberId = resolveTargetMemberId(targetEmail, targetAppId)
+        mutationFenceObserver?.afterMembershipPreview(calendarId)
+        val lockedMembers = lockCalendarMembers(
+            memberIds = listOf(ownerMemberId, targetMemberId, authenticatedActorMemberId),
+            actorMemberId = authenticatedActorMemberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
+        val activeTarget = lockedMembers[targetMemberId]
+            ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         lockOwnedCalendar(calendarId, ownerMemberId)
-        val target = findTargetMember(targetEmail, targetAppId)
-        val targetMemberId = requireNotNull(target.id)
         if (targetMemberId == ownerMemberId) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "캘린더 소유자는 다시 초대할 수 없습니다.")
         }
@@ -182,7 +218,7 @@ class ScheduleCalendarService(
         } else {
             publishCalendarCacheInvalidation(listOf(targetMemberId), "calendar-member-role-updated")
         }
-        return saved.toDto(target)
+        return saved.toDto(activeTarget)
     }
 
     @Transactional
@@ -191,7 +227,16 @@ class ScheduleCalendarService(
         calendarId: Long,
         targetMemberId: Long,
         role: ScheduleCalendarRole?,
+        presentedSessionGeneration: Long,
     ): ScheduleCalendarMemberDto {
+        sharingAvailabilityPolicy.requireEnabled()
+        val lockedMembers = lockCalendarMembers(
+            memberIds = listOf(ownerMemberId, targetMemberId),
+            actorMemberId = ownerMemberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
+        val activeTarget = lockedMembers[targetMemberId]
+            ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         lockOwnedCalendar(calendarId, ownerMemberId)
         val membership = calendarMemberRepository.findForUpdate(calendarId, targetMemberId)
             ?.takeIf { !it.deleted && it.status == ScheduleCalendarMemberStatus.ACTIVE }
@@ -205,7 +250,7 @@ class ScheduleCalendarService(
         }
         val saved = calendarMemberRepository.saveAndFlush(membership)
         publishCalendarCacheInvalidation(listOf(targetMemberId), "calendar-member-role-updated")
-        return saved.toDto(memberRepository.findByIdAndDeletedFalse(targetMemberId))
+        return saved.toDto(activeTarget)
     }
 
     /**
@@ -217,7 +262,14 @@ class ScheduleCalendarService(
         memberId: Long,
         calendarId: Long,
         routeReminderEnabled: Boolean,
+        presentedSessionGeneration: Long,
     ): ScheduleCalendarMemberDto {
+        sharingAvailabilityPolicy.requireEnabled()
+        val lockedMembers = lockCalendarMembers(
+            memberIds = listOf(memberId),
+            actorMemberId = memberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
         calendarRepository.findActiveForUpdate(calendarId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
         val membership = calendarMemberRepository.findForUpdate(calendarId, memberId)
@@ -225,11 +277,23 @@ class ScheduleCalendarService(
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
         membership.updateRouteReminder(routeReminderEnabled)
         return calendarMemberRepository.saveAndFlush(membership)
-            .toDto(memberRepository.findByIdAndDeletedFalse(memberId))
+            .toDto(lockedMembers[memberId])
     }
 
     @Transactional
-    fun removeMember(ownerMemberId: Long, calendarId: Long, targetMemberId: Long) {
+    fun removeMember(
+        ownerMemberId: Long,
+        calendarId: Long,
+        targetMemberId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        sharingAvailabilityPolicy.requireEnabled()
+        lockCalendarMembers(
+            memberIds = listOf(ownerMemberId, targetMemberId),
+            actorMemberId = ownerMemberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        ).takeIf { targetMemberId in it }
+            ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         lockOwnedCalendar(calendarId, ownerMemberId)
         val membership = calendarMemberRepository.findForUpdate(calendarId, targetMemberId)
             ?.takeIf { !it.deleted && it.status == ScheduleCalendarMemberStatus.ACTIVE }
@@ -244,7 +308,17 @@ class ScheduleCalendarService(
     }
 
     @Transactional
-    fun leaveCalendar(memberId: Long, calendarId: Long) {
+    fun leaveCalendar(
+        memberId: Long,
+        calendarId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        sharingAvailabilityPolicy.requireEnabled()
+        lockCalendarMembers(
+            memberIds = listOf(memberId),
+            actorMemberId = memberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
         val calendar = calendarRepository.findActiveForUpdate(calendarId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
         val membership = calendarMemberRepository.findForUpdate(calendarId, memberId)
@@ -260,11 +334,24 @@ class ScheduleCalendarService(
     }
 
     /**
-     * 캘린더 잠금 뒤 두 membership row를 member id 오름차순으로 잠근다. 이 순서는 반대 방향의
-     * 동시 소유권 이전에서도 DB 교착을 피하기 위한 계약이므로 다른 서비스에서도 유지해야 한다.
+     * actor/target member를 id 오름차순으로 먼저 잠근 뒤 calendar와 membership으로 진행한다.
+     * 이 순서는 반대 방향의 동시 소유권 이전과 withdrawal에서도 DB 교착을 피하기 위한
+     * 계약이므로 다른 서비스에서도 유지해야 한다.
      */
     @Transactional
-    fun transferOwnership(ownerMemberId: Long, calendarId: Long, targetMemberId: Long): ScheduleCalendarDto {
+    fun transferOwnership(
+        ownerMemberId: Long,
+        calendarId: Long,
+        targetMemberId: Long,
+        presentedSessionGeneration: Long,
+    ): ScheduleCalendarDto {
+        sharingAvailabilityPolicy.requireEnabled()
+        lockCalendarMembers(
+            memberIds = listOf(ownerMemberId, targetMemberId),
+            actorMemberId = ownerMemberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        ).takeIf { targetMemberId in it }
+            ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         val calendar = lockOwnedCalendar(calendarId, ownerMemberId)
         val pendingInvitations = lockPendingCalendarInvitations(calendarId)
         if (targetMemberId == ownerMemberId) {
@@ -302,12 +389,27 @@ class ScheduleCalendarService(
     }
 
     @Transactional
-    fun archiveCalendar(ownerMemberId: Long, calendarId: Long) {
-        val calendar = lockOwnedCalendar(calendarId, ownerMemberId)
-        val pendingInvitations = lockPendingCalendarInvitations(calendarId)
-        val affectedMemberIds = calendarMemberRepository
+    fun archiveCalendar(
+        ownerMemberId: Long,
+        calendarId: Long,
+        presentedSessionGeneration: Long,
+    ) {
+        sharingAvailabilityPolicy.requireEnabled()
+        val previewMemberIds = calendarMemberRepository
             .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
             .map { it.memberId }
+        mutationFenceObserver?.afterMembershipPreview(calendarId)
+        val lockedMembers = lockCalendarMembers(
+            memberIds = previewMemberIds + ownerMemberId,
+            actorMemberId = ownerMemberId,
+            presentedSessionGeneration = presentedSessionGeneration,
+        )
+        val calendar = lockOwnedCalendar(calendarId, ownerMemberId)
+        val affectedMemberIds = requireFrozenCalendarMemberFence(
+            calendarId,
+            lockedMembers.keys,
+        )
+        val pendingInvitations = lockPendingCalendarInvitations(calendarId)
         revokePendingCalendarInvitations(pendingInvitations)
         calendar.archive()
         calendarRepository.saveAndFlush(calendar)
@@ -322,6 +424,55 @@ class ScheduleCalendarService(
             throw BusinessException(ErrorCode.FORBIDDEN)
         }
         return calendar
+    }
+
+    /**
+     * Withdrawal 및 push-job cleanup과 동일한 전역 순서(member -> calendar -> job)를 쓴다.
+     * 잠금 없는 membership preview는 대상 id 발견에만 사용하고, 권한/상태는 calendar 및
+     * membership row를 잠근 뒤 다시 검증한다. actor의 signed generation도 같은 member lock
+     * 안에서 검증하므로 security filter 통과 뒤 logout된 요청은 어떤 calendar write도 못 한다.
+     */
+    private fun lockCalendarMembers(
+        memberIds: Collection<Long>,
+        actorMemberId: Long,
+        presentedSessionGeneration: Long,
+    ): Map<Long, Member> {
+        val activeMembers = memberRepository.findAllByIdsForUpdate(
+            memberIds.distinct().sorted(),
+        ).asSequence()
+            .filterNot { it.deleted }
+            .associateBy { requireNotNull(it.id) }
+        val actor = activeMembers[actorMemberId]
+            ?: throw BusinessException(
+                ErrorCode.INVALID_TOKEN,
+                "종료되었거나 존재하지 않는 로그인 세션입니다.",
+            )
+        if (actor.sessionGeneration != presentedSessionGeneration) {
+            throw BusinessException(ErrorCode.INVALID_TOKEN, "종료된 로그인 세션입니다.")
+        }
+        return activeMembers
+    }
+
+    /**
+     * membership preview와 parent calendar lock 사이에 add/accept가 먼저 선형화되면, 새
+     * participant는 이 transaction의 전역 member-id 잠금 집합에 포함되지 않았다. 그 상태로
+     * travel cleanup/archive를 진행하지 않고 transient failure로 끝내 caller가 fresh preview로
+     * 재시도하게 한다. 반대로 calendar lock을 이 mutation이 먼저 잡으면 후속 add가 기다리므로
+     * 기존 frozen 집합으로 안전하게 선형화된다.
+     */
+    private fun requireFrozenCalendarMemberFence(
+        calendarId: Long,
+        lockedMemberIds: Set<Long>,
+    ): List<Long> {
+        val currentMemberIds = calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+        if (!lockedMemberIds.containsAll(currentMemberIds)) {
+            throw CannotAcquireLockException(
+                "Calendar membership changed while acquiring the member fence; retry.",
+            )
+        }
+        return currentMemberIds
     }
 
     /**
@@ -365,7 +516,7 @@ class ScheduleCalendarService(
             ScheduleCalendarMemberStatus.ACTIVE,
         ) ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
 
-    private fun findTargetMember(targetEmail: String?, targetAppId: Long?): Member {
+    private fun resolveTargetMemberId(targetEmail: String?, targetAppId: Long?): Long {
         val normalizedEmail = targetEmail?.trim()?.lowercase()?.takeIf(String::isNotBlank)
         val hasEmail = normalizedEmail != null
         val hasAppId = targetAppId != null
@@ -373,12 +524,12 @@ class ScheduleCalendarService(
             throw BusinessException(ErrorCode.INVALID_INPUT, "targetEmail과 targetAppId 중 하나만 입력해야 합니다.")
         }
         return if (hasAppId) {
-            val id = targetAppId?.takeIf { it > 0L }
+            targetAppId?.takeIf { it > 0L }
                 ?: throw BusinessException(ErrorCode.INVALID_INPUT, "targetAppId는 양수여야 합니다.")
-            memberRepository.findByIdAndDeletedFalse(id)
         } else {
-            memberRepository.findByEmailAndDeletedFalse(requireNotNull(normalizedEmail))
-        } ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
+            memberRepository.findIdByEmailAndDeletedFalse(requireNotNull(normalizedEmail))
+                ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
+        }
     }
 
     private fun validateGrantableRole(role: ScheduleCalendarRole) {
@@ -437,4 +588,12 @@ class ScheduleCalendarService(
     companion object {
         private val COLOR_PATTERN = Regex("^#[0-9A-Fa-f]{6}$")
     }
+}
+
+/**
+ * membership preview 뒤 동시 grant를 결정적으로 재현하는 test seam.
+ * 운영 bean이 없으면 no-op이며 member/token 같은 식별자를 노출하지 않는다.
+ */
+fun interface ScheduleCalendarMutationFenceObserver {
+    fun afterMembershipPreview(calendarId: Long)
 }

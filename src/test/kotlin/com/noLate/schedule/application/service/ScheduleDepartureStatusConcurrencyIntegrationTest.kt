@@ -4,25 +4,24 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
-import com.noLate.notification.application.PushClient
-import com.noLate.notification.application.PushSendResult
-import com.noLate.notification.application.service.AppNotificationService
-import com.noLate.notification.application.service.AppNotificationWriter
-import com.noLate.notification.application.service.NotificationTokenService
-import com.noLate.notification.application.service.PushSendHistoryService
-import com.noLate.notification.application.useCase.NotificationUseCase
-import com.noLate.notification.domain.PushSendStatus
-import com.noLate.notification.infrastructure.PushSendHistoryRepository
+import com.noLate.notification.application.service.PushEventOutboxService
+import com.noLate.notification.application.service.PushEventOutboxWriter
+import com.noLate.notification.domain.PushManifestState
+import com.noLate.notification.domain.PushOutboxDispatchStatus
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.infrastructure.PushDeliveryRepository
+import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
@@ -33,6 +32,9 @@ import org.springframework.context.event.EventListener
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.TransactionDefinition
+import org.springframework.transaction.support.TransactionTemplate
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -45,11 +47,9 @@ import java.util.concurrent.TimeUnit
 @Import(
     ScheduleDepartureStatusService::class,
     ScheduleDeparturePushNotificationListener::class,
-    NotificationTokenService::class,
-    PushSendHistoryService::class,
-    AppNotificationService::class,
-    AppNotificationWriter::class,
-    NotificationUseCase::class,
+    PushEventOutboxService::class,
+    PushEventOutboxWriter::class,
+    ScheduleSharingAvailabilityPolicy::class,
     ScheduleDepartureConcurrencyTestConfig::class,
 )
 @TestPropertySource(
@@ -58,6 +58,7 @@ import java.util.concurrent.TimeUnit
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
+        "schedule.sharing.enabled=true",
     ]
 )
 class ScheduleDepartureStatusConcurrencyIntegrationTest @Autowired constructor(
@@ -68,8 +69,16 @@ class ScheduleDepartureStatusConcurrencyIntegrationTest @Autowired constructor(
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
     private val pushSendHistoryRepository: PushSendHistoryRepository,
     private val appNotificationRepository: AppNotificationRepository,
+    private val pushDeliveryRepository: PushDeliveryRepository,
     private val eventRecorder: ScheduleDepartureEventRecorder,
+    private val fenceObserver: ScheduleDepartureFenceTestObserver,
+    private val transactionManager: PlatformTransactionManager,
 ) {
+    @BeforeEach
+    fun resetObserver() {
+        eventRecorder.events.clear()
+        fenceObserver.reset()
+    }
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -112,24 +121,100 @@ class ScheduleDepartureStatusConcurrencyIntegrationTest @Autowired constructor(
         assertEquals(1, eventRecorder.events.size)
         assertEquals(fixture.targetMemberId, eventRecorder.events.single().departedMemberId)
 
-        // AFTER_COMMIT 리스너는 반드시 새 트랜잭션을 열어야 이력이 실제 DB에 남는다.
-        // 토큰이 없는 테스트 오너도 NO_TOKEN 이력 하나가 생기면 발송 파이프라인을 통과한 것이다.
-        val histories = pushSendHistoryRepository.findAllByScheduleIdOrderBySentAtDesc(
-            fixture.scheduleId,
-            org.springframework.data.domain.PageRequest.of(0, 10),
-        )
-        assertEquals(1, histories.size)
-        assertEquals(fixture.ownerMemberId, histories.single().memberId)
-        assertEquals("SCHEDULE_PARTICIPANT_DEPARTED", histories.single().payloadType)
-        assertEquals(PushSendStatus.NO_TOKEN, histories.single().status)
-
-        // 기기 토큰이 없어 push가 전달되지 않아도 사용자가 다음 실행 때 확인할 앱 알림은 남는다.
+        // BEFORE_COMMIT listener는 출발 상태와 같은 transaction에 immutable outbox만 저장한다.
+        // provider/history 처리는 commit 이후 별도 drainer가 맡으므로 아직 발송 이력은 없어야 한다.
+        assertTrue(pushSendHistoryRepository.findAll().isEmpty())
         val appNotifications = appNotificationRepository.findAllByMemberIdOrderByIdDesc(
             fixture.ownerMemberId
         )
         assertEquals(1, appNotifications.size)
-        assertEquals("SCHEDULE_PARTICIPANT_DEPARTED", appNotifications.single().type)
-        assertEquals(fixture.scheduleId, appNotifications.single().scheduleId)
+        val outbox = appNotifications.single()
+        assertEquals("SCHEDULE_PARTICIPANT_DEPARTED", outbox.type)
+        assertEquals(fixture.scheduleId, outbox.scheduleId)
+        assertEquals(PushManifestState.FROZEN, outbox.manifestState)
+        assertEquals(0, outbox.manifestRecipientCount)
+        assertEquals(PushOutboxDispatchStatus.PENDING, outbox.dispatchStatus)
+        assertNotNull(outbox.nextDispatchAt)
+        assertTrue(
+            pushDeliveryRepository.findAllByMemberIdAndEventKeyOrderByIdAsc(
+                fixture.ownerMemberId,
+                outbox.logicalEventKey,
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun `share revoke committed after preview is observed before departure mutation`() {
+        val fixture = createFixture()
+        fenceObserver.blockNext()
+        val executor = Executors.newSingleThreadExecutor()
+        val departure = executor.submit<Throwable?> {
+            runCatching {
+                TransactionTemplate(transactionManager).apply {
+                    isolationLevel = TransactionDefinition.ISOLATION_READ_COMMITTED
+                }.executeWithoutResult {
+                    val memberFence = service.lockNotificationActionMembers(
+                        memberId = fixture.targetMemberId,
+                        scheduleId = fixture.scheduleId,
+                        presentedSessionGeneration = 0L,
+                    )
+                    service.markDeparted(
+                        fixture.targetMemberId,
+                        fixture.scheduleId,
+                        memberFence,
+                    )
+                }
+            }.exceptionOrNull()
+        }
+
+        assertTrue(
+            fenceObserver.previewed.await(5, TimeUnit.SECONDS),
+            "departure action must stop after its non-locking recipient preview",
+        )
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            memberRepository.findByIdForUpdate(fixture.targetMemberId)
+            val share = requireNotNull(
+                shareRepository.findByScheduleIdAndTargetMemberId(
+                    fixture.scheduleId,
+                    fixture.targetMemberId,
+                )
+            )
+            share.revoke()
+            shareRepository.saveAndFlush(share)
+        }
+        fenceObserver.release.countDown()
+
+        val failure = departure.get(10, TimeUnit.SECONDS)
+        executor.shutdownNow()
+
+        assertTrue(failure is com.noLate.global.error.BusinessException)
+        assertEquals(
+            com.noLate.global.error.ErrorCode.SCHEDULE_NOT_FOUND,
+            (failure as com.noLate.global.error.BusinessException).errorCode,
+        )
+        assertTrue(
+            departureStatusRepository
+                .findAllByScheduleIdAndDeletedFalse(fixture.scheduleId)
+                .isEmpty(),
+        )
+        assertTrue(
+            eventRecorder.events.none { it.scheduleId == fixture.scheduleId },
+        )
+        assertTrue(
+            appNotificationRepository
+                .findAllByMemberIdOrderByIdDesc(fixture.ownerMemberId)
+                .none { it.scheduleId == fixture.scheduleId },
+        )
+        assertEquals(
+            ScheduleShareStatus.REVOKED,
+            requireNotNull(
+                shareRepository.findByScheduleIdAndTargetMemberId(
+                    fixture.scheduleId,
+                    fixture.targetMemberId,
+                )
+            ).status,
+        )
     }
 
     private fun createFixture(): DepartureConcurrencyFixture {
@@ -187,17 +272,11 @@ class ScheduleDepartureConcurrencyTestConfig {
     fun departureEventRecorder(): ScheduleDepartureEventRecorder = ScheduleDepartureEventRecorder()
 
     @Bean
-    fun departureObjectMapper(): ObjectMapper = jacksonObjectMapper()
+    fun departureFenceObserver(): ScheduleDepartureFenceTestObserver =
+        ScheduleDepartureFenceTestObserver()
 
     @Bean
-    fun departurePushClient(): PushClient = object : PushClient {
-        override fun sendToToken(
-            token: String,
-            title: String,
-            body: String,
-            data: Map<String, String>,
-        ): PushSendResult = error("토큰 없는 통합 테스트에서는 실제 공급자를 호출하면 안 된다.")
-    }
+    fun departureObjectMapper(): ObjectMapper = jacksonObjectMapper()
 }
 
 class ScheduleDepartureEventRecorder {
@@ -206,6 +285,32 @@ class ScheduleDepartureEventRecorder {
     @EventListener
     fun record(event: ScheduleParticipantDepartedEvent) {
         events.add(event)
+    }
+}
+
+class ScheduleDepartureFenceTestObserver : ScheduleDepartureFenceObserver {
+    @Volatile
+    var previewed = CountDownLatch(0)
+
+    @Volatile
+    var release = CountDownLatch(0)
+
+    fun reset() {
+        previewed = CountDownLatch(0)
+        release = CountDownLatch(0)
+    }
+
+    fun blockNext() {
+        previewed = CountDownLatch(1)
+        release = CountDownLatch(1)
+    }
+
+    override fun afterRecipientPreview(memberId: Long, scheduleId: Long) {
+        if (previewed.count == 0L) return
+        previewed.countDown()
+        check(release.await(5, TimeUnit.SECONDS)) {
+            "Timed out waiting for the revoke transaction."
+        }
     }
 }
 

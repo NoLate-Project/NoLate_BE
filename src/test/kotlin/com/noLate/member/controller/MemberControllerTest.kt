@@ -4,6 +4,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.member.application.useCase.MemberUseCase
+import com.noLate.member.application.useCase.MemberWithdrawalResult
 import com.noLate.member.domain.consent.SignupConsentCommand
 import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.MemberDto
@@ -20,6 +21,7 @@ import org.mockito.kotlin.check
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import org.mockito.kotlin.isNull
 
@@ -33,6 +35,7 @@ class MemberControllerTest {
         id = 1L,
         email = "user@test.com",
         name = "tester",
+        accessTokenSessionGeneration = 8L,
     )
 
     private val consentRequest = SignupConsentRequest(
@@ -79,6 +82,65 @@ class MemberControllerTest {
     }
 
     @Test
+    fun `Apple registration status ignores the single-use authorization code`() {
+        val controller = controller()
+        whenever(
+            memberUseCase.isSnsMemberRegistered(
+                LoginType.APPLE,
+                "identity-token",
+                "nonce",
+            )
+        ).thenReturn(true)
+
+        val response = controller.getSnsRegistrationStatus(
+            SnsRegistrationRequest(
+                loginType = LoginType.APPLE,
+                providerToken = "identity-token",
+                authorizationCode = "single-use-code-must-remain-unused",
+                nonce = "nonce",
+            )
+        )
+
+        assertEquals(true, response.data?.registered)
+        verify(memberUseCase).isSnsMemberRegistered(
+            LoginType.APPLE,
+            "identity-token",
+            "nonce",
+        )
+    }
+
+    @Test
+    fun `Apple login forwards the single-use authorization code only to final login`() {
+        val controller = controller()
+        val saved = MemberDto(id = 8L, loginType = LoginType.APPLE, snsId = "apple-subject")
+        whenever(
+            memberUseCase.loginSns(
+                LoginType.APPLE,
+                "identity-token",
+                "nonce",
+                "authorization-code",
+            )
+        ).thenReturn(saved)
+
+        val response = controller.snsLogin(
+            SnsLoginRequest(
+                loginType = LoginType.APPLE,
+                providerToken = "identity-token",
+                authorizationCode = "authorization-code",
+                nonce = "nonce",
+            )
+        )
+
+        assertSame(saved, response.data)
+        verify(memberUseCase).loginSns(
+            loginType = LoginType.APPLE,
+            providerToken = "identity-token",
+            nonce = "nonce",
+            authorizationCode = "authorization-code",
+        )
+    }
+
+    @Test
     fun `sns signup passes profile and the same required consent`() {
         val controller = controller()
         val saved = MemberDto(id = 4L, loginType = LoginType.NAVER, snsId = "naver-1")
@@ -88,6 +150,7 @@ class MemberControllerTest {
                 eq("provider-token"),
                 isNull(),
                 any(),
+                isNull(),
             )
         ).thenReturn(saved)
 
@@ -105,6 +168,41 @@ class MemberControllerTest {
             providerToken = eq("provider-token"),
             nonce = eq(null),
             consents = eq(consentRequest.toCommand()),
+            authorizationCode = eq(null),
+        )
+    }
+
+    @Test
+    fun `Apple signup forwards authorization code to the final transactional signup`() {
+        val controller = controller()
+        val saved = MemberDto(id = 9L, loginType = LoginType.APPLE, snsId = "apple-subject")
+        whenever(
+            memberUseCase.signUpSns(
+                eq(LoginType.APPLE),
+                eq("identity-token"),
+                eq("nonce"),
+                any(),
+                eq("authorization-code"),
+            )
+        ).thenReturn(saved)
+
+        val response = controller.snsSignUp(
+            SnsSignUpRequest(
+                loginType = LoginType.APPLE,
+                providerToken = "identity-token",
+                authorizationCode = "authorization-code",
+                nonce = "nonce",
+                consents = consentRequest,
+            )
+        )
+
+        assertSame(saved, response.data)
+        verify(memberUseCase).signUpSns(
+            loginType = eq(LoginType.APPLE),
+            providerToken = eq("identity-token"),
+            nonce = eq("nonce"),
+            consents = eq(consentRequest.toCommand()),
+            authorizationCode = eq("authorization-code"),
         )
     }
 
@@ -153,13 +251,13 @@ class MemberControllerTest {
     @Test
     fun `completeCuration updates only the authenticated member`() {
         val controller = controller()
-        whenever(memberUseCase.completeCuration(1L)).thenReturn(true)
+        whenever(memberUseCase.completeCuration(1L, 8L)).thenReturn(true)
 
         val response = controller.completeCuration(principal)
 
         assertTrue(response.success)
         assertEquals(true, response.data?.curationCompleted)
-        verify(memberUseCase).completeCuration(1L)
+        verify(memberUseCase).completeCuration(1L, 8L)
     }
 
     @Test
@@ -172,12 +270,12 @@ class MemberControllerTest {
             nickname = "late-no-more",
             intro = "hello",
         )
-        whenever(memberUseCase.getMyProfile(1L)).thenReturn(profile)
+        whenever(memberUseCase.getMyProfile(1L, 8L)).thenReturn(profile)
 
         val response = controller.getMyProfile(principal)
 
         assertSame(profile, response.data)
-        verify(memberUseCase).getMyProfile(1L)
+        verify(memberUseCase).getMyProfile(1L, 8L)
     }
 
     @Test
@@ -191,7 +289,7 @@ class MemberControllerTest {
             imgId = 7L,
             intro = "intro",
         )
-        whenever(memberUseCase.updateMyProfile(eq(1L), org.mockito.kotlin.any()))
+        whenever(memberUseCase.updateMyProfile(eq(1L), org.mockito.kotlin.any(), eq(8L)))
             .thenReturn(updated)
 
         val response = controller.updateMyProfile(
@@ -212,6 +310,7 @@ class MemberControllerTest {
                 assertEquals(7L, it.imgId)
                 assertEquals("intro", it.intro)
             },
+            presentedSessionGeneration = eq(8L),
         )
     }
 
@@ -234,6 +333,7 @@ class MemberControllerTest {
             memberId = 1L,
             currentPassword = "old-password",
             newPassword = "new-password",
+            presentedSessionGeneration = 8L,
         )
     }
 
@@ -242,6 +342,8 @@ class MemberControllerTest {
     // COMMON account password requirements are enforced by MemberUseCase, not the controller.
     fun `withdraw allows nullable password for sns members`() {
         val controller = controller()
+        whenever(memberUseCase.withdraw(1L, 8L, null))
+            .thenReturn(MemberWithdrawalResult(manualAppleRevocationRequired = true))
 
         val response = controller.withdraw(
             principal = principal,
@@ -249,7 +351,8 @@ class MemberControllerTest {
         )
 
         assertTrue(response.success)
-        verify(memberUseCase).withdraw(1L, null)
+        assertEquals(true, response.data?.manualAppleRevocationRequired)
+        verify(memberUseCase).withdraw(1L, 8L, null)
     }
 
     @Test
@@ -274,6 +377,39 @@ class MemberControllerTest {
         }
 
         assertEquals(ErrorCode.UNAUTHORIZED, exception.errorCode)
+    }
+
+    @Test
+    fun `authenticated member mutations require a signed session generation`() {
+        val controller = controller()
+        val generationless = MemberPrincipal(
+            id = 1L,
+            email = "user@test.com",
+            name = "tester",
+        )
+
+        listOf<() -> Unit>(
+            { controller.completeCuration(generationless) },
+            { controller.getMyProfile(generationless) },
+            {
+                controller.updateMyProfile(
+                    generationless,
+                    UpdateProfileRequest(nickname = "stale"),
+                )
+            },
+            {
+                controller.changePassword(
+                    generationless,
+                    ChangePasswordRequest("old-password", "new-password"),
+                )
+            },
+            { controller.withdraw(generationless, request = null) },
+        ).forEach { request ->
+            val failure = assertThrows<BusinessException> { request() }
+            assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
+        }
+
+        verifyNoInteractions(memberUseCase)
     }
 
     private fun controller() = MemberController(memberUseCase)

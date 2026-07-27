@@ -1,5 +1,6 @@
 package com.noLate.global.security
 
+import com.noLate.global.health.HealthEndpointPaths
 import com.noLate.member.application.service.MemberService
 import jakarta.servlet.DispatcherType
 import jakarta.servlet.FilterChain
@@ -9,6 +10,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource
+import org.springframework.security.web.util.matcher.RequestMatcher
 import org.springframework.web.filter.OncePerRequestFilter
 
 /**
@@ -25,6 +27,9 @@ import org.springframework.web.filter.OncePerRequestFilter
 class JwtAuthenticationFilter(
     private val jwtTokenProvider: JwtTokenProvider,
     private val memberService: MemberService,
+    private val applicationHealthRequestMatcher: RequestMatcher = RequestMatcher { request ->
+        request.method == "GET" && HealthEndpointPaths.contains(request.servletPath)
+    },
 ) : OncePerRequestFilter() {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -79,6 +84,7 @@ class JwtAuthenticationFilter(
                 val principal = memberService.getPrincipalById(
                     memberId,
                     jwtTokenProvider.getIssuedAt(token),
+                    jwtTokenProvider.getSessionGeneration(token),
                 )
                 if (principal != null) {
                     log.debug("JwtAuthenticationFilter - active member loaded")
@@ -155,7 +161,10 @@ class JwtAuthenticationFilter(
                 || request.dispatcherType == DispatcherType.ASYNC
                 || (
                     request.method == "GET"
-                        && request.servletPath == "/api/calendar/days"
+                        && (
+                            request.servletPath == "/api/calendar/days"
+                                || applicationHealthRequestMatcher.matches(request)
+                        )
                 )
     }
 
