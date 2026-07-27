@@ -19,7 +19,7 @@ services:
       SCHEDULE_CALENDAR_CACHE_ENABLED: "true"
     volumes:
       - ${NOLATE_ENV_FILE:-./env.local.properties}:/config/env.properties:ro
-      - ${NOLATE_FIREBASE_CREDENTIALS_FILE:?Set NOLATE_FIREBASE_CREDENTIALS_FILE}:/config/firebase.json:ro
+      - ${FIREBASE_CREDENTIALS_FILE:?Set FIREBASE_CREDENTIALS_FILE}:/config/firebase.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
