@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.global.logging.BackgroundSchedulerSqlContext
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.SchedulePlaceDto
@@ -149,7 +150,7 @@ class SchedulePushJobBackfill(
     private val log = LoggerFactory.getLogger(javaClass)
 
     @EventListener(ApplicationReadyEvent::class)
-    fun registerMissingJobs() {
+    fun registerMissingJobs() = BackgroundSchedulerSqlContext.suppressSuccessfulSql {
         val now = Instant.now(clock)
         var ownerCount = 0
         var participantCount = 0

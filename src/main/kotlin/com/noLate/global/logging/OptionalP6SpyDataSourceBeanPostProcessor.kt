@@ -2,6 +2,7 @@ package com.noLate.global.logging
 
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.config.BeanPostProcessor
+import org.springframework.core.env.Environment
 import org.springframework.stereotype.Component
 import org.springframework.util.ClassUtils
 import java.lang.reflect.InvocationTargetException
@@ -15,10 +16,17 @@ import javax.sql.DataSource
  * 애플리케이션이 기동되어야 하므로 설정 파일에서 P6SpyDriver를 직접 지정하지 않는다.
  */
 @Component
-class OptionalP6SpyDataSourceBeanPostProcessor : BeanPostProcessor {
+class OptionalP6SpyDataSourceBeanPostProcessor(
+    environment: Environment,
+) : BeanPostProcessor {
     private val log = LoggerFactory.getLogger(javaClass)
     private val p6DataSourceClassName = "com.p6spy.engine.spy.P6DataSource"
     private val p6SpyAvailable = ClassUtils.isPresent(p6DataSourceClassName, javaClass.classLoader)
+
+    init {
+        // P6Spy가 첫 SQL을 처리하기 전에 현재 Spring profile에 맞는 출력 정책을 고정한다.
+        P6SpySqlLoggingPolicy.configure(environment)
+    }
 
     override fun postProcessAfterInitialization(bean: Any, beanName: String): Any {
         if (bean !is DataSource || !p6SpyAvailable || bean.javaClass.name == p6DataSourceClassName) {

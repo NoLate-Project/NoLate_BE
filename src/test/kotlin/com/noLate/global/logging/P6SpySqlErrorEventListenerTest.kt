@@ -26,6 +26,7 @@ class P6SpySqlErrorEventListenerTest {
 
     @BeforeEach
     fun setUp() {
+        P6SpySqlLoggingPolicy.configureForTest(SuccessfulSqlLogMode.SAFE_METADATA)
         logger.level = Level.INFO
         appender.start()
         logger.addAppender(appender)
@@ -58,6 +59,24 @@ class P6SpySqlErrorEventListenerTest {
     }
 
     @Test
+    fun `로컬 성공 쿼리는 파라미터가 치환된 SQL 한 건으로 기록한다`() {
+        P6SpySqlLoggingPolicy.configureForTest(SuccessfulSqlLogMode.BOUND_SQL)
+        val statementInformation = statementInformation(
+            sql = "select * from member where id = ? and deleted = ?",
+            sqlWithValues = "select * from member where id = 106 and deleted = false",
+        )
+
+        listener.onAfterAnyExecute(statementInformation, 1_000_000, null)
+
+        val message = appender.list.single().formattedMessage
+        assertTrue(message.contains("id = 106"))
+        assertTrue(message.contains("deleted = false"))
+        assertTrue(message.contains("\n"))
+        assertFalse(message.contains("id = ?"))
+        assertFalse(message.contains("binding parameter"))
+    }
+
+    @Test
     fun `스케줄러가 정상 실행한 쿼리는 기록하지 않는다`() {
         Thread.currentThread().name = "scheduling-1"
 
@@ -66,6 +85,62 @@ class P6SpySqlErrorEventListenerTest {
             1_000_000,
             null,
         )
+
+        assertTrue(appender.list.isEmpty())
+    }
+
+    @Test
+    fun `독립 백그라운드 워커가 정상 실행한 쿼리도 기록하지 않는다`() {
+        P6SpySqlLoggingPolicy.configureForTest(SuccessfulSqlLogMode.BOUND_SQL)
+        listOf(
+            "nolate-operational-snapshot",
+            "apple-token-revocation",
+        ).forEach { threadName ->
+            appender.list.clear()
+            Thread.currentThread().name = threadName
+
+            listener.onAfterAnyExecute(
+                statementInformation("select * from schedule_push_job"),
+                1_000_000,
+                null,
+            )
+
+            assertTrue(appender.list.isEmpty(), threadName)
+        }
+    }
+
+    @Test
+    fun `main 스레드의 일반 초기화 SQL은 기록한다`() {
+        P6SpySqlLoggingPolicy.configureForTest(SuccessfulSqlLogMode.BOUND_SQL)
+        Thread.currentThread().name = "main"
+
+        listener.onAfterAnyExecute(
+            statementInformation(
+                sql = "select * from member where id = ?",
+                sqlWithValues = "select * from member where id = 106",
+            ),
+            1_000_000,
+            null,
+        )
+
+        assertTrue(appender.list.single().formattedMessage.contains("id = 106"))
+    }
+
+    @Test
+    fun `main 스레드의 스케줄 복구 구간 SQL만 기록하지 않는다`() {
+        P6SpySqlLoggingPolicy.configureForTest(SuccessfulSqlLogMode.BOUND_SQL)
+        Thread.currentThread().name = "main"
+
+        BackgroundSchedulerSqlContext.suppressSuccessfulSql {
+            listener.onAfterAnyExecute(
+                statementInformation(
+                    sql = "select * from schedule_routes where schedule_id = ?",
+                    sqlWithValues = "select * from schedule_routes where schedule_id = 120",
+                ),
+                1_000_000,
+                null,
+            )
+        }
 
         assertTrue(appender.list.isEmpty())
     }

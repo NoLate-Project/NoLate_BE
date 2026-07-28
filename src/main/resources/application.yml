@@ -18,9 +18,8 @@ spring:
     password: ${MY_SQL_DB_PASSWORD}
 
   jpa:
-    # 주기적으로 실행되는 스케줄 워커의 정상 쿼리는 출력하지 않는다.
-    # 그 외 쿼리도 P6Spy 리스너가 operation/table/elapsed만 출력한다. SQL 원문과
-    # 바인딩 값은 성공/실패 모두 default-deny 하고, 실패 시 안전한 JDBC code만 추가한다.
+    # SQL은 P6Spy listener 한 곳에서 출력해 원문과 bind 로그가 분리되지 않게 한다.
+    # 운영 prod 프로필에서는 같은 listener가 값 없는 메타데이터만 기록한다.
     show-sql: false
     properties:
       hibernate:
@@ -67,7 +66,7 @@ spring:
 
 logging:
   level:
-    # SQL 실행 메타데이터는 값 없는 P6Spy 리스너 한 곳으로 모아 중복 로그를 피한다.
+    # Hibernate의 SQL/bind 분리 출력을 끄고 P6Spy의 바인딩 완료 SQL 한 건만 사용한다.
     org.hibernate.SQL: "OFF"
     org.hibernate.orm.jdbc.bind: "OFF"
     # IDE 의존성 동기화 전에 P6Spy가 아직 없다면 Hibernate 오류 로그가 fallback이 된다.
@@ -76,6 +75,11 @@ logging:
     p6spy: "OFF"
 
 management:
+  health:
+    mail:
+      # 계정 삭제 메일 기능을 사용하지 않는 일반 환경에서는 SMTP 접속 점검도 수행하지 않는다.
+      # SMTP 운영 감시가 필요한 환경만 명시적으로 true를 설정한다.
+      enabled: ${MAIL_HEALTH_ENABLED:false}
   endpoints:
     web:
       # SecurityConfig resolves endpoint identities, so custom base/path mappings and a separate
@@ -100,7 +104,8 @@ observability:
     # Exact "true" is required. Missing, false, and malformed values all keep the scrape path closed.
     public-enabled: ${OBSERVABILITY_PROMETHEUS_PUBLIC_ENABLED:}
   snapshot:
-    enabled: ${OBSERVABILITY_SNAPSHOT_ENABLED:true}
+    # 30초 간격 운영 지표 조회는 로컬 SQL 디버깅을 방해하므로 prod에서만 기본 활성화한다.
+    enabled: ${OBSERVABILITY_SNAPSHOT_ENABLED:false}
     fixed-delay-ms: ${OBSERVABILITY_SNAPSHOT_FIXED_DELAY_MS:30000}
     initial-delay-ms: ${OBSERVABILITY_SNAPSHOT_INITIAL_DELAY_MS:30000}
     shutdown-wait-ms: ${OBSERVABILITY_SNAPSHOT_SHUTDOWN_WAIT_MS:5000}

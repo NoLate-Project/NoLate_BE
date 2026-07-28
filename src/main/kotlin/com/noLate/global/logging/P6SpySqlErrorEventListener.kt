@@ -2,15 +2,16 @@ package com.noLate.global.logging
 
 import com.p6spy.engine.common.StatementInformation
 import com.p6spy.engine.event.SimpleJdbcEventListener
+import org.hibernate.engine.jdbc.internal.FormatStyle
 import org.slf4j.LoggerFactory
 import java.sql.SQLException
 import java.util.concurrent.TimeUnit
 
 /**
- * P6Spy를 통해 실행된 SQL의 안전한 실행 메타데이터만 기록한다.
+ * P6Spy를 통해 실행된 SQL을 환경에 맞는 형식으로 기록한다.
  *
- * SQL 원문과 바인딩 값은 인증 정보, 알림 본문, 기기 식별자처럼 스키마가 늘어날 때마다
- * 새로 생기는 비밀을 포함할 수 있으므로 성공/실패 경로 모두 default-deny 한다.
+ * 로컬 성공 쿼리는 디버깅을 위해 바인딩 완료 SQL 한 건으로 출력한다. 운영에서는 인증 정보,
+ * 알림 본문, 기기 식별자 등이 노출되지 않도록 operation/table/처리 시간만 기록한다.
  * 스케줄러가 정상적으로 실행한 SQL은 반복 로그를 피하기 위해 기록하지 않지만,
  * 실행에 실패한 SQL은 SQLState/vendor code와 안전한 operation/table 분류를 기록한다.
  */
@@ -26,17 +27,37 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
         val sqlMetadata = statementInformation.sql.toSafeLogMetadata()
 
         if (sqlException == null) {
-            if (Thread.currentThread().name.startsWith(SCHEDULER_THREAD_PREFIX)) {
+            if (isBackgroundSchedulerSql()) {
                 return
             }
 
-            log.info(
-                "SQL executed. connectionId={}, elapsedMs={}, operation={}, table={}",
-                statementInformation.connectionInformation.connectionId,
-                elapsedMs,
-                sqlMetadata.operation,
-                sqlMetadata.table,
-            )
+            when (P6SpySqlLoggingPolicy.successfulSqlMode()) {
+                SuccessfulSqlLogMode.BOUND_SQL -> {
+                    val boundSql = statementInformation.sqlWithValues?.trim().orEmpty()
+                    if (boundSql.isNotEmpty()) {
+                        log.info(
+                            "SQL executed. connectionId={}, elapsedMs={}\n{}",
+                            statementInformation.connectionInformation.connectionId,
+                            elapsedMs,
+                            formatBoundSql(boundSql),
+                        )
+                    } else {
+                        log.info(
+                            "SQL executed. connectionId={}, elapsedMs={}, boundSql=unavailable",
+                            statementInformation.connectionInformation.connectionId,
+                            elapsedMs,
+                        )
+                    }
+                }
+
+                SuccessfulSqlLogMode.SAFE_METADATA -> log.info(
+                    "SQL executed. connectionId={}, elapsedMs={}, operation={}, table={}",
+                    statementInformation.connectionInformation.connectionId,
+                    elapsedMs,
+                    sqlMetadata.operation,
+                    sqlMetadata.table,
+                )
+            }
             return
         }
 
@@ -52,10 +73,15 @@ class P6SpySqlErrorEventListener : SimpleJdbcEventListener() {
         )
     }
 
-    private companion object {
-        const val SCHEDULER_THREAD_PREFIX = "scheduling-"
-    }
 }
+
+/**
+ * 값 치환이 끝난 SQL을 사람이 읽기 쉬운 여러 줄로 정리한다.
+ * 포맷터가 신규 SQL 문법을 처리하지 못하더라도 로깅 때문에 실제 쿼리를 실패시키지 않는다.
+ */
+private fun formatBoundSql(sql: String): String =
+    runCatching { FormatStyle.BASIC.formatter.format(sql) }
+        .getOrDefault(sql)
 
 private data class SafeSqlLogMetadata(
     val operation: String,

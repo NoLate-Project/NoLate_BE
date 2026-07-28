@@ -14,7 +14,15 @@ logging:
     # JDBC driver duplicate-key 원문은 opaque credential을 포함할 수 있다. 운영에서는
     # P6Spy의 operation/table/SQLState/vendorCode/exceptionClass 기반 metadata만 남기며
     # SQL 원문, sqlWithValues, SQLException message/stack trace는 기록하지 않는다.
+    org.hibernate.SQL: "OFF"
+    org.hibernate.orm.jdbc.bind: "OFF"
     org.hibernate.engine.jdbc.spi.SqlExceptionHelper: "OFF"
+    com.noLate.global.logging.P6SpySqlErrorEventListener: info
+
+observability:
+  snapshot:
+    # 운영 지표 스냅샷은 환경 변수가 없을 때도 유지한다.
+    enabled: ${OBSERVABILITY_SNAPSHOT_ENABLED:true}
 
 # 운영 API 계약과 내부 모델을 공개하지 않는다. 개발/테스트 프로필의 Swagger는 유지한다.
 springdoc:
