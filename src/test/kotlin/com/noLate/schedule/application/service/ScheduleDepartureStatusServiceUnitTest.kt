@@ -11,11 +11,18 @@ import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleDepartureParticipantRole
 import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.EtaPredictionBasis
+import com.noLate.schedule.domain.EtaAlgorithmVersion
+import com.noLate.schedule.domain.EtaProviderId
+import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
+import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -30,6 +37,7 @@ import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.check
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
@@ -47,6 +55,9 @@ class ScheduleDepartureStatusServiceUnitTest {
 
     @Mock
     lateinit var departureStatusRepository: ScheduleDepartureStatusRepository
+
+    @Mock
+    lateinit var pushJobRepository: SchedulePushJobRepository
 
     @Mock
     lateinit var scheduleShareRepository: ScheduleShareRepository
@@ -73,6 +84,7 @@ class ScheduleDepartureStatusServiceUnitTest {
         service = ScheduleDepartureStatusService(
             scheduleRepository = scheduleRepository,
             departureStatusRepository = departureStatusRepository,
+            pushJobRepository = pushJobRepository,
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             memberRepository = memberRepository,
@@ -182,6 +194,77 @@ class ScheduleDepartureStatusServiceUnitTest {
     }
 
     @Test
+    fun `first departure freezes absolute ETA after schedule then push job locks`() {
+        val scheduleId = 10L
+        val memberId = 1L
+        val schedule = scheduleEntity(id = scheduleId, ownerMemberId = memberId)
+        val evaluatedAt = now.minusSeconds(5 * 60)
+        val predictedArrivalAt = now.plusSeconds(35 * 60)
+        val job = SchedulePushJob.create(
+            memberId = memberId,
+            scheduleId = scheduleId,
+            scheduleAt = schedule.startAt,
+            departureAt = now,
+            monitorStartAt = now.minusSeconds(3_600),
+            intervalMinutes = 20,
+        ).apply {
+            finishCheck(
+                travelMinutes = 35,
+                recommendedDepartureAt = now,
+                pushSent = false,
+                notifiedDepartureAt = null,
+                nextCheckAt = null,
+                completeAfterCheck = true,
+                etaSource = TrafficSource.LIVE_PROVIDER,
+                liveFetchedAt = evaluatedAt,
+                etaStale = false,
+                predictedArrivalAt = predictedArrivalAt,
+                etaTravelMode = ScheduleTravelMode.TRANSIT,
+                now = evaluatedAt,
+            )
+        }
+        whenever(scheduleRepository.findScheduleDetail(scheduleId, memberId)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForDepartureUpdate(scheduleId)).thenReturn(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId))
+            .thenReturn(job)
+        whenever(departureStatusRepository.findActiveForUpdate(scheduleId, memberId)).thenReturn(null)
+        whenever(scheduleShareRepository.findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(
+            scheduleId,
+            ScheduleShareStatus.ACTIVE,
+        )).thenReturn(emptyList())
+        whenever(categoryShareRepository.findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
+            5L,
+            ScheduleShareStatus.ACTIVE,
+        )).thenReturn(emptyList())
+        whenever(memberRepository.findAllByIdsForUpdate(listOf(memberId)))
+            .thenReturn(listOf(member(memberId, "owner@nolate.test")))
+        whenever(memberRepository.findByIdAndDeletedFalse(memberId))
+            .thenReturn(member(memberId, "owner@nolate.test"))
+        whenever(departureStatusRepository.saveAndFlush(any<ScheduleDepartureStatus>()))
+            .thenAnswer { it.getArgument(0) }
+
+        val result = service.markDeparted(memberId, scheduleId)
+
+        assertEquals(evaluatedAt, result.etaSnapshotEvaluatedAt)
+        assertEquals(now, result.etaSnapshotRecommendedDepartureAt)
+        assertEquals(predictedArrivalAt, result.etaSnapshotPredictedArrivalAt)
+        assertEquals(EtaPredictionBasis.PROVIDER_ABSOLUTE, result.etaSnapshotPredictionBasis)
+        assertEquals(ScheduleTravelMode.TRANSIT, result.etaSnapshotTravelMode)
+        assertEquals(EtaProviderId.ODSAY_TRANSIT, result.etaSnapshotProviderId)
+        assertEquals(schedule.startAt, result.etaSnapshotTargetArrivalAt)
+        assertEquals(true, result.etaSnapshotOnTimeArrivalPossible)
+        assertEquals(
+            EtaAlgorithmVersion.TRANSIT_REALTIME_V3,
+            result.etaSnapshotAlgorithmVersion,
+        )
+        assertEquals(evaluatedAt, result.etaSnapshotProviderFetchedAt)
+        inOrder(scheduleRepository, pushJobRepository).apply {
+            verify(scheduleRepository).findActiveForDepartureUpdate(scheduleId)
+            verify(pushJobRepository).findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
+        }
+    }
+
+    @Test
     fun `schedule only recipient cannot publish a departure state`() {
         val schedule = scheduleEntity(id = 10L, ownerMemberId = 1L)
         whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
@@ -196,6 +279,7 @@ class ScheduleDepartureStatusServiceUnitTest {
         val policyBackedService = ScheduleDepartureStatusService(
             scheduleRepository = scheduleRepository,
             departureStatusRepository = departureStatusRepository,
+            pushJobRepository = pushJobRepository,
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             memberRepository = memberRepository,
@@ -219,6 +303,7 @@ class ScheduleDepartureStatusServiceUnitTest {
         val ownerOnlyService = ScheduleDepartureStatusService(
             scheduleRepository = scheduleRepository,
             departureStatusRepository = departureStatusRepository,
+            pushJobRepository = pushJobRepository,
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             memberRepository = memberRepository,

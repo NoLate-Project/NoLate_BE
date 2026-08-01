@@ -1,5 +1,7 @@
 package com.noLate.notification.application.service
 
+import java.time.Instant
+
 data class PushDispatchFence(
     val jobId: Long,
     val workerId: String,
@@ -7,6 +9,10 @@ data class PushDispatchFence(
     val jobVersion: Long,
     val notificationGeneration: Long,
     val notificationInputFingerprint: String,
+    /** Schedule ETA event identity. cN delivery must not survive a completed cN+1 check. */
+    val expectedCheckCount: Int? = null,
+    /** Persisted ETA safety redrive deadline. Null keeps non-ETA fence compatibility. */
+    val sourceExpiresAt: Instant? = null,
     val expectedMemberId: Long? = null,
     val expectedScheduleId: Long? = null,
     /**

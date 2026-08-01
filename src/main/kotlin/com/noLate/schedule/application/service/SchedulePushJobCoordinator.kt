@@ -4,7 +4,9 @@ import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
+import jakarta.persistence.EntityManager
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -16,23 +18,36 @@ import java.time.temporal.ChronoUnit
  * 다중 인스턴스 worker의 짧은 DB transaction 경계를 담당한다.
  *
  * due row 잠금/PROCESSING 전이는 provider 호출 전에 커밋하고, 실제 ETA 조회와 발송은 잠금을
- * 보유하지 않은 별도 transaction에서 수행한다. 완료 전이는 다시 REQUIRES_NEW로 커밋해
- * 외부 호출을 감싼 transaction의 rollback과 분리한다.
+ * 보유하지 않은 별도 transaction에서 수행한다. 완료 전이는 다시 REQUIRES_NEW로 커밋하며,
+ * 계산 결과가 요구한 native alarm 상태와 alarm outbox도 같은 transaction에 참여시킨다.
  */
 @Service
 class SchedulePushJobCoordinator private constructor(
     private val repository: SchedulePushJobRepository,
     private val memberRepository: MemberRepository?,
+    private val entityManager: EntityManager?,
+    private val departureAlarmSyncService: DepartureAlarmSyncService?,
     @Suppress("UNUSED_PARAMETER") legacyTestBoundary: Boolean,
 ) {
     @Autowired
     constructor(
         repository: SchedulePushJobRepository,
         memberRepository: MemberRepository,
-    ) : this(repository, memberRepository, false)
+        entityManager: EntityManager,
+        departureAlarmSyncServiceProvider: ObjectProvider<DepartureAlarmSyncService>,
+    ) : this(
+        repository,
+        memberRepository,
+        entityManager,
+        departureAlarmSyncServiceProvider.getIfAvailable(),
+        false,
+    )
 
     /** Unit tests that exercise detached worker policy without a persistence member fixture. */
-    internal constructor(repository: SchedulePushJobRepository) : this(repository, null, true)
+    internal constructor(
+        repository: SchedulePushJobRepository,
+        departureAlarmSyncService: DepartureAlarmSyncService? = null,
+    ) : this(repository, null, null, departureAlarmSyncService, true)
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun claimNextDueJob(now: Instant, workerId: String): SchedulePushJob? {
@@ -47,7 +62,7 @@ class SchedulePushJobCoordinator private constructor(
                 ?: return null
             legacyTestJob.startProcessing(workerId, now)
             repository.flush()
-            return legacyTestJob
+            return detachClaimedJob(legacyTestJob)
         }
         val candidate = repository
             .findDueCandidates(
@@ -69,7 +84,18 @@ class SchedulePushJobCoordinator private constructor(
             ?: return null
         dueJob.startProcessing(workerId, now)
         repository.flush()
-        return dueJob
+        return detachClaimedJob(dueJob)
+    }
+
+    /**
+     * open-in-view가 켜진 웹 요청에서는 REQUIRES_NEW claim이 끝나도 요청 범위
+     * EntityManager가 entity를 계속 관리할 수 있다. provider 처리 뒤 별도 persist
+     * transaction이 version을 올렸을 때 요청 범위 flush가 이전 version을 다시 쓰지 않도록
+     * worker에 넘기기 전에 반드시 분리한다.
+     */
+    private fun detachClaimedJob(job: SchedulePushJob): SchedulePushJob {
+        entityManager?.detach(job)
+        return job
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -127,6 +153,7 @@ class SchedulePushJobCoordinator private constructor(
         staleJobs.forEach { job ->
             if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
                 job.complete()
+                departureAlarmSyncService?.cancel(job.memberId, job.scheduleId)
             } else {
                 job.recoverProcessingTimeout(
                     reason = "Processing timeout. lockedBy=${job.lockedBy}, lockedAt=${job.lockedAt}",
@@ -139,7 +166,11 @@ class SchedulePushJobCoordinator private constructor(
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun persist(job: SchedulePushJob, workerId: String): Boolean {
+    fun persist(
+        job: SchedulePushJob,
+        workerId: String,
+        alarmIntent: SchedulePushAlarmIntent? = null,
+    ): Boolean {
         if (memberRepository != null &&
             memberRepository.findByIdForUpdate(job.memberId)?.deleted != false
         ) {
@@ -156,7 +187,31 @@ class SchedulePushJobCoordinator private constructor(
             }
         }
         repository.saveAndFlush(job)
+        // BEFORE_COMMIT alarm outbox까지 이 transaction에 참여한다. 둘 중 하나라도 실패하면
+        // PROCESSING lease를 남겨 stale recovery가 동일 ETA 전이를 안전하게 다시 평가한다.
+        applyAlarmIntent(alarmIntent)
         return true
+    }
+
+    private fun applyAlarmIntent(intent: SchedulePushAlarmIntent?) {
+        val alarmService = departureAlarmSyncService ?: return
+        when (intent) {
+            null -> Unit
+            is SchedulePushAlarmIntent.Cancel -> alarmService.cancel(
+                memberId = intent.memberId,
+                scheduleId = intent.scheduleId,
+            )
+            is SchedulePushAlarmIntent.AutomaticEta -> alarmService.synchronizeAutomaticEta(
+                memberId = intent.memberId,
+                scheduleId = intent.scheduleId,
+                notificationEnabled = intent.notificationEnabled,
+                alertMode = intent.alertMode,
+                recommendedDepartureAt = intent.recommendedDepartureAt,
+                scheduleTitle = intent.scheduleTitle,
+                resumeCanceledAfterTransitTransferFailure =
+                    intent.resumeCanceledAfterTransitTransferFailure,
+            )
+        }
     }
 
     /**
@@ -165,4 +220,21 @@ class SchedulePushJobCoordinator private constructor(
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun <T> execute(block: () -> T): T = block()
+}
+
+sealed interface SchedulePushAlarmIntent {
+    data class Cancel(
+        val memberId: Long,
+        val scheduleId: Long,
+    ) : SchedulePushAlarmIntent
+
+    data class AutomaticEta(
+        val memberId: Long,
+        val scheduleId: Long,
+        val notificationEnabled: Boolean,
+        val alertMode: com.noLate.schedule.domain.ScheduleAlertMode,
+        val recommendedDepartureAt: Instant,
+        val scheduleTitle: String?,
+        val resumeCanceledAfterTransitTransferFailure: Boolean,
+    ) : SchedulePushAlarmIntent
 }

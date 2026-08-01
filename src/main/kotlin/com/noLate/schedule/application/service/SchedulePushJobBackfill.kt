@@ -9,7 +9,10 @@ import com.noLate.schedule.domain.ScheduleTravelPlan
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
 import com.noLate.schedule.domain.ScheduleTravelPlanStatus
+import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.SchedulePushJobAlarmBackfillCandidate
+import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.event.ApplicationReadyEvent
@@ -39,6 +42,7 @@ data class SchedulePushJobBackfillCandidate(
 class SchedulePushJobBackfillCandidateReader(
     private val scheduleRepository: ScheduleRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
+    private val schedulePushJobRepository: SchedulePushJobRepository,
 ) {
     @Transactional(readOnly = true)
     fun findCandidates(now: Instant): List<SchedulePushJobBackfillCandidate> {
@@ -70,6 +74,10 @@ class SchedulePushJobBackfillCandidateReader(
             ).thenBy { it.travelPlanId ?: -1L },
         )
     }
+
+    @Transactional(readOnly = true)
+    fun findAlarmSyncCandidates(now: Instant): List<SchedulePushJobAlarmBackfillCandidate> =
+        schedulePushJobRepository.findAlarmSyncBackfillCandidates(now)
 }
 
 /**
@@ -82,10 +90,14 @@ class SchedulePushJobBackfillPairWriter(
     private val memberRepository: MemberRepository,
     private val scheduleRepository: ScheduleRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
+    private val schedulePushJobRepository: SchedulePushJobRepository,
     private val schedulePushJobService: SchedulePushJobService,
     private val scheduleAccessPolicy: ScheduleAccessPolicy,
     private val objectMapper: ObjectMapper,
+    private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
 ) {
+    fun alarmSyncEnabled(): Boolean = departureAlarmSyncService != null
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun register(
         candidate: SchedulePushJobBackfillCandidate,
@@ -139,6 +151,69 @@ class SchedulePushJobBackfillPairWriter(
             plan = plan.toBackfillDto(schedule, objectMapper),
         ) != null
     }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun synchronizeAlarm(
+        candidate: SchedulePushJobAlarmBackfillCandidate,
+        now: Instant,
+    ): Boolean {
+        val member = memberRepository.findByIdForUpdate(candidate.memberId)
+            ?.takeUnless { it.deleted }
+            ?: return false
+        if (member.id != candidate.memberId) return false
+        // Preserve the global member -> job order used by normal edits and workers.
+        val job = schedulePushJobRepository.findByIdForUpdate(candidate.jobId)
+            ?.takeIf {
+                it.memberId == candidate.memberId &&
+                    it.scheduleId == candidate.scheduleId &&
+                    it.status == SchedulePushJobStatus.ACTIVE
+            }
+            ?: return false
+        val schedule = scheduleRepository.findById(job.scheduleId)
+            .orElse(null)
+            ?.takeUnless { it.deleted }
+            ?.takeIf { it.startAt.isAfter(now) }
+            ?: return false
+
+        val personal = travelPlanRepository
+            .findByScheduleIdAndMemberIdAndDeletedFalse(job.scheduleId, job.memberId)
+            ?.takeIf {
+                it.notificationEnabled &&
+                    it.travelMinutes != null &&
+                    ScheduleTravelPlanFingerprint.matches(it, schedule)
+            }
+        val route = if (personal != null) {
+            AlarmBackfillRoute(
+                departureAt = personal.departAt
+                    ?: schedule.startAt.minusSeconds(requireNotNull(personal.travelMinutes).toLong() * 60),
+                alertMode = personal.alertMode,
+            )
+        } else {
+            schedule.route
+                ?.takeIf {
+                    schedule.memberId == job.memberId &&
+                        it.notificationEnabled &&
+                        it.travelMinutes != null
+                }
+                ?.let {
+                    AlarmBackfillRoute(
+                        departureAt = it.departAt
+                            ?: schedule.startAt.minusSeconds(requireNotNull(it.travelMinutes).toLong() * 60),
+                        alertMode = it.alertMode,
+                    )
+                }
+                ?: return false
+        }
+
+        return departureAlarmSyncService?.synchronizeConfigured(
+            memberId = job.memberId,
+            scheduleId = job.scheduleId,
+            notificationEnabled = true,
+            alertMode = route.alertMode,
+            triggerAt = route.departureAt,
+            scheduleTitle = schedule.title,
+        ) != null
+    }
 }
 
 @Component
@@ -154,23 +229,38 @@ class SchedulePushJobBackfill(
         val now = Instant.now(clock)
         var ownerCount = 0
         var participantCount = 0
+        var alarmSyncCount = 0
         candidateReader.findCandidates(now).forEach { candidate ->
             if (pairWriter.register(candidate, now)) {
                 if (candidate.ownerSchedule) ownerCount += 1 else participantCount += 1
             }
         }
+        if (pairWriter.alarmSyncEnabled()) {
+            candidateReader.findAlarmSyncCandidates(now).forEach { candidate ->
+                if (pairWriter.synchronizeAlarm(candidate, now)) {
+                    alarmSyncCount += 1
+                }
+            }
+        }
 
-        val recoveredCount = ownerCount + participantCount
+        val recoveredCount = ownerCount + participantCount + alarmSyncCount
         if (recoveredCount > 0) {
             log.info(
-                "Recovered missing schedule push jobs. ownerCount={}, participantCount={}, totalCount={}",
+                "Recovered missing schedule push jobs/alarm states. " +
+                    "ownerCount={}, participantCount={}, alarmSyncCount={}, totalCount={}",
                 ownerCount,
                 participantCount,
+                alarmSyncCount,
                 recoveredCount,
             )
         }
     }
 }
+
+private data class AlarmBackfillRoute(
+    val departureAt: Instant,
+    val alertMode: com.noLate.schedule.domain.ScheduleAlertMode,
+)
 
 /**
  * Backfill도 정상 저장 API와 같은 full plan DTO를 사용해야 runtime notification input
@@ -203,6 +293,7 @@ private fun ScheduleTravelPlan.toBackfillDto(
         notificationEnabled = notificationEnabled,
         notificationLeadMinutes = notificationLeadMinutes,
         notificationIntervalMinutes = notificationIntervalMinutes,
+        alertMode = alertMode,
         updatedAt = (updateDt ?: updatedAt)?.toString(),
     )
 

@@ -143,6 +143,54 @@ class SchedulePersistedPushSafetyIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `다음 ETA check가 끝나면 이전 check outbox는 provider 호출 없이 superseded 된다`() {
+        val token = "stale-check-token"
+        val fixture = prepareSafetyEvent(
+            memberId = 9_200L,
+            tokens = listOf(token),
+        )
+        transactions.executeWithoutResult {
+            val current = requireNotNull(
+                jobRepository.findByIdForUpdate(requireNotNull(fixture.job.id))
+            )
+            current.startProcessing("next-check-worker", NOW)
+            current.finishCheck(
+                travelMinutes = 30,
+                recommendedDepartureAt = NOW.plus(30, ChronoUnit.MINUTES),
+                pushSent = false,
+                notifiedDepartureAt = null,
+                nextCheckAt = NOW.plus(1, ChronoUnit.MINUTES),
+                completeAfterCheck = false,
+                etaSource = com.noLate.schedule.domain.TrafficSource.SAVED_FALLBACK,
+                etaStale = true,
+                now = NOW,
+            )
+        }
+
+        assertEquals(1, outboxWorker.runDueEvents(NOW))
+
+        assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(fixture).single().status)
+        assertEquals(0, pushClient.attempts(token))
+        assertEquals(PushOutboxDispatchStatus.COMPLETED, source(fixture).dispatchStatus)
+    }
+
+    @Test
+    fun `ETA event TTL이 지나면 같은 check여도 safety redrive를 terminal 처리한다`() {
+        val token = "expired-event-token"
+        val fixture = prepareSafetyEvent(
+            memberId = 9_199L,
+            tokens = listOf(token),
+            expiresAt = NOW.minusSeconds(1),
+        )
+
+        assertEquals(1, outboxWorker.runDueEvents(NOW))
+
+        assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(fixture).single().status)
+        assertEquals(0, pushClient.attempts(token))
+        assertEquals(PushOutboxDispatchStatus.COMPLETED, source(fixture).dispatchStatus)
+    }
+
+    @Test
     fun `PROCESSING safety event는 실패 예산 없이 연기되고 ACTIVE 복구 뒤 같은 delivery를 보낸다`() {
         val fixture = prepareSafetyEvent(
             memberId = 9_201L,
@@ -613,6 +661,7 @@ class SchedulePersistedPushSafetyIntegrationTest @Autowired constructor(
     private fun prepareSafetyEvent(
         memberId: Long,
         tokens: List<String>,
+        expiresAt: Instant = NOW.plus(2, ChronoUnit.MINUTES),
     ): SafetyFixture {
         tokens.forEachIndexed { index, token ->
             registerAuthenticatedPushToken(
@@ -659,6 +708,7 @@ class SchedulePersistedPushSafetyIntegrationTest @Autowired constructor(
                 "notificationGeneration" to job.notificationGeneration.toString(),
                 "schedulePushCheckCount" to job.checkCount.toString(),
                 "notificationInputFingerprint" to job.notificationInputFingerprint,
+                SCHEDULE_ETA_EVENT_EXPIRES_AT to expiresAt.toString(),
             ),
             deduplicationKey = deduplicationKey,
             persistInInbox = true,

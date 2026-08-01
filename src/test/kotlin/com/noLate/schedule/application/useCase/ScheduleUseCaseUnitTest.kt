@@ -14,6 +14,8 @@ import com.noLate.schedule.application.service.ScheduleNotificationActionIdempot
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
+import com.noLate.schedule.application.service.ScheduleTrustTelemetryCleanupService
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
@@ -73,6 +75,9 @@ class ScheduleUseCaseUnitTest {
     @Mock
     lateinit var scheduleTravelAccessCleanupService: ScheduleTravelAccessCleanupService
 
+    @Mock
+    lateinit var scheduleTrustTelemetryCleanupService: ScheduleTrustTelemetryCleanupService
+
     private val clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC)
     private val sessionGeneration = 11L
 
@@ -91,6 +96,7 @@ class ScheduleUseCaseUnitTest {
             notificationActionIdempotencyService = notificationActionIdempotencyService,
             memberService = memberService,
             scheduleTravelAccessCleanupService = scheduleTravelAccessCleanupService,
+            scheduleTrustTelemetryCleanupService = scheduleTrustTelemetryCleanupService,
         )
     }
 
@@ -305,8 +311,9 @@ class ScheduleUseCaseUnitTest {
         val memberId = 1L
         val scheduleId = 10L
         val request = scheduleDto(title = "수정된 회의")
-        stubCurrentSchedule(memberId, scheduleId)
-        whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(request.copy(id = scheduleId))
+        val updated = request.copy(id = scheduleId)
+        stubCurrentSchedule(memberId, scheduleId, updatedResponse = updated)
+        whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
 
         val result = scheduleUseCase.updateSchedule(
             memberId,
@@ -331,7 +338,7 @@ class ScheduleUseCaseUnitTest {
             notificationIntervalMinutes = 20,
         )
         val updated = request.copy(id = scheduleId)
-        stubCurrentSchedule(memberId, scheduleId)
+        stubCurrentSchedule(memberId, scheduleId, updatedResponse = updated)
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
 
         scheduleUseCase.updateSchedule(memberId, scheduleId, request, sessionGeneration)
@@ -350,6 +357,7 @@ class ScheduleUseCaseUnitTest {
             actorMemberId = memberId,
             scheduleId = scheduleId,
             notificationMemberIds = setOf(2L, 3L),
+            updatedResponse = updated,
         )
         val editFence = ScheduleEditMemberFence(setOf(memberId, 2L, 3L))
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
@@ -383,7 +391,8 @@ class ScheduleUseCaseUnitTest {
         val updated = request.copy(id = scheduleId, ownerMemberId = ownerMemberId)
         val lockedIds = setOf(ownerMemberId, calendarMemberId)
 
-        whenever(scheduleService.getScheduleDetail(ownerMemberId, scheduleId)).thenReturn(current)
+        whenever(scheduleService.getScheduleDetail(ownerMemberId, scheduleId))
+            .thenReturn(current, updated)
         whenever(scheduleTravelPlanService.findActiveCalendarAudienceMemberIds(calendarId))
             .thenReturn(lockedIds)
         whenever(scheduleTravelPlanService.findNotificationEnabledMemberIds(scheduleId))
@@ -442,18 +451,37 @@ class ScheduleUseCaseUnitTest {
     }
 
     @Test
-    fun `공유 편집자의 일정 수정은 실제 오너의 경로와 push job을 갱신한다`() {
+    fun `공유 편집자의 개인화 응답이 아닌 canonical alarm mode로 오너 경로와 push job을 갱신한다`() {
         val ownerMemberId = 1L
         val editorMemberId = 2L
         val scheduleId = 10L
-        val request = scheduleDto(title = "공유 편집")
-        val updated = request.copy(id = scheduleId, ownerMemberId = ownerMemberId)
+        val request = scheduleDto(
+            title = "공유 편집",
+            notificationEnabled = true,
+        ).copy(alertMode = ScheduleAlertMode.ALARM)
+        val current = scheduleDto().copy(
+            id = scheduleId,
+            ownerMemberId = ownerMemberId,
+        )
+        val canonical = request.copy(id = scheduleId, ownerMemberId = ownerMemberId)
+        val editorVisible = canonical.copy(
+            notificationEnabled = false,
+            alertMode = ScheduleAlertMode.STANDARD,
+        )
         stubCurrentSchedule(editorMemberId, scheduleId, ownerMemberId)
-        whenever(scheduleService.updateSchedule(editorMemberId, scheduleId, request)).thenReturn(updated)
+        whenever(scheduleService.getScheduleDetail(editorMemberId, scheduleId))
+            .thenReturn(current, editorVisible)
+        whenever(scheduleService.updateSchedule(editorMemberId, scheduleId, request))
+            .thenReturn(canonical)
 
-        scheduleUseCase.updateSchedule(editorMemberId, scheduleId, request, sessionGeneration)
+        val result = scheduleUseCase.updateSchedule(
+            editorMemberId,
+            scheduleId,
+            request,
+            sessionGeneration,
+        )
 
-        inOrder(scheduleService, schedulePushJobService) {
+        inOrder(scheduleService, scheduleTrustTelemetryCleanupService, schedulePushJobService) {
             verify(scheduleService).getScheduleDetail(editorMemberId, scheduleId)
             verify(schedulePushJobService).lockForScheduleEdit(
                 scheduleId,
@@ -462,10 +490,12 @@ class ScheduleUseCaseUnitTest {
                 sessionGeneration,
             )
             verify(scheduleService).updateSchedule(editorMemberId, scheduleId, request)
+            verify(scheduleService).getScheduleDetail(editorMemberId, scheduleId)
         }
-        verify(scheduleTravelPlanService).syncOwnerTravelPlan(ownerMemberId, updated)
-        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, ownerMemberId)
+        verify(scheduleTravelPlanService).syncOwnerTravelPlan(ownerMemberId, canonical)
+        verify(schedulePushJobService).registerFromScheduleDto(ownerMemberId, canonical)
         verify(schedulePushJobService, never()).cancelByScheduleIdAndMemberId(scheduleId, editorMemberId)
+        assertEquals(ScheduleAlertMode.STANDARD, result.alertMode)
     }
 
     @Test
@@ -480,7 +510,7 @@ class ScheduleUseCaseUnitTest {
             notificationEnabled = true,
         )
         val updated = request.copy(id = scheduleId)
-        stubCurrentSchedule(memberId, scheduleId)
+        stubCurrentSchedule(memberId, scheduleId, updatedResponse = updated)
         whenever(scheduleService.updateSchedule(memberId, scheduleId, request)).thenReturn(updated)
 
         val result = scheduleUseCase.updateSchedule(
@@ -503,7 +533,11 @@ class ScheduleUseCaseUnitTest {
 
         scheduleUseCase.deleteSchedule(memberId, scheduleId, sessionGeneration)
 
-        inOrder(scheduleService, schedulePushJobService) {
+        inOrder(
+            scheduleService,
+            scheduleTrustTelemetryCleanupService,
+            schedulePushJobService,
+        ) {
             verify(scheduleService).getScheduleDetail(memberId, scheduleId)
             verify(schedulePushJobService).lockForScheduleEdit(
                 scheduleId,
@@ -512,6 +546,7 @@ class ScheduleUseCaseUnitTest {
                 sessionGeneration,
             )
             verify(scheduleService).deleteSchedule(memberId, scheduleId)
+            verify(scheduleTrustTelemetryCleanupService).deleteForSchedule(scheduleId)
             verify(schedulePushJobService).cancelByScheduleId(scheduleId)
         }
     }
@@ -855,14 +890,19 @@ class ScheduleUseCaseUnitTest {
         scheduleId: Long,
         ownerMemberId: Long = actorMemberId,
         notificationMemberIds: Set<Long> = emptySet(),
+        updatedResponse: ScheduleDto? = null,
     ) {
-        whenever(scheduleService.getScheduleDetail(actorMemberId, scheduleId))
-            .thenReturn(
-                scheduleDto().copy(
-                    id = scheduleId,
-                    ownerMemberId = ownerMemberId,
-                ),
-            )
+        val current = scheduleDto().copy(
+            id = scheduleId,
+            ownerMemberId = ownerMemberId,
+        )
+        if (updatedResponse == null) {
+            whenever(scheduleService.getScheduleDetail(actorMemberId, scheduleId))
+                .thenReturn(current)
+        } else {
+            whenever(scheduleService.getScheduleDetail(actorMemberId, scheduleId))
+                .thenReturn(current, updatedResponse)
+        }
         whenever(scheduleTravelPlanService.findNotificationEnabledMemberIds(scheduleId))
             .thenReturn(notificationMemberIds)
         val lockedMemberIds =

@@ -6,6 +6,13 @@ import com.noLate.notification.application.service.FrozenPushSource
 import com.noLate.notification.application.service.PushSourceFreshnessValidator
 import com.noLate.schedule.domain.ScheduleRouteSetupReminderStatus
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
+import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
+import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_SCHEMA_VERSION
+import com.noLate.schedule.domain.DEFAULT_DEPARTURE_ALARM_TITLE
+import com.noLate.schedule.domain.DepartureAlarmSyncOperation
+import com.noLate.schedule.domain.MAX_DEPARTURE_ALARM_GENERATION
+import com.noLate.schedule.domain.departureAlarmId
+import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
@@ -31,14 +38,69 @@ class SchedulePushSourceFreshnessValidator(
     private val reminderPolicy: RouteSetupReminderPolicy,
     private val objectMapper: ObjectMapper,
     private val clock: Clock,
+    private val departureAlarmSyncStateRepository: DepartureAlarmSyncStateRepository,
 ) : PushSourceFreshnessValidator {
 
     override fun isFresh(source: FrozenPushSource): Boolean =
         when (source.payloadType) {
             ROUTE_SETUP_REMINDER -> routeSetupStillRequired(source)
             SCHEDULE_DEPARTURE_NUDGE -> targetHasNotDeparted(source)
+            DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE -> departureAlarmCommandIsLatest(source)
             else -> true
         }
+
+    private fun departureAlarmCommandIsLatest(source: FrozenPushSource): Boolean {
+        val scheduleId = source.scheduleId ?: return false
+        val data = canonicalData(source) ?: return false
+        val stateId = data["alarmSyncStateId"]?.toLongOrNull()
+            ?.takeIf { it > 0 }
+            ?: return false
+        val generation = data["alarmGeneration"]?.toLongOrNull()
+            ?.takeIf { it in 0..MAX_DEPARTURE_ALARM_GENERATION }
+            ?: return false
+        val operation = data["alarmOperation"]
+            ?.let { runCatching { DepartureAlarmSyncOperation.valueOf(it) }.getOrNull() }
+            ?: return false
+        val state = departureAlarmSyncStateRepository.findById(stateId).orElse(null)
+            ?: return false
+
+        if (
+            data["type"] != DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE ||
+            data["alarmSchemaVersion"] != DEPARTURE_ALARM_SYNC_SCHEMA_VERSION ||
+            data["logicalEventKey"] != source.logicalEventKey ||
+            data["recipientMemberId"]?.toLongOrNull() != source.memberId ||
+            data["scheduleId"]?.toLongOrNull() != scheduleId ||
+            data["alarmId"] != departureAlarmId(source.memberId, scheduleId) ||
+            data["alarmCommandFingerprint"] != state.commandFingerprint ||
+            source.deduplicationKey !=
+                "departure-alarm-sync:$stateId:g$generation:${operation.name}" ||
+            state.id != stateId ||
+            state.memberId != source.memberId ||
+            state.scheduleId != scheduleId ||
+            state.alarmId != data["alarmId"] ||
+            state.generation != generation ||
+            state.operation != operation
+        ) {
+            return false
+        }
+
+        return when (operation) {
+            DepartureAlarmSyncOperation.UPSERT ->
+                data["alarmTriggerAt"] == state.triggerAt?.toString() &&
+                    data["alarmTitle"] ==
+                    (state.title?.takeIf(String::isNotBlank)
+                        ?: DEFAULT_DEPARTURE_ALARM_TITLE) &&
+                    data["snoozeMinutes"]?.toIntOrNull() == state.snoozeMinutes
+
+            DepartureAlarmSyncOperation.CANCEL ->
+                state.triggerAt == null &&
+                    state.title == null &&
+                    state.snoozeMinutes == null &&
+                    "alarmTriggerAt" !in data &&
+                    "alarmTitle" !in data &&
+                    "snoozeMinutes" !in data
+        }
+    }
 
     private fun routeSetupStillRequired(source: FrozenPushSource): Boolean {
         val scheduleId = source.scheduleId ?: return false

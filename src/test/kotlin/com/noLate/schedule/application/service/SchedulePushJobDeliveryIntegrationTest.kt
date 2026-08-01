@@ -56,8 +56,10 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
+import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import org.mockito.kotlin.whenever
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -106,7 +108,8 @@ import java.util.concurrent.atomic.AtomicInteger
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.sql.init.mode=never",
         "schedule.push.batch-size=10",
-        "schedule.push.retry-delay-minutes=5",
+        "schedule.push.enabled=true",
+        "schedule.push.retry-delay-minutes=1",
         "schedule.push.max-retry-count=3",
         "schedule.push.delivery-grace-minutes=10",
         "schedule.push.departure-alert-lead-minutes=15",
@@ -139,6 +142,9 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     private val trafficClient: WorkerDeliveryTrafficClient,
     private val jdbcTemplate: JdbcTemplate,
 ) {
+    @MockitoBean
+    private lateinit var departureAlarmSyncService: DepartureAlarmSyncService
+
     private val now = Instant.parse("2026-07-24T03:00:00Z")
 
     @BeforeEach
@@ -151,6 +157,33 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         tokenRepository.deleteAll()
         pushJobRepository.deleteAll()
         scheduleRepository.deleteAll()
+    }
+
+    @Test
+    fun `early terminal alarm rollback leaves worker lease PROCESSING for stale recovery`() {
+        val schedule = createDueSchedule(memberId = 800L)
+        register(schedule.memberId, "terminal-alarm-device", "terminal-alarm-token")
+        val pastScheduleAt = now.minus(11, ChronoUnit.MINUTES)
+        val job = pushJobRepository.saveAndFlush(
+            SchedulePushJob.create(
+                memberId = schedule.memberId,
+                scheduleId = requireNotNull(schedule.id),
+                scheduleAt = pastScheduleAt,
+                departureAt = pastScheduleAt.minus(30, ChronoUnit.MINUTES),
+                monitorStartAt = pastScheduleAt.minus(60, ChronoUnit.MINUTES),
+                intervalMinutes = 20,
+            )
+        )
+        whenever(departureAlarmSyncService.cancel(schedule.memberId, requireNotNull(schedule.id)))
+            .thenThrow(IllegalStateException("alarm outbox unavailable"))
+
+        assertEquals(1, worker.runDueJobs(now))
+
+        val persisted = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(SchedulePushJobStatus.PROCESSING, persisted.status)
+        assertEquals(0, persisted.retryCount)
+        assertEquals(0, persisted.checkCount)
+        assertTrue(!persisted.lockedBy.isNullOrBlank())
     }
 
     @Test
@@ -167,14 +200,14 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         assertEquals(SchedulePushJobStatus.ACTIVE, afterPartial.status)
         assertEquals(0, afterPartial.checkCount)
         assertEquals(1, afterPartial.retryCount)
-        assertEquals(now.plus(5, ChronoUnit.MINUTES), afterPartial.nextCheckAt)
+        assertEquals(now.plus(1, ChronoUnit.MINUTES), afterPartial.nextCheckAt)
         assertEquals(now, afterPartial.lastPushedAt)
         assertEquals(
             setOf(PushDeliveryStatus.SUCCESS, PushDeliveryStatus.FAILED),
             deliveries(schedule.memberId).map { it.status }.toSet(),
         )
 
-        assertEquals(1, worker.runDueJobs(now.plus(5, ChronoUnit.MINUTES)))
+        assertEquals(1, worker.runDueJobs(now.plus(1, ChronoUnit.MINUTES)))
 
         val afterRetry = requireNotNull(pushJobRepository.findById(job.id!!).orElse(null))
         assertEquals(1, afterRetry.checkCount)
@@ -229,34 +262,42 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     }
 
     @Test
-    fun `부분 실패 재시도는 ETA가 회복돼도 최초 immutable payload만 실패 기기에 보낸다`() {
+    fun `부분 실패는 immutable payload를 재시도한 뒤 같은 decision의 최신 ETA correction을 보낸다`() {
         val schedule = createDueSchedule(memberId = 803L)
         val job = seedCheckedJob(schedule, previousTravelMinutes = 30)
         register(schedule.memberId, "stable-device", "stable-snapshot-token")
         register(schedule.memberId, "retry-device", "retry-snapshot-token")
-        trafficClient.respondWith(40, 25)
+        trafficClient.respondWith(40, 25, 25)
         pushClient.failOnce("retry-snapshot-token")
 
         assertEquals(1, worker.runDueJobs(now))
-        assertEquals(1, worker.runDueJobs(now.plus(5, ChronoUnit.MINUTES)))
+        val retryAt = now.plus(1, ChronoUnit.MINUTES)
+        assertEquals(1, worker.runDueJobs(retryAt))
+
+        val afterImmutableRetry = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(retryAt.plusSeconds(1), afterImmutableRetry.nextCheckAt)
+        assertEquals(1, worker.runDueJobs(retryAt.plusSeconds(1)))
 
         val stableCalls = pushClient.calls("stable-snapshot-token")
         val retryCalls = pushClient.calls("retry-snapshot-token")
-        assertEquals(1, stableCalls.size)
-        assertEquals(2, retryCalls.size)
+        assertEquals(2, stableCalls.size)
+        assertEquals(3, retryCalls.size)
         assertEquals(retryCalls[0].title, retryCalls[1].title)
         assertEquals(retryCalls[0].body, retryCalls[1].body)
         assertEquals(retryCalls[0].data, retryCalls[1].data)
         assertEquals("40", retryCalls[1].data["travelMinutes"])
         assertEquals("10", retryCalls[1].data["trafficChangeMinutes"])
         assertEquals("803", retryCalls[1].data["recipientMemberId"])
+        assertEquals("25", stableCalls[1].data["travelMinutes"])
+        assertEquals(stableCalls[1].data, retryCalls[2].data)
+        assertTrue(stableCalls[1].data["logicalEventKey"] != retryCalls[1].data["logicalEventKey"])
         assertEquals(
-            inboxRepository.findAllByMemberIdOrderByIdDesc(803L).single().logicalEventKey,
+            inboxRepository.findAllByMemberIdOrderByIdDesc(803L).last().logicalEventKey,
             retryCalls[1].data["logicalEventKey"],
         )
 
         val completedEvent = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
-        assertEquals(2, completedEvent.checkCount)
+        assertEquals(3, completedEvent.checkCount)
         assertEquals(25, completedEvent.lastTravelMinutes)
         assertEquals(TrafficSource.LIVE_PROVIDER, completedEvent.lastEtaSource)
         assertEquals(false, completedEvent.lastEtaStale)
@@ -265,32 +306,41 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     }
 
     @Test
-    fun `ADVANCE event 재시도 중 DEPART NOW 경계를 넘어도 최초 decision payload를 유지한다`() {
+    fun `ADVANCE event 재시도는 immutable payload를 끝낸 뒤 DEPART NOW correction을 보낸다`() {
         val schedule = createDueSchedule(memberId = 804L)
         val job = createDueJob(schedule)
         register(schedule.memberId, "stable-device", "stable-decision-token")
         register(schedule.memberId, "retry-device", "retry-decision-token")
-        trafficClient.respondWith(50, 60)
+        trafficClient.respondWith(50, 60, 60)
         pushClient.failOnce("retry-decision-token")
 
         worker.runDueJobs(now)
-        worker.runDueJobs(now.plus(5, ChronoUnit.MINUTES))
+        val retryAt = now.plus(1, ChronoUnit.MINUTES)
+        worker.runDueJobs(retryAt)
+
+        val afterRetry = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(1, afterRetry.checkCount)
+        assertEquals(retryAt.plusSeconds(1), afterRetry.nextCheckAt)
+        worker.runDueJobs(retryAt.plusSeconds(1))
 
         val retryCalls = pushClient.calls("retry-decision-token")
-        assertEquals(2, retryCalls.size)
+        val stableCalls = pushClient.calls("stable-decision-token")
+        assertEquals(3, retryCalls.size)
+        assertEquals(2, stableCalls.size)
         assertEquals(retryCalls[0].data, retryCalls[1].data)
         assertEquals("ADVANCE_NOTICE", retryCalls[1].data["departureReminderDecision"])
         assertEquals("false", retryCalls[1].data["departNow"])
+        assertEquals("DEPART_NOW", retryCalls[2].data["departureReminderDecision"])
+        assertEquals("true", retryCalls[2].data["departNow"])
 
         val persisted = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
-        assertEquals(1, persisted.checkCount)
-        assertEquals(now.plus(5, ChronoUnit.MINUTES).plusSeconds(1), persisted.nextCheckAt)
-        assertEquals(now.plus(10, ChronoUnit.MINUTES), persisted.lastNotifiedDepartureAt)
-        assertEquals(null, persisted.departureNoticeSentAt)
+        assertEquals(2, persisted.checkCount)
+        assertEquals(now, persisted.lastNotifiedDepartureAt)
+        assertEquals(retryAt.plusSeconds(1), persisted.departureNoticeSentAt)
     }
 
     @Test
-    fun `stale schedule worker가 ambiguous로 전진한 뒤 late confirmed failure는 같은 event를 재시도하고 confirmed 지표를 보정한다`() {
+    fun `stale schedule worker event TTL 뒤 late confirmed failure는 provider 재시도 없이 superseded 된다`() {
         val schedule = createDueSchedule(memberId = 805L)
         val job = createDueJob(schedule)
         val token = "late-schedule-worker-token"
@@ -313,7 +363,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         val afterReplacement = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
         assertEquals(1, afterReplacement.checkCount)
         assertEquals(null, afterReplacement.lastPushedAt)
-        assertEquals(replacementAt, afterReplacement.lastUncertainAt)
+        assertEquals(null, afterReplacement.lastUncertainAt)
         assertEquals(
             PushOutboxDispatchStatus.NOT_REQUIRED,
             inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
@@ -326,74 +376,18 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
         assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
         assertEquals(listOf(1), firstResults.toList())
-        assertEquals(PushDeliveryStatus.FAILED, deliveries(schedule.memberId).single().status)
-        assertEquals(
-            PushOutboxDispatchStatus.PENDING,
-            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
-                .single()
-                .dispatchStatus,
-        )
-
-        // The first safety-outbox attempt itself now stalls beyond its lease and is reclaimed.
-        // Its replacement sees DISPATCHING as ambiguous and closes only that replacement view.
-        val safetyProviderGate = pushClient.blockThenFailOnce(token)
-        val safetyResults = ConcurrentLinkedQueue<Int>()
-        val safetyExecutor = Executors.newSingleThreadExecutor()
-        val staleSafetyWorker = newOutboxWorker()
-        val replacementSafetyWorker = newOutboxWorker()
-        safetyExecutor.submit {
-            runCatching { staleSafetyWorker.runDueEvents(replacementAt.plusSeconds(1)) }
-                .onSuccess(safetyResults::add)
-                .onFailure(failures::add)
-        }
-        assertTrue(safetyProviderGate.entered.await(5, TimeUnit.SECONDS))
-        assertEquals(
-            PushOutboxDispatchStatus.PROCESSING,
-            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
-                .single()
-                .dispatchStatus,
-        )
-
-        assertEquals(1, replacementSafetyWorker.runDueEvents(replacementAt.plusSeconds(602)))
+        assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(schedule.memberId).single().status)
         assertEquals(
             PushOutboxDispatchStatus.COMPLETED,
             inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
                 .single()
                 .dispatchStatus,
         )
-
-        // The stale safety-outbox provider result is now a confirmed rejection. Its source lease
-        // identity no longer matches attempt 1, so delivery FAILED and outbox PENDING reopen
-        // atomically even though the replacement attempt already completed.
-        safetyProviderGate.release.countDown()
-        safetyExecutor.shutdown()
-        assertTrue(safetyExecutor.awaitTermination(10, TimeUnit.SECONDS))
-        assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
-        assertEquals(listOf(1), safetyResults.toList())
-        assertEquals(PushDeliveryStatus.FAILED, deliveries(schedule.memberId).single().status)
-        assertEquals(
-            PushOutboxDispatchStatus.PENDING,
-            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
-                .single()
-                .dispatchStatus,
-        )
-
-        // The third outbox attempt safely retries only the confirmed-failed device, then
-        // reconciles confirmed schedule metrics before completing its still-owned source lease.
-        assertEquals(1, newOutboxWorker().runDueEvents(replacementAt.plusSeconds(603)))
-
         val reconciled = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
         assertEquals(1, reconciled.checkCount)
-        assertEquals(replacementAt, reconciled.lastUncertainAt)
-        assertEquals(now, reconciled.lastPushedAt)
-        assertEquals(3, pushClient.attempts(token))
-        assertEquals(PushDeliveryStatus.SUCCESS, deliveries(schedule.memberId).single().status)
-        assertEquals(
-            PushOutboxDispatchStatus.COMPLETED,
-            inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
-                .single()
-                .dispatchStatus,
-        )
+        assertEquals(null, reconciled.lastUncertainAt)
+        assertEquals(null, reconciled.lastPushedAt)
+        assertEquals(1, pushClient.attempts(token))
     }
 
     @Test
@@ -419,7 +413,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         val afterReplacement = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
         assertEquals(1, afterReplacement.checkCount)
         assertEquals(null, afterReplacement.lastPushedAt)
-        assertEquals(replacementAt, afterReplacement.lastUncertainAt)
+        assertEquals(null, afterReplacement.lastUncertainAt)
 
         providerGate.release.countDown()
         executor.shutdown()
@@ -438,7 +432,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
 
         val reconciled = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
         assertEquals(1, reconciled.checkCount)
-        assertEquals(replacementAt, reconciled.lastUncertainAt)
+        assertEquals(null, reconciled.lastUncertainAt)
         assertEquals(now, reconciled.lastPushedAt)
         assertEquals(1, pushClient.attempts(token))
         assertEquals(
@@ -450,7 +444,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     }
 
     @Test
-    fun `schedule safety outbox보다 의미 편집이 먼저면 old generation 실패 기기는 provider 없이 superseded 된다`() {
+    fun `stale worker TTL이 끝난 old failure는 이후 의미 편집 전에도 superseded 된다`() {
         val schedule = createDueSchedule(memberId = 807L)
         val job = createDueJob(schedule)
         val token = "edited-before-safety-token"
@@ -470,9 +464,9 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         executor.shutdown()
         assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
         assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
-        assertEquals(PushDeliveryStatus.FAILED, deliveries(schedule.memberId).single().status)
+        assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(schedule.memberId).single().status)
         assertEquals(
-            PushOutboxDispatchStatus.PENDING,
+            PushOutboxDispatchStatus.COMPLETED,
             inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId)
                 .single()
                 .dispatchStatus,
@@ -491,7 +485,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         pushJobRepository.saveAndFlush(edited)
         assertEquals(1, edited.notificationGeneration)
 
-        assertEquals(1, outboxWorker.runDueEvents(replacementAt.plusSeconds(1)))
+        assertEquals(0, outboxWorker.runDueEvents(replacementAt.plusSeconds(1)))
 
         assertEquals(1, pushClient.attempts(token))
         assertEquals(PushDeliveryStatus.SUPERSEDED, deliveries(schedule.memberId).single().status)

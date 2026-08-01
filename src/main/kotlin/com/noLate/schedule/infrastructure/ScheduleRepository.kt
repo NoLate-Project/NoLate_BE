@@ -13,6 +13,8 @@ import java.time.LocalDateTime
 
 interface ScheduleRepository : JpaRepository<Schedule, Long> {
 
+    fun existsByIdAndDeletedFalse(id: Long): Boolean
+
     fun findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId: Long): List<Schedule>
     fun findAllByMemberId(memberId: Long): List<Schedule>
 

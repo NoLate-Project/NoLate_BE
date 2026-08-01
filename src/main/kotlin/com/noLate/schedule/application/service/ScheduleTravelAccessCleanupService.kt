@@ -36,6 +36,7 @@ class ScheduleTravelAccessCleanupService(
     private val accessPolicy: ScheduleAccessPolicy,
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
 ) {
 
     @Transactional
@@ -165,6 +166,10 @@ class ScheduleTravelAccessCleanupService(
             .filter { it.status == SchedulePushJobStatus.ACTIVE || it.status == SchedulePushJobStatus.PROCESSING }
             .filter { it.scheduleId to it.memberId in revokedPairs }
             .forEach { it.cancel() }
+        revokedPairs.sortedWith(compareBy<Pair<Long, Long>> { it.second }.thenBy { it.first })
+            .forEach { (scheduleId, memberId) ->
+                departureAlarmSyncService?.cancel(memberId, scheduleId)
+            }
 
         // A revoked participant plan is no longer an authoritative startup-backfill source. Soft
         // deletion retains audit/version history while preventing a restarted node from rebuilding

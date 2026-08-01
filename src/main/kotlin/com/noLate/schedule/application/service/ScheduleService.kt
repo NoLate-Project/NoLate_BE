@@ -8,6 +8,7 @@ import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEv
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheScope
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheService
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportProvider
 import com.noLate.schedule.domain.ScheduleImportResultDto
@@ -161,7 +162,9 @@ class ScheduleService(
             reason = "schedule-updated",
         )
 
-        return toVisibleDtos(memberId, listOf(savedEntity)).single()
+        // Mutation 후 owner mirror와 push job은 반드시 영속 route 원본으로 동기화한다.
+        // 요청자별 travel plan 개인화는 UseCase가 owner 동기화 뒤 조회 응답에서 적용한다.
+        return savedEntity.toDto(objectMapper)
     }
 
     /**
@@ -675,6 +678,7 @@ class ScheduleService(
             notificationEnabled = route?.notificationEnabled ?: false,
             notificationLeadMinutes = route?.notificationLeadMinutes,
             notificationIntervalMinutes = route?.notificationIntervalMinutes,
+            alertMode = route?.alertMode ?: ScheduleAlertMode.STANDARD,
         )
     }
 
@@ -728,6 +732,18 @@ class ScheduleService(
         } else {
             null
         }
+        val alertMode = if (
+            existingSchedule == null ||
+            existingSchedule.memberId == memberId
+        ) {
+            scheduleDto.alertMode
+                ?: existingSchedule?.route?.alertMode
+                ?: ScheduleAlertMode.STANDARD
+        } else {
+            // 알람 강도는 회원별 설정이다. 공유 편집 화면의 개인화 DTO가 owner route의
+            // 알람 선호를 덮지 않으며, 편집자 자신의 값은 travel-plan API로 저장한다.
+            existingSchedule.route?.alertMode ?: ScheduleAlertMode.STANDARD
+        }
 
         if (
             notificationEnabled &&
@@ -757,6 +773,7 @@ class ScheduleService(
             notificationEnabled = notificationEnabled,
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
+            alertMode = alertMode,
         )
     }
 

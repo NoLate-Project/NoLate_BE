@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.domain.AppNotification
 import com.noLate.notification.support.AllowAllPushRecipientAuthorizationTestConfig
 import com.noLate.notification.support.ensureActivePushMember
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -153,6 +154,31 @@ class AppNotificationServiceIntegrationTest @Autowired constructor(
 
         assertEquals(2, service.markAllRead(30L, presentedSessionGeneration = 0L))
         assertEquals(0L, service.getUnreadCount(30L))
+    }
+
+    @Test
+    fun `hidden control outbox is excluded from inbox unread and read mutations`() {
+        repository.saveAndFlush(
+            AppNotification(
+                memberId = 30L,
+                type = "DEPARTURE_ALARM_SYNC",
+                scheduleId = 77L,
+                title = "출발 알람 동기화",
+                body = "UPSERT",
+                dataJson = """{"type":"DEPARTURE_ALARM_SYNC","scheduleId":"77"}""",
+                createdAt = Instant.parse("2026-07-29T03:00:00Z"),
+                inboxVisible = false,
+            )
+        )
+
+        assertEquals(emptyList<com.noLate.notification.domain.AppNotification>(), service.getInbox(
+            memberId = 30L,
+            cursorId = null,
+            limit = 20,
+            unreadOnly = false,
+        ).items)
+        assertEquals(0L, service.getUnreadCount(30L))
+        assertEquals(0, service.markAllRead(30L, presentedSessionGeneration = 0L))
     }
 
     @Test

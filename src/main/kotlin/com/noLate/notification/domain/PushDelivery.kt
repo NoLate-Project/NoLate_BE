@@ -13,6 +13,8 @@ import jakarta.persistence.UniqueConstraint
 import jakarta.persistence.Version
 import java.time.Instant
 
+const val CURRENT_PUSH_DELIVERY_ACK_CAPABILITY_VERSION = 1
+
 /**
  * 논리 알림 한 건을 특정 기기에 전달하려는 영속 경계다.
  *
@@ -37,6 +39,11 @@ import java.time.Instant
         Index(
             name = "idx_push_deliveries_status_attempted_at",
             columnList = "status, last_attempted_at",
+        ),
+        Index(
+            name = "idx_push_deliveries_reliability_cohort",
+            columnList =
+                "status, delivered_at, delivery_ack_capability_version, client_received_at",
         ),
         Index(
             name = "idx_push_deliveries_schedule_id",
@@ -100,6 +107,10 @@ class PushDelivery(
     @Column(name = "payload_type", length = 80)
     val payloadType: String? = null,
 
+    /** Frozen client ACK protocol capability captured with the token manifest. */
+    @Column(name = "delivery_ack_capability_version")
+    val deliveryAckCapabilityVersion: Int? = null,
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     var status: PushDeliveryStatus = PushDeliveryStatus.PENDING,
@@ -124,6 +135,31 @@ class PushDelivery(
 
     @Column(name = "error_message", length = 1000)
     var errorMessage: String? = null,
+
+    /** Server receipt times of authenticated client lifecycle ACKs, not device wall-clock times. */
+    /** Server receipt time of the first authenticated RECEIVED acknowledgement. */
+    @Column(name = "client_received_at")
+    var clientReceivedAt: Instant? = null,
+
+    /** Server receipt time of the first authenticated PRESENTED acknowledgement. */
+    @Column(name = "client_presented_at")
+    var clientPresentedAt: Instant? = null,
+
+    /** Server receipt time of the first authenticated ALARM_SCHEDULED acknowledgement. */
+    @Column(name = "alarm_scheduled_at")
+    var alarmScheduledAt: Instant? = null,
+
+    /** Server receipt time of the first authenticated ALARM_FIRED acknowledgement. */
+    @Column(name = "alarm_fired_at")
+    var alarmFiredAt: Instant? = null,
+
+    /** Server receipt time of the first authenticated ACTIONED acknowledgement. */
+    @Column(name = "client_actioned_at")
+    var clientActionedAt: Instant? = null,
+
+    /** Server receipt time of the latest first-seen client acknowledgement. */
+    @Column(name = "client_ack_recorded_at")
+    var clientAckRecordedAt: Instant? = null,
 ) {
 
     fun beginDispatch(at: Instant) {
@@ -153,6 +189,7 @@ class PushDelivery(
     fun markFailure(at: Instant, code: String, message: String?): Boolean {
         if (status != PushDeliveryStatus.DISPATCHING) return false
         status = PushDeliveryStatus.FAILED
+        clearClientAcknowledgements()
         lastAttemptedAt = at
         errorCode = code.take(120)
         errorMessage = message?.take(1000)
@@ -184,6 +221,7 @@ class PushDelivery(
     fun markConfirmedFailureSuperseded(at: Instant, reason: String): Boolean {
         if (status != PushDeliveryStatus.DISPATCHING) return false
         status = PushDeliveryStatus.SUPERSEDED
+        clearClientAcknowledgements()
         lastAttemptedAt = at
         errorCode = "SCHEDULE_SOURCE_TERMINAL"
         errorMessage = reason.take(1000)
@@ -197,6 +235,7 @@ class PushDelivery(
     ): Boolean {
         if (status != PushDeliveryStatus.DISPATCHING) return false
         status = PushDeliveryStatus.SUPERSEDED
+        clearClientAcknowledgements()
         lastAttemptedAt = at
         errorCode = code.take(120)
         errorMessage = reason.take(1000)
@@ -206,6 +245,7 @@ class PushDelivery(
     fun markInvalidToken(at: Instant, code: String, message: String?) {
         if (status != PushDeliveryStatus.DISPATCHING) return
         status = PushDeliveryStatus.INVALID_TOKEN
+        clearClientAcknowledgements()
         lastAttemptedAt = at
         errorCode = code.take(120)
         errorMessage = message?.take(1000)
@@ -231,6 +271,57 @@ class PushDelivery(
         errorMessage = "Push delivery reached the per-device retry limit."
     }
 
+    /**
+     * Records each client lifecycle stage once. Replayed foreground/background callbacks are
+     * deliberately idempotent and cannot move an already-observed timestamp.
+     */
+    fun acknowledgeClientStage(
+        stage: PushClientAckStage,
+        occurredAt: Instant,
+        recordedAt: Instant,
+    ): Boolean {
+        val changed = when (stage) {
+            PushClientAckStage.RECEIVED -> setIfAbsent(clientReceivedAt, occurredAt) {
+                clientReceivedAt = it
+            }
+            PushClientAckStage.PRESENTED -> setIfAbsent(clientPresentedAt, occurredAt) {
+                clientPresentedAt = it
+            }
+            PushClientAckStage.ALARM_SCHEDULED -> setIfAbsent(alarmScheduledAt, occurredAt) {
+                alarmScheduledAt = it
+            }
+            PushClientAckStage.ALARM_FIRED -> setIfAbsent(alarmFiredAt, occurredAt) {
+                alarmFiredAt = it
+            }
+            PushClientAckStage.ACTIONED -> setIfAbsent(clientActionedAt, occurredAt) {
+                clientActionedAt = it
+            }
+        }
+        if (changed) {
+            clientAckRecordedAt = recordedAt
+        }
+        return changed
+    }
+
+    private inline fun setIfAbsent(
+        current: Instant?,
+        value: Instant,
+        setter: (Instant) -> Unit,
+    ): Boolean {
+        if (current != null) return false
+        setter(value)
+        return true
+    }
+
+    private fun clearClientAcknowledgements() {
+        clientReceivedAt = null
+        clientPresentedAt = null
+        alarmScheduledAt = null
+        alarmFiredAt = null
+        clientActionedAt = null
+        clientAckRecordedAt = null
+    }
+
     protected constructor() : this(
         memberId = 0L,
         eventKey = "",
@@ -254,4 +345,12 @@ enum class PushDeliveryStatus {
     EXHAUSTED,
     /** Manifest 이후 token/member/device ownership이 바뀌어 stale snapshot을 보내지 않았다. */
     SUPERSEDED,
+}
+
+enum class PushClientAckStage {
+    RECEIVED,
+    PRESENTED,
+    ALARM_SCHEDULED,
+    ALARM_FIRED,
+    ACTIONED,
 }

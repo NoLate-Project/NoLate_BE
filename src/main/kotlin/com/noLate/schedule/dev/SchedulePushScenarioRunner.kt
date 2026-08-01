@@ -10,11 +10,12 @@ import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
-import jakarta.transaction.Transactional
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.context.annotation.Profile
 import org.springframework.stereotype.Component
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.support.TransactionTemplate
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -30,11 +31,12 @@ class SchedulePushScenarioRunner(
     private val pushJobRepository: SchedulePushJobRepository,
     private val objectMapper: ObjectMapper,
     private val worker: SchedulePushJobWorker,
+    transactionManager: PlatformTransactionManager,
     @Value("\${schedule.push.departure-alert-lead-minutes:15}")
     private val departureAlertLeadMinutes: Int,
 ) {
+    private val transactionTemplate = TransactionTemplate(transactionManager)
 
-    @Transactional
     fun run(memberId: Long, request: SchedulePushScenarioRunRequest): SchedulePushScenarioRunResponse {
         val scenarios = request.scenarios.ifEmpty {
             listOf(
@@ -64,42 +66,58 @@ class SchedulePushScenarioRunner(
         request: SchedulePushScenarioRunRequest,
         scenario: SchedulePushScenario,
     ): SchedulePushScenarioResult {
-        val schedule = scheduleRepository.findScheduleDetail(request.scheduleId, memberId)
-            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
-        val job = pushJobRepository.findByScheduleIdAndMemberId(request.scheduleId, memberId)
-            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
-        val currentTravelMinutes = request.currentTravelMinutes
-            ?: selectedRouteTravelMinutes(schedule)
-            ?: schedule.route?.travelMinutes
-            ?: throw BusinessException(ErrorCode.INVALID_INPUT)
-        val recommendedDepartureAt = schedule.startAt.minus(
-            currentTravelMinutes.toLong(),
-            ChronoUnit.MINUTES,
-        )
-        val now = scenario.nowFor(recommendedDepartureAt, departureAlertLeadMinutes)
+        // Scenario seed와 실제 worker claim은 서로 다른 transaction이어야 한다. 하나의
+        // outer persistence context에서 job을 계속 관리하면 worker의 REQUIRES_NEW 완료
+        // 전이 뒤 stale version을 flush해 409 optimistic-lock 응답이 발생한다.
+        val prepared = transactionTemplate.execute {
+            val schedule = scheduleRepository.findScheduleDetail(request.scheduleId, memberId)
+                ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+            val job = pushJobRepository.findByScheduleIdAndMemberId(request.scheduleId, memberId)
+                ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+            val currentTravelMinutes = request.currentTravelMinutes
+                ?: selectedRouteTravelMinutes(schedule)
+                ?: schedule.route?.travelMinutes
+                ?: throw BusinessException(ErrorCode.INVALID_INPUT)
+            val recommendedDepartureAt = schedule.startAt.minus(
+                currentTravelMinutes.toLong(),
+                ChronoUnit.MINUTES,
+            )
+            val now = scenario.nowFor(recommendedDepartureAt, departureAlertLeadMinutes)
 
-        resetJobForScenario(
-            job = job,
-            schedule = schedule,
-            currentTravelMinutes = currentTravelMinutes,
-            now = now,
-            scenario = scenario,
-            trafficChangeMinutes = request.trafficChangeMinutes,
-        )
+            resetJobForScenario(
+                job = job,
+                schedule = schedule,
+                currentTravelMinutes = currentTravelMinutes,
+                now = now,
+                scenario = scenario,
+                trafficChangeMinutes = request.trafficChangeMinutes,
+            )
+            pushJobRepository.flush()
+            PreparedSchedulePushScenario(
+                now = now,
+                currentTravelMinutes = currentTravelMinutes,
+                recommendedDepartureAt = recommendedDepartureAt,
+            )
+        } ?: throw IllegalStateException("Schedule push scenario preparation did not complete.")
 
-        val processedCount = worker.runDueJobs(now)
+        val processedCount = worker.runDueJobs(prepared.now)
+        val observed = transactionTemplate.execute {
+            pushJobRepository.findByScheduleIdAndMemberId(request.scheduleId, memberId)
+                ?.let(::ObservedSchedulePushJob)
+        } ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
         return SchedulePushScenarioResult(
             scenario = scenario,
-            workerNow = now,
+            workerNow = prepared.now,
             processedCount = processedCount,
-            jobStatus = job.status.name,
-            currentTravelMinutes = currentTravelMinutes,
-            recommendedDepartureAt = recommendedDepartureAt,
-            lastTravelMinutes = job.lastTravelMinutes,
-            lastPushedAt = job.lastPushedAt,
-            lastNotifiedDepartureAt = job.lastNotifiedDepartureAt,
-            failureReason = job.failureReason,
+            jobStatus = observed.status,
+            currentTravelMinutes = prepared.currentTravelMinutes,
+            recommendedDepartureAt =
+                observed.lastRecommendedDepartureAt ?: prepared.recommendedDepartureAt,
+            lastTravelMinutes = observed.lastTravelMinutes,
+            lastPushedAt = observed.lastPushedAt,
+            lastNotifiedDepartureAt = observed.lastNotifiedDepartureAt,
+            failureReason = observed.failureReason,
             expectedPayloadType = scenario.expectedPayloadType,
             expectedDepartNow = scenario == SchedulePushScenario.DEPART_NOW,
         )
@@ -172,6 +190,30 @@ class SchedulePushScenarioRunner(
                 ?.takeIf { it > 0 }
         }.getOrNull()
     }
+}
+
+private data class PreparedSchedulePushScenario(
+    val now: Instant,
+    val currentTravelMinutes: Int,
+    val recommendedDepartureAt: Instant,
+)
+
+private data class ObservedSchedulePushJob(
+    val status: String,
+    val lastTravelMinutes: Int?,
+    val lastPushedAt: Instant?,
+    val lastNotifiedDepartureAt: Instant?,
+    val lastRecommendedDepartureAt: Instant?,
+    val failureReason: String?,
+) {
+    constructor(job: SchedulePushJob) : this(
+        status = job.status.name,
+        lastTravelMinutes = job.lastTravelMinutes,
+        lastPushedAt = job.lastPushedAt,
+        lastNotifiedDepartureAt = job.lastNotifiedDepartureAt,
+        lastRecommendedDepartureAt = job.lastRecommendedDepartureAt,
+        failureReason = job.failureReason,
+    )
 }
 
 data class SchedulePushScenarioRunRequest(

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.ScheduleImportProvider
+import com.noLate.schedule.domain.ScheduleAlertMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
@@ -104,5 +105,31 @@ class ScheduleControllerRequestTest {
         assertEquals(ScheduleImportProvider.GOOGLE, request.source.provider)
         assertEquals("event-10", request.source.eventId)
         assertEquals("2026-07-17T10:00:00Z", request.source.occurrenceStartAt)
+    }
+
+    @Test
+    fun `older schedule JSON remains compatible while alarm mode is explicit when supplied`() {
+        val legacyJson = """
+            {
+              "title": "기존 앱 일정",
+              "startAt": "2026-07-29T03:00:00Z",
+              "category": { "id": "1", "title": "일정", "color": "#246BFE" }
+            }
+        """.trimIndent()
+        val alarmJson = """
+            {
+              "title": "강력한 알람 일정",
+              "startAt": "2026-07-29T03:00:00Z",
+              "category": { "id": "1", "title": "일정", "color": "#246BFE" },
+              "alertMode": "ALARM"
+            }
+        """.trimIndent()
+
+        val legacy = objectMapper.readValue<AddScheduleRequest>(legacyJson)
+        val alarm = objectMapper.readValue<UpdateScheduleRequest>(alarmJson)
+
+        assertEquals(null, legacy.alertMode)
+        assertEquals(ScheduleAlertMode.ALARM, alarm.alertMode)
+        assertEquals(ScheduleAlertMode.ALARM, alarm.toDto().alertMode)
     }
 }

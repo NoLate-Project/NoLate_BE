@@ -17,6 +17,7 @@ import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.ConfirmedPushDeliveryException
 import com.noLate.notification.application.PushClient
 import com.noLate.notification.application.PushSendResult
+import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
@@ -106,15 +107,7 @@ internal class FirebasePushClient(
         body: String,
         data: Map<String, String>,
     ): PushSendResult {
-        val scheduleReminderAction = data.isScheduleDepartureReminder()
-        val messageData = data.withNotificationActionCategory(scheduleReminderAction)
-        val message = Message.builder()
-            .setToken(token)
-            .setNotification(Notification.builder().setTitle(title).setBody(body).build())
-            .setAndroidConfig(createAndroidConfig())
-            .setApnsConfig(createApnsConfig(title, body, scheduleReminderAction))
-            .putAllData(messageData)
-            .build()
+        val message = createFirebaseMessage(token, title, body, data)
         return try {
             PushSendResult(messageId = firebaseMessaging.send(message))
         } catch (exception: FirebaseMessagingException) {
@@ -139,7 +132,34 @@ internal class FirebasePushClient(
         }
     }
 
-    private fun createAndroidConfig(): AndroidConfig =
+    internal fun createFirebaseMessage(
+        token: String,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+    ): Message {
+        if (data["type"] == DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE) {
+            return Message.builder()
+                .setToken(token)
+                // Control-plane sync is intentionally data-only. The client schedules or cancels
+                // the native alarm and owns all user-visible presentation.
+                .setAndroidConfig(createDataOnlyAndroidConfig())
+                .setApnsConfig(createBackgroundApnsConfig())
+                .putAllData(data)
+                .build()
+        }
+
+        val scheduleReminderAction = data.isScheduleDepartureReminder()
+        return Message.builder()
+            .setToken(token)
+            .setNotification(Notification.builder().setTitle(title).setBody(body).build())
+            .setAndroidConfig(createStandardAndroidConfig())
+            .setApnsConfig(createStandardApnsConfig(title, body, scheduleReminderAction))
+            .putAllData(data.withNotificationActionCategory(scheduleReminderAction))
+            .build()
+    }
+
+    private fun createStandardAndroidConfig(): AndroidConfig =
         AndroidConfig.builder()
             .setPriority(AndroidConfig.Priority.HIGH)
             .setNotification(
@@ -150,7 +170,16 @@ internal class FirebasePushClient(
             )
             .build()
 
-    private fun createApnsConfig(title: String, body: String, scheduleReminderAction: Boolean): ApnsConfig =
+    private fun createDataOnlyAndroidConfig(): AndroidConfig =
+        AndroidConfig.builder()
+            .setPriority(AndroidConfig.Priority.HIGH)
+            .build()
+
+    private fun createStandardApnsConfig(
+        title: String,
+        body: String,
+        scheduleReminderAction: Boolean,
+    ): ApnsConfig =
         ApnsConfig.builder()
             .putHeader("apns-push-type", "alert")
             .putHeader("apns-priority", "10")
@@ -168,6 +197,17 @@ internal class FirebasePushClient(
                             .build()
                     )
                     .setSound("default")
+                    .setContentAvailable(true)
+                    .build()
+            )
+            .build()
+
+    private fun createBackgroundApnsConfig(): ApnsConfig =
+        ApnsConfig.builder()
+            .putHeader("apns-push-type", "background")
+            .putHeader("apns-priority", "5")
+            .setAps(
+                Aps.builder()
                     .setContentAvailable(true)
                     .build()
             )

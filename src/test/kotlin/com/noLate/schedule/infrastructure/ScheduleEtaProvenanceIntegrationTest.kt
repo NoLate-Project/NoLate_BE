@@ -26,6 +26,47 @@ class ScheduleEtaProvenanceIntegrationTest @Autowired constructor(
     private val entityManager: TestEntityManager,
 ) {
     @Test
+    fun `ODsay 시간표 provenance는 저장하되 live 비교 baseline을 만들지 않는다`() {
+        val scheduleAt = Instant.parse("2026-07-29T05:00:00Z")
+        val checkedAt = scheduleAt.minus(90, ChronoUnit.MINUTES)
+        val fetchedAt = checkedAt.minusSeconds(2)
+        val recommendedDepartureAt = scheduleAt.minus(50, ChronoUnit.MINUTES)
+        val job = SchedulePushJob.create(
+            memberId = 3L,
+            scheduleId = 30L,
+            scheduleAt = scheduleAt,
+            departureAt = scheduleAt.minus(40, ChronoUnit.MINUTES),
+            monitorStartAt = checkedAt,
+            intervalMinutes = 20,
+        )
+        job.startProcessing("odsay-worker")
+        job.finishCheck(
+            travelMinutes = 35,
+            recommendedDepartureAt = recommendedDepartureAt,
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = checkedAt.plus(20, ChronoUnit.MINUTES),
+            completeAfterCheck = false,
+            etaSource = TrafficSource.TIMETABLE_PROVIDER,
+            liveFetchedAt = fetchedAt,
+            etaStale = false,
+            etaRouteFingerprint = "odsay-route-v1",
+            now = checkedAt,
+        )
+
+        repository.saveAndFlush(job)
+        entityManager.clear()
+
+        val stored = requireNotNull(repository.findByScheduleIdAndMemberId(30L, 3L))
+        assertEquals(TrafficSource.TIMETABLE_PROVIDER, stored.lastEtaSource)
+        assertEquals(false, stored.lastEtaStale)
+        assertEquals(recommendedDepartureAt, stored.lastRecommendedDepartureAt)
+        assertEquals(checkedAt, stored.lastCheckedAt)
+        assertEquals(null, stored.lastLiveFetchedAt)
+        assertEquals(null, stored.lastLiveTravelMinutes)
+    }
+
+    @Test
     fun `legacy provenance null row도 새 nullable 컬럼 schema에서 그대로 읽을 수 있다`() {
         val scheduleAt = Instant.parse("2026-07-24T05:00:00Z")
         val checkedAt = scheduleAt.minus(90, ChronoUnit.MINUTES)

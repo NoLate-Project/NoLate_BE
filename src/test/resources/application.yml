@@ -43,7 +43,7 @@ schedule:
     enabled: false
   push:
     fixed-delay-ms: 86400000
-    retry-delay-minutes: 5
+    retry-delay-minutes: 1
     max-retry-count: 1
     departure-alert-lead-minutes: 15
     departure-reminder-interval-minutes: 5
@@ -67,6 +67,13 @@ routing:
     enabled: false
     app-key: ""
     base-url: https://example.invalid
+
+eta:
+  transit:
+    odsay:
+      enabled: false
+      api-key: ""
+      base-url: https://example.invalid
 
 transit:
   seoul:

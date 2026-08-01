@@ -6,6 +6,7 @@ import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.notification.domain.PushPlatform
+import com.noLate.notification.domain.CURRENT_PUSH_DELIVERY_ACK_CAPABILITY_VERSION
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import org.hibernate.exception.ConstraintViolationException
 import org.slf4j.LoggerFactory
@@ -54,10 +55,29 @@ class NotificationTokenService (
         token: String,
         accessTokenIssuedAt: Instant,
         accessTokenSessionGeneration: Long,
+        deliveryAckCapabilityVersion: Int? = null,
     ) {
         // deviceId는 대소문자와 앞뒤 공백까지 UTF-8 byte identity의 일부인 opaque 값이다.
         // 빈 문자열만 optional null과 동일하게 보고, 그 외 값을 trim/case-fold하지 않는다.
         val normalizedDeviceId = deviceId?.takeIf { it.isNotEmpty() }
+        if (
+            deliveryAckCapabilityVersion != null &&
+            deliveryAckCapabilityVersion != CURRENT_PUSH_DELIVERY_ACK_CAPABILITY_VERSION
+        ) {
+            throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                "지원하지 않는 푸시 수신 확인 capability 버전입니다.",
+            )
+        }
+        if (
+            deliveryAckCapabilityVersion != null &&
+            (normalizedDeviceId == null || normalizedDeviceId.length > 100)
+        ) {
+            throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                "푸시 수신 확인 capability에는 유효한 기기 식별자가 필요합니다.",
+            )
+        }
         val tokenFingerprint = OpaquePushIdentifier.fingerprint(token)
         val deviceFingerprint = normalizedDeviceId?.let(OpaquePushIdentifier::fingerprint)
         var concurrencyAttempt = 0
@@ -74,6 +94,7 @@ class NotificationTokenService (
                     tokenFingerprint = tokenFingerprint,
                     accessTokenIssuedAt = accessTokenIssuedAt,
                     accessTokenSessionGeneration = accessTokenSessionGeneration,
+                    deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
                 )
                 logRegistration(
                     memberId,
@@ -239,6 +260,7 @@ class NotificationTokenWriter(
         tokenFingerprint: String,
         accessTokenIssuedAt: Instant,
         accessTokenSessionGeneration: Long,
+        deliveryAckCapabilityVersion: Int? = null,
     ): NotificationTokenRegistrationResult {
         /*
          * 후보 ownership을 non-locking snapshot으로 먼저 읽고 모든 관련 member row를 ID
@@ -333,6 +355,7 @@ class NotificationTokenWriter(
                 token = token,
                 tokenFingerprint = tokenFingerprint,
                 deviceFingerprint = deviceFingerprint,
+                deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
             )
             notificationRepository.saveAndFlush(preferred)
             return NotificationTokenRegistrationResult(duplicates.size, "updated")
@@ -345,6 +368,7 @@ class NotificationTokenWriter(
             token = token,
             tokenFingerprint = tokenFingerprint,
             deviceFingerprint = deviceFingerprint,
+            deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
         )
         notificationRepository.saveAndFlush(entity)
         return NotificationTokenRegistrationResult(duplicates.size, "created")

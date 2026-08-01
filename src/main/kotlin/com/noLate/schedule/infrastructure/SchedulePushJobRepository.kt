@@ -16,6 +16,12 @@ interface SchedulePushJobCandidate {
     val memberId: Long
 }
 
+interface SchedulePushJobAlarmBackfillCandidate {
+    val jobId: Long
+    val memberId: Long
+    val scheduleId: Long
+}
+
 interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
     fun deleteAllByMemberId(memberId: Long)
     fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
@@ -137,6 +143,26 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
     ): List<SchedulePushJob>
 
     fun findByScheduleIdAndMemberId(scheduleId: Long, memberId: Long): SchedulePushJob?
+
+    @Query(
+        value = """
+        select job.id as jobId, job.member_id as memberId, job.schedule_id as scheduleId
+        from schedule_push_job job
+        join schedules schedule_row on schedule_row.id = job.schedule_id
+        left join departure_alarm_sync_state alarm_state
+          on alarm_state.member_id = job.member_id
+         and alarm_state.schedule_id = job.schedule_id
+        where job.status = 'ACTIVE'
+          and schedule_row.deleted = false
+          and schedule_row.start_at > :now
+          and alarm_state.id is null
+        order by job.member_id asc, job.schedule_id asc
+        """,
+        nativeQuery = true,
+    )
+    fun findAlarmSyncBackfillCandidates(
+        @Param("now") now: Instant,
+    ): List<SchedulePushJobAlarmBackfillCandidate>
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query(

@@ -109,6 +109,10 @@ observability:
     fixed-delay-ms: ${OBSERVABILITY_SNAPSHOT_FIXED_DELAY_MS:30000}
     initial-delay-ms: ${OBSERVABILITY_SNAPSHOT_INITIAL_DELAY_MS:30000}
     shutdown-wait-ms: ${OBSERVABILITY_SNAPSHOT_SHUTDOWN_WAIT_MS:5000}
+    # 실수신률은 최근 provider 성공을 즉시 실패로 세지 않도록 10분 aging한 14일 rolling
+    # cohort로 집계한다. reader는 과도한 운영 조회를 막기 위해 각각 1..90일, 1..1440분으로 제한한다.
+    push-delivery-cohort-window-days: ${OBSERVABILITY_PUSH_DELIVERY_COHORT_WINDOW_DAYS:14}
+    push-delivery-cohort-grace-minutes: ${OBSERVABILITY_PUSH_DELIVERY_COHORT_GRACE_MINUTES:10}
 
 jwt:
   secret-key: ${JWT_SECRET_KEY}
@@ -175,7 +179,10 @@ schedule:
     # 한 번의 claim transaction이 잠그는 due job 수를 제한해 backlog가 lease timeout으로
     # 복구되는 동안 다른 인스턴스가 다음 batch를 처리할 수 있게 한다.
     batch-size: ${SCHEDULE_PUSH_BATCH_SIZE:50}
-    retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:5}
+    retry-delay-minutes: ${SCHEDULE_PUSH_RETRY_DELAY_MINUTES:1}
+    # 실패 delivery가 오래된 ETA payload를 뒤늦게 발송하지 못하게 하는 안전 TTL이다.
+    # 만료 event는 현재 check를 닫고 다음 scheduler tick에서 새 ETA/event로 교체한다.
+    eta-event-ttl-seconds: ${SCHEDULE_PUSH_ETA_EVENT_TTL_SECONDS:120}
     # 푸시 공급자의 일시 장애가 지속될 때 무한 재시도를 막는 작업 단위 한도다.
     max-retry-count: ${SCHEDULE_PUSH_MAX_RETRY_COUNT:3}
     delivery-grace-minutes: ${SCHEDULE_PUSH_DELIVERY_GRACE_MINUTES:10}
@@ -183,11 +190,30 @@ schedule:
     departure-alert-lead-minutes: ${SCHEDULE_PUSH_DEPARTURE_ALERT_LEAD_MINUTES:15}
     departure-reminder-interval-minutes: ${SCHEDULE_PUSH_DEPARTURE_REMINDER_INTERVAL_MINUTES:5}
     departure-snooze-minutes: ${SCHEDULE_PUSH_DEPARTURE_SNOOZE_MINUTES:5}
+    # ETA worker와 별개로 이미 예약된 native alarm tombstone을 정리한다.
+    departure-alarm-expiry-enabled: ${SCHEDULE_DEPARTURE_ALARM_EXPIRY_ENABLED:true}
   traffic:
     # provider 오응답이 과도하게 이른 출발 알림으로 승격되지 않도록 하는 제품 상한이다.
     max-travel-minutes: ${SCHEDULE_TRAFFIC_MAX_TRAVEL_MINUTES:1440}
     # fallback 사이에도 유지하는 마지막 live 비교 기준의 최대 신선도다.
     live-comparator-max-age-minutes: ${SCHEDULE_TRAFFIC_LIVE_COMPARATOR_MAX_AGE_MINUTES:60}
+    accuracy:
+      # 출발 snapshot의 provider 계산이 이 시간보다 오래되면 진단용으로만 저장한다.
+      max-prediction-age-minutes: ${SCHEDULE_ETA_ACCURACY_MAX_PREDICTION_AGE_MINUTES:60}
+      # 절대 도착시각은 추천 출발시각과 실제 출발의 차이가 이 범위 안인 표본만 집계한다.
+      max-provider-departure-offset-minutes: ${SCHEDULE_ETA_ACCURACY_MAX_DEPARTURE_OFFSET_MINUTES:15}
+      # client 도착 callback은 느린 전송을 허용하되 지나치게 오래된 값은 거부한다.
+      max-arrival-report-delay-minutes: ${SCHEDULE_ETA_ACCURACY_MAX_REPORT_DELAY_MINUTES:1440}
+      max-arrival-future-skew-seconds: ${SCHEDULE_ETA_ACCURACY_MAX_FUTURE_SKEW_SECONDS:60}
+      # 시간 오차가 이 값을 넘는 실제 도착 관측은 보존하되 정확도 집계에서는 제외한다.
+      max-observation-precision-seconds: ${SCHEDULE_ETA_ACCURACY_MAX_OBSERVATION_PRECISION_SECONDS:120}
+      # USER_ADJUSTED의 분 단위 역보정 상한이다. DB 절대 상한은 60분이다.
+      max-arrival-adjustment-minutes: ${SCHEDULE_ETA_ACCURACY_MAX_ARRIVAL_ADJUSTMENT_MINUTES:60}
+      # 출발 이후 도착 자체의 물리적 상한과, 예측 대비 비정상 지연의 집계 상한이다.
+      max-arrival-after-departure-minutes: ${SCHEDULE_ETA_ACCURACY_MAX_ARRIVAL_AFTER_DEPARTURE_MINUTES:1440}
+      max-eligible-delay-vs-prediction-minutes: ${SCHEDULE_ETA_ACCURACY_MAX_ELIGIBLE_DELAY_MINUTES:360}
+      # unversioned 기본값은 future verified 관측도 정확도 cohort에서 fail-closed한다.
+      backend-cohort-version: ${SCHEDULE_ETA_ACCURACY_BACKEND_COHORT_VERSION:unversioned}
     tmap:
       enabled: ${TMAP_ENABLED:false}
       app-key: ${TMAP_APP_KEY:}
@@ -209,6 +235,72 @@ routing:
     app-key: ${TMAP_APP_KEY:}
     base-url: ${TMAP_BASE_URL:https://apis.openapi.sk.com}
 
+eta:
+  resilience:
+    # 대중교통 전체 계산의 soft quality boundary다. ODsay connect+read hard timeout 합(6초)
+    # 보다 길고 worker lease보다 짧아야 하며, 늦게 끝난 결과는 저장 ETA fallback으로 폐기한다.
+    calculation-soft-deadline: ${ETA_CALCULATION_SOFT_DEADLINE:8s}
+    provider-default:
+      # 런타임 검증 상한: concurrent 64, queued 256, wait 5초, failures 100, open 10분.
+      max-concurrent-calls: ${ETA_PROVIDER_DEFAULT_MAX_CONCURRENT_CALLS:8}
+      max-queued-calls: ${ETA_PROVIDER_DEFAULT_MAX_QUEUED_CALLS:16}
+      max-queue-wait: ${ETA_PROVIDER_DEFAULT_MAX_QUEUE_WAIT:100ms}
+      failure-threshold: ${ETA_PROVIDER_DEFAULT_FAILURE_THRESHOLD:5}
+      open-duration: ${ETA_PROVIDER_DEFAULT_OPEN_DURATION:30s}
+    providers:
+      odsay:
+        # 경로 재조회는 한 ETA 계산 안에서도 최대 3회 발생하므로 별도 quota/bulkhead를 둔다.
+        max-concurrent-calls: ${ODSAY_ETA_MAX_CONCURRENT_CALLS:4}
+        max-queued-calls: ${ODSAY_ETA_MAX_QUEUED_CALLS:8}
+        max-queue-wait: ${ODSAY_ETA_MAX_QUEUE_WAIT:100ms}
+        failure-threshold: ${ODSAY_ETA_FAILURE_THRESHOLD:5}
+        open-duration: ${ODSAY_ETA_OPEN_DURATION:30s}
+      seoul_subway:
+        max-concurrent-calls: ${SEOUL_SUBWAY_ETA_MAX_CONCURRENT_CALLS:4}
+        max-queued-calls: ${SEOUL_SUBWAY_ETA_MAX_QUEUED_CALLS:8}
+        max-queue-wait: ${SEOUL_SUBWAY_ETA_MAX_QUEUE_WAIT:100ms}
+        failure-threshold: ${SEOUL_SUBWAY_ETA_FAILURE_THRESHOLD:5}
+        open-duration: ${SEOUL_SUBWAY_ETA_OPEN_DURATION:30s}
+      seoul_bus:
+        max-concurrent-calls: ${SEOUL_BUS_ETA_MAX_CONCURRENT_CALLS:4}
+        max-queued-calls: ${SEOUL_BUS_ETA_MAX_QUEUED_CALLS:8}
+        max-queue-wait: ${SEOUL_BUS_ETA_MAX_QUEUE_WAIT:100ms}
+        failure-threshold: ${SEOUL_BUS_ETA_FAILURE_THRESHOLD:5}
+        open-duration: ${SEOUL_BUS_ETA_OPEN_DURATION:30s}
+      tago_bus:
+        max-concurrent-calls: ${TAGO_BUS_ETA_MAX_CONCURRENT_CALLS:4}
+        max-queued-calls: ${TAGO_BUS_ETA_MAX_QUEUED_CALLS:8}
+        max-queue-wait: ${TAGO_BUS_ETA_MAX_QUEUE_WAIT:100ms}
+        failure-threshold: ${TAGO_BUS_ETA_FAILURE_THRESHOLD:5}
+        open-duration: ${TAGO_BUS_ETA_OPEN_DURATION:30s}
+  transit:
+    # 정류장에 도착하자마자 떠나는 차량을 잡을 수 있다고 계산하지 않도록 하는 승차 여유다.
+    boarding-buffer-seconds: ${SCHEDULE_TRANSIT_BOARDING_BUFFER_SECONDS:60}
+    # 물리적으로 놓친 환승을 판정하는 명시적 운영 버퍼다.
+    transfer-buffer-seconds: ${SCHEDULE_TRANSIT_TRANSFER_BUFFER_SECONDS:0}
+    # ODsay 분 단위 시간표의 exact/sub-minute 경계를 정시 가능으로 과신하지 않는다. 이 여유가
+    # 부족하면 MISSED로 단정하지 않고 UNKNOWN으로 내려 더 이른 동일 경로를 제한 재탐색한다.
+    transfer-confidence-margin-seconds: ${SCHEDULE_TRANSIT_TRANSFER_CONFIDENCE_MARGIN_SECONDS:60}
+    # 첫 차량을 놓치는 경우 다음 도착 차량까지 선택할 수 있도록 provider 허용 상한까지 조회한다.
+    arrival-limit: ${SCHEDULE_TRANSIT_ARRIVAL_LIMIT:10}
+    # provider 원천 갱신시각이 오래된 도착정보를 미래 차량처럼 사용하지 않는다.
+    arrival-source-max-age-seconds: ${SCHEDULE_TRANSIT_ARRIVAL_SOURCE_MAX_AGE_SECONDS:120}
+    # 한 계산 안의 safe-departure 반복이 같은 first-stop provider를 중복 호출하지 않게 한다.
+    arrival-cache-ttl-seconds: ${SCHEDULE_TRANSIT_ARRIVAL_CACHE_TTL_SECONDS:15}
+    arrival-cache-max-entries: ${SCHEDULE_TRANSIT_ARRIVAL_CACHE_MAX_ENTRIES:512}
+    safe-departure:
+      # depart-at 공급자의 시간표 불연속을 다시 확인하되 worker 외부 호출 횟수를 제한한다.
+      max-searches: ${SCHEDULE_TRANSIT_SAFE_DEPARTURE_MAX_SEARCHES:3}
+      tolerance-seconds: ${SCHEDULE_TRANSIT_SAFE_DEPARTURE_TOLERANCE_SECONDS:60}
+    odsay:
+      # 모바일 공개 키와 분리된 서버용 키가 준비된 환경에서만 활성화한다.
+      enabled: ${ODSAY_ENABLED:false}
+      api-key: ${ODSAY_SERVER_API_KEY:}
+      base-url: ${ODSAY_BASE_URL:https://api.odsay.com/v1/api}
+      allow-insecure-http: ${ODSAY_ALLOW_INSECURE_HTTP:false}
+      # 공식 host/loopback 이외의 egress proxy는 보안 검토 뒤 두 opt-in을 각각 명시한다.
+      allow-custom-endpoint: ${ODSAY_ALLOW_CUSTOM_ENDPOINT:false}
+
 calendar:
   metadata-cache:
     enabled: ${CALENDAR_METADATA_CACHE_ENABLED:true}
@@ -223,17 +315,26 @@ calendar:
     cache-ttl-hours: ${KASI_CACHE_TTL_HOURS:168}
 
 transit:
+  # 한 logical 조회가 여러 station/arrival HTTP 요청으로 증폭될 때 replica 내부 burst를
+  # fail-fast로 제한한다. 계정 전체 다중 replica quota는 운영의 외부 shared budget으로 둔다.
+  wire-rate-limit:
+    seoul-subway-per-second: ${SEOUL_SUBWAY_WIRE_CALLS_PER_SECOND:10}
+    seoul-bus-per-second: ${SEOUL_BUS_WIRE_CALLS_PER_SECOND:20}
+    tago-bus-per-second: ${TAGO_BUS_WIRE_CALLS_PER_SECOND:20}
   seoul:
     api-key: ${SEOUL_OPENAPI_KEY:}
     subway-api-key: ${SEOUL_SUBWAY_API_KEY:}
     bus-api-key: ${SEOUL_BUS_API_KEY:}
     subway-base-url: ${SEOUL_SUBWAY_BASE_URL:http://swopenAPI.seoul.go.kr/api/subway}
     bus-base-url: ${SEOUL_BUS_BASE_URL:http://ws.bus.go.kr/api/rest}
+    # 서울 공식 endpoint가 HTTP인 환경은 key/ETA 무결성 위험을 검토한 뒤에만 명시적으로 연다.
+    allow-insecure-http: ${SEOUL_ALLOW_INSECURE_HTTP:false}
   tago:
     api-key: ${TAGO_API_KEY:}
     bus-api-key: ${TAGO_BUS_API_KEY:${TAGO_API_KEY:}}
     base-url: ${TAGO_BASE_URL:https://apis.data.go.kr/1613000}
     city-codes: ${TAGO_BUS_CITY_CODES:}
+    allow-insecure-http: ${TAGO_ALLOW_INSECURE_HTTP:false}
 
 firebase:
   enabled: ${FIREBASE_ENABLED:false}

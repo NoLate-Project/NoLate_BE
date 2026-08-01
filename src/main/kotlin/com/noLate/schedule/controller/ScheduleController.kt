@@ -399,6 +399,7 @@ data class AddScheduleRequest(
     val notificationEnabled: Boolean? = null,
     val notificationLeadMinutes: Int? = null,
     val notificationIntervalMinutes: Int? = null,
+    val alertMode: com.noLate.schedule.domain.ScheduleAlertMode? = null,
 ) {
     fun toDto(): ScheduleDto =
         ScheduleDto(
@@ -423,6 +424,7 @@ data class AddScheduleRequest(
             notificationEnabled = notificationEnabled,
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
+            alertMode = alertMode,
         )
 }
 
@@ -467,6 +469,7 @@ data class UpdateScheduleRequest(
     val notificationEnabled: Boolean? = null,
     val notificationLeadMinutes: Int? = null,
     val notificationIntervalMinutes: Int? = null,
+    val alertMode: com.noLate.schedule.domain.ScheduleAlertMode? = null,
 ) {
     fun toDto(): ScheduleDto =
         ScheduleDto(
@@ -491,5 +494,6 @@ data class UpdateScheduleRequest(
             notificationEnabled = notificationEnabled,
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
+            alertMode = alertMode,
         )
 }

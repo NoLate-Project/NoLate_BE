@@ -12,6 +12,7 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.domain.SchedulePushJobStatus
+import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import org.springframework.stereotype.Service
@@ -33,6 +34,8 @@ class SchedulePushDispatchFenceValidator(
         val identityValid =
             job.notificationGeneration == fence.notificationGeneration &&
                 job.notificationInputFingerprint == fence.notificationInputFingerprint &&
+                (fence.expectedCheckCount == null || job.checkCount == fence.expectedCheckCount) &&
+                (fence.sourceExpiresAt == null || Instant.now(clock).isBefore(fence.sourceExpiresAt)) &&
                 (fence.expectedMemberId == null || job.memberId == fence.expectedMemberId) &&
                 (fence.expectedScheduleId == null || job.scheduleId == fence.expectedScheduleId)
         if (!identityValid) {
@@ -111,6 +114,10 @@ class SchedulePushRecipientAccessValidator(
         payloadType: String?,
         calendarId: Long?,
     ): Boolean {
+        // Schedule deletion/share revoke is exactly when the latest CANCEL tombstone must still
+        // cross the provider boundary. Its authority is the independent alarm-state freshness
+        // validator, not mutable schedule access.
+        if (payloadType == DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE) return true
         if (!sharingAvailabilityPolicy.enabled) {
             return canDispatchWhileSharingDisabled(
                 memberId = memberId,

@@ -66,12 +66,15 @@ lease를 다시 잡는 ABA 상황에서도 이전 attempt가 새 lease를 덮어
 provider 호출이 event lease timeout보다 오래 걸리면 replacement worker는 남은
 `DISPATCHING`을 ambiguous terminal로 관측할 수 있다. 이후 원 provider 호출이 확정 미수락으로
 돌아오는 경우에는 authoritative schedule state를 다시 잠가 판단한다. 같은 generation/input의
-`ACTIVE` job만 `delivery=FAILED`와 frozen safety outbox `PENDING`을 같은 transaction에서
-재개방한다. `PROCESSING`은 현재 source worker가 끝날 때까지 failure budget 없이 defer하고,
-`COMPLETED/FAILED/CANCELED`, missing job, generation/fingerprint mismatch는 delivery를
+`ACTIVE` job이면서 같은 ETA `checkCount`이고 persisted event TTL 안인 경우만
+`delivery=FAILED`와 frozen safety outbox `PENDING`을 같은 transaction에서 재개방한다.
+`PROCESSING`은 현재 source worker가 끝날 때까지 failure budget 없이 defer하고,
+`COMPLETED/FAILED/CANCELED`, missing job, generation/fingerprint/checkCount mismatch 또는 ETA
+TTL 만료는 delivery를
 `SUPERSEDED`, outbox를 `COMPLETED`로 즉시 닫는다. 따라서 snooze/편집/terminal job의 오래된
-알림은 late failure로 되살아나지 않는다. 이 규칙은 성공 가능성이 모호한 transport 예외에는
-적용하지 않는다.
+알림은 late failure로 되살아나지 않는다. ETA TTL 만료는 당시 delivery를 새로운 uncertain
+관측으로 기록하지 않고, 현재 회차를 닫은 뒤 새 ETA check를 예약한다. 이 규칙은 성공 가능성이
+모호한 transport 예외를 자동 재전송한다는 뜻이 아니다.
 schedule generation/fingerprint safety fence는 event identity만 증명하고 outbox lease 소유권은
 증명하지 않는다. provider 결과 전이는 locked source row의
 `notificationId + workerId + dispatchAttemptCount`까지 별도로 비교한다. 현재 attempt가
@@ -85,6 +88,11 @@ confirmed-state reconciliation용 outbox wake-up을 함께 기록한다. wake-up
 `PROCESSING`이면 optimistic version을 선점하지 않고 reconciliation을 재예약한다. 이미 다음
 generation 또는 두 회차 이상 진행된 경우에는 현재 reminder 의미를 과거 event로 덮지 않고
 확인 성공 시각만 보존한다. `last_uncertain_at`은 당시 stale worker의 관측 이력으로 남는다.
+
+schedule ETA event의 기본 안전 TTL은 120초이고 provider confirmed-failure 재시도 기본값은
+1분이다. 시작 시 `retryDelay < TTL`을 강제한다. immutable `cN` 재시도 중 ETA 의미가 바뀌면
+기존 payload와 성공 기기는 그대로 끝내고, 완료 직후 1초 catch-up marker가 새 `cN+1` ETA와
+교정 알림을 만든다. provider 직전 fence는 source expiry를 정확한 경계시각에도 거부한다.
 
 모든 사용자 대상 canonical data에는 다음 계정 binding이 있다.
 

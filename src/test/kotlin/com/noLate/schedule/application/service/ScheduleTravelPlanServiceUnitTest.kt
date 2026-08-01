@@ -5,6 +5,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleTravelMode
@@ -71,7 +72,8 @@ class ScheduleTravelPlanServiceUnitTest {
         val result = service.upsertMyTravelPlan(
             memberId = 2L,
             scheduleId = 10L,
-            command = routeCommand(originName = "참여자 집", travelMinutes = 28),
+            command = routeCommand(originName = "참여자 집", travelMinutes = 28)
+                .copy(alertMode = ScheduleAlertMode.ALARM),
         )
 
         verify(travelPlanRepository).saveAndFlush(check {
@@ -79,10 +81,33 @@ class ScheduleTravelPlanServiceUnitTest {
             assertEquals(2L, it.memberId)
             assertEquals("참여자 집", it.originName)
             assertEquals(28, it.travelMinutes)
+            assertEquals(ScheduleAlertMode.ALARM, it.alertMode)
         })
         assertEquals("참여자 집", result.origin?.name)
         assertEquals("강남역", result.destination?.name)
         assertEquals(2L, result.memberId)
+        assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
+    }
+
+    @Test
+    fun `personal alarm mode is stored and a legacy update preserves it`() {
+        val schedule = scheduleEntity()
+        val existing = travelPlan(memberId = 2L, originName = "참여자 집").apply {
+            alertMode = ScheduleAlertMode.ALARM
+        }
+        whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.findByScheduleIdAndMemberId(10L, 2L)).thenReturn(existing)
+        whenever(travelPlanRepository.saveAndFlush(existing)).thenReturn(existing)
+
+        val result = service.upsertMyTravelPlan(
+            memberId = 2L,
+            scheduleId = 10L,
+            command = routeCommand(originName = "새 출발지", travelMinutes = 31),
+        )
+
+        assertEquals(ScheduleAlertMode.ALARM, existing.alertMode)
+        assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
     }
 
     @Test
@@ -150,6 +175,7 @@ class ScheduleTravelPlanServiceUnitTest {
         assertNull(participantView.departAt)
         assertNull(participantView.travelMode)
         assertFalse(participantView.notificationEnabled ?: true)
+        assertEquals(ScheduleAlertMode.STANDARD, participantView.alertMode)
         assertTrue(participantView.routeSetupRequired == true)
     }
 

@@ -107,6 +107,13 @@ class AppNotification(
     @Column(name = "created_at", nullable = false)
     val createdAt: Instant,
 
+    /**
+     * Durable control-plane events share the provider outbox but must never appear in the
+     * user-facing notification inbox or unread count.
+     */
+    @Column(name = "inbox_visible", nullable = false)
+    val inboxVisible: Boolean = true,
+
     @Column(name = "read_at")
     var readAt: Instant? = null,
 

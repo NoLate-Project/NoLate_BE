@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportProvider
@@ -265,10 +266,31 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `legacy update without alert mode preserves an existing alarm preference`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val existing = scheduleEntity(id = scheduleId, memberId = memberId).apply {
+            route?.alertMode = ScheduleAlertMode.ALARM
+        }
+        val legacyUpdate = scheduleDto(title = "Updated by older client")
+
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId))
+            .thenReturn(existing)
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        val result = scheduleService.updateSchedule(memberId, scheduleId, legacyUpdate)
+
+        assertEquals(ScheduleAlertMode.ALARM, existing.route?.alertMode)
+        assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
+    }
+
+    @Test
     fun `shared editor can update while keeping owner's existing category snapshot`() {
         val editorId = 2L
         val scheduleId = 10L
-        val existing = scheduleEntity(id = scheduleId, memberId = 99L, title = "Old schedule")
+        val existing = scheduleEntity(id = scheduleId, memberId = 99L, title = "Old schedule").apply {
+            route?.alertMode = ScheduleAlertMode.ALARM
+        }
         val accessPolicy = mock<ScheduleAccessPolicy>()
         val categoryRepository = mock<ScheduleCategoryRepository>()
         val categoryShareRepository = mock<ScheduleCategoryShareRepository>()
@@ -292,18 +314,19 @@ class ScheduleServiceUnitTest {
             effectivePermission = ScheduleSharePermission.EDITOR,
         )
         whenever(accessPolicy.resolve(editorId, existing)).thenReturn(editorAccess)
-        whenever(accessPolicy.resolveAll(editorId, listOf(existing)))
-            .thenReturn(mapOf(scheduleId to editorAccess))
         whenever(scheduleRepository.save(existing)).thenReturn(existing)
 
         val result = securedService.updateSchedule(
             editorId,
             scheduleId,
-            scheduleDto(title = "Editor update"),
+            scheduleDto(title = "Editor update").copy(
+                alertMode = ScheduleAlertMode.STANDARD,
+            ),
         )
 
         assertEquals("Editor update", result.title)
         assertEquals("Work", result.category.title)
+        assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
         verify(categoryRepository, never()).findById(any())
         verify(categoryShareRepository, never()).findByCategoryIdAndTargetMemberId(any(), any())
     }
@@ -356,8 +379,6 @@ class ScheduleServiceUnitTest {
             canViewAllTravelPlans = true,
         )
         whenever(accessPolicy.resolve(memberId, existing)).thenReturn(editorAccess)
-        whenever(accessPolicy.resolveAll(memberId, listOf(existing)))
-            .thenReturn(mapOf(scheduleId to editorAccess))
         whenever(calendarRepository.findAllForUpdate(listOf(targetCalendarId, sourceCalendarId)))
             .thenReturn(listOf(targetCalendar, sourceCalendar))
         whenever(

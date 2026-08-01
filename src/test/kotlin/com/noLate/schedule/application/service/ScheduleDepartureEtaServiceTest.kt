@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.TrafficClient
+import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleEtaConfidence
 import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
@@ -94,6 +95,171 @@ class ScheduleDepartureEtaServiceTest {
         assertNull(result.preparationStartAt)
         assertNull(result.safetyBufferMinutes)
         assertEquals("Asia/Seoul", result.timeZone)
+    }
+
+    @Test
+    fun `ODsay 실제 출발시각이 ETA 역산값보다 이르더라도 시간표 snapshot을 그대로 노출한다`() {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val checkedAt = queryAt.minus(5, ChronoUnit.MINUTES)
+        val providerFetchedAt = checkedAt.minusSeconds(2)
+        val providerRecommendedDepartureAt =
+            schedule.startAt.minus(50, ChronoUnit.MINUTES)
+        val route = requireNotNull(schedule.route)
+        job.startProcessing("odsay-worker")
+        job.finishCheck(
+            travelMinutes = 35,
+            recommendedDepartureAt = providerRecommendedDepartureAt,
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = checkedAt.plus(20, ChronoUnit.MINUTES),
+            completeAfterCheck = false,
+            etaSource = TrafficSource.TIMETABLE_PROVIDER,
+            liveFetchedAt = providerFetchedAt,
+            etaStale = false,
+            etaRouteFingerprint = ScheduleEtaRouteFingerprint.calculate(
+                schedule = schedule,
+                travelMinutes = route.travelMinutes,
+                travelMode = route.travelMode,
+                originLat = route.originLat,
+                originLng = route.originLng,
+                routeJson = route.routeJson,
+            ),
+            now = checkedAt,
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(35, result.travelMinutes)
+        assertEquals(providerRecommendedDepartureAt, result.recommendedDepartureAt)
+        assertEquals(TrafficSource.TIMETABLE_PROVIDER, result.source)
+        assertEquals(ScheduleEtaConfidence.MEDIUM, result.confidence)
+        assertFalse(result.stale)
+        assertEquals(checkedAt, result.evaluatedAt)
+        assertNull(result.liveFetchedAt)
+    }
+
+    @Test
+    fun `정시 도착 불가 진단은 늦은 예측 도착을 LOW confidence 상태로 노출한다`() {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val checkedAt = queryAt.minus(5, ChronoUnit.MINUTES)
+        val liveFetchedAt = checkedAt.minusSeconds(2)
+        val predictedArrivalAt = schedule.startAt.plus(5, ChronoUnit.MINUTES)
+        val travelMinutes = ChronoUnit.MINUTES.between(checkedAt, predictedArrivalAt).toInt()
+        val route = requireNotNull(schedule.route)
+        job.startProcessing("odsay-live-worker")
+        job.finishCheck(
+            travelMinutes = travelMinutes,
+            recommendedDepartureAt = checkedAt,
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = checkedAt.plus(20, ChronoUnit.MINUTES),
+            completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = liveFetchedAt,
+            etaStale = true,
+            etaFailureReason = TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE,
+            predictedArrivalAt = predictedArrivalAt,
+            etaRouteFingerprint = ScheduleEtaRouteFingerprint.calculate(
+                schedule = schedule,
+                travelMinutes = route.travelMinutes,
+                travelMode = route.travelMode,
+                originLat = route.originLat,
+                originLng = route.originLng,
+                routeJson = route.routeJson,
+            ),
+            now = checkedAt,
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(travelMinutes, result.travelMinutes)
+        assertEquals(checkedAt, result.recommendedDepartureAt)
+        assertEquals(predictedArrivalAt, result.predictedArrivalAt)
+        assertEquals(false, result.onTimeArrivalPossible)
+        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
+        assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
+        assertTrue(result.stale)
+        assertEquals(
+            TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE,
+            result.failureReason,
+        )
+        assertEquals(liveFetchedAt, result.liveFetchedAt)
+    }
+
+    @Test
+    fun `환승 실패 fallback snapshot은 선택 경로여도 LOW confidence로 노출한다`() {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val checkedAt = queryAt.minus(5, ChronoUnit.MINUTES)
+        val route = requireNotNull(schedule.route)
+        job.startProcessing("transfer-fallback-worker")
+        job.finishCheck(
+            travelMinutes = 45,
+            recommendedDepartureAt = schedule.startAt.minus(45, ChronoUnit.MINUTES),
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = checkedAt.plus(20, ChronoUnit.MINUTES),
+            completeAfterCheck = false,
+            etaSource = TrafficSource.SELECTED_ROUTE,
+            etaStale = true,
+            etaFailureReason = TrafficFailureReasons.TRANSIT_TRANSFER_MISSED,
+            etaTravelMode = ScheduleTravelMode.TRANSIT,
+            etaRouteFingerprint = ScheduleEtaRouteFingerprint.calculate(
+                schedule = schedule,
+                travelMinutes = route.travelMinutes,
+                travelMode = route.travelMode,
+                originLat = route.originLat,
+                originLng = route.originLng,
+                routeJson = route.routeJson,
+            ),
+            now = checkedAt,
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
+        assertTrue(result.stale)
+        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_MISSED, result.failureReason)
+    }
+
+    @Test
+    fun `정상 provider snapshot의 늦은 예측 도착은 계속 거부한다`() {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 30,
+            source = TrafficSource.LIVE_PROVIDER,
+            checkedAt = queryAt.minus(5, ChronoUnit.MINUTES),
+            liveFetchedAt = queryAt.minus(5, ChronoUnit.MINUTES).minusSeconds(2),
+            snapshotSchedule = schedule,
+        )
+        // 영속 계층에서 유입될 수 있는 legacy/손상 snapshot을 재현한다. 새 도메인 쓰기 경로는
+        // 정시 도착 불가 진단이 아닌 late predictedArrivalAt 자체를 이미 차단한다.
+        setField(
+            job,
+            "lastPredictedArrivalAt",
+            schedule.startAt.plus(5, ChronoUnit.MINUTES),
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(30, result.travelMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.onTimeArrivalPossible)
     }
 
     @Test
@@ -651,7 +817,8 @@ class ScheduleDepartureEtaServiceTest {
             completeAfterCheck = false,
             etaSource = source,
             liveFetchedAt = liveFetchedAt,
-            etaStale = source != TrafficSource.LIVE_PROVIDER,
+            etaStale = source != TrafficSource.LIVE_PROVIDER &&
+                source != TrafficSource.TIMETABLE_PROVIDER,
             etaFailureReason = failureReason,
             etaRouteFingerprint = ScheduleEtaRouteFingerprint.calculate(
                 schedule = snapshotSchedule,
@@ -713,6 +880,7 @@ class ScheduleDepartureEtaServiceTest {
         destinationName: String = "회사",
         destinationLat: Double = 37.2,
         notificationEnabled: Boolean = true,
+        travelMode: ScheduleTravelMode = ScheduleTravelMode.CAR,
     ): Schedule =
         Schedule(
             id = 10L,
@@ -725,7 +893,7 @@ class ScheduleDepartureEtaServiceTest {
                 travelMinutes = travelMinutes,
                 departAt = null,
                 departedAt = null,
-                travelMode = ScheduleTravelMode.CAR,
+                travelMode = travelMode,
                 locationName = "회사",
                 originName = "집",
                 originAddress = null,

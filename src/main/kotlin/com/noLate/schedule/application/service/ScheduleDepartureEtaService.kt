@@ -5,6 +5,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.SelectedRouteMetadata
+import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.sanitizeTrafficFailureReason
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleDepartureEtaStatusDto
@@ -140,14 +141,21 @@ class ScheduleDepartureEtaService(
         val travelMinutes = lastTravelMinutes
         if (!EtaTravelTimePolicy.isValid(travelMinutes, maxTravelMinutes)) return false
         if (lastCheckedAt == null || lastRecommendedDepartureAt == null) return false
-        if (
-            lastRecommendedDepartureAt !=
-            schedule.startAt.minus(requireNotNull(travelMinutes).toLong(), ChronoUnit.MINUTES)
-        ) {
-            return false
-        }
+        val recommendedDepartureAt = requireNotNull(lastRecommendedDepartureAt)
+        if (recommendedDepartureAt.isAfter(schedule.startAt)) return false
         val source = lastEtaSource ?: return false
         val stale = lastEtaStale ?: return false
+        val onTimeUnavailableDiagnostic = isOnTimeUnavailableDiagnostic(schedule)
+        if (
+            recommendedDepartureAt
+                .plus(requireNotNull(travelMinutes).toLong(), ChronoUnit.MINUTES)
+                .isAfter(schedule.startAt) &&
+            !onTimeUnavailableDiagnostic
+        ) return false
+        if (
+            lastPredictedArrivalAt?.isAfter(schedule.startAt) == true &&
+            !onTimeUnavailableDiagnostic
+        ) return false
         val livePairComplete = (lastLiveTravelMinutes == null) == (lastLiveFetchedAt == null)
         if (!livePairComplete) return false
         if (lastLiveFetchedAt != null && requireNotNull(lastCheckedAt).isBefore(lastLiveFetchedAt)) {
@@ -159,16 +167,37 @@ class ScheduleDepartureEtaService(
         ) {
             return false
         }
+        if (onTimeUnavailableDiagnostic) {
+            return when (source) {
+                TrafficSource.LIVE_PROVIDER ->
+                    lastLiveFetchedAt != null && lastLiveTravelMinutes == travelMinutes
+                TrafficSource.TIMETABLE_PROVIDER -> true
+                TrafficSource.SELECTED_ROUTE,
+                TrafficSource.SAVED_FALLBACK -> false
+            }
+        }
         return when (source) {
             TrafficSource.LIVE_PROVIDER ->
                 !stale &&
                     lastEtaFailureReason == null &&
                     lastLiveFetchedAt != null &&
                     lastLiveTravelMinutes == travelMinutes
+            TrafficSource.TIMETABLE_PROVIDER ->
+                !stale && lastEtaFailureReason == null
             TrafficSource.SELECTED_ROUTE,
             TrafficSource.SAVED_FALLBACK ->
                 stale && lastEtaFailureReason != null
         }
+    }
+
+    private fun SchedulePushJob.isOnTimeUnavailableDiagnostic(schedule: Schedule): Boolean {
+        val failureCodePrefix =
+            TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE.substringBefore(':') + ":"
+        return (lastEtaSource == TrafficSource.LIVE_PROVIDER ||
+            lastEtaSource == TrafficSource.TIMETABLE_PROVIDER) &&
+            lastEtaStale == true &&
+            lastEtaFailureReason?.startsWith(failureCodePrefix) == true &&
+            lastPredictedArrivalAt?.isAfter(schedule.startAt) == true
     }
 
     private fun statusFromJob(
@@ -178,6 +207,7 @@ class ScheduleDepartureEtaService(
     ): ScheduleDepartureEtaStatusDto {
         val travelMinutes = requireNotNull(job.lastTravelMinutes)
         val source = requireNotNull(job.lastEtaSource)
+        val onTimeUnavailableDiagnostic = job.isOnTimeUnavailableDiagnostic(schedule)
         val evaluatedAt = listOfNotNull(job.lastCheckedAt, job.lastLiveFetchedAt)
             .maxOrNull()
             ?: Instant.now(clock)
@@ -190,7 +220,15 @@ class ScheduleDepartureEtaService(
             liveFetchedAt = job.lastLiveFetchedAt,
             source = source,
             stale = requireNotNull(job.lastEtaStale),
-            confidence = confidence(source),
+            confidence = if (
+                onTimeUnavailableDiagnostic ||
+                job.lastEtaStale == true ||
+                job.lastEtaFailureReason != null
+            ) {
+                ScheduleEtaConfidence.LOW
+            } else {
+                confidence(source)
+            },
             failureReason = sanitizeTrafficFailureReason(job.lastEtaFailureReason),
             lastTrafficChangeMinutes = job.lastTrafficChangeMinutes,
             lastChangedAt = job.lastChangedAt,
@@ -199,6 +237,10 @@ class ScheduleDepartureEtaService(
             preparationStartAt = null,
             safetyBufferMinutes = null,
             timeZone = serviceZone.id,
+            predictedArrivalAt = job.lastPredictedArrivalAt,
+            onTimeArrivalPossible = job.lastPredictedArrivalAt?.let {
+                !it.isAfter(schedule.startAt)
+            },
         )
     }
 
@@ -295,6 +337,7 @@ class ScheduleDepartureEtaService(
 
     private fun confidence(source: TrafficSource?): ScheduleEtaConfidence? = when (source) {
         TrafficSource.LIVE_PROVIDER -> ScheduleEtaConfidence.HIGH
+        TrafficSource.TIMETABLE_PROVIDER -> ScheduleEtaConfidence.MEDIUM
         TrafficSource.SELECTED_ROUTE -> ScheduleEtaConfidence.MEDIUM
         TrafficSource.SAVED_FALLBACK -> ScheduleEtaConfidence.LOW
         null -> null

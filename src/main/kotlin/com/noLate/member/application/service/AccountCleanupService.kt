@@ -11,6 +11,8 @@ import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.member.infrastructure.MemberSettingRepository
 import com.noLate.notification.application.service.NotificationTokenRetirementService
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.infrastructure.DepartureAlarmFireEventRepository
+import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.routehistory.infrastructure.RecentRoutePlaceRepository
@@ -19,6 +21,8 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
+import com.noLate.schedule.infrastructure.ScheduleEtaAccuracyObservationRepository
+import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleNotificationActionReceiptRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
@@ -28,6 +32,7 @@ import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
+import com.noLate.schedule.application.service.DepartureAlarmSyncService
 import com.noLate.schedule.application.service.QuickScheduleReliabilityTelemetryService
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
@@ -76,6 +81,11 @@ class AccountCleanupService(
     private val notificationActionReceiptRepository: ScheduleNotificationActionReceiptRepository,
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService,
     private val eventPublisher: ApplicationEventPublisher,
+    private val departureAlarmSyncStateRepository: DepartureAlarmSyncStateRepository,
+    private val etaAccuracyObservationRepository: ScheduleEtaAccuracyObservationRepository,
+    private val departureAlarmFireEventRepository: DepartureAlarmFireEventRepository,
+    private val departureAlarmScheduleReceiptRepository: DepartureAlarmScheduleReceiptRepository,
+    private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
     private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
 ) {
     /**
@@ -169,7 +179,13 @@ class AccountCleanupService(
         // rows first guarantees that deleting the owner schedule cannot leave a live job/outbox
         // that a restarted worker redrives.
         if (fence.ownedScheduleIds.isNotEmpty()) {
+            fence.ownedScheduleIds.sorted().forEach {
+                departureAlarmSyncService?.cancelAllForSchedule(it)
+            }
             notificationActionReceiptRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
+            etaAccuracyObservationRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
+            departureAlarmFireEventRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
+            departureAlarmScheduleReceiptRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             departureStatusRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             routeSetupReminderRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             travelPlanRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
@@ -215,9 +231,13 @@ class AccountCleanupService(
         pushDeliveryRepository.deleteAllByMemberId(memberId)
         pushHistoryRepository.deleteAllByMemberId(memberId)
         notificationActionReceiptRepository.deleteAllByMemberId(memberId)
-        quickScheduleReliabilityTelemetryService?.deleteForMember(memberId)
+        etaAccuracyObservationRepository.deleteAllByMemberId(memberId)
+        departureAlarmFireEventRepository.deleteAllByMemberId(memberId)
+        departureAlarmScheduleReceiptRepository.deleteAllByMemberId(memberId)
         departureStatusRepository.deleteAllByMemberId(memberId)
         travelPlanRepository.deleteAllByMemberId(memberId)
+        departureAlarmSyncStateRepository.deleteAllByMemberId(memberId)
+        quickScheduleReliabilityTelemetryService?.deleteForMember(memberId)
         invitationRepository.deleteAllByOwnerMemberId(memberId)
 
         scheduleRepository.deleteAll(
@@ -231,7 +251,6 @@ class AccountCleanupService(
         memberSettingRepository.deleteAllByMemberId(memberId)
         memberConsentRepository.deleteAllByMemberId(memberId)
         tokenRetirementService.retireAllByMember(memberId)
-
         // 회원 row는 감사/참조 안정성을 위해 남기되 재식별 정보를 제거하고 인증을 차단한다.
         lockedMember.name = "탈퇴 회원"
         lockedMember.email = "deleted-$memberId-${UUID.randomUUID()}@deleted.invalid"
@@ -239,6 +258,11 @@ class AccountCleanupService(
         lockedMember.snsId = null
         lockedMember.tokensValidAfter = java.time.Instant.now()
         lockedMember.softDelete()
+        // Schedule-scoped bulk cleanup deliberately clears the persistence context so hidden
+        // departure-alarm CANCEL controls can survive without stale notification entities.
+        // The withdrawal-fenced member may therefore be detached by this point; merge and flush
+        // the terminal account state explicitly instead of relying on dirty checking.
+        memberRepository.saveAndFlush(lockedMember)
         // 일정 삭제, 직접/카테고리 공유 제거, 캘린더 탈퇴를 같은 transaction에서 마친 뒤
         // frozen participant 전체의 durable revision을 BEFORE_COMMIT listener가 올린다.
         eventPublisher.publishEvent(
@@ -368,6 +392,15 @@ class AccountCleanupService(
                 .forEach(affectedMemberIds::add)
             pushHistoryRepository.findDistinctMemberIdsByScheduleIdIn(scheduleIds)
                 .forEach(affectedMemberIds::add)
+            departureAlarmFireEventRepository.findDistinctMemberIdsByScheduleIdIn(scheduleIds)
+                .forEach(affectedMemberIds::add)
+            departureAlarmScheduleReceiptRepository.findDistinctMemberIdsByScheduleIdIn(scheduleIds)
+                .forEach(affectedMemberIds::add)
+            scheduleIds.forEach { scheduleId ->
+                departureAlarmSyncStateRepository
+                    .findAllByScheduleIdOrderByMemberIdAsc(scheduleId)
+                    .mapTo(affectedMemberIds) { it.memberId }
+            }
         }
 
         return OwnedNotificationScope(

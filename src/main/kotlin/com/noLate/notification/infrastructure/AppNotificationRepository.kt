@@ -18,7 +18,19 @@ interface AppNotificationDispatchCandidate {
 
 interface AppNotificationRepository : JpaRepository<AppNotification, Long> {
 
-    fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
+    /**
+     * Owner account cleanup may erase user-facing schedule history, but independent alarm CANCEL
+     * control rows must survive until their frozen device manifests have converged.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(
+        """
+        delete from AppNotification notification
+        where notification.scheduleId in :scheduleIds
+          and notification.inboxVisible = true
+        """
+    )
+    fun deleteAllByScheduleIdIn(@Param("scheduleIds") scheduleIds: Collection<Long>)
 
     @Query(
         """

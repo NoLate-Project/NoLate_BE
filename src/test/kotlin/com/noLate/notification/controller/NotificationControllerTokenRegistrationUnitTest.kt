@@ -47,6 +47,7 @@ class NotificationControllerTokenRegistrationUnitTest {
                 deviceId = "device-91",
                 platform = PushPlatform.ANDROID,
                 token = "opaque-token-not-logged",
+                deliveryAckCapabilityVersion = 1,
             ),
         )
 
@@ -57,6 +58,7 @@ class NotificationControllerTokenRegistrationUnitTest {
             token = "opaque-token-not-logged",
             accessTokenIssuedAt = issuedAt,
             accessTokenSessionGeneration = 7,
+            deliveryAckCapabilityVersion = 1,
         )
     }
 

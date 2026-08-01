@@ -26,6 +26,8 @@ class SchedulePersistedPushDispatchFenceFactory : PersistedPushDispatchFenceFact
         val memberId = snapshot.data["recipientMemberId"]?.toLongOrNull()
         val scheduleId = snapshot.scheduleId ?: snapshot.data["scheduleId"]?.toLongOrNull()
         val persistedFingerprint = snapshot.data["notificationInputFingerprint"]
+        val sourceExpiresAt = snapshot.data[SCHEDULE_ETA_EVENT_EXPIRES_AT]
+            ?.let { runCatching { Instant.parse(it) }.getOrNull() }
         val metadataMatches =
             snapshot.data["schedulePushJobId"]?.toLongOrNull() == jobId &&
                 snapshot.data["notificationGeneration"]?.toLongOrNull() == generation &&
@@ -41,6 +43,8 @@ class SchedulePersistedPushDispatchFenceFactory : PersistedPushDispatchFenceFact
             notificationGeneration = generation,
             notificationInputFingerprint =
                 persistedFingerprint.takeIf { metadataMatches } ?: INVALID_FINGERPRINT,
+            expectedCheckCount = checkCount ?: INVALID_CHECK_COUNT,
+            sourceExpiresAt = sourceExpiresAt ?: Instant.EPOCH,
             expectedMemberId = memberId ?: INVALID_MEMBER_ID,
             expectedScheduleId = scheduleId ?: INVALID_SCHEDULE_ID,
             requireWorkerLease = false,
@@ -124,6 +128,8 @@ private class SchedulePushSourceStillProcessingException :
 private const val SCHEDULE_PUSH_EVENT_PREFIX = "schedule-push-job:"
 private const val INVALID_JOB_ID = -1L
 private const val INVALID_GENERATION = -1L
+private const val INVALID_CHECK_COUNT = -1
 private const val INVALID_MEMBER_ID = -1L
 private const val INVALID_SCHEDULE_ID = -1L
 private const val INVALID_FINGERPRINT = "invalid-persisted-schedule-fingerprint"
+internal const val SCHEDULE_ETA_EVENT_EXPIRES_AT = "etaEventExpiresAt"

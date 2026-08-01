@@ -11,6 +11,7 @@ import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.domain.ScheduleTravelPlanOverviewDto
 import com.noLate.schedule.domain.ScheduleTravelPlanUpsertCommand
+import com.noLate.schedule.domain.ScheduleAlertMode
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -84,6 +85,7 @@ data class ScheduleTravelPlanUpsertRequest(
     val notificationEnabled: Boolean? = null,
     val notificationLeadMinutes: Int? = null,
     val notificationIntervalMinutes: Int? = null,
+    val alertMode: ScheduleAlertMode? = null,
 ) {
     fun toCommand(): ScheduleTravelPlanUpsertCommand = ScheduleTravelPlanUpsertCommand(
         travelMinutes = travelMinutes,
@@ -97,5 +99,6 @@ data class ScheduleTravelPlanUpsertRequest(
         notificationEnabled = notificationEnabled == true,
         notificationLeadMinutes = notificationLeadMinutes,
         notificationIntervalMinutes = notificationIntervalMinutes,
+        alertMode = alertMode,
     )
 }

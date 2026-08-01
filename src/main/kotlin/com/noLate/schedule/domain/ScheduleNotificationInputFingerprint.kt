@@ -17,7 +17,7 @@ import java.time.ZoneId
 object ScheduleNotificationInputFingerprint {
     fun fromSchedule(memberId: Long, schedule: ScheduleDto): String {
         val scheduleAt = parseInstant(schedule.startAt)
-        return digest(
+        val legacyValues = arrayOf<Any?>(
             memberId,
             schedule.title,
             scheduleAt,
@@ -37,6 +37,7 @@ object ScheduleNotificationInputFingerprint {
             schedule.notificationLeadMinutes ?: 60,
             schedule.notificationIntervalMinutes ?: 20,
         )
+        return digest(*withAlarmModeWhenEnabled(legacyValues, schedule.alertMode))
     }
 
     fun fromTravelPlan(
@@ -45,7 +46,7 @@ object ScheduleNotificationInputFingerprint {
         plan: ScheduleTravelPlanDto,
     ): String {
         val scheduleAt = parseInstant(schedule.startAt)
-        return digest(
+        val legacyValues = arrayOf<Any?>(
             memberId,
             schedule.title,
             scheduleAt,
@@ -65,6 +66,7 @@ object ScheduleNotificationInputFingerprint {
             plan.notificationLeadMinutes ?: 60,
             plan.notificationIntervalMinutes ?: 20,
         )
+        return digest(*withAlarmModeWhenEnabled(legacyValues, plan.alertMode))
     }
 
     fun legacy(
@@ -90,6 +92,20 @@ object ScheduleNotificationInputFingerprint {
             .digest(canonical.toByteArray(StandardCharsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
+
+    /**
+     * STANDARD는 배포 전 fingerprint와 byte-for-byte 같게 유지한다. ALARM만 새 식별자를
+     * 추가해 기존 활성 job이 단순 배포 때문에 reset되거나 재알림되는 것을 막는다.
+     */
+    private fun withAlarmModeWhenEnabled(
+        legacyValues: Array<Any?>,
+        alertMode: ScheduleAlertMode?,
+    ): Array<Any?> =
+        if (alertMode == ScheduleAlertMode.ALARM) {
+            legacyValues + "alertMode=ALARM"
+        } else {
+            legacyValues
+        }
 
     private fun effectiveDepartureAt(
         scheduleAt: Instant,
