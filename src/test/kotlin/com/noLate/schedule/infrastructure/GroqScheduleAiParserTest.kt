@@ -1,6 +1,7 @@
 package com.noLate.schedule.infrastructure
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.noLate.schedule.domain.ScheduleRecognitionAlternative
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -14,6 +15,8 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Groq 어댑터의 429 재시도와 사용자 경고를 실제 HTTP 왕복으로 검증한다. */
 class GroqScheduleAiParserTest {
     private val objectMapper = jacksonObjectMapper()
+    @Volatile
+    private var lastRequestBody: String? = null
 
     @Test
     fun `retries once after rate limit and returns parsed result`() {
@@ -49,6 +52,54 @@ class GroqScheduleAiParserTest {
             assertTrue(outcome.attempted)
             assertEquals(null, outcome.result)
             assertTrue(outcome.warning.orEmpty().contains("AI 요청이 잠시 몰려"))
+        }
+    }
+
+    @Test
+    fun `transcript correction returns only a supplied candidate index`() {
+        withServer { exchange ->
+            respond(exchange, 200, successfulTranscriptCorrectionResponse())
+        }.use { server ->
+            val parser = parserFor(server, maxAttempts = 1, maxBackoffMs = 250)
+            val candidates = listOf(
+                ScheduleRecognitionAlternative("내일 강남형 회의", 0.62),
+                ScheduleRecognitionAlternative("내일 강남역 회의", 0.91),
+            )
+
+            val outcome = parser.correctTranscript(candidates, "2026-07-29")
+
+            assertTrue(outcome.attempted)
+            assertEquals(1, outcome.result?.selectedIndex)
+            assertEquals(0.94, outcome.result?.confidence)
+            val request = objectMapper.readTree(lastRequestBody)
+            val schemaProperties = request
+                .path("response_format")
+                .path("json_schema")
+                .path("schema")
+                .path("properties")
+            assertEquals(setOf("selectedIndex", "confidence"), schemaProperties.fieldNames().asSequence().toSet())
+            assertTrue(lastRequestBody.orEmpty().contains("내일 강남형 회의"))
+            assertTrue(lastRequestBody.orEmpty().contains("Never rewrite, merge, complete, or infer"))
+        }
+    }
+
+    @Test
+    fun `does not call Groq when transcript correction has only one candidate`() {
+        val calls = AtomicInteger()
+        withServer { exchange ->
+            calls.incrementAndGet()
+            respond(exchange, 200, successfulTranscriptCorrectionResponse())
+        }.use { server ->
+            val parser = parserFor(server, maxAttempts = 1, maxBackoffMs = 250)
+
+            val outcome = parser.correctTranscript(
+                listOf(ScheduleRecognitionAlternative("내일 강남역 회의", 0.91)),
+                "2026-07-29",
+            )
+
+            assertEquals(0, calls.get())
+            assertTrue(!outcome.attempted)
+            assertEquals(null, outcome.result)
         }
     }
 
@@ -92,10 +143,28 @@ class GroqScheduleAiParserTest {
         )
     }
 
+    private fun successfulTranscriptCorrectionResponse(): String {
+        val correctionResult = objectMapper.writeValueAsString(
+            mapOf(
+                "selectedIndex" to 1,
+                "confidence" to 0.94,
+            ),
+        )
+        return objectMapper.writeValueAsString(
+            mapOf(
+                "choices" to listOf(
+                    mapOf("message" to mapOf("content" to correctionResult)),
+                ),
+            ),
+        )
+    }
+
     private fun withServer(handler: (HttpExchange) -> Unit): TestHttpServer {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/chat/completions") { exchange ->
-            exchange.requestBody.use { it.readAllBytes() }
+            lastRequestBody = exchange.requestBody.use {
+                String(it.readAllBytes(), StandardCharsets.UTF_8)
+            }
             handler(exchange)
         }
         server.start()

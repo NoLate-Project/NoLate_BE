@@ -104,6 +104,16 @@ sourceSets {
             srcDir("build/generated/source/kapt/main")
         }
     }
+    quickScheduleReliabilityTest {
+        kotlin.srcDir 'src/quickScheduleReliabilityTest/kotlin'
+        compileClasspath += sourceSets.main.output + configurations.testRuntimeClasspath
+        runtimeClasspath += output + compileClasspath
+    }
+}
+
+configurations {
+    quickScheduleReliabilityTestImplementation.extendsFrom testImplementation
+    quickScheduleReliabilityTestRuntimeOnly.extendsFrom testRuntimeOnly
 }
 
 kotlin {
@@ -129,6 +139,14 @@ tasks.named('test') {
     useJUnitPlatform {
         excludeTags 'external'
     }
+}
+
+tasks.register('quickScheduleReliabilityTest', Test) {
+    description = 'Runs the isolated 90% quick-schedule critical-field reliability gate.'
+    group = 'verification'
+    testClassesDirs = sourceSets.quickScheduleReliabilityTest.output.classesDirs
+    classpath = sourceSets.quickScheduleReliabilityTest.runtimeClasspath
+    useJUnitPlatform()
 }
 
 // Local credentials may exist beside application.yml for developer convenience,

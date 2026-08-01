@@ -28,6 +28,7 @@ import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
+import com.noLate.schedule.application.service.QuickScheduleReliabilityTelemetryService
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCalendarStatus
@@ -75,6 +76,7 @@ class AccountCleanupService(
     private val notificationActionReceiptRepository: ScheduleNotificationActionReceiptRepository,
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService,
     private val eventPublisher: ApplicationEventPublisher,
+    private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
 ) {
     /**
      * Owner withdrawal and participant mutation share one member-row order. The first scan is only
@@ -213,6 +215,7 @@ class AccountCleanupService(
         pushDeliveryRepository.deleteAllByMemberId(memberId)
         pushHistoryRepository.deleteAllByMemberId(memberId)
         notificationActionReceiptRepository.deleteAllByMemberId(memberId)
+        quickScheduleReliabilityTelemetryService?.deleteForMember(memberId)
         departureStatusRepository.deleteAllByMemberId(memberId)
         travelPlanRepository.deleteAllByMemberId(memberId)
         invitationRepository.deleteAllByOwnerMemberId(memberId)

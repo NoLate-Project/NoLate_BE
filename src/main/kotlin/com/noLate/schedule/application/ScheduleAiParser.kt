@@ -1,5 +1,7 @@
 package com.noLate.schedule.application
 
+import com.noLate.schedule.domain.ScheduleRecognitionAlternative
+
 /**
  * AI가 추출한 일정 후보와 각 필드의 신뢰도를 전달한다.
  *
@@ -34,6 +36,23 @@ data class ScheduleAiParseOutcome(
 )
 
 /**
+ * AI가 생성한 문장을 받지 않고, 전달된 음성 인식 후보 중 하나의 인덱스만 받는다.
+ *
+ * 애플리케이션 계층은 이 인덱스를 원래 후보 목록에 다시 매핑하므로 모델이 날짜, 시간,
+ * 장소 또는 일정 내용을 새로 만들어 전사문에 끼워 넣을 수 없다.
+ */
+data class ScheduleTranscriptCorrectionResult(
+    val selectedIndex: Int? = null,
+    val confidence: Double = 0.0,
+)
+
+data class ScheduleTranscriptCorrectionOutcome(
+    val attempted: Boolean,
+    val result: ScheduleTranscriptCorrectionResult? = null,
+    val warning: String? = null,
+)
+
+/**
  * 일정 AI 분석기의 애플리케이션 포트다.
  *
  * 서비스 계층이 Groq 같은 특정 공급자에 의존하지 않도록 추상화하며,
@@ -44,4 +63,16 @@ interface ScheduleAiParser {
      * 개인정보가 제거된 원문과 기준 날짜를 받아 구조화된 일정 후보를 반환한다.
      */
     fun parse(text: String, referenceDate: String): ScheduleAiParseOutcome
+
+    /**
+     * 동일 발화의 음성 인식 후보 중 가장 신뢰할 수 있는 문장을 고른다.
+     *
+     * 기존 구현과 테스트 대역의 호환성을 위해 기본 구현은 호출하지 않은 폴백을 반환한다.
+     * 구현체는 반드시 후보를 재작성하지 않고 [ScheduleTranscriptCorrectionResult.selectedIndex]만
+     * 반환해야 한다.
+     */
+    fun correctTranscript(
+        candidates: List<ScheduleRecognitionAlternative>,
+        referenceDate: String,
+    ): ScheduleTranscriptCorrectionOutcome = ScheduleTranscriptCorrectionOutcome(attempted = false)
 }

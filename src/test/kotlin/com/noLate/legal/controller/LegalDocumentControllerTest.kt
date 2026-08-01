@@ -55,6 +55,7 @@ class LegalDocumentControllerTest {
         assertTrue(response.success)
         assertEquals(LegalDocumentType.PRIVACY_POLICY, document.type)
         assertEquals("개인정보처리방침", document.title)
+        assertEquals("2026.08.01", document.version)
         assertTrue(document.sections.any { it.title.contains("외부 캘린더") })
         assertTrue(document.sections.any { section ->
             section.body.any { it.contains("Google Calendar") && it.contains("서버에는 저장하지 않습니다") }

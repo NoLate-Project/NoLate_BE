@@ -14,7 +14,12 @@ import com.noLate.schedule.domain.ScheduleImportSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
+import com.noLate.schedule.domain.ScheduleRecognitionAlternative
 import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.QuickScheduleClientPlatform
+import com.noLate.schedule.domain.QuickScheduleFeedbackOutcome
+import com.noLate.schedule.domain.QuickScheduleParseFeedbackDto
+import com.noLate.schedule.domain.QuickScheduleVerificationSignal
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -54,10 +59,28 @@ class ScheduleController(
             // 값이 있으면 음성/OCR 정규화 정책이 적용되도록 서비스 계층까지 전달한다.
             inputType = request.inputType ?: ScheduleParseInputType.TEXT,
             recognitionConfidence = request.recognitionConfidence,
+            recognitionAlternatives = request.recognitionAlternatives,
             referenceDate = request.referenceDate,
             defaultDurationMinutes = request.defaultDurationMinutes,
+            clientPlatform = request.clientPlatform ?: QuickScheduleClientPlatform.UNKNOWN,
         )
         return ApiResponse.success(result)
+    }
+
+    /** 원문 없이 저장/취소 및 사용자 확인 여부만 신뢰도 보정 표본으로 남긴다. */
+    @Operation(summary = "빠른 일정 분석 품질 피드백 기록")
+    @PostMapping("/parse/{analysisId}/feedback")
+    fun recordQuickScheduleParseFeedback(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @PathVariable analysisId: String,
+        @RequestBody request: QuickScheduleParseFeedbackRequest,
+    ): ApiResponse<Unit> {
+        scheduleUseCase.recordQuickScheduleFeedback(
+            memberId = requireMemberId(principal),
+            analysisId = analysisId,
+            feedback = request.toDto(),
+        )
+        return ApiResponse.success(Unit)
     }
 
     /**
@@ -332,9 +355,27 @@ data class ParseScheduleTextRequest(
     val text: String,
     val inputType: ScheduleParseInputType? = null,
     val recognitionConfidence: Double? = null,
+    val recognitionAlternatives: List<ScheduleRecognitionAlternative> = emptyList(),
     val referenceDate: String? = null,
     val defaultDurationMinutes: Int? = null,
+    val clientPlatform: QuickScheduleClientPlatform? = null,
 )
+
+data class QuickScheduleParseFeedbackRequest(
+    val outcome: QuickScheduleFeedbackOutcome,
+    val date: QuickScheduleVerificationSignal = QuickScheduleVerificationSignal.UNTOUCHED,
+    val time: QuickScheduleVerificationSignal = QuickScheduleVerificationSignal.UNTOUCHED,
+    val destination: QuickScheduleVerificationSignal = QuickScheduleVerificationSignal.UNTOUCHED,
+    val globalConfirmed: Boolean = false,
+) {
+    fun toDto() = QuickScheduleParseFeedbackDto(
+        outcome = outcome,
+        date = date,
+        time = time,
+        destination = destination,
+        globalConfirmed = globalConfirmed,
+    )
+}
 
 data class AddScheduleRequest(
     val calendarId: Long? = null,

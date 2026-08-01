@@ -9,6 +9,7 @@ import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleNotificationActionIdempotencyService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
+import com.noLate.schedule.application.service.QuickScheduleReliabilityTelemetryService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportResultDto
 import com.noLate.schedule.domain.ScheduleImportSource
@@ -16,6 +17,9 @@ import com.noLate.schedule.domain.ScheduleOriginSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
+import com.noLate.schedule.domain.ScheduleRecognitionAlternative
+import com.noLate.schedule.domain.QuickScheduleClientPlatform
+import com.noLate.schedule.domain.QuickScheduleParseFeedbackDto
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Isolation
@@ -38,6 +42,7 @@ class ScheduleUseCase(
     private val clock: Clock = Clock.systemUTC(),
     private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
     private val scheduleTravelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
+    private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
@@ -82,13 +87,15 @@ class ScheduleUseCase(
         referenceDate: String?,
         defaultDurationMinutes: Int?,
         recognitionConfidence: Double? = null,
+        recognitionAlternatives: List<ScheduleRecognitionAlternative> = emptyList(),
     ): ScheduleParseDto {
         return scheduleHybridParserService.parse(
-            text,
-            inputType,
-            referenceDate,
-            defaultDurationMinutes,
-            recognitionConfidence,
+            text = text,
+            inputType = inputType,
+            referenceDate = referenceDate,
+            defaultDurationMinutes = defaultDurationMinutes,
+            recognitionConfidence = recognitionConfidence,
+            recognitionAlternatives = recognitionAlternatives,
         )
     }
 
@@ -107,28 +114,51 @@ class ScheduleUseCase(
         referenceDate: String?,
         defaultDurationMinutes: Int?,
         recognitionConfidence: Double? = null,
+        recognitionAlternatives: List<ScheduleRecognitionAlternative> = emptyList(),
+        clientPlatform: QuickScheduleClientPlatform = QuickScheduleClientPlatform.UNKNOWN,
     ): ScheduleParseDto {
         val parsed = scheduleHybridParserService.parse(
-            text,
-            inputType,
-            referenceDate,
-            defaultDurationMinutes,
-            recognitionConfidence,
+            text = text,
+            inputType = inputType,
+            referenceDate = referenceDate,
+            defaultDurationMinutes = defaultDurationMinutes,
+            recognitionConfidence = recognitionConfidence,
+            recognitionAlternatives = recognitionAlternatives,
         )
-        if (parsed.origin != null) return parsed
+        val result = if (parsed.origin != null) {
+            parsed
+        } else {
+            val defaultOrigin = favoritePlaceService.getDefaultOrigin(memberId)
+            if (defaultOrigin == null) {
+                parsed
+            } else {
+                parsed.copy(
+                    origin = SchedulePlaceDto(
+                        name = defaultOrigin.placeName?.takeIf { it.isNotBlank() } ?: defaultOrigin.label,
+                        address = defaultOrigin.address,
+                        lat = defaultOrigin.lat,
+                        lng = defaultOrigin.lng,
+                    ),
+                    originSource = ScheduleOriginSource.FAVORITE_DEFAULT,
+                    originRequired = false,
+                    missingFields = parsed.missingFields.filterNot { it == "origin" },
+                )
+            }
+        }
+        return quickScheduleReliabilityTelemetryService?.recordParse(
+            memberId = memberId,
+            inputType = inputType,
+            clientPlatform = clientPlatform,
+            result = result,
+        ) ?: result
+    }
 
-        val defaultOrigin = favoritePlaceService.getDefaultOrigin(memberId) ?: return parsed
-        return parsed.copy(
-            origin = SchedulePlaceDto(
-                name = defaultOrigin.placeName?.takeIf { it.isNotBlank() } ?: defaultOrigin.label,
-                address = defaultOrigin.address,
-                lat = defaultOrigin.lat,
-                lng = defaultOrigin.lng,
-            ),
-            originSource = ScheduleOriginSource.FAVORITE_DEFAULT,
-            originRequired = false,
-            missingFields = parsed.missingFields.filterNot { it == "origin" },
-        )
+    fun recordQuickScheduleFeedback(
+        memberId: Long,
+        analysisId: String,
+        feedback: QuickScheduleParseFeedbackDto,
+    ) {
+        quickScheduleReliabilityTelemetryService?.recordFeedback(memberId, analysisId, feedback)
     }
 
     /**

@@ -29,6 +29,37 @@ enum class ScheduleParseSource {
 }
 
 /**
+ * 빠른 일정 결과를 사용자가 어느 정도 신뢰해도 되는지 나타내는 보수적인 등급이다.
+ *
+ * HIGH는 핵심 필드(날짜·시간·목적지)의 합산 점수가 90% 이상일 때만 사용한다.
+ * REVIEW는 누락, 충돌, 낮은 미디어 인식 신뢰도처럼 저장 전 확인이 필요한 결과다.
+ */
+enum class ScheduleParseConfidenceLevel {
+    HIGH,
+    MEDIUM,
+    REVIEW,
+}
+
+data class ScheduleFieldConfidenceDto(
+    val date: Double = 0.0,
+    val time: Double = 0.0,
+    val destination: Double = 0.0,
+)
+
+data class ScheduleParseConfidenceDto(
+    /** 0.0~1.0 범위의 핵심 필드 가중 평균이다. */
+    val overall: Double,
+    val level: ScheduleParseConfidenceLevel,
+
+    /** 사진 OCR 또는 음성 STT 엔진이 준 입력 인식 참고값이다. 텍스트 입력에는 null이다. */
+    val recognition: Double? = null,
+    val fields: ScheduleFieldConfidenceDto,
+
+    /** 점수를 낮추거나 사용자 확인을 요구한 이유다. */
+    val reasons: List<String> = emptyList(),
+)
+
+/**
  * 자유 형식 일정 텍스트를 저장 폼에 반영하기 위한 미리보기 DTO다.
  *
  * 이 DTO는 일정을 즉시 저장하지 않는다. 프론트가 분석 결과와 경고를 보여주고
@@ -71,4 +102,39 @@ data class ScheduleParseDto(
     /** 추정 또는 검토가 필요한 이유와 누락 필드 목록이다. */
     val warnings: List<String> = emptyList(),
     val missingFields: List<String> = emptyList(),
+
+    /** 원본 인식률과 일정 필드 신뢰도를 구분한 사용자 표시용 진단 정보다. */
+    val confidence: ScheduleParseConfidenceDto? = null,
+
+    /** 원문을 저장하지 않는 품질 피드백 연결용 임의 UUID다. */
+    val analysisId: String? = null,
+
+    /** 신뢰도 산식이 바뀌었을 때 점수를 같은 기준끼리 비교하기 위한 버전이다. */
+    val confidenceVersion: String? = null,
+)
+
+enum class QuickScheduleClientPlatform {
+    IOS,
+    ANDROID,
+    UNKNOWN,
+}
+
+enum class QuickScheduleFeedbackOutcome {
+    PENDING,
+    SAVED,
+    CANCELLED,
+}
+
+enum class QuickScheduleVerificationSignal {
+    UNTOUCHED,
+    USER_CONFIRMED,
+    USER_CORRECTED,
+}
+
+data class QuickScheduleParseFeedbackDto(
+    val outcome: QuickScheduleFeedbackOutcome,
+    val date: QuickScheduleVerificationSignal = QuickScheduleVerificationSignal.UNTOUCHED,
+    val time: QuickScheduleVerificationSignal = QuickScheduleVerificationSignal.UNTOUCHED,
+    val destination: QuickScheduleVerificationSignal = QuickScheduleVerificationSignal.UNTOUCHED,
+    val globalConfirmed: Boolean = false,
 )

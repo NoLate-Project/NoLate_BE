@@ -20,6 +20,17 @@ class ScheduleControllerRequestTest {
             {
               "text": "수요일 저녁 7시 강남역에서 판교 네이버까지",
               "inputType": "VOICE_TRANSCRIPT",
+              "recognitionConfidence": 0.74,
+              "recognitionAlternatives": [
+                {
+                  "text": "수요일 저녁 7시 강남역에서 판교 네이버까지",
+                  "confidence": 0.74
+                },
+                {
+                  "text": "수요일 저녁 7시 강남역에서 판교 네이버까지 회의",
+                  "confidence": 0.91
+                }
+              ],
               "referenceDate": "2026-07-10",
               "defaultDurationMinutes": 60
             }
@@ -29,8 +40,24 @@ class ScheduleControllerRequestTest {
 
         assertEquals("수요일 저녁 7시 강남역에서 판교 네이버까지", request.text)
         assertEquals(ScheduleParseInputType.VOICE_TRANSCRIPT, request.inputType)
+        assertEquals(0.74, request.recognitionConfidence)
+        assertEquals(2, request.recognitionAlternatives.size)
+        assertEquals(
+            "수요일 저녁 7시 강남역에서 판교 네이버까지 회의",
+            request.recognitionAlternatives[1].text,
+        )
+        assertEquals(0.91, request.recognitionAlternatives[1].confidence)
         assertEquals("2026-07-10", request.referenceDate)
         assertEquals(60, request.defaultDurationMinutes)
+    }
+
+    @Test
+    fun `older parse request remains valid without recognition alternatives`() {
+        val request = objectMapper.readValue<ParseScheduleTextRequest>(
+            """{"text":"내일 오후 3시 강남역 회의","inputType":"VOICE_TRANSCRIPT"}""",
+        )
+
+        assertEquals(0, request.recognitionAlternatives.size)
     }
 
     @Test

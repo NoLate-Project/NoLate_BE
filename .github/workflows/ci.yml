@@ -36,7 +36,9 @@ jobs:
           java-version: 21
           cache: gradle
       - run: chmod +x gradlew
-      - run: ./gradlew --no-daemon clean test bootWar
+      - name: Enforce quick-schedule 90% reliability gate
+        run: ./gradlew --no-daemon clean quickScheduleReliabilityTest
+      - run: ./gradlew --no-daemon test bootWar
       - name: Verify WAR contains no credential files
         run: |
           WAR_FILE="$(find build/libs -name '*.war' ! -name '*plain*' | head -n 1)"

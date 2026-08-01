@@ -3,8 +3,12 @@ package com.noLate.schedule.application.service
 import com.noLate.schedule.application.ScheduleAiParseOutcome
 import com.noLate.schedule.application.ScheduleAiParseResult
 import com.noLate.schedule.application.ScheduleAiParser
+import com.noLate.schedule.application.ScheduleTranscriptCorrectionOutcome
+import com.noLate.schedule.application.ScheduleTranscriptCorrectionResult
+import com.noLate.schedule.domain.ScheduleParseConfidenceLevel
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.ScheduleParseSource
+import com.noLate.schedule.domain.ScheduleRecognitionAlternative
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -16,6 +20,26 @@ import org.junit.jupiter.api.Test
  */
 class ScheduleHybridParserServiceTest {
     private val ruleParser = ScheduleTextParserService()
+
+    @Test
+    fun `removes exhibition purpose from voice destination`() {
+        val service = ScheduleHybridParserService(
+            ruleParser,
+            RecordingAiParser(ScheduleAiParseOutcome(attempted = false)),
+        )
+
+        val result = service.parse(
+            text = "8월 24일 오후 2시 코엑스 전시",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-08-01",
+            defaultDurationMinutes = 60,
+            recognitionConfidence = 0.95,
+        )
+
+        assertEquals("2026-08-24", result.date)
+        assertEquals("14:00", result.time)
+        assertEquals("코엑스", result.destination?.name)
+    }
 
     @Test
     fun `does not call AI when rule parser found date time and destination`() {
@@ -286,7 +310,10 @@ class ScheduleHybridParserServiceTest {
         assertEquals("일정 내용: 고등학교 친구와 회식", result.notes)
         assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
         assertTrue(result.aiAttempted)
-        assertFalse(result.needsReview)
+        // 모델 자기평가만으로 채운 필드는 현장 보정 데이터가 쌓이기 전까지 90% 이상으로
+        // 자동 확정하지 않는다. 값은 채우되 사용자가 한 번 확인하게 하는 것이 현재 계약이다.
+        assertTrue(result.needsReview)
+        assertEquals(ScheduleParseConfidenceLevel.MEDIUM, result.confidence?.level)
     }
 
     @Test
@@ -397,6 +424,134 @@ class ScheduleHybridParserServiceTest {
     }
 
     @Test
+    fun `selects an exact supplied voice candidate before rule parsing`() {
+        val aiParser = RecordingAiParser(
+            outcome = ScheduleAiParseOutcome(attempted = true),
+            correctionOutcome = ScheduleTranscriptCorrectionOutcome(
+                attempted = true,
+                result = ScheduleTranscriptCorrectionResult(
+                    selectedIndex = 1,
+                    confidence = 0.96,
+                ),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "내일 강남역 회의",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-02",
+            defaultDurationMinutes = 60,
+            recognitionConfidence = 0.71,
+            recognitionAlternatives = listOf(
+                ScheduleRecognitionAlternative(
+                    text = "내일 오후 3시 강남역 회의",
+                    confidence = 0.93,
+                ),
+            ),
+        )
+
+        assertEquals(1, aiParser.correctionCalls)
+        assertEquals(0, aiParser.calls)
+        assertEquals("2026-07-03", result.date)
+        assertEquals("15:00", result.time)
+        assertEquals("강남역", result.destination?.name)
+        assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
+        assertTrue(result.aiAttempted)
+        assertTrue(result.needsReview)
+        assertTrue(result.warnings.any { "다른 음성 인식 후보" in it })
+    }
+
+    @Test
+    fun `keeps original voice transcript when candidate selection is uncertain`() {
+        val aiParser = RecordingAiParser(
+            outcome = ScheduleAiParseOutcome(attempted = true),
+            correctionOutcome = ScheduleTranscriptCorrectionOutcome(
+                attempted = true,
+                result = ScheduleTranscriptCorrectionResult(
+                    selectedIndex = 1,
+                    confidence = 0.64,
+                ),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "내일 강남역 회의",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-02",
+            defaultDurationMinutes = 60,
+            recognitionAlternatives = listOf(
+                ScheduleRecognitionAlternative("내일 오후 3시 강남역 회의", 0.93),
+            ),
+        )
+
+        assertEquals(1, aiParser.correctionCalls)
+        // 원문에는 시간이 없으므로 기존 음성 정책대로 일정 필드 AI 추론은 호출하지 않는다.
+        assertEquals(0, aiParser.calls)
+        assertNull(result.time)
+        assertTrue("time" in result.missingFields)
+        assertEquals(ScheduleParseSource.RULE_FALLBACK, result.parseSource)
+        assertTrue(result.aiAttempted)
+        assertTrue(result.warnings.any { "불확실해 첫 번째 인식 결과" in it })
+    }
+
+    @Test
+    fun `masks every voice candidate before AI selection`() {
+        val aiParser = RecordingAiParser(
+            outcome = ScheduleAiParseOutcome(attempted = true),
+            correctionOutcome = ScheduleTranscriptCorrectionOutcome(
+                attempted = true,
+                result = ScheduleTranscriptCorrectionResult(selectedIndex = 0, confidence = 0.95),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        service.parse(
+            text = "내일 오후 3시 강남역 010-1234-5678 회의",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-07-02",
+            defaultDurationMinutes = 60,
+            recognitionAlternatives = listOf(
+                ScheduleRecognitionAlternative(
+                    "내일 오후 3시 강남역 test@example.com 회의",
+                    0.81,
+                ),
+            ),
+        )
+
+        val sentTexts = aiParser.lastCorrectionCandidates.map { it.text }
+        assertTrue(sentTexts.any { "[PHONE]" in it })
+        assertTrue(sentTexts.any { "[EMAIL]" in it })
+        assertTrue(sentTexts.none { "010-1234-5678" in it })
+        assertTrue(sentTexts.none { "test@example.com" in it })
+    }
+
+    @Test
+    fun `does not attempt transcript selection outside voice input`() {
+        val aiParser = RecordingAiParser(
+            outcome = ScheduleAiParseOutcome(attempted = true),
+            correctionOutcome = ScheduleTranscriptCorrectionOutcome(
+                attempted = true,
+                result = ScheduleTranscriptCorrectionResult(selectedIndex = 1, confidence = 1.0),
+            ),
+        )
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        service.parse(
+            text = "내일 오후 3시 강남역 회의",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-07-02",
+            defaultDurationMinutes = 60,
+            recognitionAlternatives = listOf(
+                ScheduleRecognitionAlternative("내일 오후 5시 서울역 회의", 1.0),
+            ),
+        )
+
+        assertEquals(0, aiParser.correctionCalls)
+    }
+
+    @Test
     fun `low confidence media recognition is always returned for review`() {
         val aiParser = RecordingAiParser(ScheduleAiParseOutcome(attempted = true))
         val service = ScheduleHybridParserService(ruleParser, aiParser)
@@ -470,14 +625,27 @@ class ScheduleHybridParserServiceTest {
      */
     private class RecordingAiParser(
         private val outcome: ScheduleAiParseOutcome,
+        private val correctionOutcome: ScheduleTranscriptCorrectionOutcome =
+            ScheduleTranscriptCorrectionOutcome(attempted = false),
     ) : ScheduleAiParser {
         var calls: Int = 0
         var lastText: String? = null
+        var correctionCalls: Int = 0
+        var lastCorrectionCandidates: List<ScheduleRecognitionAlternative> = emptyList()
 
         override fun parse(text: String, referenceDate: String): ScheduleAiParseOutcome {
             calls += 1
             lastText = text
             return outcome
+        }
+
+        override fun correctTranscript(
+            candidates: List<ScheduleRecognitionAlternative>,
+            referenceDate: String,
+        ): ScheduleTranscriptCorrectionOutcome {
+            correctionCalls += 1
+            lastCorrectionCandidates = candidates
+            return correctionOutcome
         }
     }
 }
