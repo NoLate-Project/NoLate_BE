@@ -23,6 +23,7 @@ import com.noLate.sharing.domain.SharingReportStatus
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.beans.factory.annotation.Autowired
@@ -62,6 +63,7 @@ class NoLateMySqlContainer(imageName: String) :
     SharingBlockPolicy::class,
     SharingSafetyService::class,
 )
+@Tag("mysql")
 @Testcontainers(disabledWithoutDocker = false)
 @TestPropertySource(properties = ["schedule.sharing.enabled=true"])
 class SharedCalendarMySqlConcurrencyIntegrationTest @Autowired constructor(
