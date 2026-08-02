@@ -370,11 +370,68 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
         assertTrue(notificationDeviceTokenRepository.findAll().isEmpty())
     }
 
+    @Test
+    fun `ACK capability v1 registration persists an explicit measurable client contract`() {
+        val memberId = 900_401L
+
+        registerToken(
+            memberId = memberId,
+            deviceId = "ack-capable-device",
+            platform = PushPlatform.ANDROID,
+            token = "ack-capable-token",
+            deliveryAckCapabilityVersion = 1,
+        )
+
+        assertEquals(
+            1,
+            notificationDeviceTokenRepository.findAllByMemberId(memberId)
+                .single()
+                .deliveryAckCapabilityVersion,
+        )
+    }
+
+    @Test
+    fun `unsupported ACK capability version is rejected before persistence`() {
+        val error = assertThrows<BusinessException> {
+            notificationTokenService.registerToken(
+                memberId = 900_402L,
+                deviceId = "future-capability-device",
+                platform = PushPlatform.IOS,
+                token = "future-capability-token",
+                accessTokenIssuedAt = TEST_ISSUED_AT,
+                accessTokenSessionGeneration = 0,
+                deliveryAckCapabilityVersion = 2,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_INPUT, error.errorCode)
+        assertTrue(notificationDeviceTokenRepository.findAll().isEmpty())
+    }
+
+    @Test
+    fun `ACK capability registration requires a stable device identity`() {
+        val error = assertThrows<BusinessException> {
+            notificationTokenService.registerToken(
+                memberId = 900_403L,
+                deviceId = null,
+                platform = PushPlatform.ANDROID,
+                token = "capability-without-device-token",
+                accessTokenIssuedAt = TEST_ISSUED_AT,
+                accessTokenSessionGeneration = 0,
+                deliveryAckCapabilityVersion = 1,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_INPUT, error.errorCode)
+        assertTrue(notificationDeviceTokenRepository.findAll().isEmpty())
+    }
+
     private fun registerToken(
         memberId: Long,
         deviceId: String?,
         platform: PushPlatform,
         token: String,
+        deliveryAckCapabilityVersion: Int? = null,
     ) {
         ensureActiveMember(memberId)
         notificationTokenService.registerToken(
@@ -384,6 +441,7 @@ class NotificationTokenServiceIntegrationTest @Autowired constructor(
             token = token,
             accessTokenIssuedAt = TEST_ISSUED_AT,
             accessTokenSessionGeneration = 0,
+            deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
         )
     }
 

@@ -30,6 +30,11 @@ class ScheduleNotificationInputFingerprintTest {
         val fingerprint = ScheduleNotificationInputFingerprint.fromSchedule(1L, original)
 
         assertEquals(
+            "48698ceeb3426adf2205503785c1ebd0ea789d7387ae8a45f023809972b362de",
+            fingerprint,
+            "STANDARD must retain the pre-alarm deployment fingerprint",
+        )
+        assertEquals(
             fingerprint,
             ScheduleNotificationInputFingerprint.fromSchedule(1L, original.copy()),
         )
@@ -60,6 +65,7 @@ class ScheduleNotificationInputFingerprintTest {
             original.copy(notificationEnabled = false),
             original.copy(notificationLeadMinutes = 90),
             original.copy(notificationIntervalMinutes = 10),
+            original.copy(alertMode = ScheduleAlertMode.ALARM),
             original.copy(route = mapper.readTree("""{"a":1,"b":3}""")),
         )
 
@@ -69,6 +75,48 @@ class ScheduleNotificationInputFingerprintTest {
                 ScheduleNotificationInputFingerprint.fromSchedule(1L, edited),
             )
         }
+    }
+
+    @Test
+    fun `participant STANDARD fingerprint remains legacy-compatible and ALARM changes it`() {
+        val schedule = scheduleDto()
+        val standardPlan = ScheduleTravelPlanDto(
+            scheduleId = requireNotNull(schedule.id),
+            memberId = 2L,
+            status = ScheduleTravelPlanStatus.READY,
+            travelMinutes = schedule.travelMinutes,
+            departAt = schedule.departAt,
+            travelMode = schedule.travelMode,
+            origin = schedule.origin,
+            destination = schedule.destination,
+            route = schedule.route,
+            notificationEnabled = true,
+            notificationLeadMinutes = 60,
+            notificationIntervalMinutes = 20,
+            alertMode = ScheduleAlertMode.STANDARD,
+        )
+
+        val standard = ScheduleNotificationInputFingerprint.fromTravelPlan(
+            memberId = 2L,
+            schedule = schedule,
+            plan = standardPlan,
+        )
+        val alarm = ScheduleNotificationInputFingerprint.fromTravelPlan(
+            memberId = 2L,
+            schedule = schedule,
+            plan = standardPlan.copy(alertMode = ScheduleAlertMode.ALARM),
+        )
+
+        assertEquals(
+            "edcf0fe38f09e1caec9fd5348f4bd6fe517d6e3d67035bfaea6dea06cc57f646",
+            standard,
+            "participant STANDARD must retain the pre-alarm deployment fingerprint",
+        )
+        assertEquals(
+            "bb6d16b58b23242d1d5562d56c04114eb0d40be078a322a0bcae121a367ad33f",
+            alarm,
+        )
+        assertNotEquals(standard, alarm)
     }
 
     @Test

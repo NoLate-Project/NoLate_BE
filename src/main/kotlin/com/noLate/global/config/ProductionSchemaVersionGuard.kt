@@ -135,7 +135,7 @@ class ProductionSchemaVersionGuard(
                 """
                 SELECT version, COUNT(*) AS marker_count
                 FROM application_schema_migrations
-                WHERE version IN (?, ?, ?, ?)
+                WHERE version IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 GROUP BY version
                 """.trimIndent(),
                 { resultSet, _ ->
@@ -169,12 +169,36 @@ class ProductionSchemaVersionGuard(
         const val ACCOUNT_DELETION_SCHEMA_VERSION = "2026-07-26-account-deletion-v1"
         const val SCHEDULE_CALENDAR_CACHE_REVISION_SCHEMA_VERSION =
             "2026-07-27-schedule-calendar-cache-revision-v1"
+        const val DEPARTURE_ALARM_MODE_SCHEMA_VERSION =
+            "2026-07-29-departure-alarm-mode-v1"
+        const val DEPARTURE_ALARM_SYNC_SCHEMA_VERSION =
+            "2026-07-29-departure-alarm-sync-v1"
+        /**
+         * Also gates the versioned immutable target-arrival snapshot and false-safe ground truth.
+         * The reviewed v1 migration is still pre-production and its postcondition verifies the
+         * complete contract before writing this marker.
+         */
+        const val PUSH_ETA_TRUST_SCHEMA_VERSION = "2026-07-31-push-eta-trust-v1"
+        const val DEPARTURE_ALARM_FIRE_EVIDENCE_SCHEMA_VERSION =
+            "2026-08-01-departure-alarm-fire-evidence-v1"
+        const val DEPARTURE_ALARM_SCHEDULE_RECEIPT_SCHEMA_VERSION =
+            "2026-08-01-departure-alarm-schedule-receipts-v1"
+        const val SHARING_SAFETY_SCHEMA_VERSION = "2026-08-01-sharing-safety-v1"
+        const val PUSH_DELIVERY_ACK_CAPABILITY_SCHEMA_VERSION =
+            "2026-08-01-push-delivery-ack-capability-v1"
 
         val REQUIRED_SCHEMA_VERSIONS = listOf(
             PUSH_RELIABILITY_SCHEMA_VERSION,
             APPLE_TOKEN_LIFECYCLE_SCHEMA_VERSION,
             ACCOUNT_DELETION_SCHEMA_VERSION,
             SCHEDULE_CALENDAR_CACHE_REVISION_SCHEMA_VERSION,
+            DEPARTURE_ALARM_MODE_SCHEMA_VERSION,
+            DEPARTURE_ALARM_SYNC_SCHEMA_VERSION,
+            PUSH_ETA_TRUST_SCHEMA_VERSION,
+            DEPARTURE_ALARM_FIRE_EVIDENCE_SCHEMA_VERSION,
+            DEPARTURE_ALARM_SCHEDULE_RECEIPT_SCHEMA_VERSION,
+            SHARING_SAFETY_SCHEMA_VERSION,
+            PUSH_DELIVERY_ACK_CAPABILITY_SCHEMA_VERSION,
         )
     }
 }

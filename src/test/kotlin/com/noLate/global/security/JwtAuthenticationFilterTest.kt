@@ -75,24 +75,31 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    fun `공개 달력 메타데이터 GET은 bearer가 있어도 회원 DB를 조회하지 않는다`() {
+    fun `캘린더 메타데이터 GET은 bearer를 검증해 회원 인증을 설정한다`() {
+        val token = tokenProvider.createAccessToken(1L, "member", 0)
+        val issuedAt = tokenProvider.getIssuedAt(token)
+        whenever(
+            memberService.getPrincipalById(1L, issuedAt, 0)
+        ).thenReturn(
+            MemberPrincipal(
+                1L,
+                "member@example.com",
+                "member",
+                issuedAt,
+                0,
+            )
+        )
         val request = MockHttpServletRequest("GET", "/nolate/api/calendar/days").apply {
             contextPath = "/nolate"
             servletPath = "/api/calendar/days"
-            addHeader(
-                "Authorization",
-                "Bearer ${tokenProvider.createAccessToken(1L, "member", 0)}",
-            )
+            addHeader("Authorization", "Bearer $token")
         }
 
         filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
 
-        verify(memberService, never()).getPrincipalById(
-            org.mockito.kotlin.any(),
-            org.mockito.kotlin.any(),
-            org.mockito.kotlin.any(),
-        )
-        kotlin.test.assertNull(SecurityContextHolder.getContext().authentication)
+        verify(memberService).getPrincipalById(1L, issuedAt, 0)
+        val principal = SecurityContextHolder.getContext().authentication?.principal as MemberPrincipal
+        kotlin.test.assertEquals(1L, principal.id)
     }
 
     @Test

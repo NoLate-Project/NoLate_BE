@@ -48,6 +48,32 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
+    fun `sharing safety migration verifies moderation and acceptance tables before the production marker`() {
+        val migration = Files.readString(
+            Path.of("docs/schedule/migrations/2026-08-01-sharing-safety.sql"),
+        )
+        val blocksTable = migration.indexOf("CREATE TABLE sharing_member_blocks")
+        val reportsTable = migration.indexOf("CREATE TABLE sharing_reports")
+        val acceptancesTable = migration.indexOf("CREATE TABLE schedule_share_invitation_acceptances")
+        val postcondition = migration.indexOf("CALL assert_sharing_safety_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(blocksTable >= 0)
+        assertTrue(reportsTable > blocksTable)
+        assertTrue(acceptancesTable > reportsTable)
+        assertTrue(postcondition > acceptancesTable)
+        assertTrue(marker > postcondition)
+        assertTrue(migration.contains(ProductionSchemaVersionGuard.SHARING_SAFETY_SCHEMA_VERSION))
+        assertTrue(migration.contains("uk_sharing_member_blocks_pair"))
+        assertTrue(migration.contains("chk_sharing_member_blocks_not_self"))
+        assertTrue(migration.contains("chk_sharing_reports_not_self"))
+        assertTrue(migration.contains("uk_share_invitation_acceptance_member"))
+        assertTrue(migration.contains("moderator_member_id"))
+    }
+
+    @Test
     fun `production refuses automatic Hibernate schema mutation`() {
         val error = assertThrows(IllegalStateException::class.java) {
             guard(markerDatabase(), ddlMode = "update").afterSingletonsInstantiated()

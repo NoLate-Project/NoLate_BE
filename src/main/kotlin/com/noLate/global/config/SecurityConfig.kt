@@ -173,8 +173,11 @@ class SecurityConfig(
                     .requestMatchers(
                         "/",
                         "/robots.txt",
+                        "/.well-known/apple-app-site-association",
+                        "/.well-known/assetlinks.json",
+                        "/sharing-admin",
+                        "/sharing-admin/**",
                         "/api/member/auth/**",
-                        "/api/calendar/days",
                         "/api/legal/**",
                         "/legal/**",
                         "/v3/api-docs/**",

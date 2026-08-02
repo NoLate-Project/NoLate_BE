@@ -13,6 +13,7 @@ import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
+import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.springframework.context.ApplicationEventPublisher
@@ -39,6 +40,7 @@ data class ScheduleDepartureMemberFence(
 class ScheduleDepartureStatusService(
     private val scheduleRepository: ScheduleRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
+    private val pushJobRepository: SchedulePushJobRepository,
     private val scheduleShareRepository: ScheduleShareRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val memberRepository: MemberRepository,
@@ -135,6 +137,14 @@ class ScheduleDepartureStatusService(
         val schedule = scheduleRepository.findActiveForDepartureUpdate(scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
+        // 전역 lock order를 schedule -> push job으로 고정한다. 출발 상태가 최초 전환되는
+        // transaction 안에서 job의 마지막 ETA를 먼저 잠가야 뒤이어 실행되는 cancel이 절대
+        // 도착시각을 지우더라도 동일한 예측을 측정할 수 있다.
+        val pushJob = pushJobRepository.findByScheduleIdAndMemberIdForUpdate(
+            scheduleId,
+            memberId,
+        )
+
         val status = departureStatusRepository.findActiveForUpdate(
             scheduleId = scheduleId,
             memberId = memberId,
@@ -144,6 +154,15 @@ class ScheduleDepartureStatusService(
         )
 
         val firstDeparture = status.keepFirstDeparture(Instant.now(clock))
+        if (firstDeparture && pushJob != null) {
+            status.freezeEtaSnapshot(
+                job = pushJob,
+                // Legacy owner jobs may predate last_eta_travel_mode. A shared participant can
+                // have a different personal mode, so never label that job from the owner route.
+                fallbackTravelMode = schedule.route?.travelMode
+                    ?.takeIf { schedule.memberId == memberId },
+            )
+        }
         val saved = departureStatusRepository.saveAndFlush(status)
 
         if (firstDeparture) {

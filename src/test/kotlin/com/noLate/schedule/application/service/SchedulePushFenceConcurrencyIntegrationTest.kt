@@ -73,6 +73,19 @@ class SchedulePushFenceConcurrencyIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `ETA source TTL 경계에서는 현재 worker lease도 provider fence를 통과하지 못한다`() {
+        val jobId = createClaimedJob(originalDto())
+        val current = oldFence(jobId).copy(
+            expectedCheckCount = 0,
+            sourceExpiresAt = NOW.plusSeconds(1),
+        )
+        val expired = current.copy(sourceExpiresAt = NOW)
+
+        assertTrue(transactions.execute { validator.validate(current) } ?: false)
+        assertFalse(transactions.execute { validator.validate(expired) } ?: true)
+    }
+
+    @Test
     fun `job 없는 공유 편집도 actor와 owner를 잠가 새 job 등록보다 먼저 linearize된다`() {
         ensureActivePushMember(jdbcTemplate, EDITOR_MEMBER_ID)
         val scheduleId = 20L

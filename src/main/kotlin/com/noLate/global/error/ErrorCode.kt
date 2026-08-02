@@ -45,6 +45,11 @@ enum class ErrorCode(
     SCHEDULE_TRAVEL_PLAN_NOT_FOUND("S008", "개인 이동 계획이 존재하지 않습니다."),
     SCHEDULE_CALENDAR_NOT_FOUND("S009", "공유 캘린더가 존재하지 않습니다."),
     SCHEDULE_CALENDAR_MEMBER_NOT_FOUND("S010", "공유 캘린더 멤버가 존재하지 않습니다."),
+    SHARING_INTERACTION_BLOCKED("S011", "차단 관계에 있는 회원과는 공유할 수 없습니다."),
+    SHARING_REPORT_NOT_ALLOWED("S012", "신고할 수 없는 공유 항목입니다."),
+    SHARING_REPORT_RATE_LIMITED("S013", "신고 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."),
+    SHARING_REPORT_NOT_FOUND("S014", "신고 내역이 존재하지 않습니다."),
+    SHARING_MUTATION_RATE_LIMITED("S015", "공유 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."),
 
     // Favorite Place 영역
     FAVORITE_PLACE_CATEGORY_NOT_FOUND("F001", "즐겨찾기 장소 카테고리가 존재하지 않습니다."),

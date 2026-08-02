@@ -14,6 +14,7 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
+import com.noLate.sharing.application.SharingBlockPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -143,6 +144,48 @@ class ScheduleAccessPolicyTest {
         assertFalse(access.canView)
         assertFalse(access.canEdit)
         assertFalse(access.travelEnabled)
+    }
+
+    @Test
+    fun `member block overrides retained direct share and removes travel audience`() {
+        val blockPolicy = mock<SharingBlockPolicy>()
+        val blockedPolicy = ScheduleAccessPolicy(
+            directShares,
+            categoryShares,
+            calendars,
+            calendarMembers,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+            sharingBlockPolicy = blockPolicy,
+        )
+        val schedule = routeSchedule(ownerId = 1L, calendarId = null)
+        whenever(blockPolicy.isInteractionBlocked(2L, 1L)).thenReturn(true)
+        whenever(blockPolicy.blockedCounterpartIds(1L, setOf(1L, 2L)))
+            .thenReturn(setOf(2L))
+        whenever(
+            directShares.findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(
+                10L,
+                ScheduleShareStatus.ACTIVE,
+            )
+        ).thenReturn(
+            listOf(
+                ScheduleShare(
+                    scheduleId = 10L,
+                    ownerMemberId = 1L,
+                    targetMemberId = 2L,
+                    contentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
+                )
+            )
+        )
+
+        val access = blockedPolicy.resolve(memberId = 2L, schedule = schedule)
+
+        assertFalse(access.canView)
+        assertFalse(access.canEdit)
+        assertEquals(listOf(1L), blockedPolicy.travelMemberIds(schedule))
+        verify(directShares, org.mockito.kotlin.never())
+            .findByScheduleIdAndTargetMemberId(10L, 2L)
     }
 
     @Test

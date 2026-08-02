@@ -18,6 +18,7 @@ fun registerAuthenticatedPushToken(
     deviceId: String?,
     platform: PushPlatform,
     token: String,
+    deliveryAckCapabilityVersion: Int? = null,
 ) {
     ensureActivePushMember(jdbcTemplate, memberId)
     tokenService.registerToken(
@@ -27,6 +28,7 @@ fun registerAuthenticatedPushToken(
         token = token,
         accessTokenIssuedAt = FIXTURE_ISSUED_AT,
         accessTokenSessionGeneration = 0,
+        deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
     )
 }
 

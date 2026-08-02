@@ -1,0 +1,31 @@
+- main [ref=e2]:
+  - region [ref=e16]:
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: "N"
+          - generic [ref=e21]: NoLate Operations
+        - heading "공유 안전 큐" [level=1] [ref=e22]
+        - paragraph [ref=e23]: 오래 접수된 신고부터 최대 100건을 보여줍니다.
+      - button "로그아웃" [ref=e24] [cursor=pointer]
+    - generic "신고 상태 요약" [ref=e25]:
+      - generic [ref=e26]:
+        - text: 접수
+        - strong [ref=e27]: "0"
+      - generic [ref=e28]:
+        - text: 검토 중
+        - strong [ref=e29]: "0"
+      - generic [ref=e30]:
+        - text: 처리 완료
+        - strong [ref=e31]: "1"
+      - generic [ref=e32]:
+        - text: 기각
+        - strong [ref=e33]: "0"
+    - generic [ref=e34]:
+      - generic "상태 필터" [ref=e35]:
+        - button "접수" [pressed] [ref=e36] [cursor=pointer]
+        - button "검토 중" [ref=e37] [cursor=pointer]
+        - button "처리 완료" [ref=e38] [cursor=pointer]
+        - button "기각" [ref=e39] [cursor=pointer]
+      - generic [ref=e40]: 2026. 8. 1. 오후 12:12 갱신
+    - generic [ref=e41]: 이 상태의 신고가 없습니다.

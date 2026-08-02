@@ -31,6 +31,15 @@ class PushOutboxDispatchWorkerUnitTest {
     private val clock = Clock.fixed(now, ZoneOffset.UTC)
 
     @Test
+    fun `disabled outbox worker does not recover or claim events`() {
+        assertEquals(0, worker(enabled = false).runDueEvents(now))
+
+        verify(coordinator, never()).recoverStale(any(), any(), any())
+        verify(coordinator, never()).claimNextDue(any(), any())
+        verify(notificationUseCase, never()).redrivePersistedEvent(any(), any(), any())
+    }
+
+    @Test
     fun `confirmed provider failure is retried with the same event before terminal success`() {
         val firstLease = lease(attempt = 1)
         val secondLease = lease(attempt = 2)
@@ -205,6 +214,7 @@ class PushOutboxDispatchWorkerUnitTest {
     }
 
     private fun worker(
+        enabled: Boolean = true,
         batchSize: Int = 10,
         maxAttempts: Int = 3,
     ): PushOutboxDispatchWorker =
@@ -212,7 +222,7 @@ class PushOutboxDispatchWorkerUnitTest {
             notificationUseCase = notificationUseCase,
             coordinator = coordinator,
             clock = clock,
-            enabled = true,
+            enabled = enabled,
             batchSize = batchSize,
             maxAttempts = maxAttempts,
             retryDelaySeconds = 60,

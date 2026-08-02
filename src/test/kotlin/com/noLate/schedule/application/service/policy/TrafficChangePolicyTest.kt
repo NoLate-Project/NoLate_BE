@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.service.policy
 
+import com.noLate.schedule.application.TrafficFailureReasons
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -105,5 +106,63 @@ class TrafficChangePolicyTest {
         assertEquals("지금 출발하세요", message.title)
         assertTrue(message.body.contains("지금 출발"))
         assertTrue(message.body.contains("20분 늘었어요"))
+    }
+
+    @Test
+    fun `정시 도착 불가 결과는 늦지 않는다고 오인시키지 않고 예상 도착시각을 안내한다`() {
+        val predictedArrivalAt = Instant.parse("2026-06-12T02:20:00Z")
+
+        val message = policy.createMessage(
+            scheduleTitle = "회의",
+            previousTravelMinutes = 30,
+            currentTravelMinutes = 50,
+            recommendedDepartureAt = recommendedDepartureAt,
+            decision = DepartureReminderDecision.DEPART_NOW,
+            alertLeadMinutes = alertLeadMinutes,
+            onTimeArrivalPossible = false,
+            predictedArrivalAt = predictedArrivalAt,
+        )
+
+        assertEquals("정시 도착이 어려워요", message.title)
+        assertTrue(message.body.contains("제시간 도착하기 어려워요"))
+        assertTrue(message.body.contains("가장 빠른 예상 도착은 11:20"))
+        assertTrue(message.body.contains("지금 출발"))
+    }
+
+    @Test
+    fun `환승 실패는 지금 출발하면 도착한다는 문구 대신 경로 재확인을 안내한다`() {
+        val message = policy.createMessage(
+            scheduleTitle = "회의",
+            previousTravelMinutes = 30,
+            currentTravelMinutes = 45,
+            recommendedDepartureAt = recommendedDepartureAt,
+            decision = DepartureReminderDecision.DEPART_NOW,
+            alertLeadMinutes = alertLeadMinutes,
+            transferFailureReason = TrafficFailureReasons.TRANSIT_TRANSFER_MISSED,
+        )
+
+        assertEquals("선택한 환승을 놓칠 수 있어요", message.title)
+        assertTrue(message.body.contains("환승 차량을 현재 ETA로는 탈 수 없어요"))
+        assertTrue(message.body.contains("경로를 다시 확인"))
+        assertTrue(!message.body.contains("지금 출발"))
+    }
+
+    @Test
+    fun `환승 시간표 불확실은 알람을 신뢰하지 말고 상태를 확인하라고 안내한다`() {
+        val message = policy.createMessage(
+            scheduleTitle = "회의",
+            previousTravelMinutes = 30,
+            currentTravelMinutes = 30,
+            recommendedDepartureAt = recommendedDepartureAt,
+            decision = DepartureReminderDecision.NONE,
+            alertLeadMinutes = alertLeadMinutes,
+            transferFailureReason = TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN,
+        )
+
+        assertEquals("환승 가능 여부를 확인할 수 없어요", message.title)
+        assertTrue(message.body.contains("환승 시간표나 안전 여유를 확정하지 못했어요"))
+        assertTrue(message.body.contains("기존 출발 알람을 신뢰하지 말고"))
+        assertTrue(message.body.contains("기기 알람 상태"))
+        assertTrue(message.body.contains("경로를 다시 확인"))
     }
 }

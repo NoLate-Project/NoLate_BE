@@ -16,6 +16,12 @@ PushJob snapshot은 다음 조건을 모두 만족할 때만 현재 상태로 �
   완전하고 서로 일관된다.
 - `LIVE_PROVIDER`이면 `stale=false`, `liveFetchedAt`과 `lastLiveTravelMinutes`가 존재하고,
   현재 ETA와 마지막 live ETA가 같다.
+- `TIMETABLE_PROVIDER`이면 방금 조회한 시간표의 provider 취득 시각이 있고 `stale=false`다.
+  실제 추천 출발시각은 `일정시각 - 이동시간`보다 이를 수 있다.
+- 정상 provider snapshot의 `predictedArrivalAt`은 일정 시작 시각을 넘지 않는다. 동일 경로의
+  조회 가능한 차량을 모두 확인해도 정시 도착이 불가능한 경우에만
+  `TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE`, `stale=true`, `confidence=LOW` 조합으로 늦은
+  절대 도착시각을 보존한다.
 
 `CANCELED`, `FAILED`, `COMPLETED`, 이전 일정/경로 snapshot과 migration 전 provenance가 없는
 legacy row는 거부한다. 이 경우 현재 선택 경로 또는 canonical 저장 이동 시간으로 명시적인 stale
@@ -25,6 +31,9 @@ fallback을 만들며, 현재 경로도 유효하지 않으면 ETA를 null로 �
 
 - `LIVE_PROVIDER`: worker의 마지막 평가에서 provider가 실제 응답했다. `liveFetchedAt`이 있고
   `stale=false`다.
+- `TIMETABLE_PROVIDER`: ODsay에서 선택한 동일 여정을 방금 다시 조회했지만 첫 승차 실시간
+  도착정보는 적용하지 못한 결과다. `stale=false`, 신뢰도는 `MEDIUM`이며 공개
+  `liveFetchedAt`과 live 비교 이력은 만들지 않는다.
 - `SELECTED_ROUTE`: 사용자가 선택해 저장한 경로의 ETA snapshot이다. 새 live 취득 시각을
   만들지 않고 `stale=true`다.
 - `SAVED_FALLBACK`: 선택 경로 ETA가 없어 일정/개인 계획에 저장된 시간을 사용했다.
@@ -50,6 +59,11 @@ live로 교체한다. 일정 또는 route fingerprint가 바뀌거나 job이 취
 `preparationStartAt`, `safetyBufferMinutes`는 null이다. `timeZone`은 서버의 일정 표시 정책인
 `Asia/Seoul`이다.
 
+`predictedArrivalAt`은 provider 여정과 첫 승차 실시간 overlay가 계산한 절대 목적지 도착
+시각이다. `onTimeArrivalPossible`은 이 값이 있을 때만 boolean이며, 정시 도착 불가 진단에서는
+`false`다. 이 진단의 푸시는 “늦지 않으려면”이라는 문구를 사용하지 않고 현재 확인된 가장
+빠른 예상 도착시각과 정시 도착이 어렵다는 사실을 함께 안내한다.
+
 ## 동일 경로 갱신 제약
 
 - `BIKE`는 provider 미지원으로 명시적 fallback한다.
@@ -57,10 +71,20 @@ live로 교체한다. 일정 또는 route fingerprint가 바뀌거나 job이 취
   명시적으로 매핑한다. catch-all 자동차 fallback으로 처리하지 않는다.
 - `CAR`, `WALK` 선택 경로는 저장된 `searchOption` 또는 `providerRouteOption`이 있을 때만
   같은 옵션으로 provider를 다시 조회한다. 옵션이 없으면 `SELECTED_ROUTE`/`SAVED_FALLBACK`이다.
-- 대중교통은 route JSON 유무와 관계없이 선택한 itinerary를 동일 여정으로 재조회할 provider
-  계약이 없다. 따라서 다른 추천 여정을 `LIVE_PROVIDER`로 표시하지 않고 저장 snapshot을
-  사용한다. 실시간 대중교통 교통 변화 알림은 동일 itinerary 갱신 계약을 도입하기 전까지
-  제공하지 않는다.
+- `provider=odsay`인 대중교통 경로는 ODsay `maasRP`에서 다시 조회한다. 노선, 방향,
+  승·하차 정류장 signature가 모두 같은 후보를 우선 사용한다. 첫 승차 실시간 지연으로 환승을
+  놓치거나 선택 경로가 정시 도착 불가일 때만 같은 ODsay 응답 안의 최대 3개 대체 여정을
+  비교한다. 전환 시 `ODSAY_ALTERNATIVE_ROUTE`를 푸시 payload에 남기며, 환승 시각이
+  불완전한 선택 경로는 임의 변경하지 않고 저신뢰도 진단으로 보존한다.
+- 시간표 기반 도착 마감 탐색은 최대 3회로 제한하고, 단순 `도착시각 - ETA` 역산 후보가 다음
+  차량으로 넘어가 늦어지는 경우 조회한 후보 중 가장 늦게 출발하는 도착 가능 여정을 사용한다.
+- 전체 시간은 새 ODsay 여정을 기준으로 하고 첫 승차 구간만 현재 정류장 도착정보로 교체한다.
+  첫 차량의 지연은 다음 환승까지 전파하며 `이전 차량 도착 + 환승 도보 + 60초 버퍼`가 다음
+  시간표 출발보다 늦으면 해당 여정을 제외한다. 미래 환승 정류장의 현재 도착정보는 사용하지
+  않는다. 실시간 도착정보까지 적용되면
+  `LIVE_PROVIDER`, 시간표만 유효하면 `TIMETABLE_PROVIDER`다.
+- ODsay가 비활성화되거나 동일 경로를 찾지 못하면 TMAP 대중교통으로 바꾸지 않고 선택 경로
+  snapshot으로 fallback한다.
 
 모든 canonical/selected/provider ETA에는 동일한
 `schedule.traffic.max-travel-minutes` 상한(기본 1,440분)을 적용한다. canonical

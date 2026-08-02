@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean
 import org.springframework.core.io.ClassPathResource
+import org.springframework.core.io.FileSystemResource
 
 class ProductionApiSurfaceConfigurationTest {
     @Test
@@ -27,7 +28,7 @@ class ProductionApiSurfaceConfigurationTest {
     }
 
     @Test
-    fun `production scheduling gate can keep the first migration instance worker-off`() {
+    fun `production schedule push gate keeps only the ETA worker off by default`() {
         val properties = YamlPropertiesFactoryBean().apply {
             setResources(ClassPathResource("application-prod.yml"))
         }.getObject() ?: error("application-prod.yml could not be loaded")
@@ -35,6 +36,41 @@ class ProductionApiSurfaceConfigurationTest {
         assertEquals(
             "\${SCHEDULE_PUSH_ENABLED:false}",
             properties.getProperty("schedule.push.enabled"),
+        )
+    }
+
+    @Test
+    fun `production schedule push off preserves independent scheduler defaults`() {
+        val properties = YamlPropertiesFactoryBean().apply {
+            setResources(
+                FileSystemResource("src/main/resources/application.yml"),
+                FileSystemResource("src/main/resources/application-prod.yml"),
+            )
+        }.getObject() ?: error("application configuration could not be loaded")
+
+        assertEquals(
+            "\${SPRING_TASK_SCHEDULING_ENABLED:true}",
+            properties.getProperty("spring.task.scheduling.enabled"),
+        )
+        assertEquals(
+            "\${SCHEDULE_PUSH_ENABLED:false}",
+            properties.getProperty("schedule.push.enabled"),
+        )
+        assertEquals(
+            "\${NOTIFICATION_PUSH_OUTBOX_ENABLED:true}",
+            properties.getProperty("notification.push-outbox.enabled"),
+        )
+        assertEquals(
+            "\${NOTIFICATION_PUSH_TOKEN_RETIREMENT_REAPER_ENABLED:true}",
+            properties.getProperty("notification.push-token.retirement-reaper-enabled"),
+        )
+        assertEquals(
+            "\${SCHEDULE_DEPARTURE_ALARM_EXPIRY_ENABLED:true}",
+            properties.getProperty("schedule.push.departure-alarm-expiry-enabled"),
+        )
+        assertEquals(
+            "\${ACCOUNT_DELETION_RETENTION_CLEANUP_ENABLED:true}",
+            properties.getProperty("account-deletion.retention-cleanup-enabled"),
         )
     }
 

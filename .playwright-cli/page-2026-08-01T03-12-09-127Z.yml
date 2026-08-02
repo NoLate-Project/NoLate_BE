@@ -1,0 +1,14 @@
+- main [ref=e2]:
+  - region [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: "N"
+      - generic [ref=e6]: NoLate Operations
+    - heading "공유 안전 운영" [level=1] [ref=e7]
+    - paragraph [ref=e8]: 운영자로 등록된 NoLate 계정으로 로그인해 신고를 검토하고 처리합니다.
+    - generic [ref=e9]:
+      - generic [ref=e10]: 이메일
+      - textbox "이메일" [ref=e11]
+      - generic [ref=e12]: 비밀번호
+      - textbox "비밀번호" [ref=e13]
+      - button "운영 대시보드 열기" [ref=e14] [cursor=pointer]
+      - alert [ref=e15]

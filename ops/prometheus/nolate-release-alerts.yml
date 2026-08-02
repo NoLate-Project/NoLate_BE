@@ -90,6 +90,80 @@ groups:
           summary: "NoLate push provider failure rate is elevated"
           description: "Confirmed or unknown push outcomes exceeded 5% with at least 20 calls."
 
+      - alert: NoLatePushClientReceivedReliabilityLow
+        expr: |
+          (
+            max(
+              nolate_push_delivery_cohort_client_received{application="noLate"}
+              and on (application, instance)
+              (
+                time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90
+              )
+            )
+            /
+            clamp_min(
+              max(
+                nolate_push_delivery_cohort_ack_eligible{application="noLate"}
+                and on (application, instance)
+                (
+                  time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90
+                )
+              ),
+              1
+            )
+          ) < 0.90
+          and
+          max(
+            nolate_push_delivery_cohort_ack_eligible{application="noLate"}
+            and on (application, instance)
+            (
+              time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90
+            )
+          ) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate client-confirmed push reliability is below 90%"
+          description: "Fewer than 90% of at least 20 aged ACK-capable provider successes uploaded a RECEIVED acknowledgement."
+
+      - alert: NoLatePushAckMeasurementCoverageLow
+        expr: |
+          (
+            max(
+              nolate_push_delivery_cohort_ack_eligible{application="noLate"}
+              and on (application, instance)
+              (
+                time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90
+              )
+            )
+            /
+            clamp_min(
+              max(
+                nolate_push_delivery_cohort_provider_success{application="noLate"}
+                and on (application, instance)
+                (
+                  time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90
+                )
+              ),
+              1
+            )
+          ) < 0.90
+          and
+          max(
+            nolate_push_delivery_cohort_provider_success{application="noLate"}
+            and on (application, instance)
+            (
+              time() - nolate_observability_snapshot_last_success_seconds{application="noLate"} < 90
+            )
+          ) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate push ACK measurement coverage is below 90%"
+          description: "Fewer than 90% of at least 20 aged provider successes came from clients declaring ACK capability v1; this is a measurement coverage gap, not a delivery-failure rate."
+
       - alert: NoLateEtaProviderFailureRate
         expr: |
           (
@@ -105,6 +179,44 @@ groups:
         annotations:
           summary: "NoLate live ETA provider failure rate is elevated"
           description: "Bounded live ETA failures exceeded 20% with at least 20 calls."
+
+      - alert: NoLateTransitEtaProviderFailureRate
+        expr: |
+          (
+            sum by (provider) (
+              rate(
+                nolate_eta_transit_provider_events_total{
+                  application="noLate",
+                  outcome=~"timeout|http_error|invalid|empty|rejected_stale|rejected_unverified_source"
+                }[10m]
+              )
+            )
+            /
+            clamp_min(
+              sum by (provider) (
+                rate(
+                  nolate_eta_transit_provider_duration_seconds_count{
+                    application="noLate"
+                  }[10m]
+                )
+              ),
+              0.001
+            )
+          ) > 0.20
+          and on (provider)
+          sum by (provider) (
+            increase(
+              nolate_eta_transit_provider_duration_seconds_count{
+                application="noLate"
+              }[10m]
+            )
+          ) >= 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate transit ETA provider failure rate is elevated"
+          description: "{{$labels.provider}} transit ETA failures, empty results, stale rejections, or unverified-source rejections exceeded 20% with at least 20 logical lookups."
 
       - alert: NoLateEtaWorkerProcessingException
         expr: |
@@ -122,6 +234,64 @@ groups:
         annotations:
           summary: "NoLate ETA worker is raising processing exceptions"
           description: "At least one ETA execution failed before its retry or terminal transition."
+
+      - alert: NoLateDepartureAlarmStaleGenerationFired
+        expr: |
+          sum(
+            increase(
+              nolate_departure_alarm_fire_events_total{
+                application="noLate",
+                generation_relation="stale",
+                outcome="recorded"
+              }[10m]
+            )
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate fired a stale departure alarm generation"
+          description: "A native alarm executed after the server had already advanced its desired generation."
+
+      - alert: NoLateEtaFalseSafeRate
+        expr: |
+          (
+            sum by (travel_mode, provider, algorithm_version) (
+              increase(
+                nolate_eta_on_time_outcomes_total{
+                  application="noLate",
+                  outcome="predicted_on_time_actual_late"
+                }[1h]
+              )
+            )
+            /
+            clamp_min(
+              sum by (travel_mode, provider, algorithm_version) (
+                increase(
+                  nolate_eta_on_time_outcomes_total{
+                    application="noLate",
+                    outcome=~"predicted_on_time_actual_on_time|predicted_on_time_actual_late"
+                  }[1h]
+                )
+              ),
+              1
+            )
+          ) > 0.05
+          and on (travel_mode, provider, algorithm_version)
+          sum by (travel_mode, provider, algorithm_version) (
+            increase(
+              nolate_eta_on_time_outcomes_total{
+                application="noLate",
+                outcome=~"predicted_on_time_actual_on_time|predicted_on_time_actual_late"
+              }[1h]
+            )
+          ) >= 50
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NoLate ETA false-safe rate is elevated"
+          description: "More than 5% of at least 50 predicted-on-time eligible observations arrived late."
 
       - alert: NoLateObservabilitySnapshotFailure
         expr: sum(increase(nolate_observability_snapshot_failures_total{application="noLate"}[10m])) > 0

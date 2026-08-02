@@ -16,6 +16,7 @@ import com.noLate.schedule.domain.ScheduleShareDto
 import com.noLate.schedule.domain.ScheduleShareInboxDto
 import com.noLate.schedule.domain.ScheduleShareInboxItemDto
 import com.noLate.schedule.domain.ScheduleShareInvitation
+import com.noLate.schedule.domain.ScheduleShareInvitationAcceptance
 import com.noLate.schedule.domain.ScheduleShareInvitationAcceptDto
 import com.noLate.schedule.domain.ScheduleShareInvitationDto
 import com.noLate.schedule.domain.ScheduleShareInvitationStatus
@@ -31,7 +32,11 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.infrastructure.ScheduleShareInvitationAcceptanceRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
+import com.noLate.sharing.application.SharingBlockPolicy
+import com.noLate.sharing.application.SharingMutationRateLimiter
+import com.noLate.sharing.application.SharingMutationScope
 import jakarta.transaction.Transactional
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
@@ -47,6 +52,7 @@ class ScheduleShareService(
     private val categoryRepository: ScheduleCategoryRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val invitationRepository: ScheduleShareInvitationRepository,
+    private val invitationAcceptanceRepository: ScheduleShareInvitationAcceptanceRepository,
     private val memberRepository: MemberRepository,
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
     private val clock: Clock = Clock.systemUTC(),
@@ -57,25 +63,42 @@ class ScheduleShareService(
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
     private val mutationFenceObserver: ScheduleShareMutationFenceObserver? = null,
     private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
+    private val sharingBlockPolicy: SharingBlockPolicy? = null,
+    private val sharingMutationRateLimiter: SharingMutationRateLimiter? = null,
 ) {
 
     @Transactional
     fun getShareInbox(memberId: Long): ScheduleShareInboxDto {
         sharingAvailabilityPolicy.requireEnabled()
-        val scheduleShares = scheduleShareRepository
+        val rawScheduleShares = scheduleShareRepository
             .findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
                 targetMemberId = memberId,
                 status = ScheduleShareStatus.ACTIVE,
             )
-        val categoryShares = categoryShareRepository
+        val rawCategoryShares = categoryShareRepository
             .findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
                 targetMemberId = memberId,
                 status = ScheduleShareStatus.ACTIVE,
             )
-        val calendarMemberships = calendarMemberRepository
+        val rawCalendarMemberships = calendarMemberRepository
             ?.findAllByMemberIdAndStatusAndDeletedFalseOrderByIdAsc(memberId)
             ?.filter { it.role != ScheduleCalendarRole.OWNER }
             .orEmpty()
+        val calendarOwnersById = calendarRepository
+            ?.findAllById(rawCalendarMemberships.map { it.calendarId })
+            ?.associate { requireNotNull(it.id) to it.ownerMemberId }
+            .orEmpty()
+        val blockedOwnerIds = sharingBlockPolicy?.blockedCounterpartIds(
+            memberId,
+            rawScheduleShares.map { it.ownerMemberId } +
+                rawCategoryShares.map { it.ownerMemberId } +
+                calendarOwnersById.values,
+        ).orEmpty()
+        val scheduleShares = rawScheduleShares.filter { it.ownerMemberId !in blockedOwnerIds }
+        val categoryShares = rawCategoryShares.filter { it.ownerMemberId !in blockedOwnerIds }
+        val calendarMemberships = rawCalendarMemberships.filter {
+            calendarOwnersById[it.calendarId] !in blockedOwnerIds
+        }
 
         val scheduleResources = scheduleResources(scheduleShares.map { it.scheduleId })
         val categoryResources = categoryResources(categoryShares.map { it.categoryId })
@@ -154,12 +177,12 @@ class ScheduleShareService(
     fun getShareOutbox(ownerMemberId: Long): ScheduleShareOutboxDto {
         sharingAvailabilityPolicy.requireEnabled()
         val now = Instant.now(clock)
-        val scheduleShares = scheduleShareRepository
+        val rawScheduleShares = scheduleShareRepository
             .findAllByOwnerMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
                 ownerMemberId = ownerMemberId,
                 status = ScheduleShareStatus.ACTIVE,
             )
-        val categoryShares = categoryShareRepository
+        val rawCategoryShares = categoryShareRepository
             .findAllByOwnerMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
                 ownerMemberId = ownerMemberId,
                 status = ScheduleShareStatus.ACTIVE,
@@ -167,13 +190,25 @@ class ScheduleShareService(
         val ownedCalendars = calendarRepository
             ?.findAllByOwnerMemberIdAndStatusAndDeletedFalseOrderByIdAsc(ownerMemberId)
             .orEmpty()
+        val blockedTargetIds = sharingBlockPolicy?.blockedCounterpartIds(
+            ownerMemberId,
+            rawScheduleShares.map { it.targetMemberId } + rawCategoryShares.map { it.targetMemberId } +
+                calendarMemberRepository?.let { repository ->
+                    ownedCalendars.flatMap { calendar ->
+                        repository.findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(requireNotNull(calendar.id))
+                            .map { it.memberId }
+                    }
+                }.orEmpty(),
+        ).orEmpty()
+        val scheduleShares = rawScheduleShares.filter { it.targetMemberId !in blockedTargetIds }
+        val categoryShares = rawCategoryShares.filter { it.targetMemberId !in blockedTargetIds }
         val calendarMembershipsByCalendarId = calendarMemberRepository
             ?.let { repository ->
                 ownedCalendars.associate { calendar ->
                     val calendarId = requireNotNull(calendar.id)
                     calendarId to repository
                         .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
-                        .filter { it.memberId != ownerMemberId }
+                        .filter { it.memberId != ownerMemberId && it.memberId !in blockedTargetIds }
                 }
             }
             .orEmpty()
@@ -317,6 +352,7 @@ class ScheduleShareService(
         presentedSessionGeneration: Long,
     ): ScheduleShareDto {
         sharingAvailabilityPolicy.requireEnabled()
+        sharingMutationRateLimiter?.requirePermit(ownerMemberId, SharingMutationScope.DIRECT_SHARE)
         val normalizedPermission = validateGrantablePermission(permission)
         // Resolve only the immutable member id before the member-row fence. Loading a Member
         // entity here would put deleted=false in the persistence context; if target withdrawal
@@ -333,6 +369,7 @@ class ScheduleShareService(
             presentedSessionGeneration = presentedSessionGeneration,
             affectedMemberIds = setOf(targetMemberId),
         ).getValue(targetMemberId)
+        sharingBlockPolicy?.requireInteractionAllowed(ownerMemberId, targetMemberId)
 
         val schedule = scheduleRepository.findOwnedActiveForShareUpdate(scheduleId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
@@ -375,6 +412,7 @@ class ScheduleShareService(
             presentedSessionGeneration = presentedSessionGeneration,
             affectedMemberIds = setOf(preview.targetMemberId),
         )
+        sharingBlockPolicy?.requireInteractionAllowed(ownerMemberId, preview.targetMemberId)
         scheduleRepository.findOwnedActiveForShareUpdate(scheduleId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
 
@@ -430,6 +468,7 @@ class ScheduleShareService(
 
         return scheduleShareRepository
             .findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(scheduleId, ScheduleShareStatus.ACTIVE)
+            .filterNot { sharingBlockPolicy?.isInteractionBlocked(ownerMemberId, it.targetMemberId) == true }
             .map { share ->
                 share.toDto(targetEmail = memberRepository.findByIdAndDeletedFalse(share.targetMemberId)?.email)
             }
@@ -450,6 +489,7 @@ class ScheduleShareService(
         presentedSessionGeneration: Long,
     ): ScheduleShareDto {
         sharingAvailabilityPolicy.requireEnabled()
+        sharingMutationRateLimiter?.requirePermit(ownerMemberId, SharingMutationScope.DIRECT_SHARE)
         val normalizedPermission = validateGrantablePermission(permission)
         val targetMemberId = resolveTargetMemberId(targetEmail, targetAppId)
         mutationFenceObserver?.afterTargetPreview(
@@ -462,6 +502,7 @@ class ScheduleShareService(
             presentedSessionGeneration = presentedSessionGeneration,
             affectedMemberIds = setOf(targetMemberId),
         ).getValue(targetMemberId)
+        sharingBlockPolicy?.requireInteractionAllowed(ownerMemberId, targetMemberId)
 
         val category = categoryRepository.findOwnedActiveForShareUpdate(categoryId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
@@ -502,6 +543,7 @@ class ScheduleShareService(
             presentedSessionGeneration = presentedSessionGeneration,
             affectedMemberIds = setOf(preview.targetMemberId),
         )
+        sharingBlockPolicy?.requireInteractionAllowed(ownerMemberId, preview.targetMemberId)
         categoryRepository.findOwnedActiveForShareUpdate(categoryId, ownerMemberId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
 
@@ -556,6 +598,7 @@ class ScheduleShareService(
 
         return categoryShareRepository
             .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(categoryId, ScheduleShareStatus.ACTIVE)
+            .filterNot { sharingBlockPolicy?.isInteractionBlocked(ownerMemberId, it.targetMemberId) == true }
             .map { share ->
                 share.toDto(targetEmail = memberRepository.findByIdAndDeletedFalse(share.targetMemberId)?.email)
             }
@@ -572,6 +615,7 @@ class ScheduleShareService(
         presentedSessionGeneration: Long,
     ): ScheduleShareInvitationDto {
         sharingAvailabilityPolicy.requireEnabled()
+        sharingMutationRateLimiter?.requirePermit(ownerMemberId, SharingMutationScope.INVITATION_CREATE)
         val normalizedPermission = validateGrantablePermission(permission)
         lockMutationMembers(ownerMemberId, presentedSessionGeneration)
         scheduleRepository.findOwnedActiveForShareUpdate(scheduleId, ownerMemberId)
@@ -598,6 +642,7 @@ class ScheduleShareService(
         presentedSessionGeneration: Long,
     ): ScheduleShareInvitationDto {
         sharingAvailabilityPolicy.requireEnabled()
+        sharingMutationRateLimiter?.requirePermit(ownerMemberId, SharingMutationScope.INVITATION_CREATE)
         val normalizedPermission = validateGrantablePermission(permission)
         lockMutationMembers(ownerMemberId, presentedSessionGeneration)
         categoryRepository.findOwnedActiveForShareUpdate(categoryId, ownerMemberId)
@@ -623,6 +668,7 @@ class ScheduleShareService(
         presentedSessionGeneration: Long,
     ): ScheduleShareInvitationDto {
         sharingAvailabilityPolicy.requireEnabled()
+        sharingMutationRateLimiter?.requirePermit(ownerMemberId, SharingMutationScope.INVITATION_CREATE)
         val normalizedPermission = validateGrantablePermission(permission)
         lockMutationMembers(ownerMemberId, presentedSessionGeneration)
         val calendar = requireCalendarRepository().findActiveForUpdate(calendarId)
@@ -748,10 +794,16 @@ class ScheduleShareService(
                 throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
             }
         }
-        val invitation = invitationRepository.findActiveByTokenHashForUpdate(tokenHash)
+        val invitation = invitationRepository.findByTokenHashForUpdate(tokenHash)
             ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
 
         rejectSelfShare(invitation.ownerMemberId, currentMemberId)
+        sharingBlockPolicy?.requireInteractionAllowed(invitation.ownerMemberId, currentMemberId)
+        invitationAcceptanceRepository
+            .findByInvitationIdAndMemberId(requireNotNull(invitation.id), currentMemberId)
+            ?.let {
+                return resolveAcceptedInvitation(invitation, targetMember)
+            }
         validateInvitationAcceptable(invitation)
 
         var calendarMembership: ScheduleCalendarMemberDto? = null
@@ -808,9 +860,17 @@ class ScheduleShareService(
             }
         }
 
+        val acceptedAt = Instant.now(clock)
+        invitationAcceptanceRepository.saveAndFlush(
+            ScheduleShareInvitationAcceptance(
+                invitationId = requireNotNull(invitation.id),
+                memberId = currentMemberId,
+                acceptedAt = acceptedAt,
+            )
+        )
         invitation.accept(
             memberId = currentMemberId,
-            acceptedAt = Instant.now(clock),
+            acceptedAt = acceptedAt,
         )
         val savedInvitation = invitationRepository.saveAndFlush(invitation)
         // 캘린더 수락은 addMember가 ScheduleShareGrantedEvent를 발행한다.
@@ -821,6 +881,75 @@ class ScheduleShareService(
 
         return ScheduleShareInvitationAcceptDto(
             invitation = savedInvitation.toDto(),
+            share = share,
+            calendarMembership = calendarMembership,
+        )
+    }
+
+    private fun resolveAcceptedInvitation(
+        invitation: ScheduleShareInvitation,
+        targetMember: Member,
+    ): ScheduleShareInvitationAcceptDto {
+        val memberId = requireNotNull(targetMember.id)
+        var calendarMembership: ScheduleCalendarMemberDto? = null
+        val share = when (invitation.resourceType) {
+            ScheduleShareResourceType.SCHEDULE -> scheduleShareRepository
+                .findByScheduleIdAndTargetMemberId(invitation.resourceId, memberId)
+                ?.takeIf {
+                    !it.deleted && it.status == ScheduleShareStatus.ACTIVE &&
+                        it.ownerMemberId == invitation.ownerMemberId
+                }
+                ?.toDto(targetMember.email)
+                ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
+
+            ScheduleShareResourceType.CATEGORY -> categoryShareRepository
+                .findByCategoryIdAndTargetMemberId(invitation.resourceId, memberId)
+                ?.takeIf {
+                    !it.deleted && it.status == ScheduleShareStatus.ACTIVE &&
+                        it.ownerMemberId == invitation.ownerMemberId
+                }
+                ?.toDto(targetMember.email)
+                ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
+
+            ScheduleShareResourceType.CALENDAR -> {
+                val membership = requireCalendarMemberRepository()
+                    .findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                        invitation.resourceId,
+                        memberId,
+                        ScheduleCalendarMemberStatus.ACTIVE,
+                    ) ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
+                val calendar = requireCalendarRepository()
+                    .findByIdAndStatusAndDeletedFalse(invitation.resourceId)
+                    ?.takeIf { it.ownerMemberId == invitation.ownerMemberId }
+                    ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
+                calendarMembership = ScheduleCalendarMemberDto(
+                    id = requireNotNull(membership.id),
+                    calendarId = membership.calendarId,
+                    memberId = membership.memberId,
+                    name = targetMember.name,
+                    email = targetMember.email,
+                    role = membership.role,
+                    status = membership.status,
+                    routeReminderEnabled = membership.routeReminderEnabled,
+                    joinedAt = (membership.createDt ?: membership.createdAt)?.toString(),
+                    updatedAt = (membership.updateDt ?: membership.updatedAt)?.toString(),
+                )
+                ScheduleShareDto(
+                    id = requireNotNull(membership.id).toString(),
+                    resourceId = invitation.resourceId.toString(),
+                    ownerMemberId = invitation.ownerMemberId,
+                    targetMemberId = memberId,
+                    targetEmail = targetMember.email,
+                    permission = membership.role.toSharePermission(),
+                    contentMode = calendar.defaultContentMode,
+                    status = ScheduleShareStatus.ACTIVE,
+                    createdAt = (membership.createDt ?: membership.createdAt)?.toString(),
+                    updatedAt = (membership.updateDt ?: membership.updatedAt)?.toString(),
+                )
+            }
+        }
+        return ScheduleShareInvitationAcceptDto(
+            invitation = invitation.toDto(),
             share = share,
             calendarMembership = calendarMembership,
         )
@@ -1118,6 +1247,10 @@ class ScheduleShareService(
     private fun requireCalendarRepository(): ScheduleCalendarRepository =
         calendarRepository
             ?: throw BusinessException(ErrorCode.INVALID_STATE, "공유 캘린더 저장소가 준비되지 않았습니다.")
+
+    private fun requireCalendarMemberRepository(): ScheduleCalendarMemberRepository =
+        calendarMemberRepository
+            ?: throw BusinessException(ErrorCode.INVALID_STATE, "공유 캘린더 멤버 저장소가 준비되지 않았습니다.")
 
     private fun ScheduleSharePermission.toCalendarRole(): ScheduleCalendarRole = when (this) {
         ScheduleSharePermission.VIEWER,

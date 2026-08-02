@@ -28,6 +28,10 @@ class GlobalExceptionHandler {
             ErrorCode.INVALID_CREDENTIALS -> HttpStatus.UNAUTHORIZED
             ErrorCode.FORBIDDEN -> HttpStatus.FORBIDDEN
             ErrorCode.FEATURE_DISABLED -> HttpStatus.FORBIDDEN
+            ErrorCode.SHARING_INTERACTION_BLOCKED,
+            ErrorCode.SHARING_REPORT_NOT_ALLOWED -> HttpStatus.FORBIDDEN
+            ErrorCode.SHARING_REPORT_RATE_LIMITED,
+            ErrorCode.SHARING_MUTATION_RATE_LIMITED -> HttpStatus.TOO_MANY_REQUESTS
             ErrorCode.EXTERNAL_SERVICE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE
             ErrorCode.SUBSCRIPTION_LIMIT_EXCEEDED -> HttpStatus.FORBIDDEN
             ErrorCode.SUBSCRIPTION_POLICY_VIOLATION -> HttpStatus.FORBIDDEN
@@ -38,7 +42,8 @@ class GlobalExceptionHandler {
             ErrorCode.SCHEDULE_CATEGORY_SHARE_NOT_FOUND,
             ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND,
             ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND,
-            ErrorCode.SCHEDULE_CALENDAR_MEMBER_NOT_FOUND -> HttpStatus.NOT_FOUND
+            ErrorCode.SCHEDULE_CALENDAR_MEMBER_NOT_FOUND,
+            ErrorCode.SHARING_REPORT_NOT_FOUND -> HttpStatus.NOT_FOUND
             ErrorCode.MEMBER_DUPLICATE_EMAIL,
             ErrorCode.DUPLICATE_EMAIL,
             ErrorCode.DUPLICATE_MEMBER -> HttpStatus.CONFLICT

@@ -182,3 +182,32 @@ class ScheduleShareInvitation(
         )
     }
 }
+
+@Entity
+@Table(
+    name = "schedule_share_invitation_acceptances",
+    uniqueConstraints = [
+        UniqueConstraint(
+            name = "uk_share_invitation_acceptance_member",
+            columnNames = ["invitation_id", "member_id"],
+        ),
+    ],
+    indexes = [
+        Index(name = "idx_share_invitation_acceptance_member", columnList = "member_id,accepted_at"),
+    ],
+)
+@Comment("회원별 공유 초대 수락 멱등성 기록")
+class ScheduleShareInvitationAcceptance(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    var id: Long? = null,
+
+    @Column(name = "invitation_id", nullable = false)
+    var invitationId: Long = 0L,
+
+    @Column(name = "member_id", nullable = false)
+    var memberId: Long = 0L,
+
+    @Column(name = "accepted_at", nullable = false)
+    var acceptedAt: Instant = Instant.EPOCH,
+) : BaseEntity()

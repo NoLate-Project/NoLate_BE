@@ -6,11 +6,19 @@ import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.application.service.NotificationTokenRetirementService
 import com.noLate.notification.domain.AppNotification
+import com.noLate.notification.domain.DepartureAlarmFireEvent
+import com.noLate.notification.domain.DepartureAlarmGenerationRelation
+import com.noLate.notification.domain.DepartureAlarmDeliveryMode
+import com.noLate.notification.domain.DepartureAlarmScheduleOutcome
+import com.noLate.notification.domain.DepartureAlarmScheduleReceipt
+import com.noLate.notification.domain.DepartureAlarmScheduleSource
 import com.noLate.notification.domain.PushDelivery
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.domain.PushSendHistory
 import com.noLate.notification.domain.PushSendStatus
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.infrastructure.DepartureAlarmFireEventRepository
+import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.schedule.application.service.ScheduleAccessPolicy
@@ -18,6 +26,7 @@ import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEv
 import com.noLate.schedule.application.service.ScheduleSharingAvailabilityPolicy
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleArrivalObservationSource
 import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCalendarMember
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
@@ -26,6 +35,15 @@ import com.noLate.schedule.domain.ScheduleCalendarStatus
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleDepartureStatus
+import com.noLate.schedule.domain.ScheduleEtaAccuracyObservation
+import com.noLate.schedule.domain.DepartureAlarmSyncOperation
+import com.noLate.schedule.domain.EtaPredictionBasis
+import com.noLate.schedule.domain.EtaAlgorithmVersion
+import com.noLate.schedule.domain.EtaAccuracyEligibilityPolicyVersion
+import com.noLate.schedule.domain.EtaAccuracyEligibilityReason
+import com.noLate.schedule.domain.EtaOnTimeOutcome
+import com.noLate.schedule.domain.EtaProviderId
+import com.noLate.schedule.domain.ScheduleArrivalObservationVerification
 import com.noLate.schedule.domain.ScheduleNotificationActionReceipt
 import com.noLate.schedule.domain.ScheduleNotificationActionType
 import com.noLate.schedule.domain.SchedulePushJob
@@ -34,11 +52,14 @@ import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleTravelPlan
+import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
+import com.noLate.schedule.infrastructure.ScheduleEtaAccuracyObservationRepository
 import com.noLate.schedule.infrastructure.ScheduleNotificationActionReceiptRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
@@ -106,6 +127,9 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val scheduleShareRepository: ScheduleShareRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
+    private val etaAccuracyObservationRepository: ScheduleEtaAccuracyObservationRepository,
+    private val departureAlarmFireEventRepository: DepartureAlarmFireEventRepository,
+    private val departureAlarmScheduleReceiptRepository: DepartureAlarmScheduleReceiptRepository,
     private val actionReceiptRepository: ScheduleNotificationActionReceiptRepository,
     private val transactionManager: PlatformTransactionManager,
     private val invalidationRecorder: AccountCleanupInvalidationRecorder,
@@ -202,6 +226,49 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
                 sentAt = Instant.parse("2026-07-24T00:00:00Z"),
             )
         )
+        departureAlarmFireEventRepository.saveAndFlush(
+            DepartureAlarmFireEvent(
+                memberId = participantId,
+                clientEventId = "550e8400-e29b-41d4-a716-446655440000",
+                deviceFingerprint = "f".repeat(64),
+                alarmId = "schedule:$scheduleId:member:$participantId",
+                scheduleId = scheduleId,
+                generation = 2,
+                desiredGenerationAtReceipt = 2,
+                desiredOperationAtReceipt = DepartureAlarmSyncOperation.UPSERT,
+                generationRelation = DepartureAlarmGenerationRelation.CURRENT,
+                scheduledFor = startAt.minusSeconds(1_800),
+                sourceTriggerAt = startAt.minusSeconds(1_800),
+                clientOccurredAt = startAt.minusSeconds(1_797),
+                fireDelaySeconds = 3,
+                serverRecordedAt = Instant.parse("2026-07-24T00:00:00Z"),
+            )
+        )
+        departureAlarmScheduleReceiptRepository.saveAndFlush(
+            DepartureAlarmScheduleReceipt(
+                memberId = participantId,
+                clientReceiptId = "550e8400-e29b-41d4-a716-446655440100",
+                deviceFingerprint = "f".repeat(64),
+                commandReceiptKey = "e".repeat(64),
+                alarmId = "schedule:$scheduleId:member:$participantId",
+                scheduleId = scheduleId,
+                generation = 2,
+                desiredGenerationAtReceipt = 2,
+                desiredOperationAtReceipt = DepartureAlarmSyncOperation.UPSERT,
+                generationRelation = DepartureAlarmGenerationRelation.CURRENT,
+                operation = DepartureAlarmSyncOperation.UPSERT,
+                triggerAt = startAt.minusSeconds(1_800),
+                outcome = DepartureAlarmScheduleOutcome.SCHEDULED,
+                applied = true,
+                scheduled = true,
+                platform = PushPlatform.ANDROID,
+                deliveryMode = DepartureAlarmDeliveryMode.ANDROID_EXACT,
+                source = DepartureAlarmScheduleSource.SNAPSHOT,
+                failureReason = null,
+                clientOccurredAt = Instant.parse("2026-07-24T00:00:00Z"),
+                serverRecordedAt = Instant.parse("2026-07-24T00:00:01Z"),
+            )
+        )
 
         cleanupService.withdraw(owner)
 
@@ -213,6 +280,10 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
         assertTrue(markerRepository.findAll().none { it.scheduleId == scheduleId })
         assertTrue(notificationRepository.findAll().none { it.scheduleId == scheduleId })
         assertTrue(deliveryRepository.findAll().none { it.scheduleId == scheduleId })
+        assertTrue(departureAlarmFireEventRepository.findAll().none { it.scheduleId == scheduleId })
+        assertTrue(
+            departureAlarmScheduleReceiptRepository.findAll().none { it.scheduleId == scheduleId }
+        )
         assertTrue(
             historyRepository.findAllByScheduleIdOrderBySentAtDesc(
                 scheduleId,
@@ -265,6 +336,48 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
                 departedAt = Instant.parse("2026-07-24T00:00:00Z"),
             ),
         )
+        etaAccuracyObservationRepository.saveAndFlush(
+            ScheduleEtaAccuracyObservation(
+                scheduleId = scheduleId,
+                memberId = participantId,
+                pushJobId = jobRepository
+                    .findByScheduleIdAndMemberId(scheduleId, participantId)
+                    ?.id,
+                departedAt = Instant.parse("2026-07-24T00:00:00Z"),
+                predictionEvaluatedAt = Instant.parse("2026-07-23T23:59:00Z"),
+                predictedArrivalAt = Instant.parse("2026-07-24T00:30:00Z"),
+                recommendedDepartureAt = Instant.parse("2026-07-24T00:00:00Z"),
+                targetArrivalAt = Instant.parse("2026-07-24T00:30:00Z"),
+                actualArrivalAt = Instant.parse("2026-07-24T00:35:00Z"),
+                observationSource = ScheduleArrivalObservationSource.USER_NOW,
+                observationVerification = ScheduleArrivalObservationVerification.UNVERIFIED_CLIENT,
+                precisionSeconds = 30,
+                adjustmentSeconds = null,
+                clientAppVersion = null,
+                clientBuildVersion = null,
+                backendCohortVersion = "integration-test",
+                eligibilityPolicyVersion = EtaAccuracyEligibilityPolicyVersion.SELF_REPORT_DIAGNOSTIC_V2,
+                etaSource = TrafficSource.LIVE_PROVIDER,
+                etaStale = false,
+                travelMinutes = 30,
+                predictionBasis = EtaPredictionBasis.PROVIDER_ABSOLUTE,
+                travelMode = ScheduleTravelMode.TRANSIT,
+                providerId = EtaProviderId.ODSAY_TRANSIT,
+                algorithmVersion = EtaAlgorithmVersion.TRANSIT_REALTIME_V2,
+                providerFetchedAt = Instant.parse("2026-07-23T23:59:00Z"),
+                predictedOnTime = true,
+                actualOnTime = false,
+                onTimeOutcome = EtaOnTimeOutcome.PREDICTED_ON_TIME_ACTUAL_LATE,
+                departureOffsetSeconds = 0,
+                actualTravelSeconds = 35 * 60,
+                reportDelaySeconds = 1,
+                accuracyEligible = false,
+                accuracyEligibilityReason = EtaAccuracyEligibilityReason.UNVERIFIED_USER_NOW,
+                signedErrorSeconds = 300,
+                absoluteErrorSeconds = 300,
+                recordedAt = Instant.parse("2026-07-24T00:35:01Z"),
+            ),
+        )
         actionReceiptRepository.saveAndFlush(
             ScheduleNotificationActionReceipt(
                 keyFingerprint = "e".repeat(64),
@@ -297,6 +410,10 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
         assertNoScheduleArtifacts(scheduleId, participantId)
         assertTrue(
             departureStatusRepository.findAllByScheduleIdAndDeletedFalse(scheduleId).isEmpty(),
+        )
+        assertTrue(
+            etaAccuracyObservationRepository
+                .findByScheduleIdAndMemberId(scheduleId, participantId) == null,
         )
         assertTrue(
             actionReceiptRepository.findAll()

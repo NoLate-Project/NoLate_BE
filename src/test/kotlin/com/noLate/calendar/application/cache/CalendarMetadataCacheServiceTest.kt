@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.time.Duration
 import java.time.LocalDate
+import java.time.YearMonth
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -114,7 +115,7 @@ class CalendarMetadataCacheServiceTest {
 
     @Test
     fun `손상된 JSON은 삭제하고 해당 월을 다시 적재한다`() {
-        val key = "nolate:calendar:metadata:v1:month:2026-07"
+        val key = "nolate:calendar:metadata:v2:month:2026-07"
         store.values[key] = "{not-json"
         var loadCount = 0
         val loader = { _: LocalDate, _: LocalDate ->
@@ -175,6 +176,55 @@ class CalendarMetadataCacheServiceTest {
 
         assertEquals(1, loadCount)
         assertEquals(3, result.size)
+        assertEquals(1, store.writeCount)
+    }
+
+    @Test
+    fun `DB에 아직 보충 metadata가 없는 월은 반환하되 Redis에 24시간 저장하지 않는다`() {
+        val july = YearMonth.of(2026, 7)
+        var loadCount = 0
+        val load = { start: LocalDate, end: LocalDate ->
+            loadCount += 1
+            CalendarMetadataCacheLoad(
+                days = start.datesUntil(end.plusDays(1)).map { date ->
+                    CalendarDayDto(
+                        date = date.toString(),
+                        lunarYear = null,
+                        lunarMonth = null,
+                        lunarDay = null,
+                        leapMonth = null,
+                        holidays = emptyList(),
+                    )
+                }.toList(),
+                cacheableMonths = emptySet(),
+            )
+        }
+
+        val first = service.getOrLoadSnapshot(
+            startDate = LocalDate.of(2026, 7, 10),
+            endDate = LocalDate.of(2026, 7, 12),
+            loader = load,
+        )
+        val second = service.getOrLoadSnapshot(
+            startDate = LocalDate.of(2026, 7, 10),
+            endDate = LocalDate.of(2026, 7, 12),
+            loader = load,
+        )
+
+        assertEquals(3, first.size)
+        assertEquals(3, second.size)
+        assertEquals(2, loadCount)
+        assertEquals(emptyMap<String, String>(), store.values)
+        assertEquals(0, store.writeCount)
+
+        service.refillMonths(listOf(july)) { start, end ->
+            CalendarMetadataCacheLoad(
+                days = daysBetween(start, end),
+                cacheableMonths = setOf(july),
+            )
+        }
+
+        assertTrue(store.values.containsKey("nolate:calendar:metadata:v2:month:2026-07"))
         assertEquals(1, store.writeCount)
     }
 

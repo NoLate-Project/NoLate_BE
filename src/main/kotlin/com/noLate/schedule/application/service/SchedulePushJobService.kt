@@ -5,6 +5,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobDto
 import com.noLate.schedule.domain.SchedulePushJobStatus
@@ -13,6 +14,7 @@ import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import jakarta.transaction.Transactional
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.stereotype.Service
@@ -39,6 +41,7 @@ data class ScheduleEditMemberFence(
 class SchedulePushJobService private constructor(
     private val schedulePushJobRepository: SchedulePushJobRepository,
     private val memberRepository: MemberRepository?,
+    private val departureAlarmSyncService: DepartureAlarmSyncService?,
     private val departureSnoozeMinutes: Long = 5,
     private val clock: Clock = Clock.systemUTC(),
     @Suppress("UNUSED_PARAMETER") legacyTestBoundary: Boolean,
@@ -47,12 +50,14 @@ class SchedulePushJobService private constructor(
     constructor(
         schedulePushJobRepository: SchedulePushJobRepository,
         memberRepository: MemberRepository,
+        departureAlarmSyncServiceProvider: ObjectProvider<DepartureAlarmSyncService>,
         @Value("\${schedule.push.departure-snooze-minutes:5}")
         departureSnoozeMinutes: Long = 5,
         clock: Clock = Clock.systemUTC(),
     ) : this(
         schedulePushJobRepository,
         memberRepository,
+        departureAlarmSyncServiceProvider.getIfAvailable(),
         departureSnoozeMinutes,
         clock,
         false,
@@ -66,8 +71,22 @@ class SchedulePushJobService private constructor(
     ) : this(
         schedulePushJobRepository,
         null,
+        null,
         departureSnoozeMinutes,
         clock,
+        true,
+    )
+
+    /** Legacy unit fixtures that exercise only member/job fencing do not require alarm sync. */
+    internal constructor(
+        schedulePushJobRepository: SchedulePushJobRepository,
+        memberRepository: MemberRepository,
+    ) : this(
+        schedulePushJobRepository,
+        memberRepository,
+        null,
+        5,
+        Clock.systemUTC(),
         true,
     )
 
@@ -154,7 +173,10 @@ class SchedulePushJobService private constructor(
         val schedule = scheduleDto.toEntity(memberId)
         val route = schedule.route ?: return null
 
-        if (!route.notificationEnabled) { return null }
+        if (!route.notificationEnabled) {
+            scheduleDto.id?.let { departureAlarmSyncService?.cancel(memberId, it) }
+            return null
+        }
 
         val scheduleId = requireNotNull(schedule.id) { "저장된 일정 ID가 없습니다." }
         val travelMinutes = requireNotNull(route.travelMinutes) { "출발 알림을 생성하려면 travelMinutes가 필요합니다." }
@@ -172,6 +194,8 @@ class SchedulePushJobService private constructor(
             intervalMinutes = intervalMinutes,
             notificationInputFingerprint =
                 ScheduleNotificationInputFingerprint.fromSchedule(memberId, scheduleDto),
+            alertMode = route.alertMode,
+            scheduleTitle = scheduleDto.title,
         )
 
     }
@@ -186,7 +210,10 @@ class SchedulePushJobService private constructor(
         scheduleDto: ScheduleDto,
         plan: ScheduleTravelPlanDto,
     ): SchedulePushJobDto? {
-        if (!plan.notificationEnabled) return null
+        if (!plan.notificationEnabled) {
+            scheduleDto.id?.let { departureAlarmSyncService?.cancel(memberId, it) }
+            return null
+        }
         val scheduleId = scheduleDto.id ?: return null
         val scheduleAt = parseInstant(scheduleDto.startAt)
         val travelMinutes = requireNotNull(plan.travelMinutes) {
@@ -205,6 +232,8 @@ class SchedulePushJobService private constructor(
             intervalMinutes = intervalMinutes,
             notificationInputFingerprint =
                 ScheduleNotificationInputFingerprint.fromTravelPlan(memberId, scheduleDto, plan),
+            alertMode = plan.alertMode,
+            scheduleTitle = scheduleDto.title,
         )
     }
 
@@ -216,6 +245,8 @@ class SchedulePushJobService private constructor(
         monitorStartAt: Instant,
         intervalMinutes: Int,
         notificationInputFingerprint: String,
+        alertMode: ScheduleAlertMode,
+        scheduleTitle: String?,
     ): SchedulePushJobDto? {
         if (memberRepository != null &&
             memberRepository.findByIdForUpdate(memberId)?.deleted != false
@@ -242,20 +273,33 @@ class SchedulePushJobService private constructor(
                 notificationInputFingerprint = notificationInputFingerprint,
             )
 
-        return SchedulePushJobDto.fromEntity(schedulePushJobRepository.save(pushJob))
+        val saved = schedulePushJobRepository.save(pushJob)
+        departureAlarmSyncService?.synchronizeConfigured(
+            memberId = memberId,
+            scheduleId = scheduleId,
+            notificationEnabled = true,
+            alertMode = alertMode,
+            triggerAt = departureAt,
+            scheduleTitle = scheduleTitle,
+        )
+        return SchedulePushJobDto.fromEntity(saved)
 
     }
 
     @Transactional
     fun cancelByScheduleId(scheduleId: Long) {
-        val memberIds = schedulePushJobRepository.findAllByScheduleId(scheduleId)
-            .map { it.memberId }
+        val memberIds = (
+            schedulePushJobRepository.findAllByScheduleId(scheduleId)
+                .map { it.memberId } +
+                departureAlarmSyncService?.findMemberIdsForSchedule(scheduleId).orEmpty()
+            )
             .distinct()
             .sorted()
         if (memberIds.isNotEmpty()) {
             memberRepository?.findAllByIdsForUpdate(memberIds)
         }
         schedulePushJobRepository.findAllByScheduleIdOrderByIdAsc(scheduleId).forEach { it.cancel() }
+        departureAlarmSyncService?.cancelAllForSchedule(scheduleId)
     }
 
     @Transactional
@@ -264,6 +308,7 @@ class SchedulePushJobService private constructor(
             memberRepository.findByIdForUpdate(memberId)?.deleted != false
         ) return
         schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)?.cancel()
+        departureAlarmSyncService?.cancel(memberId, scheduleId)
     }
 
     @Transactional
@@ -293,6 +338,12 @@ class SchedulePushJobService private constructor(
         }
 
         pushJob.snoozeUntil(nextCheckAt)
+        departureAlarmSyncService?.snooze(
+            memberId = memberId,
+            scheduleId = scheduleId,
+            snoozedUntil = pushJob.snoozedUntil,
+            scheduleTitle = null,
+        )
         return pushJob.snoozedUntil
     }
 

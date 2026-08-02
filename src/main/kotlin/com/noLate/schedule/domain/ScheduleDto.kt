@@ -80,6 +80,7 @@ data class ScheduleDto(
     val notificationEnabled: Boolean? = null,
     val notificationLeadMinutes: Int? = null,
     val notificationIntervalMinutes: Int? = null,
+    val alertMode: ScheduleAlertMode? = null,
     val updatedAt: String? = null,
 ) {
 
@@ -137,6 +138,7 @@ data class ScheduleDto(
             notificationEnabled = notificationEnabled ?: false,
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
+            alertMode = alertMode ?: ScheduleAlertMode.STANDARD,
         )
 
         return schedule
@@ -196,6 +198,7 @@ data class ScheduleDto(
                 notificationEnabled = routeInfo?.notificationEnabled ?: false,
                 notificationLeadMinutes = routeInfo?.notificationLeadMinutes,
                 notificationIntervalMinutes = routeInfo?.notificationIntervalMinutes,
+                alertMode = routeInfo?.alertMode ?: ScheduleAlertMode.STANDARD,
                 updatedAt = (schedule.updateDt ?: schedule.updatedAt)
                     ?.atZone(zoneId)
                     ?.toInstant()

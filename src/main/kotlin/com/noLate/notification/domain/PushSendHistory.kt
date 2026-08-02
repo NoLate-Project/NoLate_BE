@@ -9,7 +9,6 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Index
-import jakarta.persistence.Lob
 import jakarta.persistence.Table
 import java.time.Instant
 
@@ -76,8 +75,10 @@ class PushSendHistory(
     @Column(nullable = false, length = 1000)
     val body: String,
 
-    @Lob
-    @Column(nullable = false)
+    // MySQL/Hibernate 조합에서 @Lob String이 TINYTEXT(255 bytes)로 생성될 수 있다.
+    // 스케줄 푸시 payload는 모든 action/fence 필드를 포함하므로 배포 DDL과 동일한
+    // LONGTEXT를 명시해 실패 이력 자체가 data truncation으로 유실되지 않게 한다.
+    @Column(name = "data_json", nullable = false, columnDefinition = "LONGTEXT")
     val dataJson: String,
 
     @Enumerated(EnumType.STRING)

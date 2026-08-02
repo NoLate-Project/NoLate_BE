@@ -1,4 +1,11 @@
 spring:
+  datasource:
+    hikari:
+      # 가정용 서버에서 요청 스레드가 DB connection을 무제한으로 기다리지 않게 한다.
+      # Hikari의 connection-timeout 단위는 ms이며 최소 허용값(250ms)보다 여유 있게 둔다.
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE:8}
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE:2}
+      connection-timeout: ${SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT:3000}
   sql:
     init:
       mode: never
@@ -9,6 +16,16 @@ spring:
       ddl-auto: validate
     open-in-view: false
 
+server:
+  tomcat:
+    # Boot/Tomcat 기본값(threads 200, connections 8192)은 홈서버의 CPU/DB보다 크다.
+    # 작은 실행 상한과 유한 대기열로 순간 부하가 JVM 전체로 확산되는 것을 막는다.
+    threads:
+      max: ${SERVER_TOMCAT_THREADS_MAX:32}
+      min-spare: ${SERVER_TOMCAT_THREADS_MIN_SPARE:4}
+    accept-count: ${SERVER_TOMCAT_ACCEPT_COUNT:32}
+    max-connections: ${SERVER_TOMCAT_MAX_CONNECTIONS:128}
+
 logging:
   level:
     # JDBC driver duplicate-key 원문은 opaque credential을 포함할 수 있다. 운영에서는
@@ -18,6 +35,9 @@ logging:
     org.hibernate.orm.jdbc.bind: "OFF"
     org.hibernate.engine.jdbc.spi.SqlExceptionHelper: "OFF"
     com.noLate.global.logging.P6SpySqlErrorEventListener: info
+    # 요청마다 발생하는 HIT/MISS/STORE INFO는 운영 디스크 I/O만 늘린다.
+    # 클래스의 WARN fallback/역직렬화/Redis 실패 로그는 그대로 보존한다.
+    com.noLate.schedule.application.cache.ScheduleCalendarCacheService: warn
 
 observability:
   snapshot:
@@ -37,8 +57,8 @@ schedule:
     # malformed 값은 중앙 정책에서 fail closed 된다.
     enabled: ${SCHEDULE_SHARING_ENABLED:true}
   push:
-    # 최초 migration 기동은 false로 두어 guard/backfill/smoke가 끝나기 전에 어떤
-    # @Scheduled worker도 시작하지 않게 한다. 검증 뒤 명시적 재시작에서만 true로 전환한다.
+    # 최초 migration 기동에서는 ETA job claim만 멈춘다. Durable outbox와 보존/토큰/알람
+    # cleanup worker는 각자의 enable flag로 계속 동작한다.
     enabled: ${SCHEDULE_PUSH_ENABLED:false}
 
 # Ephemeral provider scenario runner는 운영에서 환경 변수로도 열리지 않게 고정한다.

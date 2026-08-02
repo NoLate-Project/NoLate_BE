@@ -15,8 +15,10 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestPropertySource
+import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import org.mockito.kotlin.whenever
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -40,6 +42,9 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
     private val repository: SchedulePushJobRepository,
     private val jdbcTemplate: JdbcTemplate,
 ) {
+
+    @MockitoBean
+    private lateinit var departureAlarmSyncService: DepartureAlarmSyncService
 
     private val now = Instant.parse("2026-07-24T03:00:00Z")
 
@@ -143,6 +148,27 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
         val current = repository.findAll().single()
         assertEquals(SchedulePushJobStatus.PROCESSING, current.status)
         assertEquals("worker-b", current.lockedBy)
+    }
+
+    @Test
+    fun `alarm outbox 전이가 실패하면 job 완료 전이도 함께 rollback한다`() {
+        repository.saveAndFlush(createJob())
+        val claimed = requireNotNull(coordinator.claimNextDueJob(now, "worker-a"))
+        claimed.cancel()
+        whenever(departureAlarmSyncService.cancel(MEMBER_ID, claimed.scheduleId))
+            .thenThrow(IllegalStateException("alarm outbox unavailable"))
+
+        assertThrows(IllegalStateException::class.java) {
+            coordinator.persist(
+                job = claimed,
+                workerId = "worker-a",
+                alarmIntent = SchedulePushAlarmIntent.Cancel(MEMBER_ID, claimed.scheduleId),
+            )
+        }
+
+        val current = repository.findAll().single()
+        assertEquals(SchedulePushJobStatus.PROCESSING, current.status)
+        assertEquals("worker-a", current.lockedBy)
     }
 
     @Test

@@ -27,6 +27,8 @@ schedule:
   sharing:
     # The Gradle test profile must not silently reopen schedule sharing.
     enabled: false
+    rate-limit:
+      enabled: false
   calendar-cache:
     enabled: false
   push:
@@ -41,6 +43,12 @@ schedule:
 routing:
   tmap:
     enabled: false
+eta:
+  transit:
+    odsay:
+      enabled: false
+      api-key: ""
+      base-url: https://example.invalid
 firebase:
   enabled: false
 

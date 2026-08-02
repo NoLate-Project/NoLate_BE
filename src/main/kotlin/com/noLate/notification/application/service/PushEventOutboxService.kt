@@ -82,12 +82,49 @@ class PushEventOutboxService(
         data: Map<String, String>,
         deduplicationKey: String,
     ): PreparedPushEvent =
+        enqueueDurable(
+            memberId = memberId,
+            title = title,
+            body = body,
+            data = data,
+            deduplicationKey = deduplicationKey,
+            inboxVisible = true,
+        )
+
+    fun enqueueDurable(
+        memberId: Long,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+        deduplicationKey: String,
+        inboxVisible: Boolean,
+    ): PreparedPushEvent =
         writer.prepareDurable(
             memberId = memberId,
             title = title,
             body = body,
             data = data,
             deduplicationKey = deduplicationKey,
+            inboxVisible = inboxVisible,
+        )
+
+    /**
+     * Provider 전달 내구성은 일반 알림과 공유하되 앱 알림함에는 노출하지 않는 제어 명령이다.
+     */
+    fun enqueueControl(
+        memberId: Long,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+        deduplicationKey: String,
+    ): PreparedPushEvent =
+        enqueueDurable(
+            memberId = memberId,
+            title = title,
+            body = body,
+            data = data,
+            deduplicationKey = deduplicationKey,
+            inboxVisible = false,
         )
 
     fun loadPersisted(
@@ -172,6 +209,7 @@ class PushEventOutboxWriter(
         body: String,
         data: Map<String, String>,
         deduplicationKey: String,
+        inboxVisible: Boolean = true,
     ): PreparedPushEvent =
         prepareWithinTransaction(
             memberId = memberId,
@@ -181,6 +219,7 @@ class PushEventOutboxWriter(
             deduplicationKey = deduplicationKey,
             fence = null,
             durableDispatch = true,
+            inboxVisible = inboxVisible,
         )
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
@@ -206,6 +245,7 @@ class PushEventOutboxWriter(
         fence: PushDispatchFence?,
         durableDispatch: Boolean,
         sessionFence: AuthenticatedPushSessionFence? = null,
+        inboxVisible: Boolean = true,
     ): PreparedPushEvent {
         // Global notification/withdrawal lock order starts with the recipient member. The active
         // check and every source/manifest write below are committed under this same row lock.
@@ -281,6 +321,7 @@ class PushEventOutboxWriter(
                 body = body.take(1000),
                 dataJson = objectMapper.writeValueAsString(canonicalData),
                 createdAt = Instant.now(clock),
+                inboxVisible = inboxVisible,
                 manifestState = PushManifestState.OPEN,
             )
         )
@@ -325,6 +366,7 @@ class PushEventOutboxWriter(
                         scheduleId = data["scheduleId"]?.toLongOrNull(),
                         calendarId = data["calendarId"]?.toLongOrNull(),
                         payloadType = data["type"]?.take(80),
+                        deliveryAckCapabilityVersion = token.deliveryAckCapabilityVersion,
                     )
                 }
             if (frozen.isNotEmpty()) {

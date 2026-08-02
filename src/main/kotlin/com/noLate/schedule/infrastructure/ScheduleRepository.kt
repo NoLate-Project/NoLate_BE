@@ -13,6 +13,8 @@ import java.time.LocalDateTime
 
 interface ScheduleRepository : JpaRepository<Schedule, Long> {
 
+    fun existsByIdAndDeletedFalse(id: Long): Boolean
+
     fun findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId: Long): List<Schedule>
     fun findAllByMemberId(memberId: Long): List<Schedule>
 
@@ -427,6 +429,7 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         @Param("categoryId") categoryId: String?,
         @Param("rangeStart") rangeStart: Instant?,
         @Param("rangeEnd") rangeEnd: Instant?,
+        pageable: Pageable,
     ): List<Schedule>
 
     @Query(
@@ -454,6 +457,7 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         @Param("categoryId") categoryId: String?,
         @Param("rangeStart") rangeStart: Instant?,
         @Param("rangeEnd") rangeEnd: Instant?,
+        pageable: Pageable,
     ): List<Schedule>
 
     @Query(

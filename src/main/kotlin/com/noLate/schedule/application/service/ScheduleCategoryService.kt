@@ -12,6 +12,7 @@ import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.sharing.application.SharingBlockPolicy
 import jakarta.transaction.Transactional
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.dao.ConcurrencyFailureException
@@ -28,6 +29,7 @@ class ScheduleCategoryService(
     private val categoryDeleteCoordinator: ScheduleCategoryDeleteCoordinator? = null,
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
     private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
+    private val sharingBlockPolicy: SharingBlockPolicy? = null,
 ) {
     private val defaultCategories = listOf(
         DefaultScheduleCategory("업무", "#f44336", "briefcase-outline"),
@@ -62,7 +64,13 @@ class ScheduleCategoryService(
             // 조회 조건에 사용하지 않아 다른 회원의 카테고리 UGC가 응답에 섞이지 않게 한다.
             categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId)
         }
-        val hasReceivedCategory = visibleCategories.any { it.memberId != memberId }
+        val blockedOwnerIds = sharingBlockPolicy
+            ?.blockedCounterpartIds(memberId, visibleCategories.map { it.memberId })
+            .orEmpty()
+        val allowedCategories = visibleCategories.filter {
+            it.memberId == memberId || it.memberId !in blockedOwnerIds
+        }
+        val hasReceivedCategory = allowedCategories.any { it.memberId != memberId }
         val permissionByCategoryId = if (hasReceivedCategory) {
             categoryShareRepository
                 ?.findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
@@ -75,7 +83,7 @@ class ScheduleCategoryService(
             emptyMap()
         }
 
-        return visibleCategories
+        return allowedCategories
             .map { category ->
                 val shared = category.memberId != memberId
                 category.toDto().copy(

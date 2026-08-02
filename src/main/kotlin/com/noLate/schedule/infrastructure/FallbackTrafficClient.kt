@@ -1,7 +1,7 @@
 package com.noLate.schedule.infrastructure
 
-import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
+import com.noLate.schedule.application.TrafficProviderClient
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.TrafficResult
 import com.noLate.schedule.application.fallbackResult
@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component
     havingValue = "false",
     matchIfMissing = true,
 )
-class FallbackTrafficClient : TrafficClient {
+class FallbackTrafficClient : TrafficProviderClient {
     override fun getTravelMinutes(request: TrafficRequest): TrafficResult =
         request.fallbackResult(
             request.liveRefreshBlockedReason

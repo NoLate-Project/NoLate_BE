@@ -1,0 +1,47 @@
+- main [ref=f1e2]:
+  - region [ref=f1e16]:
+    - generic [ref=f1e17]:
+      - generic [ref=f1e18]:
+        - generic [ref=f1e19]:
+          - generic [ref=f1e20]: "N"
+          - generic [ref=f1e21]: NoLate Operations
+        - heading "공유 안전 큐" [level=1] [ref=f1e22]
+        - paragraph [ref=f1e23]: 오래 접수된 신고부터 최대 100건을 보여줍니다.
+      - button "로그아웃" [ref=f1e24] [cursor=pointer]
+    - generic "신고 상태 요약" [ref=f1e25]:
+      - generic [ref=f1e26]:
+        - text: 접수
+        - strong [ref=f1e27]: "0"
+      - generic [ref=f1e28]:
+        - text: 검토 중
+        - strong [ref=f1e29]: "1"
+      - generic [ref=f1e30]:
+        - text: 처리 완료
+        - strong [ref=f1e31]: "0"
+      - generic [ref=f1e32]:
+        - text: 기각
+        - strong [ref=f1e33]: "0"
+    - generic [ref=f1e34]:
+      - generic "상태 필터" [ref=f1e35]:
+        - button "접수" [ref=f1e73] [cursor=pointer]
+        - button "검토 중" [pressed] [ref=f1e74] [cursor=pointer]
+        - button "처리 완료" [ref=f1e75] [cursor=pointer]
+        - button "기각" [ref=f1e76] [cursor=pointer]
+      - generic [ref=f1e40]: 2026. 8. 1. 오전 11:52 갱신
+    - article [ref=f1e77]:
+      - generic [ref=f1e78]:
+        - generic [ref=f1e79]:
+          - generic [ref=f1e80]:
+            - generic [ref=f1e81]: 검토 중
+            - generic [ref=f1e82]: "#1 · 일정 #4242"
+          - heading "스팸" [level=2] [ref=f1e83]
+          - paragraph [ref=f1e84]: 운영 대시보드 E2E 신고 샘플
+        - time [ref=f1e85]: 2026. 8. 1. 오전 2:50
+      - generic [ref=f1e86]:
+        - generic [ref=f1e87]: 신고자 reporter@nolate.test
+        - generic [ref=f1e88]: 신고 대상 operator@nolate.test
+        - generic [ref=f1e89]: "처리 운영자 #1"
+      - paragraph [ref=f1e90]: "처리 메모: E2E 검토 시작 확인"
+      - generic [ref=f1e91]:
+        - button "처리 완료" [ref=f1e92] [cursor=pointer]
+        - button "기각" [ref=f1e93] [cursor=pointer]

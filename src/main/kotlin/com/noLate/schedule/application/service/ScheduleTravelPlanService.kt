@@ -6,6 +6,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleDepartureParticipantRole
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePlaceDto
@@ -109,6 +110,7 @@ class ScheduleTravelPlanService(
             notificationEnabled = scheduleDto.notificationEnabled == true,
             notificationLeadMinutes = scheduleDto.notificationLeadMinutes,
             notificationIntervalMinutes = scheduleDto.notificationIntervalMinutes,
+            alertMode = scheduleDto.alertMode,
         )
         return upsertLocked(
             memberId = memberId,
@@ -329,6 +331,7 @@ class ScheduleTravelPlanService(
                 notificationEnabled = false,
                 notificationLeadMinutes = null,
                 notificationIntervalMinutes = null,
+                alertMode = ScheduleAlertMode.STANDARD,
                 myTravelPlan = null,
                 travelPlanStatus = null,
                 travelPlanParticipants = emptyList(),
@@ -352,6 +355,7 @@ class ScheduleTravelPlanService(
                 notificationEnabled = dto.notificationEnabled,
                 notificationLeadMinutes = dto.notificationLeadMinutes,
                 notificationIntervalMinutes = dto.notificationIntervalMinutes,
+                alertMode = dto.alertMode,
                 myTravelPlan = dto,
                 travelPlanStatus = dto.status,
             )
@@ -387,6 +391,7 @@ class ScheduleTravelPlanService(
             notificationEnabled = false,
             notificationLeadMinutes = null,
             notificationIntervalMinutes = null,
+            alertMode = ScheduleAlertMode.STANDARD,
             myTravelPlan = null,
             travelPlanStatus = ScheduleTravelPlanStatus.NOT_CONFIGURED,
         )
@@ -423,6 +428,9 @@ class ScheduleTravelPlanService(
         val departAt = command.departAt?.let { parseInstant(it, "departAt") }
         val routeJson = normalizeRouteJson(command.routeJson)
         val plan = existing ?: ScheduleTravelPlan(scheduleId = scheduleId, memberId = memberId)
+        val alertMode = command.alertMode
+            ?: existing?.takeUnless { it.deleted }?.alertMode
+            ?: ScheduleAlertMode.STANDARD
         plan.replace(
             command = command,
             scheduleFingerprint = ScheduleTravelPlanFingerprint.calculate(schedule),
@@ -430,6 +438,7 @@ class ScheduleTravelPlanService(
             routeJson = routeJson,
             notificationLeadMinutes = normalizedNotification.leadMinutes,
             notificationIntervalMinutes = normalizedNotification.intervalMinutes,
+            alertMode = alertMode,
         )
         val saved = travelPlanRepository.saveAndFlush(plan)
         return saved.toDto(schedule, canViewAllTravelPlans(memberId, schedule))
@@ -582,6 +591,7 @@ class ScheduleTravelPlanService(
             notificationEnabled = notificationEnabled,
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
+            alertMode = alertMode,
             updatedAt = (updateDt ?: updatedAt)?.toString(),
         )
     }
@@ -609,6 +619,7 @@ class ScheduleTravelPlanService(
             notificationEnabled = route.notificationEnabled,
             notificationLeadMinutes = route.notificationLeadMinutes,
             notificationIntervalMinutes = route.notificationIntervalMinutes,
+            alertMode = route.alertMode,
             updatedAt = (schedule.updateDt ?: schedule.updatedAt)?.toString(),
         )
     }
@@ -645,7 +656,7 @@ class ScheduleTravelPlanService(
 
     private fun hasPersonalRoute(dto: ScheduleDto): Boolean =
         dto.origin != null || dto.route != null || dto.travelMinutes != null ||
-            dto.notificationEnabled == true
+            dto.notificationEnabled == true || dto.alertMode == ScheduleAlertMode.ALARM
 }
 
 private data class NormalizedNotification(

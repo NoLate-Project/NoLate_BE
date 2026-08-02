@@ -1,5 +1,7 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
+
 /**
  * Schedule-bound notification payloads use the same access rule at dispatch and cleanup time.
  *
@@ -25,5 +27,7 @@ internal object SchedulePushPayloadAccessPolicy {
     fun shouldDelete(
         access: ScheduleAccessDecision,
         payloadType: String?,
-    ): Boolean = !canDispatch(access, payloadType)
+    ): Boolean =
+        payloadType != DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE &&
+            !canDispatch(access, payloadType)
 }

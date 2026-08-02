@@ -11,7 +11,8 @@ DDL을 겹치면 누락 column insert, 잘못된 device ownership, 과거 event 
 2. 새 이미지가 `spring.jpa.hibernate.ddl-auto=validate`,
    `spring.sql.init.mode=never`인지 artifact에서 확인한다.
 3. `2026-07-22-app-notifications.sql`이 이미 적용되어 `app_notifications`가 있는지 확인한다.
-   아직 없다면 old writer를 중지한 뒤 먼저 적용하고 아래 3개 migration으로 진행한다.
+   아직 없다면 old writer를 중지한 뒤 먼저 적용하고 아래 v4 3개 및 후속 migration으로
+   진행한다.
 4. 모든 old API 인스턴스, `SchedulePushJobWorker`, route-setup worker, outbox drainer를
    중지한다. 일부 인스턴스를 남긴 rolling rollout은 금지한다.
 5. load balancer target과 scheduler/배치 목록이 0인지 확인하고, DB에서 아래 row count를
@@ -321,6 +322,20 @@ old writer가 모두 중지된 상태에서 정확히 다음 순서로 실행한
 2. [`2026-07-24-push-delivery-followup.sql`](./2026-07-24-push-delivery-followup.sql)
 3. [`2026-07-24-push-delivery-linearization.sql`](./2026-07-24-push-delivery-linearization.sql)
 
+v4 이후의 독립 migration은 각 migration의 predecessor marker 순서대로 같은 maintenance
+window에서 계속 적용한다. 특히 아래 ACK capability migration은
+`2026-08-01-departure-alarm-schedule-receipts-v1` marker가 정확히 한 건인 것을 먼저 확인한 뒤 마지막 후속
+단계로 실행한다. API/worker를 먼저 재개하거나 marker를 수동 insert해서 predecessor 검사를
+우회하지 않는다.
+
+4. [`2026-08-01-push-delivery-ack-capability.sql`](../schedule/migrations/2026-08-01-push-delivery-ack-capability.sql)
+
+4번은 legacy row를 capability v1으로 추정 backfill하지 않는다. 기존 row의 nullable 값은
+그대로 measurement-coverage 대상에 남기고, 새 클라이언트가 token 등록에서 명시한 v1만 이후
+delivery manifest에 동결한다. script의 postcondition이 두 nullable column, 정확한 cohort
+index 순서, 두 CHECK constraint를 검증한 뒤에만
+`2026-08-01-push-delivery-ack-capability-v1` marker를 기록한다.
+
 3번은 precondition을 다시 검사하고 다음을 함께 적용한다.
 
 - immutable app notification manifest/outbox lease와 optimistic version
@@ -368,7 +383,36 @@ FROM schedule_push_job;
 
 SELECT version, description, applied_at
 FROM application_schema_migrations
-WHERE version = '2026-07-24-push-reliability-v4';
+WHERE version IN (
+    '2026-07-24-push-reliability-v4',
+    '2026-08-01-push-delivery-ack-capability-v1'
+)
+ORDER BY version;
+
+SELECT table_name, column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name IN ('push_device_token', 'push_deliveries')
+  AND column_name = 'delivery_ack_capability_version'
+ORDER BY table_name;
+
+SELECT index_name,
+       GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns_in_index
+FROM information_schema.statistics
+WHERE table_schema = DATABASE()
+  AND table_name = 'push_deliveries'
+  AND index_name = 'idx_push_deliveries_reliability_cohort'
+GROUP BY index_name;
+
+SELECT table_name, constraint_name, constraint_type
+FROM information_schema.table_constraints
+WHERE constraint_schema = DATABASE()
+  AND table_name IN ('push_device_token', 'push_deliveries')
+  AND constraint_name IN (
+      'chk_push_device_token_ack_capability',
+      'chk_push_deliveries_ack_capability'
+  )
+ORDER BY table_name;
 
 SELECT index_name, GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns_in_index
 FROM information_schema.statistics
@@ -429,6 +473,12 @@ unique index가 없어야 한다. `uk_push_device_token_token_fingerprint`와
 `invalid_notification_account_binding`도 0이어야 한다. valid JSON scalar/array였던 legacy
 payload는 기존 앱의 `Map<String, String>` 계약 밖 데이터이므로 migration이 최소 account
 binding object로 정규화한다.
+
+두 marker query 결과는 각각 정확히 한 row여야 한다. capability column query는 두 table에서
+각각 `int`/nullable 한 row를 반환해야 하고, cohort index는 정확히
+`status,delivered_at,delivery_ack_capability_version,client_received_at` 순서여야 한다. CHECK
+constraint도 table별 한 건이어야 한다. 하나라도 다르면 새 binary를 시작하지 말고 모든
+writer를 중지한 채 migration postcondition 실패 원인을 조사한다.
 
 아래 calendar snapshot/history/grant 검증도 모두 0이어야 한다. 0이 아니면 payload에서 id를
 추정해 발송하지 않고 writer를 계속 중지한 채 승인된 source+history drain/보정을 수행한 뒤
@@ -494,10 +544,11 @@ WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
 ## 5. Deploy and resume
 
 1. 첫 새 인스턴스에는 반드시 `SCHEDULE_PUSH_ENABLED=false`를 명시한다.
-   이 값은 `SchedulingConfiguration`의 전역 `@EnableScheduling` gate이므로 schedule push,
-   route-setup, durable outbox의 모든 `@Scheduled` 진입점을 함께 멈춘다. 배포 환경의 실제
-   resolved property가 `false`인지 확인하고, scheduler 실행 thread와 job/outbox claim 증가가
-   모두 0인지 확인한다. prod 기본값도 fail-safe `false`지만 배포 선언에 값을 명시한다.
+   이 값은 ETA schedule-push job claim만 멈춘다. Scheduling infrastructure와 route-setup,
+   durable outbox, token/alarm/retention cleanup은 각자의 enable flag에 따라 계속 동작한다.
+   따라서 push job claim 증가가 0인지 확인하되, 기존 outbox drain과 cleanup 활동은 정상으로
+   간주한다. maintenance에서 모든 scheduler를 멈춰야 한다면
+   `SPRING_TASK_SCHEDULING_ENABLED=false`를 별도로 사용하고 각 backlog의 영향도 함께 승인한다.
 2. worker-off 상태로 새 애플리케이션 한 인스턴스를 배포한다. `ApplicationReadyEvent`
    startup backfill은 scheduler와 별개로 실행되므로 future owner와 participant travel-plan
    job이 full runtime fingerprint로 재구성됐는지 count를 확인한다. Backfill은 scan 전체를
@@ -510,15 +561,17 @@ WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
    mandatory drain 때문에 기존 endpoint는 하나도 승계되지 않으며, generation claim이 없는
    JWT는 의도적으로 재로그인이 필요하다. 동일 event/zero-device 검증용 row는 provider를
    호출하지 않는 승인된 진단 절차로만 만든다.
-5. worker-off 인스턴스를 종료하고 scheduler thread와 실행 중 claim이 다시 0인지 확인한다.
+5. worker-off 인스턴스를 종료하고 실행 중 schedule-push claim이 다시 0인지 확인한다.
    같은 검증된 artifact를 `SCHEDULE_PUSH_ENABLED=true`로 명시해 제한된 한 인스턴스로
-   재시작한다. 이 재시작이 API, schedule push, route-setup, durable outbox를 함께 재개하는
-   유일한 전환점이다.
+   재시작한다. 운영 startup guard는 이때 `SPRING_TASK_SCHEDULING_ENABLED=true`,
+   `NOTIFICATION_PUSH_OUTBOX_ENABLED=true`, `FIREBASE_ENABLED=true`가 아니면 기동을 거절한다.
+   route-setup, durable outbox와 cleanup worker는 이 전환과 독립적으로 계속 동작한다.
 6. 동일 event redrive, zero-device event, token ownership transfer, outbox retry 지표와
    backlog/lease/error 지표가 안정된 뒤 나머지 새 인스턴스를 올린다.
 
 Docker가 없는 개발 환경에서 MySQL Testcontainers 테스트가 skip될 수 있다. 실제 MySQL 8에서
-3개 script, global fingerprint 경합, 다중 인스턴스 claim, schedule edit/backfill의
+v4 3개 script와 필수 후속 migration, global fingerprint 경합, 다중 인스턴스 claim,
+schedule edit/backfill의
 member→job gap→schedule 잠금, lock timeout/deadlock bounded retry를 실행한 결과를 staging
 promotion gate로 남긴다. 느린 실제 provider를 사용한 lease recovery/confirmed failure
 reconciliation과 FCM 응답 분류도 같은 gate에서 확인한다. provider 호출은 DB transaction
@@ -558,7 +611,7 @@ startup을 실패시킨다. staging에서는 배포 artifact의 resolved configu
 
 ## 6. Rollback policy
 
-- token drain 전 첫 DDL 전 실패: 세 migration을 적용하지 않고 old app/worker를 그대로
+- token drain 전 첫 DDL 전 실패: v4 및 후속 migration을 적용하지 않고 old app/worker를 그대로
   재개할 수 있다.
 - token/job drain 뒤 첫 DDL 전 실패: old app/worker를 재개할 수는 있지만 push token과
   schedule job row는 복원되지 않는다. snapshot 복원 승인이 없다면 사용자의

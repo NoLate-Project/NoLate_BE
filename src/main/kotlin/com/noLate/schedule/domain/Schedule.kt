@@ -155,6 +155,7 @@ class Schedule(
         notificationEnabled: Boolean,
         notificationLeadMinutes: Int?,
         notificationIntervalMinutes: Int?,
+        alertMode: ScheduleAlertMode = ScheduleAlertMode.STANDARD,
     ) {
         if (
             travelMinutes == null &&
@@ -171,7 +172,8 @@ class Schedule(
             destinationLat == null &&
             destinationLng == null &&
             routeJson == null &&
-            !notificationEnabled
+            !notificationEnabled &&
+            alertMode != ScheduleAlertMode.ALARM
         ) {
             route = null
             return
@@ -199,6 +201,7 @@ class Schedule(
         next.notificationEnabled = notificationEnabled
         next.notificationLeadMinutes = notificationLeadMinutes
         next.notificationIntervalMinutes = notificationIntervalMinutes
+        next.alertMode = alertMode
     }
 
     /**
@@ -251,6 +254,7 @@ class Schedule(
             notificationEnabled = routeInfo?.notificationEnabled ?: false,
             notificationLeadMinutes = routeInfo?.notificationLeadMinutes,
             notificationIntervalMinutes = routeInfo?.notificationIntervalMinutes,
+            alertMode = routeInfo?.alertMode ?: ScheduleAlertMode.STANDARD,
             updatedAt = (updateDt ?: updatedAt)?.toString(),
         )
     }

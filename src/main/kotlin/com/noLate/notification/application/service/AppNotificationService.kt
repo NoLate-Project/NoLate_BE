@@ -254,7 +254,8 @@ class AppNotificationService(
     }
 
     private fun AppNotification.isCurrentlyVisibleTo(memberId: Long): Boolean =
-        this.memberId == memberId &&
+        inboxVisible &&
+            this.memberId == memberId &&
             recipientAuthorizationValidator.canDispatch(
                 memberId = memberId,
                 scheduleId = scheduleId,

@@ -12,13 +12,22 @@ import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleArrivalObservationSource
+import com.noLate.schedule.domain.EtaAccuracyEligibilityReason
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.domain.SchedulePushJob
+import com.noLate.schedule.domain.SchedulePushJobStatus
+import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
+import com.noLate.schedule.infrastructure.ScheduleEtaAccuracyObservationRepository
+import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -46,6 +55,7 @@ import java.util.concurrent.TimeUnit
 @DataJpaTest
 @Import(
     ScheduleDepartureStatusService::class,
+    ScheduleEtaAccuracyService::class,
     ScheduleDeparturePushNotificationListener::class,
     PushEventOutboxService::class,
     PushEventOutboxWriter::class,
@@ -67,6 +77,9 @@ class ScheduleDepartureStatusConcurrencyIntegrationTest @Autowired constructor(
     private val scheduleRepository: ScheduleRepository,
     private val shareRepository: ScheduleShareRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
+    private val pushJobRepository: SchedulePushJobRepository,
+    private val etaAccuracyObservationRepository: ScheduleEtaAccuracyObservationRepository,
+    private val etaAccuracyService: ScheduleEtaAccuracyService,
     private val pushSendHistoryRepository: PushSendHistoryRepository,
     private val appNotificationRepository: AppNotificationRepository,
     private val pushDeliveryRepository: PushDeliveryRepository,
@@ -215,6 +228,84 @@ class ScheduleDepartureStatusConcurrencyIntegrationTest @Autowired constructor(
                 )
             ).status,
         )
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    fun `operational depart then cancel preserves ETA snapshot used by arrival observation`() {
+        val fixture = createFixture()
+        val evaluatedAt = Instant.parse("2026-07-22T01:19:00Z")
+        val predictedArrivalAt = Instant.parse("2026-07-22T01:55:00Z")
+        val job = pushJobRepository.saveAndFlush(
+            SchedulePushJob.create(
+                memberId = fixture.targetMemberId,
+                scheduleId = fixture.scheduleId,
+                scheduleAt = Instant.parse("2026-07-22T02:00:00Z"),
+                departureAt = Instant.parse("2026-07-22T01:20:00Z"),
+                monitorStartAt = Instant.parse("2026-07-22T00:20:00Z"),
+                intervalMinutes = 20,
+            ).apply {
+                finishCheck(
+                    travelMinutes = 35,
+                    recommendedDepartureAt = Instant.parse("2026-07-22T01:20:00Z"),
+                    pushSent = false,
+                    notifiedDepartureAt = null,
+                    nextCheckAt = null,
+                    completeAfterCheck = true,
+                    etaSource = TrafficSource.LIVE_PROVIDER,
+                    liveFetchedAt = evaluatedAt,
+                    etaStale = false,
+                    predictedArrivalAt = predictedArrivalAt,
+                    etaTravelMode = ScheduleTravelMode.TRANSIT,
+                    now = evaluatedAt,
+                )
+            }
+        )
+
+        service.markDeparted(fixture.targetMemberId, fixture.scheduleId)
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            val locked = requireNotNull(
+                pushJobRepository.findByScheduleIdAndMemberIdForUpdate(
+                    fixture.scheduleId,
+                    fixture.targetMemberId,
+                )
+            )
+            locked.cancel()
+            pushJobRepository.saveAndFlush(locked)
+        }
+
+        val canceled = requireNotNull(
+            pushJobRepository.findByScheduleIdAndMemberId(
+                fixture.scheduleId,
+                fixture.targetMemberId,
+            )
+        )
+        assertEquals(SchedulePushJobStatus.CANCELED, canceled.status)
+        assertEquals(null, canceled.lastPredictedArrivalAt)
+        val status = departureStatusRepository
+            .findByScheduleIdAndMemberIdAndDeletedFalse(
+                fixture.scheduleId,
+                fixture.targetMemberId,
+            )
+        assertEquals(predictedArrivalAt, status?.etaSnapshotPredictedArrivalAt)
+        assertEquals(job.id, status?.etaSnapshotPushJobId)
+
+        val observation = etaAccuracyService.recordArrival(
+            fixture.targetMemberId,
+            fixture.scheduleId,
+            Instant.parse("2026-07-22T01:20:00Z"),
+            ScheduleArrivalObservationSource.USER_NOW,
+            30,
+        )
+
+        assertEquals(job.id, observation.pushJobId)
+        assertEquals(predictedArrivalAt, observation.predictedArrivalAt)
+        assertFalse(observation.accuracyEligible)
+        assertEquals(
+            EtaAccuracyEligibilityReason.UNVERIFIED_USER_NOW,
+            observation.accuracyEligibilityReason,
+        )
+        assertEquals(1, etaAccuracyObservationRepository.count())
     }
 
     private fun createFixture(): DepartureConcurrencyFixture {

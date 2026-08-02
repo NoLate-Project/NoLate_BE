@@ -106,6 +106,16 @@ class ScheduleTravelPlan(
     @Comment("사용자별 ETA 재확인 간격(분)")
     var notificationIntervalMinutes: Int? = null,
 
+    @Enumerated(EnumType.STRING)
+    @Column(
+        name = "alert_mode",
+        nullable = false,
+        length = 20,
+        columnDefinition = "varchar(20) default 'STANDARD'",
+    )
+    @Comment("사용자별 출발 알림 표시 방식: STANDARD 또는 ALARM")
+    var alertMode: ScheduleAlertMode = ScheduleAlertMode.STANDARD,
+
     @Column(name = "schedule_fingerprint", nullable = false, length = 64)
     @Comment("저장 당시 일정 시각과 공통 도착지의 SHA-256 지문")
     var scheduleFingerprint: String = "",
@@ -122,6 +132,7 @@ class ScheduleTravelPlan(
         routeJson: String?,
         notificationLeadMinutes: Int?,
         notificationIntervalMinutes: Int?,
+        alertMode: ScheduleAlertMode = ScheduleAlertMode.STANDARD,
     ) {
         travelMinutes = command.travelMinutes
         this.departAt = departAt
@@ -134,6 +145,7 @@ class ScheduleTravelPlan(
         notificationEnabled = command.notificationEnabled
         this.notificationLeadMinutes = notificationLeadMinutes
         this.notificationIntervalMinutes = notificationIntervalMinutes
+        this.alertMode = alertMode
         this.scheduleFingerprint = scheduleFingerprint
 
         // 회수 후 다시 공유받아 같은 유일키를 재사용하는 경우 새 row를 만들지 않고 복구한다.
@@ -166,6 +178,7 @@ data class ScheduleTravelPlanUpsertCommand(
     val notificationEnabled: Boolean = false,
     val notificationLeadMinutes: Int? = null,
     val notificationIntervalMinutes: Int? = null,
+    val alertMode: ScheduleAlertMode? = null,
 )
 
 data class ScheduleTravelPlanDto(
@@ -183,6 +196,7 @@ data class ScheduleTravelPlanDto(
     val notificationEnabled: Boolean = false,
     val notificationLeadMinutes: Int? = null,
     val notificationIntervalMinutes: Int? = null,
+    val alertMode: ScheduleAlertMode = ScheduleAlertMode.STANDARD,
     val updatedAt: String? = null,
 )
 

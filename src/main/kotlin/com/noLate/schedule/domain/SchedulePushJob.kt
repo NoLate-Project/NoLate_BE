@@ -137,6 +137,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var lastLiveFetchedAt: Instant? = null
         protected set
 
+    @Column(name = "last_eta_provider_fetched_at")
+    @Comment("마지막 ETA provider 응답 취득 시각; live comparator와 분리")
+    var lastEtaProviderFetchedAt: Instant? = null
+        protected set
+
     @Column(name = "last_live_travel_minutes")
     @Comment("마지막 신뢰 가능한 실시간 provider 이동 시간")
     var lastLiveTravelMinutes: Int? = null
@@ -156,6 +161,23 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     @Column(name = "last_eta_failure_reason", length = 500)
     @Comment("마지막 ETA fallback 안정 reason code와 안전 메시지")
     var lastEtaFailureReason: String? = null
+        protected set
+
+    @Column(name = "last_predicted_arrival_at")
+    @Comment("마지막 provider/overlay가 예측한 목적지 도착 시각")
+    var lastPredictedArrivalAt: Instant? = null
+        protected set
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "last_eta_travel_mode", length = 20)
+    @Comment("마지막 ETA snapshot의 이동 수단")
+    var lastEtaTravelMode: ScheduleTravelMode? = null
+        protected set
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "last_eta_algorithm_version", length = 40)
+    @Comment("마지막 ETA 계산 규칙의 낮은 cardinality 버전")
+    var lastEtaAlgorithmVersion: EtaAlgorithmVersion? = null
         protected set
 
     @Column(name = "last_eta_route_fingerprint", length = 64)
@@ -284,6 +306,9 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         status = SchedulePushJobStatus.CANCELED
         clearLiveComparatorChain()
         lastEtaRouteFingerprint = null
+        lastPredictedArrivalAt = null
+        lastEtaProviderFetchedAt = null
+        lastEtaAlgorithmVersion = null
         clearLock()
     }
 
@@ -391,6 +416,34 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     /**
      * 교통상황 체크 후 이동시간, 추천 출발 시간, 푸시 발송 여부를 반영한다.
      */
+    fun recordEtaEvaluationBeforeRetry(
+        travelMinutes: Int,
+        recommendedDepartureAt: Instant,
+        etaSource: TrafficSource,
+        liveFetchedAt: Instant?,
+        etaStale: Boolean,
+        etaFailureReason: String?,
+        predictedArrivalAt: Instant?,
+        etaTravelMode: ScheduleTravelMode?,
+        etaRouteFingerprint: String?,
+        liveComparatorMaxAgeMinutes: Long = DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES,
+        now: Instant = Instant.now(),
+    ) {
+        applyEtaEvaluation(
+            travelMinutes = travelMinutes,
+            recommendedDepartureAt = recommendedDepartureAt,
+            etaSource = etaSource,
+            liveFetchedAt = liveFetchedAt,
+            etaStale = etaStale,
+            etaFailureReason = etaFailureReason,
+            predictedArrivalAt = predictedArrivalAt,
+            etaTravelMode = etaTravelMode,
+            etaRouteFingerprint = etaRouteFingerprint,
+            liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
+            now = now,
+        )
+    }
+
     fun finishCheck(
         travelMinutes: Int,
         recommendedDepartureAt: Instant,
@@ -409,45 +462,25 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         liveFetchedAt: Instant? = null,
         etaStale: Boolean = true,
         etaFailureReason: String? = null,
+        predictedArrivalAt: Instant? = null,
+        etaTravelMode: ScheduleTravelMode? = null,
         etaRouteFingerprint: String? = null,
         liveComparatorMaxAgeMinutes: Long = DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES,
         now: Instant = Instant.now()
     ) {
-        if (etaSource == TrafficSource.LIVE_PROVIDER) {
-            requireNotNull(liveFetchedAt) {
-                "LIVE_PROVIDER ETA에는 provider 취득 시각이 필요합니다."
-            }
-        }
-        if (etaRouteFingerprint != null && etaRouteFingerprint != lastEtaRouteFingerprint) {
-            clearLiveComparatorChain()
-        }
-        val evaluatedAt = maxOf(now, liveFetchedAt ?: now)
-        val comparableLiveTravelMinutes = liveFetchedAt
-            ?.takeIf { etaSource == TrafficSource.LIVE_PROVIDER }
-            ?.let {
-                comparableLiveTravelMinutes(
-                    currentLiveFetchedAt = it,
-                    maxAgeMinutes = liveComparatorMaxAgeMinutes,
-                    routeFingerprint = etaRouteFingerprint,
-                )
-            }
-        comparableLiveTravelMinutes?.let { previousTravelMinutes ->
-            if (previousTravelMinutes != travelMinutes) {
-                lastTrafficChangeMinutes = travelMinutes - previousTravelMinutes
-                lastChangedAt = evaluatedAt
-            }
-        }
-        lastTravelMinutes = travelMinutes
-        lastRecommendedDepartureAt = recommendedDepartureAt
-        lastCheckedAt = evaluatedAt
-        if (etaSource == TrafficSource.LIVE_PROVIDER) {
-            lastLiveTravelMinutes = travelMinutes
-            lastLiveFetchedAt = liveFetchedAt
-        }
-        lastEtaSource = etaSource
-        lastEtaStale = etaStale
-        lastEtaFailureReason = etaFailureReason
-        lastEtaRouteFingerprint = etaRouteFingerprint
+        applyEtaEvaluation(
+            travelMinutes = travelMinutes,
+            recommendedDepartureAt = recommendedDepartureAt,
+            etaSource = etaSource,
+            liveFetchedAt = liveFetchedAt,
+            etaStale = etaStale,
+            etaFailureReason = etaFailureReason,
+            predictedArrivalAt = predictedArrivalAt,
+            etaTravelMode = etaTravelMode,
+            etaRouteFingerprint = etaRouteFingerprint,
+            liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
+            now = now,
+        )
         checkCount += 1
         retryCount = 0
         failureReason = null
@@ -517,6 +550,74 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         clearLock()
     }
 
+    private fun applyEtaEvaluation(
+        travelMinutes: Int,
+        recommendedDepartureAt: Instant,
+        etaSource: TrafficSource,
+        liveFetchedAt: Instant?,
+        etaStale: Boolean,
+        etaFailureReason: String?,
+        predictedArrivalAt: Instant?,
+        etaTravelMode: ScheduleTravelMode?,
+        etaRouteFingerprint: String?,
+        liveComparatorMaxAgeMinutes: Long,
+        now: Instant,
+    ) {
+        if (etaSource in PROVIDER_ETA_SOURCES) {
+            requireNotNull(liveFetchedAt) {
+                "provider ETA에는 provider 취득 시각이 필요합니다."
+            }
+        }
+        val onTimeUnavailableDiagnostic =
+            etaStale &&
+                etaFailureReason?.startsWith("TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE:") == true
+        require(
+            predictedArrivalAt == null ||
+                !predictedArrivalAt.isAfter(scheduleAt) ||
+                onTimeUnavailableDiagnostic
+        ) {
+            "목표 도착시각을 넘긴 여정은 정시 도착 불가 진단으로만 저장할 수 있습니다."
+        }
+        require(predictedArrivalAt == null || !predictedArrivalAt.isBefore(recommendedDepartureAt)) {
+            "예측 도착시각은 추천 출발시각보다 빠를 수 없습니다."
+        }
+        if (etaRouteFingerprint != null && etaRouteFingerprint != lastEtaRouteFingerprint) {
+            clearLiveComparatorChain()
+        }
+        val evaluatedAt = maxOf(now, liveFetchedAt ?: now)
+        val comparableLiveTravelMinutes = liveFetchedAt
+            ?.takeIf { etaSource == TrafficSource.LIVE_PROVIDER }
+            ?.let {
+                comparableLiveTravelMinutes(
+                    currentLiveFetchedAt = it,
+                    maxAgeMinutes = liveComparatorMaxAgeMinutes,
+                    routeFingerprint = etaRouteFingerprint,
+                )
+            }
+        comparableLiveTravelMinutes?.let { previousTravelMinutes ->
+            if (previousTravelMinutes != travelMinutes) {
+                lastTrafficChangeMinutes = travelMinutes - previousTravelMinutes
+                lastChangedAt = evaluatedAt
+            }
+        }
+        lastTravelMinutes = travelMinutes
+        lastRecommendedDepartureAt = recommendedDepartureAt
+        lastCheckedAt = evaluatedAt
+        if (etaSource == TrafficSource.LIVE_PROVIDER) {
+            lastLiveTravelMinutes = travelMinutes
+            lastLiveFetchedAt = liveFetchedAt
+        }
+        lastEtaSource = etaSource
+        lastEtaStale = etaStale
+        lastEtaFailureReason = etaFailureReason
+        lastPredictedArrivalAt = predictedArrivalAt
+        lastEtaTravelMode = etaTravelMode
+        lastEtaProviderFetchedAt = liveFetchedAt
+            ?.takeIf { etaSource in PROVIDER_ETA_SOURCES }
+        lastEtaAlgorithmVersion = EtaAlgorithmVersion.infer(etaSource, etaTravelMode)
+        lastEtaRouteFingerprint = etaRouteFingerprint
+    }
+
     /**
      * 일정 시간, 출발 시간, 모니터링 시작 시간, 체크 간격이 변경되었을 때 작업 정보를 갱신한다.
      */
@@ -568,6 +669,10 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.lastEtaSource = null
         this.lastEtaStale = null
         this.lastEtaFailureReason = null
+        this.lastPredictedArrivalAt = null
+        this.lastEtaTravelMode = null
+        this.lastEtaProviderFetchedAt = null
+        this.lastEtaAlgorithmVersion = null
         this.lastEtaRouteFingerprint = null
         this.lastTrafficChangeMinutes = null
         this.lastChangedAt = null
@@ -650,6 +755,8 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     }
 
     companion object {
+        private val PROVIDER_ETA_SOURCES =
+            setOf(TrafficSource.LIVE_PROVIDER, TrafficSource.TIMETABLE_PROVIDER)
         private val ALLOWED_INTERVALS = setOf(10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60)
         const val DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES = 60L
         const val MAX_LIVE_COMPARATOR_AGE_MINUTES = 10_080L

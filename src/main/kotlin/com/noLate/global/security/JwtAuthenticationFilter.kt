@@ -161,10 +161,7 @@ class JwtAuthenticationFilter(
                 || request.dispatcherType == DispatcherType.ASYNC
                 || (
                     request.method == "GET"
-                        && (
-                            request.servletPath == "/api/calendar/days"
-                                || applicationHealthRequestMatcher.matches(request)
-                        )
+                        && applicationHealthRequestMatcher.matches(request)
                 )
     }
 

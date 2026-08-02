@@ -2,19 +2,30 @@ package com.noLate.transit.infrastructure
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.noLate.transit.domain.TransitArrivalDto
+import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
 import com.noLate.transit.domain.TransitArrivalStatus
 import com.noLate.transit.domain.estimatedTransitArrivalStatus
 import com.noLate.transit.domain.seoulSubwayArrivalStatus
+import com.noLate.global.observability.NoLateOperationalMetrics
+import com.noLate.global.observability.TransitEtaProviderMetricId
+import com.noLate.global.observability.observeTransitEtaProviderCall
+import com.noLate.eta.resilience.EtaCalculationDeadline
+import com.noLate.eta.resilience.EtaDeadlineAwareClientHttpRequestFactory
+import com.noLate.eta.resilience.EtaProviderGuard
+import com.noLate.eta.resilience.StaticEtaProviderResiliencePolicyResolver
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
-import com.noLate.global.config.externalHttpRequestFactory
+import org.w3c.dom.Document
 import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
 import java.time.Instant
 import java.time.LocalDateTime
+import java.time.Duration
 import java.time.ZoneId
+import java.time.format.DateTimeFormatterBuilder
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoField
 import java.util.concurrent.ConcurrentHashMap
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
@@ -27,15 +38,44 @@ class SeoulTransitArrivalClient(
     @Value("\${transit.seoul.bus-api-key:}") private val busApiKey: String,
     @Value("\${transit.seoul.subway-base-url:http://swopenAPI.seoul.go.kr/api/subway}") subwayBaseUrl: String,
     @Value("\${transit.seoul.bus-base-url:http://ws.bus.go.kr/api/rest}") busBaseUrl: String,
+    @Value("\${transit.seoul.allow-insecure-http:false}") allowInsecureHttp: Boolean = false,
+    private val calculationDeadline: EtaCalculationDeadline = EtaCalculationDeadline(),
+    private val operationalMetrics: NoLateOperationalMetrics? = null,
+    private val providerGuard: EtaProviderGuard = EtaProviderGuard(
+        policyResolver = StaticEtaProviderResiliencePolicyResolver(),
+        calculationDeadline = calculationDeadline,
+    ),
+    private val wireMetrics: TransitProviderWireMetrics? = null,
+    private val wireRateLimiter: TransitProviderWireRateLimiter = TransitProviderWireRateLimiter(),
 ) {
+    init {
+        validateTransitProviderEndpoint(
+            provider = TransitWireProvider.SEOUL_SUBWAY,
+            baseUrl = subwayBaseUrl,
+            credentialConfigured = subwayKey().isNotBlank(),
+            allowInsecureHttp = allowInsecureHttp,
+        )
+        validateTransitProviderEndpoint(
+            provider = TransitWireProvider.SEOUL_BUS,
+            baseUrl = busBaseUrl,
+            credentialConfigured = busKey().isNotBlank(),
+            allowInsecureHttp = allowInsecureHttp,
+        )
+    }
+
+    private val requestFactory = EtaDeadlineAwareClientHttpRequestFactory(
+        calculationDeadline = calculationDeadline,
+        configuredConnectTimeout = Duration.ofSeconds(2),
+        configuredReadTimeout = Duration.ofSeconds(4),
+    )
     private val subwayClient = RestClient.builder()
         .baseUrl(subwayBaseUrl)
-        .requestFactory(externalHttpRequestFactory())
+        .requestFactory(requestFactory)
         .build()
 
     private val busClient = RestClient.builder()
         .baseUrl(busBaseUrl)
-        .requestFactory(externalHttpRequestFactory())
+        .requestFactory(requestFactory)
         .build()
     private val stationArsCache = ConcurrentHashMap<String, List<String>>()
 
@@ -49,6 +89,31 @@ class SeoulTransitArrivalClient(
         val apiKey = subwayKey()
         if (apiKey.isBlank()) return emptyList()
 
+        return operationalMetrics.observeTransitEtaProviderCall(
+            provider = TransitEtaProviderMetricId.SEOUL_SUBWAY,
+            isEmpty = { arrivals -> arrivals.isEmpty() },
+        ) {
+            providerGuard.execute(SEOUL_SUBWAY_PROVIDER_ID) {
+                getSubwayArrivalsUnobserved(
+                    apiKey = apiKey,
+                    stationName = stationName,
+                    lineName = lineName,
+                    directionName = directionName,
+                    directionCode = directionCode,
+                    limit = limit,
+                )
+            }
+        }
+    }
+
+    private fun getSubwayArrivalsUnobserved(
+        apiKey: String,
+        stationName: String,
+        lineName: String?,
+        directionName: String?,
+        directionCode: String?,
+        limit: Int,
+    ): List<TransitArrivalDto> {
         val arrivals = stationNameCandidates(stationName)
             .asSequence()
             .map { requestSubwayArrivals(apiKey, it, lineName, directionName, directionCode, limit) }
@@ -67,6 +132,29 @@ class SeoulTransitArrivalClient(
         val apiKey = busKey()
         if (apiKey.isBlank()) return emptyList()
 
+        return operationalMetrics.observeTransitEtaProviderCall(
+            provider = TransitEtaProviderMetricId.SEOUL_BUS,
+            isEmpty = { arrivals -> arrivals.isEmpty() },
+        ) {
+            providerGuard.execute(SEOUL_BUS_PROVIDER_ID) {
+                getBusArrivalsUnobserved(
+                    apiKey = apiKey,
+                    arsId = arsId,
+                    stationName = stationName,
+                    routeName = routeName,
+                    limit = limit,
+                )
+            }
+        }
+    }
+
+    private fun getBusArrivalsUnobserved(
+        apiKey: String,
+        arsId: String?,
+        stationName: String?,
+        routeName: String?,
+        limit: Int,
+    ): List<TransitArrivalDto> {
         val arsCandidates = buildList {
             val directArsId = arsId?.filter { it.isDigit() }?.takeIf(::isSeoulBusArsId)
             if (directArsId != null) add(directArsId)
@@ -89,19 +177,30 @@ class SeoulTransitArrivalClient(
         limit: Int,
     ): List<TransitArrivalDto> {
 
-        val response = busClient.get()
-            .uri { uriBuilder ->
-                uriBuilder
-                    .path("/stationinfo/getStationByUid")
-                    .queryParam("serviceKey", apiKey)
-                    .queryParam("arsId", arsId)
-                    .build()
-            }
-            .retrieve()
-            .body(String::class.java)
-            ?: return emptyList()
+        return observeWire(
+            provider = TransitWireProvider.SEOUL_BUS,
+            operation = TransitWireOperation.ARRIVAL,
+            isEmpty = List<TransitArrivalDto>::isEmpty,
+        ) {
+            val response = busClient.get()
+                .uri { uriBuilder ->
+                    uriBuilder
+                        .path("/stationinfo/getStationByUid")
+                        .queryParam("serviceKey", apiKey)
+                        .queryParam("arsId", arsId)
+                        .build()
+                }
+                .retrieve()
+                .body(String::class.java)
+                ?: return@observeWire emptyList()
 
-        return parseBusArrivals(response, routeName, limit)
+            parseBusArrivals(response, routeName, limit)
+                .map { arrival ->
+                    arrival.copy(
+                        arsId = arsId,
+                    )
+                }
+        }
     }
 
     internal fun parseBusArrivals(
@@ -119,10 +218,15 @@ class SeoulTransitArrivalClient(
     }
 
     private fun resolveSeoulBusArsIds(apiKey: String, stationName: String): List<String> {
+        stationArsCache[stationName]?.let { return it }
         if (stationArsCache.size >= MAX_STATION_CACHE_ENTRIES && !stationArsCache.containsKey(stationName)) {
             stationArsCache.clear()
         }
-        return stationArsCache.getOrPut(stationName) {
+        val resolved = observeWire(
+            provider = TransitWireProvider.SEOUL_BUS,
+            operation = TransitWireOperation.STATION_LOOKUP,
+            isEmpty = List<String>::isEmpty,
+        ) {
             val response = busClient.get()
                 .uri { uriBuilder ->
                     uriBuilder
@@ -133,7 +237,7 @@ class SeoulTransitArrivalClient(
                 }
                 .retrieve()
                 .body(String::class.java)
-                ?: return@getOrPut emptyList()
+                ?: return@observeWire emptyList()
 
             parseBusItems(response)
                 .mapNotNull { item -> item.text("arsId")?.filter { it.isDigit() } }
@@ -141,6 +245,11 @@ class SeoulTransitArrivalClient(
                 .distinct()
                 .take(MAX_ARS_CANDIDATES)
         }
+        // Empty station searches are not cached. Besides normal eventual consistency, providers
+        // sometimes encode quota/auth errors as an empty HTTP-200 payload; a later healthy lookup
+        // must be allowed to recover in the same process.
+        if (resolved.isNotEmpty()) stationArsCache.putIfAbsent(stationName, resolved)
+        return resolved
     }
 
     private fun requestSubwayArrivals(
@@ -151,17 +260,41 @@ class SeoulTransitArrivalClient(
         directionCode: String?,
         limit: Int,
     ): List<TransitArrivalDto> {
-        val response = subwayClient.get()
-            .uri("/{apiKey}/json/realtimeStationArrival/0/{endIndex}/{stationName}", apiKey, 40, stationName)
-            .retrieve()
-            .body(JsonNode::class.java)
-            ?: return emptyList()
+        return observeWire(
+            provider = TransitWireProvider.SEOUL_SUBWAY,
+            operation = TransitWireOperation.ARRIVAL,
+            isEmpty = List<TransitArrivalDto>::isEmpty,
+        ) {
+            val response = subwayClient.get()
+                .uri("/{apiKey}/json/realtimeStationArrival/0/{endIndex}/{stationName}", apiKey, 40, stationName)
+                .retrieve()
+                .body(JsonNode::class.java)
+                ?: return@observeWire emptyList()
 
+            parseSubwayArrivals(
+                response = response,
+                lineName = lineName,
+                directionName = directionName,
+                directionCode = directionCode,
+                limit = limit,
+            )
+        }
+    }
+
+    internal fun parseSubwayArrivals(
+        response: JsonNode,
+        lineName: String?,
+        directionName: String?,
+        directionCode: String?,
+        limit: Int,
+        observedAt: Instant = Instant.now(),
+    ): List<TransitArrivalDto> {
+        if (!seoulSubwayResponseHasData(response)) return emptyList()
         val lineFilter = lineName?.let(::normalizeRouteName)?.takeIf { it.isNotBlank() }
         val arrivals = response.path("realtimeArrivalList")
             .filter { it.isObject }
             .filter { node -> lineFilter == null || subwayLineMatches(node.path("subwayId").asText(), lineFilter) }
-            .mapNotNull { node -> node.toSubwayArrival() }
+            .mapNotNull { node -> node.toSubwayArrival(observedAt) }
         return filterSubwayDirection(arrivals, directionName, directionCode).take(limit)
     }
 
@@ -205,11 +338,14 @@ class SeoulTransitArrivalClient(
             ?.trim()
             ?: ""
 
-    private fun JsonNode.toSubwayArrival(): TransitArrivalDto? {
+    private fun JsonNode.toSubwayArrival(observedAt: Instant): TransitArrivalDto? {
         val waitSeconds = parsePositiveInt(path("barvlDt").asText(null)) ?: parseWaitSeconds(path("arvlMsg2").asText(null))
         val waitMinutes = waitSeconds?.toWaitMinutes()
         val message = text("arvlMsg2") ?: text("arvlMsg3")
-        val observedAt = Instant.now()
+        val sourceUpdatedAt = parseSeoulTimestamp(text("recptnDt"))
+        val expectedBase = sourceUpdatedAt
+            ?.let { runCatching { Instant.parse(it) }.getOrNull() }
+            ?: observedAt
         val trainType = text("btrainSttus")
         val arrivalStatus = seoulSubwayArrivalStatus(text("arvlCd"), message)
         return TransitArrivalDto(
@@ -222,13 +358,18 @@ class SeoulTransitArrivalClient(
             arrivalMessage = message,
             waitSeconds = waitSeconds,
             waitMinutes = waitMinutes,
-            expectedAt = waitSeconds?.let { observedAt.plusSeconds(it.toLong()).toString() },
+            expectedAt = waitSeconds?.let { expectedBase.plusSeconds(it.toLong()).toString() },
             lastTrain = text("lstcarAt") == "1" ||
                 listOf(trainType, message).filterNotNull().any { it.contains("막차") || it.contains("막") },
             realtime = true,
             arrivalStatus = arrivalStatus,
             observedAt = observedAt.toString(),
-            sourceUpdatedAt = parseSeoulTimestamp(text("recptnDt")),
+            sourceUpdatedAt = sourceUpdatedAt,
+            freshnessEvidence = if (sourceUpdatedAt != null) {
+                TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP
+            } else {
+                TransitArrivalFreshnessEvidence.LOCAL_RECEIPT_TIMESTAMP_ONLY
+            },
             vehicleType = trainType,
             express = trainType?.let { type ->
                 type.contains("급행") || type.contains("특급") || type.contains("ITX", ignoreCase = true)
@@ -240,6 +381,10 @@ class SeoulTransitArrivalClient(
         val routeName = text("rtNm")
         val stationName = text("stNm")
         val direction = text("adirection")
+        val observedAt = Instant.now()
+        // getStationByUid의 mkTm은 서울시 공식 명세상 공급자 "제공시각"이다.
+        // HTTP 수신시각과 구분해 원천 freshness 및 도착예정 절대시각의 기준으로 사용한다.
+        val sourceUpdatedAt = parseSeoulTimestamp(text("mkTm"))
 
         return listOf(
             busArrivalFromSlot(
@@ -252,6 +397,8 @@ class SeoulTransitArrivalClient(
                 arrivalCode = text("isArrive1"),
                 lastBusCode = text("isLast1"),
                 busTypeCode = text("busType1"),
+                observedAt = observedAt,
+                sourceUpdatedAt = sourceUpdatedAt,
             ),
             busArrivalFromSlot(
                 routeName = routeName,
@@ -263,6 +410,8 @@ class SeoulTransitArrivalClient(
                 arrivalCode = text("isArrive2"),
                 lastBusCode = text("isLast2"),
                 busTypeCode = text("busType2"),
+                observedAt = observedAt,
+                sourceUpdatedAt = sourceUpdatedAt,
             ),
         )
             .filterNotNull()
@@ -279,10 +428,14 @@ class SeoulTransitArrivalClient(
         arrivalCode: String?,
         lastBusCode: String?,
         busTypeCode: String?,
+        observedAt: Instant,
+        sourceUpdatedAt: String?,
     ): TransitArrivalDto? {
         if (message.isNullOrBlank() && waitSeconds == null) return null
         val resolvedWaitSeconds = waitSeconds ?: parseWaitSeconds(message)
-        val observedAt = Instant.now()
+        val expectedBase = sourceUpdatedAt
+            ?.let { runCatching { Instant.parse(it) }.getOrNull() }
+            ?: observedAt
         val arrivalStatus = if (arrivalCode == "1") {
             TransitArrivalStatus.ARRIVED
         } else {
@@ -300,11 +453,17 @@ class SeoulTransitArrivalClient(
             arrivalMessage = message,
             waitSeconds = resolvedWaitSeconds,
             waitMinutes = resolvedWaitSeconds?.toWaitMinutes(),
-            expectedAt = resolvedWaitSeconds?.let { observedAt.plusSeconds(it.toLong()).toString() },
+            expectedAt = resolvedWaitSeconds?.let { expectedBase.plusSeconds(it.toLong()).toString() },
             lastTrain = lastBusCode == "1",
             realtime = true,
             arrivalStatus = arrivalStatus,
             observedAt = observedAt.toString(),
+            sourceUpdatedAt = sourceUpdatedAt,
+            freshnessEvidence = if (sourceUpdatedAt != null) {
+                TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP
+            } else {
+                TransitArrivalFreshnessEvidence.LOCAL_RECEIPT_TIMESTAMP_ONLY
+            },
             vehicleType = vehicleType,
             lowFloor = busTypeCode == SEOUL_LOW_FLOOR_BUS_CODE,
         )
@@ -313,11 +472,17 @@ class SeoulTransitArrivalClient(
     private fun parseBusItems(xml: String): List<Element> {
         val documentBuilderFactory = DocumentBuilderFactory.newInstance().apply {
             setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "")
+            setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "")
             isExpandEntityReferences = false
         }
         val document = documentBuilderFactory
             .newDocumentBuilder()
             .parse(ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8)))
+        requireSeoulBusSuccess(document)
         val nodes = document.getElementsByTagName("itemList")
         return (0 until nodes.length)
             .mapNotNull { nodes.item(it) as? Element }
@@ -326,6 +491,64 @@ class SeoulTransitArrivalClient(
     private fun Element.text(tagName: String): String? {
         val node = getElementsByTagName(tagName).item(0) ?: return null
         return node.textContent?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun Document.text(tagName: String): String? {
+        val node = getElementsByTagName(tagName).item(0) ?: return null
+        return node.textContent?.trim()?.takeIf(String::isNotBlank)
+    }
+
+    private fun requireSeoulBusSuccess(document: Document) {
+        val resultCode = document.text("headerCd") ?: document.text("returnCode")
+        if (resultCode == null) {
+            if (document.text("headerMsg") != null) {
+                throw TransitProviderApplicationException(TransitWireProvider.SEOUL_BUS, null)
+            }
+            return
+        }
+        if (resultCode !in SEOUL_BUS_SUCCESS_CODES) {
+            throw TransitProviderApplicationException(TransitWireProvider.SEOUL_BUS, resultCode)
+        }
+    }
+
+    /**
+     * Seoul Open API의 INFO-200은 정상적인 빈 조회다. 예외로 올리면 첫 역명 후보에서
+     * 순회가 중단되고 circuit failure까지 누적되므로, data 유무를 별도로 반환한다.
+     */
+    private fun seoulSubwayResponseHasData(response: JsonNode): Boolean {
+        val resultCode = (
+            response.path("RESULT").path("CODE").asText(null)
+                ?: response.path("errorMessage").path("code").asText(null)
+        )?.trim()
+        if (resultCode == null) {
+            val resultMessagePresent = response.path("RESULT").path("MESSAGE").asText(null) != null ||
+                response.path("errorMessage").path("message").asText(null) != null
+            if (resultMessagePresent || !response.path("realtimeArrivalList").isArray) {
+                throw TransitProviderApplicationException(TransitWireProvider.SEOUL_SUBWAY, null)
+            }
+            return true
+        }
+        if (resultCode in SEOUL_SUBWAY_NO_DATA_CODES) return false
+        if (resultCode !in SEOUL_SUBWAY_SUCCESS_CODES) {
+            throw TransitProviderApplicationException(TransitWireProvider.SEOUL_SUBWAY, resultCode)
+        }
+        if (!response.path("realtimeArrivalList").isArray) {
+            throw TransitProviderApplicationException(TransitWireProvider.SEOUL_SUBWAY, resultCode)
+        }
+        return true
+    }
+
+    private fun <T> observeWire(
+        provider: TransitWireProvider,
+        operation: TransitWireOperation,
+        isEmpty: (T) -> Boolean,
+        call: () -> T,
+    ): T {
+        val guardedCall = {
+            wireRateLimiter.requirePermit(provider)
+            call()
+        }
+        return wireMetrics?.observe(provider, operation, isEmpty, guardedCall) ?: guardedCall()
     }
 
     private fun JsonNode.text(fieldName: String): String? =
@@ -373,6 +596,7 @@ class SeoulTransitArrivalClient(
         "1077" -> "신분당선"
         "1092" -> "우이신설선"
         "1093" -> "서해선"
+        "1032" -> "GTX-A"
         else -> null
     }
 
@@ -410,7 +634,17 @@ class SeoulTransitArrivalClient(
         const val MAX_STATION_CACHE_ENTRIES = 500
         const val MAX_ARS_CANDIDATES = 8
         const val SEOUL_LOW_FLOOR_BUS_CODE = "1"
-        val SEOUL_TIMESTAMP_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        const val SEOUL_BUS_PROVIDER_ID = "seoul_bus"
+        const val SEOUL_SUBWAY_PROVIDER_ID = "seoul_subway"
+        val SEOUL_BUS_SUCCESS_CODES = setOf("0", "00", "INFO-000")
+        val SEOUL_SUBWAY_SUCCESS_CODES = setOf("0", "00", "INFO-000")
+        val SEOUL_SUBWAY_NO_DATA_CODES = setOf("INFO-200")
+        val SEOUL_TIMESTAMP_FORMATTER: DateTimeFormatter = DateTimeFormatterBuilder()
+            .appendPattern("yyyy-MM-dd HH:mm:ss")
+            .optionalStart()
+            .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true)
+            .optionalEnd()
+            .toFormatter()
         val SEOUL_ZONE_ID: ZoneId = ZoneId.of("Asia/Seoul")
     }
 }

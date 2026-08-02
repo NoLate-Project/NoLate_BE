@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.service.policy
 
+import com.noLate.schedule.application.TrafficFailureReasons
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.time.ZoneId
@@ -25,10 +26,43 @@ class TrafficChangePolicy {
         decision: DepartureReminderDecision,
         alertLeadMinutes: Int,
         reminderMinutesBeforeDeparture: Int = alertLeadMinutes,
+        departureAdvanceMinutes: Int = 0,
+        onTimeArrivalPossible: Boolean? = null,
+        predictedArrivalAt: Instant? = null,
+        transferFailureReason: String? = null,
     ): SchedulePushMessage {
         val titleText = scheduleTitle.trim().ifBlank { "일정" }
         val departureText = timeFormatter.format(recommendedDepartureAt)
         val delta = previousTravelMinutes?.let { currentTravelMinutes - it }
+
+        when (transferFailureReason) {
+            TrafficFailureReasons.TRANSIT_TRANSFER_MISSED ->
+                return SchedulePushMessage(
+                    title = "선택한 환승을 놓칠 수 있어요",
+                    body = "'$titleText' 선택 경로의 환승 차량을 현재 ETA로는 탈 수 없어요. " +
+                        "기존 출발 알람을 신뢰하지 말고 기기 알람 상태와 앱 경로를 다시 확인해 주세요.",
+                    trafficChangeMinutes = delta,
+                )
+            TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN ->
+                return SchedulePushMessage(
+                    title = "환승 가능 여부를 확인할 수 없어요",
+                    body = "'$titleText' 선택 경로의 환승 시간표나 안전 여유를 확정하지 못했어요. " +
+                        "기존 출발 알람을 신뢰하지 말고 기기 알람 상태와 앱 경로를 다시 확인해 주세요.",
+                    trafficChangeMinutes = delta,
+                )
+        }
+
+        if (onTimeArrivalPossible == false) {
+            val arrivalText = predictedArrivalAt?.let(timeFormatter::format)
+            val prediction = arrivalText
+                ?.let { "현재 확인한 가장 빠른 예상 도착은 ${it}예요. " }
+                .orEmpty()
+            return SchedulePushMessage(
+                title = "정시 도착이 어려워요",
+                body = "'$titleText'에 제시간 도착하기 어려워요. ${prediction}아직 출발 전이면 지금 출발하세요.",
+                trafficChangeMinutes = delta,
+            )
+        }
 
         if (decision.departNowAction) {
             val trafficChange = delta
@@ -59,6 +93,9 @@ class TrafficChangePolicy {
         }
 
         val body = when {
+            departureAdvanceMinutes > 0 && (delta == null || delta <= 0) ->
+                "대중교통 운행시각이 바뀌어 ${departureAdvanceMinutes}분 일찍 출발해야 해요. " +
+                    "'$titleText' 권장 출발 $departureText."
             delta == null ->
                 "'$titleText' 권장 출발 $departureText. 약 ${reminderMinutesBeforeDeparture}분 남았어요."
             delta > 0 ->
@@ -71,6 +108,8 @@ class TrafficChangePolicy {
 
         return SchedulePushMessage(
             title = when {
+                departureAdvanceMinutes > 0 && (delta == null || delta <= 0) ->
+                    "출발 시간이 앞당겨졌어요"
                 delta == null -> "출발 준비하세요"
                 delta > 0 -> "이동 시간이 늘었어요"
                 delta < 0 -> "이동 시간이 줄었어요"

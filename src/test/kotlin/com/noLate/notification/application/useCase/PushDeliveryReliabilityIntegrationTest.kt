@@ -143,6 +143,22 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `token ACK capability is frozen into the per-device delivery manifest`() {
+        val memberId = 530L
+        register(
+            memberId = memberId,
+            deviceId = "ack-capable-manifest-device",
+            token = "ack-capable-manifest-token",
+            deliveryAckCapabilityVersion = 1,
+        )
+
+        val result = send(memberId, "ack-capability-manifest")
+
+        assertEquals(1, result.sentCount)
+        assertEquals(1, deliveries(memberId).single().deliveryAckCapabilityVersion)
+    }
+
+    @Test
     fun `두 기기 중 하나가 실패하면 성공 기기는 유지하고 실패 기기만 재시도한다`() {
         val memberId = 502L
         register(memberId, "device-1", "stable-token")
@@ -936,7 +952,12 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
         "scheduleId" to "7001",
     )
 
-    private fun register(memberId: Long, deviceId: String, token: String) {
+    private fun register(
+        memberId: Long,
+        deviceId: String,
+        token: String,
+        deliveryAckCapabilityVersion: Int? = null,
+    ) {
         registerAuthenticatedPushToken(
             jdbcTemplate = jdbcTemplate,
             tokenService = tokenService,
@@ -944,6 +965,7 @@ class PushDeliveryReliabilityIntegrationTest @Autowired constructor(
             deviceId = deviceId,
             platform = PushPlatform.ANDROID,
             token = token,
+            deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
         )
     }
 

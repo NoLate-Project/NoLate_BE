@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportProvider
@@ -29,6 +30,7 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.subscription.application.SubscriptionPolicyService
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -39,6 +41,7 @@ import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
 import org.mockito.kotlin.check
+import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
@@ -47,6 +50,11 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.mock.env.MockEnvironment
 import org.springframework.data.domain.PageRequest
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.TransactionDefinition
+import org.springframework.transaction.TransactionStatus
+import org.springframework.transaction.support.SimpleTransactionStatus
+import java.time.Duration
 import java.time.Instant
 import java.util.Optional
 
@@ -62,6 +70,7 @@ class ScheduleServiceUnitTest {
     private lateinit var scheduleService: ScheduleService
 
     private val objectMapper = ObjectMapper()
+    private val calendarTransactionManager = ImmediateTransactionManager()
 
     @BeforeEach
     fun setUp() {
@@ -72,6 +81,7 @@ class ScheduleServiceUnitTest {
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
             ),
+            transactionManager = calendarTransactionManager,
         )
     }
 
@@ -265,10 +275,31 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `legacy update without alert mode preserves an existing alarm preference`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val existing = scheduleEntity(id = scheduleId, memberId = memberId).apply {
+            route?.alertMode = ScheduleAlertMode.ALARM
+        }
+        val legacyUpdate = scheduleDto(title = "Updated by older client")
+
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId))
+            .thenReturn(existing)
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        val result = scheduleService.updateSchedule(memberId, scheduleId, legacyUpdate)
+
+        assertEquals(ScheduleAlertMode.ALARM, existing.route?.alertMode)
+        assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
+    }
+
+    @Test
     fun `shared editor can update while keeping owner's existing category snapshot`() {
         val editorId = 2L
         val scheduleId = 10L
-        val existing = scheduleEntity(id = scheduleId, memberId = 99L, title = "Old schedule")
+        val existing = scheduleEntity(id = scheduleId, memberId = 99L, title = "Old schedule").apply {
+            route?.alertMode = ScheduleAlertMode.ALARM
+        }
         val accessPolicy = mock<ScheduleAccessPolicy>()
         val categoryRepository = mock<ScheduleCategoryRepository>()
         val categoryShareRepository = mock<ScheduleCategoryShareRepository>()
@@ -292,18 +323,19 @@ class ScheduleServiceUnitTest {
             effectivePermission = ScheduleSharePermission.EDITOR,
         )
         whenever(accessPolicy.resolve(editorId, existing)).thenReturn(editorAccess)
-        whenever(accessPolicy.resolveAll(editorId, listOf(existing)))
-            .thenReturn(mapOf(scheduleId to editorAccess))
         whenever(scheduleRepository.save(existing)).thenReturn(existing)
 
         val result = securedService.updateSchedule(
             editorId,
             scheduleId,
-            scheduleDto(title = "Editor update"),
+            scheduleDto(title = "Editor update").copy(
+                alertMode = ScheduleAlertMode.STANDARD,
+            ),
         )
 
         assertEquals("Editor update", result.title)
         assertEquals("Work", result.category.title)
+        assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
         verify(categoryRepository, never()).findById(any())
         verify(categoryShareRepository, never()).findByCategoryIdAndTargetMemberId(any(), any())
     }
@@ -356,8 +388,6 @@ class ScheduleServiceUnitTest {
             canViewAllTravelPlans = true,
         )
         whenever(accessPolicy.resolve(memberId, existing)).thenReturn(editorAccess)
-        whenever(accessPolicy.resolveAll(memberId, listOf(existing)))
-            .thenReturn(mapOf(scheduleId to editorAccess))
         whenever(calendarRepository.findAllForUpdate(listOf(targetCalendarId, sourceCalendarId)))
             .thenReturn(listOf(targetCalendar, sourceCalendar))
         whenever(
@@ -529,6 +559,44 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `getCalendarScheduleList allows an exact 190 day range`() {
+        val memberId = 1L
+        val rangeStart = Instant.parse("2026-01-01T00:00:00Z")
+        val rangeEnd = rangeStart.plus(Duration.ofDays(190))
+        whenever(
+            scheduleRepository.findOverlappingScheduleList(memberId, rangeStart, rangeEnd)
+        ).thenReturn(emptyList())
+
+        val result = scheduleService.getCalendarScheduleList(
+            memberId,
+            rangeStart.toString(),
+            rangeEnd.toString(),
+        )
+
+        assertTrue(result.isEmpty())
+        verify(scheduleRepository).findOverlappingScheduleList(memberId, rangeStart, rangeEnd)
+    }
+
+    @Test
+    fun `getCalendarScheduleList rejects a range over 190 days before repository access`() {
+        val memberId = 1L
+        val rangeStart = Instant.parse("2026-01-01T00:00:00Z")
+        val rangeEnd = rangeStart.plus(Duration.ofDays(190)).plusNanos(1)
+
+        val error = assertThrows<BusinessException> {
+            scheduleService.getCalendarScheduleList(
+                memberId,
+                rangeStart.toString(),
+                rangeEnd.toString(),
+            )
+        }
+
+        assertEquals(com.noLate.global.error.ErrorCode.INVALID_INPUT, error.errorCode)
+        verify(scheduleRepository, never()).findOverlappingScheduleList(any(), any(), any())
+        verify(scheduleRepository, never()).findOwnedOverlappingScheduleList(any(), any(), any())
+    }
+
+    @Test
     fun `getScheduleList returns the effective direct or category share permission`() {
         val memberId = 1L
         val directShareRepository = mock<ScheduleShareRepository>()
@@ -646,6 +714,30 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `all-owned schedule results skip bulk share access resolution`() {
+        val memberId = 1L
+        val accessPolicy = mock<ScheduleAccessPolicy>()
+        val first = scheduleEntity(id = 1L, memberId = memberId)
+        val second = scheduleEntity(id = 2L, memberId = memberId)
+        val securedService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            scheduleAccessPolicy = accessPolicy,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+        )
+        whenever(scheduleRepository.findScheduleList(memberId)).thenReturn(listOf(first, second))
+
+        val result = securedService.getScheduleList(memberId)
+
+        assertEquals(listOf(1L, 2L), result.map { it.id })
+        assertTrue(result.all { it.canViewAllTravelPlans == true })
+        verify(accessPolicy, never()).resolveAll(memberId, listOf(first, second))
+    }
+
+    @Test
     fun `global sharing off uses owner queries and filters a defensive foreign row`() {
         val memberId = 1L
         val owner = scheduleEntity(id = 1L, memberId = memberId)
@@ -657,6 +749,7 @@ class ScheduleServiceUnitTest {
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
             ),
+            transactionManager = calendarTransactionManager,
         )
         whenever(scheduleRepository.findOwnedScheduleList(memberId))
             .thenReturn(listOf(owner, retainedForeign))
@@ -685,6 +778,7 @@ class ScheduleServiceUnitTest {
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
             ),
+            transactionManager = calendarTransactionManager,
         )
         whenever(
             scheduleRepository.findOwnedOverlappingScheduleList(memberId, rangeStart, rangeEnd)
@@ -738,6 +832,7 @@ class ScheduleServiceUnitTest {
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
             ),
+            transactionManager = calendarTransactionManager,
         )
         whenever(
             cacheService.getOrLoad(
@@ -763,6 +858,72 @@ class ScheduleServiceUnitTest {
             any(),
         )
         verify(scheduleRepository, never()).findOwnedOverlappingScheduleList(any(), any(), any())
+    }
+
+    @Test
+    fun `calendar cache coordination stays outside the short read-only DB transaction`() {
+        val memberId = 1L
+        val rangeStart = Instant.parse("2026-06-01T00:00:00Z")
+        val rangeEnd = Instant.parse("2026-06-30T23:59:59Z")
+        val cacheService = mock<ScheduleCalendarCacheService>()
+        val transactionManager = mock<PlatformTransactionManager>()
+        val transactionStatus = mock<TransactionStatus>()
+        var transactionActive = false
+
+        whenever(transactionManager.getTransaction(any())).thenAnswer { invocation ->
+            val definition = invocation.getArgument<TransactionDefinition>(0)
+            assertTrue(definition.isReadOnly)
+            assertFalse(transactionActive)
+            transactionActive = true
+            transactionStatus
+        }
+        doAnswer {
+            assertTrue(transactionActive)
+            transactionActive = false
+            null
+        }.whenever(transactionManager).commit(transactionStatus)
+        whenever(
+            scheduleRepository.findOverlappingScheduleList(memberId, rangeStart, rangeEnd)
+        ).thenAnswer {
+            assertTrue(transactionActive)
+            emptyList<Schedule>()
+        }
+        whenever(
+            cacheService.getOrLoad(
+                eq(memberId),
+                eq(ScheduleCalendarCacheScope.SHARING_ENABLED),
+                eq(rangeStart),
+                eq(rangeEnd),
+                any(),
+            )
+        ).thenAnswer { invocation ->
+            assertFalse(transactionActive)
+            val loader = invocation.getArgument<(Instant, Instant) -> List<ScheduleDto>>(4)
+            val result = loader(rangeStart, rangeEnd)
+            assertFalse(transactionActive)
+            result
+        }
+        val service = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            calendarCacheService = cacheService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+            transactionManager = transactionManager,
+        )
+
+        val result = service.getCalendarScheduleList(
+            memberId,
+            rangeStart.toString(),
+            rangeEnd.toString(),
+        )
+
+        assertTrue(result.isEmpty())
+        assertFalse(transactionActive)
+        verify(transactionManager).getTransaction(any())
+        verify(transactionManager).commit(transactionStatus)
     }
 
     @Test
@@ -866,7 +1027,7 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
-    fun `searchScheduleList normalizes blank filters before repository call`() {
+    fun `searchScheduleList normalizes blank filters and applies the default database limit`() {
         // given
         val memberId = 1L
         val startAt = "2026-06-01T00:00:00Z"
@@ -879,6 +1040,7 @@ class ScheduleServiceUnitTest {
                 categoryId = null,
                 rangeStart = Instant.parse(startAt),
                 rangeEnd = Instant.parse(endAt),
+                pageable = PageRequest.of(0, 20),
             )
         ).thenReturn(emptyList())
 
@@ -889,6 +1051,7 @@ class ScheduleServiceUnitTest {
             categoryId = "",
             startAt = startAt,
             endAt = endAt,
+            limit = null,
         )
 
         // then
@@ -899,6 +1062,97 @@ class ScheduleServiceUnitTest {
             categoryId = null,
             rangeStart = Instant.parse(startAt),
             rangeEnd = Instant.parse(endAt),
+            pageable = PageRequest.of(0, 20),
+        )
+    }
+
+    @Test
+    fun `searchScheduleList trims filters and caps the shared database query at 50`() {
+        whenever(
+            scheduleRepository.searchScheduleList(
+                memberId = 1L,
+                keyword = "회의",
+                categoryId = "12",
+                rangeStart = null,
+                rangeEnd = null,
+                pageable = PageRequest.of(0, 50),
+            )
+        ).thenReturn(emptyList())
+
+        scheduleService.searchScheduleList(
+            memberId = 1L,
+            keyword = "  회의  ",
+            categoryId = " 12 ",
+            startAt = null,
+            endAt = null,
+            limit = 500,
+        )
+
+        verify(scheduleRepository).searchScheduleList(
+            memberId = 1L,
+            keyword = "회의",
+            categoryId = "12",
+            rangeStart = null,
+            rangeEnd = null,
+            pageable = PageRequest.of(0, 50),
+        )
+    }
+
+    @Test
+    fun `searchScheduleList rejects a one character keyword before repository access`() {
+        val error = assertThrows<BusinessException> {
+            scheduleService.searchScheduleList(
+                memberId = 1L,
+                keyword = " 회 ",
+                categoryId = null,
+                startAt = null,
+                endAt = null,
+                limit = null,
+            )
+        }
+
+        assertEquals(com.noLate.global.error.ErrorCode.INVALID_INPUT, error.errorCode)
+        verify(scheduleRepository, never()).searchScheduleList(any(), any(), any(), any(), any(), any())
+        verify(scheduleRepository, never()).searchOwnedScheduleList(any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `searchScheduleList applies the minimum database limit to owned-only search`() {
+        val ownedOnlyService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
+            ),
+        )
+        whenever(
+            scheduleRepository.searchOwnedScheduleList(
+                memberId = 1L,
+                keyword = null,
+                categoryId = null,
+                rangeStart = null,
+                rangeEnd = null,
+                pageable = PageRequest.of(0, 1),
+            )
+        ).thenReturn(emptyList())
+
+        ownedOnlyService.searchScheduleList(
+            memberId = 1L,
+            keyword = null,
+            categoryId = null,
+            startAt = null,
+            endAt = null,
+            limit = 0,
+        )
+
+        verify(scheduleRepository).searchOwnedScheduleList(
+            memberId = 1L,
+            keyword = null,
+            categoryId = null,
+            rangeStart = null,
+            rangeEnd = null,
+            pageable = PageRequest.of(0, 1),
         )
     }
 
@@ -1048,4 +1302,12 @@ class ScheduleServiceUnitTest {
             )
         }
 
+    private class ImmediateTransactionManager : PlatformTransactionManager {
+        override fun getTransaction(definition: TransactionDefinition?): TransactionStatus =
+            SimpleTransactionStatus()
+
+        override fun commit(status: TransactionStatus) = Unit
+
+        override fun rollback(status: TransactionStatus) = Unit
+    }
 }

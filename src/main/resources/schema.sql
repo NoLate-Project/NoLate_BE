@@ -176,6 +176,64 @@ CREATE TABLE IF NOT EXISTS schedule_share_invitations (
     INDEX idx_schedule_share_invitations_status_expires (status, expires_at)
 ) COMMENT='Link-based schedule and category share invitations';
 
+CREATE TABLE IF NOT EXISTS schedule_share_invitation_acceptances (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Invitation acceptance primary key',
+    invitation_id BIGINT NOT NULL COMMENT 'Accepted invitation id',
+    member_id BIGINT NOT NULL COMMENT 'Member who accepted the invitation',
+    accepted_at DATETIME(6) NOT NULL COMMENT 'First successful acceptance time',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_share_invitation_acceptance_member (invitation_id, member_id),
+    INDEX idx_share_invitation_acceptance_member (member_id, accepted_at)
+) COMMENT='Durable per-member idempotency ledger for invitation acceptance';
+
+CREATE TABLE IF NOT EXISTS sharing_member_blocks (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Sharing block primary key',
+    blocker_member_id BIGINT NOT NULL COMMENT 'Member who initiated the block',
+    blocked_member_id BIGINT NOT NULL COMMENT 'Member hidden from sharing interactions',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_sharing_member_blocks_pair (blocker_member_id, blocked_member_id),
+    INDEX idx_sharing_member_blocks_blocker (blocker_member_id, deleted),
+    INDEX idx_sharing_member_blocks_blocked (blocked_member_id, deleted),
+    CONSTRAINT chk_sharing_member_blocks_not_self CHECK (blocker_member_id <> blocked_member_id)
+) COMMENT='Recoverable member blocks enforced across schedule sharing';
+
+CREATE TABLE IF NOT EXISTS sharing_reports (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Sharing report primary key',
+    reporter_member_id BIGINT NOT NULL COMMENT 'Member submitting the report',
+    reported_member_id BIGINT NOT NULL COMMENT 'Member whose shared content is reported',
+    resource_type VARCHAR(30) NOT NULL COMMENT 'SCHEDULE, CATEGORY, or CALENDAR',
+    resource_id BIGINT NOT NULL COMMENT 'Reported sharing resource id',
+    reason VARCHAR(40) NOT NULL COMMENT 'Normalized report reason',
+    details VARCHAR(500) NULL COMMENT 'Optional reporter-provided context',
+    status VARCHAR(30) NOT NULL COMMENT 'Moderation lifecycle status',
+    moderator_member_id BIGINT NULL COMMENT 'Last operator who changed moderation status',
+    resolution_note VARCHAR(500) NULL COMMENT 'Operator moderation note',
+    resolved_at DATETIME(6) NULL COMMENT 'Final moderation time',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_sharing_reports_reporter_created (reporter_member_id, created_at),
+    INDEX idx_sharing_reports_status_created (status, created_at),
+    INDEX idx_sharing_reports_resource (resource_type, resource_id, reported_member_id),
+    CONSTRAINT chk_sharing_reports_not_self CHECK (reporter_member_id <> reported_member_id)
+) COMMENT='User reports for shared schedule content and senders';
+
 CREATE TABLE IF NOT EXISTS schedule_routes (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule route primary key',
     schedule_id BIGINT NOT NULL COMMENT 'Schedule id',
@@ -196,6 +254,7 @@ CREATE TABLE IF NOT EXISTS schedule_routes (
     notification_enabled BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Realtime departure notification flag',
     notification_lead_minutes INT NULL COMMENT 'Monitoring lead minutes',
     notification_interval_minutes INT NULL COMMENT 'Notification interval minutes',
+    alert_mode VARCHAR(20) NOT NULL DEFAULT 'STANDARD' COMMENT 'STANDARD or ALARM departure alert mode',
     PRIMARY KEY (id),
     UNIQUE KEY uk_schedule_routes_schedule (schedule_id),
     INDEX idx_schedule_routes_depart_at (depart_at),
@@ -220,6 +279,7 @@ CREATE TABLE IF NOT EXISTS schedule_travel_plans (
     notification_enabled BOOLEAN NOT NULL DEFAULT FALSE COMMENT 'Member-specific departure notification flag',
     notification_lead_minutes INT NULL COMMENT 'Member-specific monitoring lead minutes',
     notification_interval_minutes INT NULL COMMENT 'Member-specific ETA refresh interval',
+    alert_mode VARCHAR(20) NOT NULL DEFAULT 'STANDARD' COMMENT 'STANDARD or ALARM member alert mode',
     schedule_fingerprint VARCHAR(64) NOT NULL COMMENT 'Schedule time and destination fingerprint at save time',
     created_at DATETIME(6) NULL,
     updated_at DATETIME(6) NULL,
@@ -283,10 +343,14 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     last_handled_reminder_boundary_at DATETIME(6) NULL COMMENT 'Last confirmed or uncertain logical reminder boundary',
     last_checked_at DATETIME(6) NULL COMMENT 'Last checked time',
     last_live_fetched_at DATETIME(6) NULL COMMENT 'Last successful live provider fetch time',
+    last_eta_provider_fetched_at DATETIME(6) NULL COMMENT 'Provider fetch time for the latest ETA, including timetable responses',
     last_live_travel_minutes INT NULL COMMENT 'Last trusted live provider travel minutes',
-    last_eta_source VARCHAR(30) NULL COMMENT 'LIVE_PROVIDER, SELECTED_ROUTE, or SAVED_FALLBACK',
+    last_eta_source VARCHAR(30) NULL COMMENT 'LIVE_PROVIDER, TIMETABLE_PROVIDER, SELECTED_ROUTE, or SAVED_FALLBACK',
     last_eta_stale BOOLEAN NULL COMMENT 'Whether the last ETA used a stale snapshot',
     last_eta_failure_reason VARCHAR(500) NULL COMMENT 'Stable fallback or provider failure code and safe message',
+    last_predicted_arrival_at DATETIME(6) NULL COMMENT 'Latest provider/overlay absolute predicted arrival time',
+    last_eta_travel_mode VARCHAR(20) NULL COMMENT 'Travel mode used by the latest ETA snapshot',
+    last_eta_algorithm_version VARCHAR(40) NULL COMMENT 'Bounded ETA calculation algorithm version',
     last_eta_route_fingerprint VARCHAR(64) NULL COMMENT 'Route fingerprint used by the latest ETA snapshot',
     last_traffic_change_minutes INT NULL COMMENT 'Last comparable live-to-live ETA delta in minutes',
     last_changed_at DATETIME(6) NULL COMMENT 'Time of the last comparable live-to-live ETA change',
@@ -318,6 +382,179 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     INDEX idx_schedule_push_job_member_id (member_id),
     INDEX idx_schedule_push_job_schedule_id (schedule_id)
 ) COMMENT='Schedule push jobs';
+
+CREATE TABLE IF NOT EXISTS schedule_departure_statuses (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Per-member departure status primary key',
+    schedule_id BIGINT NOT NULL COMMENT 'Schedule id',
+    member_id BIGINT NOT NULL COMMENT 'Participant member id',
+    departed_at DATETIME(6) NULL COMMENT 'First actual departure time',
+    eta_snapshot_push_job_id BIGINT NULL COMMENT 'Frozen ETA job id without lifecycle FK coupling',
+    eta_snapshot_evaluated_at DATETIME(6) NULL COMMENT 'Frozen ETA evaluation time',
+    eta_snapshot_recommended_departure_at DATETIME(6) NULL COMMENT 'Frozen recommended departure time',
+    eta_snapshot_predicted_arrival_at DATETIME(6) NULL COMMENT 'Frozen predicted destination arrival time',
+    eta_snapshot_source VARCHAR(30) NULL COMMENT 'Frozen ETA source',
+    eta_snapshot_stale BOOLEAN NULL COMMENT 'Frozen ETA stale flag',
+    eta_snapshot_travel_minutes INT NULL COMMENT 'Frozen ETA travel minutes',
+    eta_snapshot_prediction_basis VARCHAR(40) NULL COMMENT 'PROVIDER_ABSOLUTE or DEPARTURE_ANCHORED_DURATION',
+    eta_snapshot_travel_mode VARCHAR(20) NULL COMMENT 'Frozen travel mode',
+    eta_snapshot_provider_id VARCHAR(30) NULL COMMENT 'Bounded ETA provider id',
+    eta_snapshot_target_arrival_at DATETIME(6) NULL COMMENT 'Frozen target arrival time',
+    eta_snapshot_on_time_arrival_possible BOOLEAN NULL COMMENT 'Whether frozen prediction meets target arrival',
+    eta_snapshot_algorithm_version VARCHAR(40) NULL COMMENT 'Bounded frozen ETA algorithm version',
+    eta_snapshot_provider_fetched_at DATETIME(6) NULL COMMENT 'Frozen provider response fetch time',
+    eta_observation_exposed_at DATETIME(6) NULL COMMENT 'First server-observed arrival-record UI exposure',
+    eta_observation_exposed_client_app_version VARCHAR(64) NULL COMMENT 'App version frozen at first UI exposure',
+    eta_observation_exposed_client_build_version VARCHAR(64) NULL COMMENT 'Build version frozen at first UI exposure',
+    eta_observation_exposed_ux_variant VARCHAR(64) NULL COMMENT 'UX variant frozen at first UI exposure',
+    eta_observation_prompted_at DATETIME(6) NULL COMMENT 'First server-observed arrival confirmation prompt',
+    eta_observation_prompted_client_app_version VARCHAR(64) NULL COMMENT 'App version frozen at first prompt',
+    eta_observation_prompted_client_build_version VARCHAR(64) NULL COMMENT 'Build version frozen at first prompt',
+    eta_observation_prompted_ux_variant VARCHAR(64) NULL COMMENT 'UX variant frozen at first prompt',
+    eta_observation_responded_at DATETIME(6) NULL COMMENT 'First persisted arrival observation receipt',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_schedule_departure_statuses_schedule_member (schedule_id, member_id),
+    INDEX idx_schedule_departure_statuses_schedule (schedule_id),
+    INDEX idx_schedule_departure_statuses_member (member_id),
+    CONSTRAINT fk_schedule_departure_statuses_schedule
+        FOREIGN KEY (schedule_id) REFERENCES schedules (id)
+        ON DELETE CASCADE
+) COMMENT='Per-member departure status and immutable departure ETA snapshot';
+
+CREATE TABLE IF NOT EXISTS schedule_eta_accuracy_observations (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Authenticated arrival ground-truth sample id',
+    schedule_id BIGINT NOT NULL COMMENT 'Measured schedule id',
+    member_id BIGINT NOT NULL COMMENT 'Member who reported arrival',
+    push_job_id BIGINT NULL COMMENT 'ETA job snapshot id; retained without FK coupling',
+    departed_at DATETIME(6) NOT NULL COMMENT 'Recorded actual departure time',
+    prediction_evaluated_at DATETIME(6) NOT NULL COMMENT 'Time the measured ETA prediction was calculated',
+    predicted_arrival_at DATETIME(6) NOT NULL COMMENT 'Frozen predicted destination arrival time',
+    recommended_departure_at DATETIME(6) NOT NULL COMMENT 'Frozen recommended departure time',
+    target_arrival_at DATETIME(6) NOT NULL COMMENT 'Frozen target arrival time',
+    actual_arrival_at DATETIME(6) NOT NULL COMMENT 'Validated client-observed actual arrival time',
+    observation_verification VARCHAR(30) NOT NULL COMMENT 'Server-owned verification state',
+    observation_source VARCHAR(30) NOT NULL COMMENT 'USER_NOW, USER_ADJUSTED, or GEOFENCE',
+    precision_seconds INT NOT NULL COMMENT 'Temporal uncertainty of the arrival observation',
+    adjustment_seconds INT NULL COMMENT 'Whole-minute correction for USER_ADJUSTED only',
+    client_app_version VARCHAR(64) NULL COMMENT 'Bounded diagnostic app release cohort',
+    client_build_version VARCHAR(64) NULL COMMENT 'Bounded diagnostic app build cohort',
+    backend_cohort_version VARCHAR(64) NOT NULL COMMENT 'Operator-provided backend release cohort',
+    eligibility_policy_version VARCHAR(50) NOT NULL COMMENT 'Bounded ground-truth eligibility policy',
+    eta_source VARCHAR(30) NOT NULL COMMENT 'ETA source used by the measured prediction',
+    eta_stale BOOLEAN NOT NULL COMMENT 'Whether the measured prediction was stale/fallback',
+    travel_minutes INT NOT NULL COMMENT 'Travel minutes in the measured prediction',
+    prediction_basis VARCHAR(40) NOT NULL COMMENT 'PROVIDER_ABSOLUTE or DEPARTURE_ANCHORED_DURATION',
+    travel_mode VARCHAR(20) NOT NULL COMMENT 'Travel mode used by the measured prediction',
+    provider_id VARCHAR(30) NOT NULL COMMENT 'Bounded ETA provider id',
+    algorithm_version VARCHAR(40) NOT NULL COMMENT 'Bounded ETA calculation algorithm version',
+    provider_fetched_at DATETIME(6) NULL COMMENT 'Provider response time for measured ETA',
+    predicted_on_time BOOLEAN NOT NULL COMMENT 'Whether the prediction met target arrival',
+    actual_on_time BOOLEAN NOT NULL COMMENT 'Whether actual arrival met target arrival',
+    on_time_outcome VARCHAR(50) NOT NULL COMMENT 'Bounded predicted-versus-actual on-time outcome',
+    departure_offset_seconds BIGINT NOT NULL COMMENT 'Actual departure minus recommended departure',
+    actual_travel_seconds BIGINT NOT NULL COMMENT 'Actual arrival minus actual departure',
+    report_delay_seconds BIGINT NOT NULL COMMENT 'Server receipt minus client capture, floored at zero',
+    accuracy_eligible BOOLEAN NOT NULL COMMENT 'Whether this sample may enter ETA accuracy aggregates',
+    accuracy_eligibility_reason VARCHAR(60) NOT NULL COMMENT 'Bounded primary inclusion or exclusion reason',
+    signed_error_seconds BIGINT NOT NULL COMMENT 'Actual minus predicted; positive means late',
+    absolute_error_seconds BIGINT NOT NULL COMMENT 'Absolute ETA error seconds',
+    recorded_at DATETIME(6) NOT NULL COMMENT 'Server observation receipt time',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_eta_accuracy_schedule_member (schedule_id, member_id),
+    INDEX idx_eta_accuracy_recorded_at (recorded_at),
+    INDEX idx_eta_accuracy_source (eta_source, recorded_at),
+    INDEX idx_eta_accuracy_observation_quality (accuracy_eligible, observation_source, precision_seconds, recorded_at),
+    INDEX idx_eta_accuracy_provenance (algorithm_version, travel_mode, provider_id, prediction_basis, recorded_at),
+    INDEX idx_eta_accuracy_cohort (backend_cohort_version, client_app_version, algorithm_version, recorded_at),
+    INDEX idx_eta_accuracy_member (member_id, id),
+    CONSTRAINT fk_eta_accuracy_schedule
+        FOREIGN KEY (schedule_id) REFERENCES schedules (id)
+        ON DELETE CASCADE,
+    CONSTRAINT chk_eta_accuracy_travel_minutes CHECK (travel_minutes > 0),
+    CONSTRAINT chk_eta_accuracy_observation_source
+        CHECK (observation_source IN ('USER_NOW', 'USER_ADJUSTED', 'GEOFENCE')),
+    CONSTRAINT chk_eta_accuracy_observation_verification
+        CHECK (observation_verification IN ('UNVERIFIED_CLIENT', 'VERIFIED_GEOFENCE')),
+    CONSTRAINT chk_eta_accuracy_precision_seconds
+        CHECK (precision_seconds BETWEEN 1 AND 3600),
+    CONSTRAINT chk_eta_accuracy_observation_shape CHECK (
+        (
+            observation_source = 'USER_ADJUSTED' AND
+            adjustment_seconds IS NOT NULL AND
+            adjustment_seconds BETWEEN 60 AND 3600 AND
+            MOD(adjustment_seconds, 60) = 0 AND
+            precision_seconds >= 60
+        ) OR (
+            observation_source IN ('USER_NOW', 'GEOFENCE') AND
+            adjustment_seconds IS NULL
+        )
+    ),
+    CONSTRAINT chk_eta_accuracy_client_cohort CHECK (
+        (client_app_version IS NULL OR client_app_version REGEXP '^[A-Za-z0-9._+-]{1,64}$') AND
+        (client_build_version IS NULL OR client_build_version REGEXP '^[A-Za-z0-9._+-]{1,64}$')
+    ),
+    CONSTRAINT chk_eta_accuracy_backend_cohort
+        CHECK (backend_cohort_version REGEXP '^[A-Za-z0-9._+-]{1,64}$'),
+    CONSTRAINT chk_eta_accuracy_eligibility_policy
+        CHECK (eligibility_policy_version = 'SELF_REPORT_DIAGNOSTIC_V2'),
+    CONSTRAINT chk_eta_accuracy_eligibility_reason CHECK (
+        accuracy_eligibility_reason IN (
+            'ELIGIBLE', 'UNVERIFIED_USER_NOW', 'UNVERIFIED_USER_ADJUSTED',
+            'UNVERIFIED_GEOFENCE', 'MISSING_CLIENT_APP_VERSION',
+            'MISSING_CLIENT_BUILD_VERSION', 'UNVERSIONED_BACKEND_COHORT',
+            'UNKNOWN_ALGORITHM_VERSION', 'UNVERIFIED_DEPARTURE',
+            'OBSERVATION_PRECISION_TOO_COARSE',
+            'STALE_ETA', 'UNSUPPORTED_ETA_SOURCE', 'UNSUPPORTED_PROVIDER',
+            'MISSING_PROVIDER_FETCH_TIME', 'PROVIDER_FETCH_AFTER_DEPARTURE',
+            'PROVIDER_PREDICTION_TOO_OLD', 'PREDICTION_EVALUATED_AFTER_DEPARTURE',
+            'PREDICTION_TOO_OLD', 'PROVIDER_ABSOLUTE_DEPARTURE_OFFSET_TOO_LARGE',
+            'ACTUAL_TRAVEL_DURATION_IMPLAUSIBLE'
+        )
+    ),
+    CONSTRAINT chk_eta_accuracy_eligibility_consistency
+        CHECK (accuracy_eligible = (accuracy_eligibility_reason = 'ELIGIBLE')),
+    CONSTRAINT chk_eta_accuracy_eligible_provenance CHECK (
+        NOT accuracy_eligible OR (
+            observation_verification = 'VERIFIED_GEOFENCE' AND
+            observation_source = 'GEOFENCE' AND
+            client_app_version IS NOT NULL AND
+            client_build_version IS NOT NULL AND
+            LOWER(backend_cohort_version) <> 'unversioned' AND
+            algorithm_version <> 'UNKNOWN' AND
+            prediction_basis = 'PROVIDER_ABSOLUTE'
+        )
+    ),
+    CONSTRAINT chk_eta_accuracy_actual_after_departure
+        CHECK (actual_arrival_at >= departed_at),
+    CONSTRAINT chk_eta_accuracy_actual_travel
+        CHECK (
+            actual_travel_seconds >= 0 AND
+            actual_travel_seconds = TIMESTAMPDIFF(SECOND, departed_at, actual_arrival_at)
+        ),
+    CONSTRAINT chk_eta_accuracy_report_delay CHECK (report_delay_seconds >= 0),
+    CONSTRAINT chk_eta_accuracy_absolute_error CHECK (absolute_error_seconds >= 0),
+    CONSTRAINT chk_eta_accuracy_predicted_on_time
+        CHECK (predicted_on_time = (predicted_arrival_at <= target_arrival_at)),
+    CONSTRAINT chk_eta_accuracy_actual_on_time
+        CHECK (actual_on_time = (actual_arrival_at <= target_arrival_at)),
+    CONSTRAINT chk_eta_accuracy_on_time_outcome CHECK (
+        on_time_outcome = CASE
+            WHEN predicted_on_time AND actual_on_time
+                THEN 'PREDICTED_ON_TIME_ACTUAL_ON_TIME'
+            WHEN predicted_on_time AND NOT actual_on_time
+                THEN 'PREDICTED_ON_TIME_ACTUAL_LATE'
+            WHEN NOT predicted_on_time AND actual_on_time
+                THEN 'PREDICTED_LATE_ACTUAL_ON_TIME'
+            ELSE 'PREDICTED_LATE_ACTUAL_LATE'
+        END
+    )
+) COMMENT='Opt-in actual-arrival ground truth for ETA accuracy';
 
 CREATE TABLE IF NOT EXISTS quick_schedule_parse_telemetry (
     analysis_id VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
@@ -356,6 +593,149 @@ CREATE TABLE IF NOT EXISTS quick_schedule_parse_telemetry (
     )
 ) COMMENT='Content-free 90-day quick schedule confidence calibration telemetry';
 
+CREATE TABLE IF NOT EXISTS departure_alarm_sync_state (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Departure alarm desired-state primary key',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
+    member_id BIGINT NOT NULL COMMENT 'Alarm recipient member id',
+    schedule_id BIGINT NOT NULL COMMENT 'Schedule id; deliberately no FK so tombstones survive deletion',
+    alarm_id VARCHAR(100) NOT NULL COMMENT 'Stable client alarm identifier',
+    generation BIGINT NOT NULL DEFAULT 0 COMMENT 'Monotonic command generation per alarm id',
+    operation VARCHAR(16) NOT NULL COMMENT 'UPSERT or CANCEL',
+    trigger_at DATETIME(6) NULL COMMENT 'Native alarm trigger time for UPSERT',
+    title VARCHAR(100) NULL COMMENT 'Native alarm title for UPSERT',
+    snooze_minutes INT NULL COMMENT 'Native alarm default snooze minutes for UPSERT',
+    command_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Canonical latest-command SHA-256',
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_departure_alarm_sync_member_schedule (member_id, schedule_id),
+    UNIQUE KEY uk_departure_alarm_sync_alarm_id (alarm_id),
+    INDEX idx_departure_alarm_sync_member_id (member_id, id),
+    INDEX idx_departure_alarm_sync_expiry (operation, trigger_at, id),
+    CONSTRAINT chk_departure_alarm_sync_generation
+        CHECK (generation BETWEEN 0 AND 9007199254740991),
+    CONSTRAINT chk_departure_alarm_sync_operation
+        CHECK (operation IN ('UPSERT', 'CANCEL')),
+    CONSTRAINT chk_departure_alarm_sync_shape
+        CHECK (
+            (
+                operation = 'UPSERT' AND
+                trigger_at IS NOT NULL AND
+                title IS NOT NULL AND
+                snooze_minutes BETWEEN 1 AND 60
+            ) OR (
+                operation = 'CANCEL' AND
+                trigger_at IS NULL AND
+                title IS NULL AND
+                snooze_minutes IS NULL
+            )
+        )
+) COMMENT='Latest native departure alarm desired state and CANCEL tombstones';
+
+CREATE TABLE IF NOT EXISTS departure_alarm_fire_events (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Native alarm fire evidence primary key',
+    member_id BIGINT NOT NULL COMMENT 'Authenticated alarm recipient member id',
+    client_event_id VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Canonical native UUID retained for at-least-once idempotency',
+    device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'SHA-256 of the opaque installation id; raw device id is never stored',
+    alarm_id VARCHAR(100) NOT NULL COMMENT 'Stable native alarm identifier',
+    schedule_id BIGINT NOT NULL COMMENT 'Schedule id; deliberately no lifecycle FK',
+    generation BIGINT NOT NULL COMMENT 'Native desired-state generation that actually fired',
+    desired_generation_at_receipt BIGINT NOT NULL
+        COMMENT 'Latest server generation when the evidence was received',
+    desired_operation_at_receipt VARCHAR(16) NOT NULL
+        COMMENT 'Latest UPSERT or CANCEL operation when evidence arrived',
+    generation_relation VARCHAR(16) NOT NULL COMMENT 'CURRENT or STALE fire evidence',
+    scheduled_for DATETIME(6) NOT NULL COMMENT 'Effective native trigger, including local snooze',
+    source_trigger_at DATETIME(6) NULL COMMENT 'Original server trigger when preserved by native OS',
+    client_occurred_at DATETIME(6) NOT NULL COMMENT 'Diagnostic device callback time',
+    timing_basis VARCHAR(24) NOT NULL COMMENT 'Exact, observed alerting, or inferred OS delivery evidence quality',
+    fire_delay_seconds BIGINT NOT NULL COMMENT 'Signed occurred minus scheduled delay in seconds',
+    server_recorded_at DATETIME(6) NOT NULL COMMENT 'Authoritative server receipt time',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_departure_alarm_fire_member_event (member_id, client_event_id),
+    UNIQUE KEY uk_departure_alarm_fire_member_device_trigger
+        (member_id, device_fingerprint, alarm_id, generation, scheduled_for),
+    INDEX idx_departure_alarm_fire_recorded_at (server_recorded_at, id),
+    INDEX idx_departure_alarm_fire_member (member_id, id),
+    INDEX idx_departure_alarm_fire_schedule (schedule_id, server_recorded_at),
+    CONSTRAINT chk_departure_alarm_fire_generation
+        CHECK (generation BETWEEN 0 AND 9007199254740991),
+    CONSTRAINT chk_departure_alarm_fire_desired_generation
+        CHECK (desired_generation_at_receipt BETWEEN generation AND 9007199254740991),
+    CONSTRAINT chk_departure_alarm_fire_operation
+        CHECK (desired_operation_at_receipt IN ('UPSERT', 'CANCEL')),
+    CONSTRAINT chk_departure_alarm_fire_timing_basis
+        CHECK (timing_basis IN ('EXACT_CALLBACK', 'OBSERVED_ALERTING', 'INFERRED_OS_DELIVERY')),
+    CONSTRAINT chk_departure_alarm_fire_relation
+        CHECK (
+            (generation_relation = 'CURRENT' AND generation = desired_generation_at_receipt) OR
+            (generation_relation = 'STALE' AND generation < desired_generation_at_receipt)
+        )
+) COMMENT='Authenticated durable evidence of actual native departure-alarm execution';
+
+CREATE TABLE IF NOT EXISTS departure_alarm_schedule_receipts (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Native alarm command receipt primary key',
+    member_id BIGINT NOT NULL COMMENT 'Authenticated alarm recipient member id',
+    client_receipt_id VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    command_receipt_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    alarm_id VARCHAR(100) NOT NULL,
+    schedule_id BIGINT NOT NULL COMMENT 'Deliberately no lifecycle FK',
+    generation BIGINT NOT NULL,
+    desired_generation_at_receipt BIGINT NOT NULL,
+    desired_operation_at_receipt VARCHAR(16) NOT NULL,
+    generation_relation VARCHAR(16) NOT NULL,
+    operation VARCHAR(16) NOT NULL,
+    trigger_at DATETIME(6) NULL,
+    outcome VARCHAR(16) NOT NULL,
+    applied BOOLEAN NOT NULL,
+    scheduled BOOLEAN NOT NULL,
+    platform VARCHAR(20) NOT NULL,
+    delivery_mode VARCHAR(24) NOT NULL,
+    source VARCHAR(16) NOT NULL,
+    failure_reason VARCHAR(64) NULL,
+    client_occurred_at DATETIME(6) NOT NULL,
+    server_recorded_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_departure_alarm_receipt_member_client (member_id, client_receipt_id),
+    UNIQUE KEY uk_departure_alarm_receipt_member_device_command
+        (member_id, device_fingerprint, command_receipt_key),
+    INDEX idx_departure_alarm_receipt_cohort
+        (outcome, trigger_at, platform, delivery_mode, server_recorded_at),
+    INDEX idx_departure_alarm_receipt_schedule (schedule_id, server_recorded_at),
+    INDEX idx_departure_alarm_receipt_member (member_id, id),
+    CONSTRAINT chk_departure_alarm_receipt_generation
+        CHECK (generation BETWEEN 0 AND 9007199254740991),
+    CONSTRAINT chk_departure_alarm_receipt_desired_generation
+        CHECK (desired_generation_at_receipt BETWEEN generation AND 9007199254740991),
+    CONSTRAINT chk_departure_alarm_receipt_relation CHECK (
+        (generation_relation = 'CURRENT' AND generation = desired_generation_at_receipt) OR
+        (generation_relation = 'STALE' AND generation < desired_generation_at_receipt)
+    ),
+    CONSTRAINT chk_departure_alarm_receipt_enums CHECK (
+        desired_operation_at_receipt IN ('UPSERT', 'CANCEL') AND
+        operation IN ('UPSERT', 'CANCEL') AND
+        outcome IN ('SCHEDULED', 'CANCELED', 'FAILED') AND
+        platform IN ('ANDROID', 'IOS') AND
+        delivery_mode IN (
+            'ANDROID_EXACT', 'ANDROID_INEXACT', 'IOS_ALARM_KIT',
+            'IOS_TIME_SENSITIVE', 'UNKNOWN'
+        ) AND
+        source IN ('PUSH', 'SNAPSHOT')
+    ),
+    CONSTRAINT chk_departure_alarm_receipt_shape CHECK (
+        (outcome = 'SCHEDULED' AND operation = 'UPSERT' AND trigger_at IS NOT NULL
+            AND scheduled = TRUE) OR
+        (outcome = 'CANCELED' AND operation = 'CANCEL' AND trigger_at IS NULL
+            AND applied = TRUE AND scheduled = FALSE AND failure_reason IS NULL) OR
+        (outcome = 'FAILED' AND scheduled = FALSE AND failure_reason IS NOT NULL
+            AND NOT (operation = 'CANCEL' AND applied = TRUE))
+    )
+) COMMENT='Authenticated append-only native alarm scheduling denominator';
+
 CREATE TABLE IF NOT EXISTS schedule_notification_action_receipts (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Action receipt primary key',
     key_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
@@ -384,12 +764,16 @@ CREATE TABLE IF NOT EXISTS push_device_token (
     dispatch_lease_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
     dispatch_lease_until DATETIME(6) NULL,
     retirement_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    delivery_ack_capability_version INT NULL
+        COMMENT 'Null for legacy clients; 1 promises authenticated per-delivery ACK upload',
     create_dt DATETIME(6) NULL,
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_push_device_token_token_fingerprint (token_fingerprint),
     UNIQUE KEY uk_push_device_token_device_fingerprint (device_fingerprint),
-    INDEX idx_push_device_token_dispatch_lease (dispatch_lease_until, id)
+    INDEX idx_push_device_token_dispatch_lease (dispatch_lease_until, id),
+    CONSTRAINT chk_push_device_token_ack_capability
+        CHECK (delivery_ack_capability_version IS NULL OR delivery_ack_capability_version = 1)
 ) COMMENT='Current global byte-exact installation ownership; raw opaque values are never indexed';
 
 CREATE TABLE IF NOT EXISTS push_send_history (
@@ -432,6 +816,8 @@ CREATE TABLE IF NOT EXISTS app_notifications (
     body VARCHAR(1000) NOT NULL COMMENT 'Notification body',
     data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON',
     created_at DATETIME(6) NOT NULL COMMENT 'Logical notification creation time',
+    inbox_visible BOOLEAN NOT NULL DEFAULT TRUE
+        COMMENT 'Whether this durable row appears in the user inbox and unread count',
     read_at DATETIME(6) NULL COMMENT 'First read time',
     manifest_state VARCHAR(24) NOT NULL DEFAULT 'INBOX_ONLY'
         COMMENT 'INBOX_ONLY, OPEN, or immutable FROZEN recipient snapshot',
@@ -457,12 +843,15 @@ CREATE TABLE IF NOT EXISTS app_notifications (
     INDEX idx_app_notifications_calendar_id (calendar_id),
     INDEX idx_app_notifications_dispatch_due (dispatch_status, next_dispatch_at, id),
     INDEX idx_app_notifications_dispatch_lease (dispatch_status, dispatch_locked_at, id)
-) COMMENT='Durable user-facing in-app notification inbox';
+) COMMENT='Durable push outbox source with optional user-facing inbox visibility';
 
 -- Existing environments may have created data_json with a smaller text type while the
 -- entity mapping was being introduced. Keep the executable bootstrap schema corrective.
 ALTER TABLE app_notifications
     MODIFY COLUMN data_json LONGTEXT NOT NULL COMMENT 'Original navigation payload as JSON';
+
+ALTER TABLE push_send_history
+    MODIFY COLUMN data_json LONGTEXT NOT NULL COMMENT 'Canonical provider data payload';
 
 CREATE TABLE IF NOT EXISTS push_deliveries (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Per-device logical push delivery primary key',
@@ -478,6 +867,8 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     schedule_id BIGINT NULL COMMENT 'Related schedule id when applicable',
     calendar_id BIGINT NULL COMMENT 'Frozen shared-calendar authorization resource id',
     payload_type VARCHAR(80) NULL COMMENT 'Push payload type',
+    delivery_ack_capability_version INT NULL
+        COMMENT 'Frozen ACK protocol version from the token manifest',
     status VARCHAR(30) NOT NULL COMMENT 'PENDING, DISPATCHING, SUCCESS, FAILED, INVALID_TOKEN, or SUPERSEDED',
     attempt_count INT NOT NULL DEFAULT 0 COMMENT 'Provider call attempt count',
     first_attempted_at DATETIME(6) NULL COMMENT 'First provider call boundary creation time',
@@ -486,12 +877,22 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
     provider_message_id VARCHAR(300) NULL COMMENT 'Provider message id after confirmed success',
     error_code VARCHAR(120) NULL COMMENT 'Provider or local transition failure class/code',
     error_message VARCHAR(1000) NULL COMMENT 'Sanitized failure detail without raw push token',
+    client_received_at DATETIME(6) NULL COMMENT 'Server receipt time of authenticated client RECEIVED ACK',
+    client_presented_at DATETIME(6) NULL COMMENT 'Server receipt time of authenticated client PRESENTED ACK',
+    alarm_scheduled_at DATETIME(6) NULL COMMENT 'Server receipt time of authenticated client ALARM_SCHEDULED ACK',
+    alarm_fired_at DATETIME(6) NULL COMMENT 'Server receipt time of authenticated client ALARM_FIRED ACK',
+    client_actioned_at DATETIME(6) NULL COMMENT 'Server receipt time of authenticated client ACTIONED ACK',
+    client_ack_recorded_at DATETIME(6) NULL COMMENT 'Server receipt time of latest first-seen client ACK',
     PRIMARY KEY (id),
     UNIQUE KEY uk_push_deliveries_member_event_device (member_id, event_key, device_key),
     INDEX idx_push_deliveries_member_event (member_id, event_key),
     INDEX idx_push_deliveries_status_attempted_at (status, last_attempted_at),
+    INDEX idx_push_deliveries_reliability_cohort
+        (status, delivered_at, delivery_ack_capability_version, client_received_at),
     INDEX idx_push_deliveries_schedule_id (schedule_id),
-    INDEX idx_push_deliveries_calendar_id (calendar_id)
+    INDEX idx_push_deliveries_calendar_id (calendar_id),
+    CONSTRAINT chk_push_deliveries_ack_capability
+        CHECK (delivery_ack_capability_version IS NULL OR delivery_ack_capability_version = 1)
 ) COMMENT='Durable at-most-once per-device push delivery boundary';
 
 CREATE TABLE IF NOT EXISTS apple_authorization_code_receipts (

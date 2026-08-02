@@ -9,6 +9,7 @@ import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleNotificationActionIdempotencyService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
 import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
+import com.noLate.schedule.application.service.ScheduleTrustTelemetryCleanupService
 import com.noLate.schedule.application.service.QuickScheduleReliabilityTelemetryService
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleImportResultDto
@@ -42,6 +43,7 @@ class ScheduleUseCase(
     private val clock: Clock = Clock.systemUTC(),
     private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
     private val scheduleTravelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
+    private val scheduleTrustTelemetryCleanupService: ScheduleTrustTelemetryCleanupService? = null,
     private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -289,7 +291,10 @@ class ScheduleUseCase(
                 schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, staleMemberId)
         }
         registerOrCancelPushJob(ownerMemberId, updated)
-        return updated
+        // Owner plan 동기화 전의 개인화 DTO를 반환하면 방금 바꾼 route 설정이 이전 plan 값으로
+        // 되돌아 보일 수 있다. 동기화 후 다시 읽어 owner/editor 모두 기존 응답 메타데이터와
+        // 자신의 travel plan을 일관되게 돌려준다.
+        return scheduleService.getScheduleDetail(memberId, scheduleId)
     }
 
     private fun registerOrCancelPushJob(memberId: Long, scheduleDto: ScheduleDto) {
@@ -339,6 +344,7 @@ class ScheduleUseCase(
             editFence.lockedMemberIds,
         )
         scheduleService.deleteSchedule(memberId, scheduleId)
+        scheduleTrustTelemetryCleanupService?.deleteForSchedule(scheduleId)
         schedulePushJobService.cancelByScheduleId(scheduleId)
     }
 
@@ -467,8 +473,9 @@ class ScheduleUseCase(
         categoryId: String?,
         startAt: String?,
         endAt: String?,
+        limit: Int? = null,
     ): List<ScheduleDto> {
-        return scheduleService.searchScheduleList(memberId, keyword, categoryId, startAt, endAt)
+        return scheduleService.searchScheduleList(memberId, keyword, categoryId, startAt, endAt, limit)
     }
 
     /**

@@ -17,6 +17,7 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
+import com.noLate.sharing.application.SharingBlockPolicy
 import org.springframework.stereotype.Component
 
 data class ScheduleAccessDecision(
@@ -46,6 +47,7 @@ class ScheduleAccessPolicy(
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
     private val categoryRepository: ScheduleCategoryRepository? = null,
     private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
+    private val sharingBlockPolicy: SharingBlockPolicy? = null,
 ) {
     /**
      * 보조 travel/participant 서비스도 dormant grant를 포함하는 native detail query를
@@ -56,6 +58,9 @@ class ScheduleAccessPolicy(
     fun resolve(memberId: Long, schedule: Schedule): ScheduleAccessDecision {
         if (schedule.memberId == memberId) return ownerDecision(schedule)
         if (!sharingAvailabilityPolicy.enabled) return NO_ACCESS
+        if (sharingBlockPolicy?.isInteractionBlocked(memberId, schedule.memberId) == true) {
+            return NO_ACCESS
+        }
 
         val scheduleId = requireNotNull(schedule.id)
         val direct = scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, memberId)
@@ -103,11 +108,16 @@ class ScheduleAccessPolicy(
         val calendarsById = calendarRepository.findAllById(calendarMembershipById.keys)
             .filter(::isActive)
             .associateBy { requireNotNull(it.id) }
+        val blockedOwnerIds = sharingBlockPolicy
+            ?.blockedCounterpartIds(memberId, schedules.map { it.memberId })
+            .orEmpty()
 
         return schedules.mapNotNull { schedule ->
             val scheduleId = schedule.id ?: return@mapNotNull null
             val decision = if (schedule.memberId == memberId) {
                 ownerDecision(schedule)
+            } else if (schedule.memberId in blockedOwnerIds) {
+                NO_ACCESS
             } else {
                 val membership = schedule.calendarId?.let(calendarMembershipById::get)
                 decide(
@@ -156,7 +166,7 @@ class ScheduleAccessPolicy(
                     .mapTo(ids) { it.memberId }
             }
         }
-        return ids.toList()
+        return filterBlockedAudience(schedule.memberId, ids)
     }
 
     /**
@@ -167,17 +177,14 @@ class ScheduleAccessPolicy(
     fun activeCalendarMemberIds(calendarId: Long): List<Long> {
         if (!sharingAvailabilityPolicy.enabled) return emptyList()
 
-        if (
-            calendarRepository.findByIdAndStatusAndDeletedFalse(
+        val calendar = calendarRepository.findByIdAndStatusAndDeletedFalse(
                 calendarId,
                 ScheduleCalendarStatus.ACTIVE,
-            ) == null
-        ) {
-            return emptyList()
-        }
-        return calendarMemberRepository
+            ) ?: return emptyList()
+        val memberIds = calendarMemberRepository
             .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
             .map { it.memberId }
+        return filterBlockedAudience(calendar.ownerMemberId, memberIds)
     }
 
     /**
@@ -195,6 +202,7 @@ class ScheduleAccessPolicy(
                 ?: true
         }
         if (!sharingAvailabilityPolicy.enabled) return false
+        if (sharingBlockPolicy?.isInteractionBlocked(memberId, schedule.memberId) == true) return false
 
         val scheduleId = requireNotNull(schedule.id)
         val directTravel = scheduleShareRepository
@@ -277,6 +285,16 @@ class ScheduleAccessPolicy(
                 .findAllByCalendarIdInAndStatusAndDeletedFalseOrderByCalendarIdAscIdAsc(calendarIds)
                 .groupBy { it.calendarId }
         }
+        val allCandidateMemberIds = buildSet {
+            directByScheduleId.values.flatten().forEach { add(it.targetMemberId) }
+            categoryById.values.flatten().forEach { add(it.targetMemberId) }
+            calendarMembersById.values.flatten().forEach { add(it.memberId) }
+        }
+        val blockedByOwner = routeSchedules.map { it.memberId }.distinct().associateWith { ownerMemberId ->
+            sharingBlockPolicy
+                ?.blockedCounterpartIds(ownerMemberId, allCandidateMemberIds)
+                .orEmpty()
+        }
 
         return routeSchedules.associate { schedule ->
             val scheduleId = requireNotNull(schedule.id)
@@ -305,8 +323,19 @@ class ScheduleAccessPolicy(
                         .mapTo(memberIds) { it.memberId }
                 }
             }
+            memberIds.removeAll(blockedByOwner[schedule.memberId].orEmpty())
             scheduleId to memberIds.toList()
         }
+    }
+
+    private fun filterBlockedAudience(
+        ownerMemberId: Long,
+        memberIds: Collection<Long>,
+    ): List<Long> {
+        val blocked = sharingBlockPolicy
+            ?.blockedCounterpartIds(ownerMemberId, memberIds)
+            .orEmpty()
+        return memberIds.filter { it == ownerMemberId || it !in blocked }
     }
 
     private fun decide(

@@ -109,3 +109,268 @@ tests:
             exp_annotations:
               summary: "NoLate ETA worker is raising processing exceptions"
               description: "At least one ETA execution failed before its retry or terminal transition."
+
+  - name: sufficiently sampled transit ETA stale rejection rate alerts per provider
+    interval: 1m
+    input_series:
+      - series: 'nolate_eta_transit_provider_duration_seconds_count{application="noLate",provider="seoul_subway",outcome="success",instance="app-1"}'
+        values: '0+2x30'
+      - series: 'nolate_eta_transit_provider_events_total{application="noLate",provider="seoul_subway",outcome="rejected_stale",instance="app-1"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NoLateTransitEtaProviderFailureRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              provider: seoul_subway
+            exp_annotations:
+              summary: "NoLate transit ETA provider failure rate is elevated"
+              description: "seoul_subway transit ETA failures, empty results, stale rejections, or unverified-source rejections exceeded 20% with at least 20 logical lookups."
+
+  - name: sufficiently sampled transit ETA unverified source rejection rate alerts per provider
+    interval: 1m
+    input_series:
+      - series: 'nolate_eta_transit_provider_duration_seconds_count{application="noLate",provider="tago_bus",outcome="success",instance="app-1"}'
+        values: '0+2x30'
+      - series: 'nolate_eta_transit_provider_events_total{application="noLate",provider="tago_bus",outcome="rejected_unverified_source",instance="app-1"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NoLateTransitEtaProviderFailureRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              provider: tago_bus
+            exp_annotations:
+              summary: "NoLate transit ETA provider failure rate is elevated"
+              description: "tago_bus transit ETA failures, empty results, stale rejections, or unverified-source rejections exceeded 20% with at least 20 logical lookups."
+
+  - name: transit ETA provider alert ignores a high failure ratio below twenty calls
+    interval: 1m
+    input_series:
+      - series: 'nolate_eta_transit_provider_duration_seconds_count{application="noLate",provider="tago_bus",outcome="empty",instance="app-1"}'
+        values: '0+1x20'
+      - series: 'nolate_eta_transit_provider_events_total{application="noLate",provider="tago_bus",outcome="empty",instance="app-1"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NoLateTransitEtaProviderFailureRate
+        exp_alerts: []
+
+  - name: sufficiently sampled ACK-capable push cohort alerts below ninety percent
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-1"}'
+        values: '30x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '20x30'
+      - series: 'nolate_push_delivery_cohort_client_received{application="noLate",instance="app-1"}'
+        values: '17x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NoLatePushClientReceivedReliabilityLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "NoLate client-confirmed push reliability is below 90%"
+              description: "Fewer than 90% of at least 20 aged ACK-capable provider successes uploaded a RECEIVED acknowledgement."
+
+  - name: legacy provider successes do not inflate the ACK reliability denominator
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-1"}'
+        values: '100x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '10x30'
+      - series: 'nolate_push_delivery_cohort_client_received{application="noLate",instance="app-1"}'
+        values: '5x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushClientReceivedReliabilityLow
+        exp_alerts: []
+
+  - name: zero ACK-capable samples remain unmeasured instead of zero percent
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-1"}'
+        values: '0x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '0x30'
+      - series: 'nolate_push_delivery_cohort_client_received{application="noLate",instance="app-1"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushClientReceivedReliabilityLow
+        exp_alerts: []
+
+  - name: sufficiently sampled provider cohort alerts on low ACK measurement coverage
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-1"}'
+        values: '30x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '26x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NoLatePushAckMeasurementCoverageLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "NoLate push ACK measurement coverage is below 90%"
+              description: "Fewer than 90% of at least 20 aged provider successes came from clients declaring ACK capability v1; this is a measurement coverage gap, not a delivery-failure rate."
+
+  - name: zero provider successes leave ACK measurement coverage unmeasured
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-1"}'
+        values: '0x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushAckMeasurementCoverageLow
+        exp_alerts: []
+
+  - name: exactly ninety percent ACK measurement coverage does not alert
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-1"}'
+        values: '20x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '18x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushAckMeasurementCoverageLow
+        exp_alerts: []
+
+  - name: stale delivery snapshots do not evaluate ACK measurement coverage
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-1"}'
+        values: '30x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushAckMeasurementCoverageLow
+        exp_alerts: []
+
+  - name: replicated provider cohort gauges are not summed into the coverage sample
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-2"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-1"}'
+        values: '10x30'
+      - series: 'nolate_push_delivery_cohort_provider_success{application="noLate",instance="app-2"}'
+        values: '10x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '0x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-2"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushAckMeasurementCoverageLow
+        exp_alerts: []
+
+  - name: exactly ninety percent client receipt reliability does not alert
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '20x30'
+      - series: 'nolate_push_delivery_cohort_client_received{application="noLate",instance="app-1"}'
+        values: '18x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushClientReceivedReliabilityLow
+        exp_alerts: []
+
+  - name: stale delivery cohort snapshots do not evaluate the reliability alert
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '20x30'
+      - series: 'nolate_push_delivery_cohort_client_received{application="noLate",instance="app-1"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushClientReceivedReliabilityLow
+        exp_alerts: []
+
+  - name: replicated database cohort gauges are not summed into the minimum sample
+    interval: 1m
+    input_series:
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-1"}'
+        values: '0+60x30'
+      - series: 'nolate_observability_snapshot_last_success_seconds{application="noLate",instance="app-2"}'
+        values: '0+60x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-1"}'
+        values: '10x30'
+      - series: 'nolate_push_delivery_cohort_ack_eligible{application="noLate",instance="app-2"}'
+        values: '10x30'
+      - series: 'nolate_push_delivery_cohort_client_received{application="noLate",instance="app-1"}'
+        values: '5x30'
+      - series: 'nolate_push_delivery_cohort_client_received{application="noLate",instance="app-2"}'
+        values: '5x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NoLatePushClientReceivedReliabilityLow
+        exp_alerts: []
+
+  - name: stale native alarm generation execution alerts
+    interval: 1m
+    input_series:
+      - series: 'nolate_departure_alarm_fire_events_total{application="noLate",generation_relation="stale",timing_basis="exact_callback",outcome="recorded",instance="app-1"}'
+        values: '0 0 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: NoLateDepartureAlarmStaleGenerationFired
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "NoLate fired a stale departure alarm generation"
+              description: "A native alarm executed after the server had already advanced its desired generation."
+
+  - name: sufficiently sampled ETA false-safe rate alerts
+    interval: 5m
+    input_series:
+      - series: 'nolate_eta_on_time_outcomes_total{application="noLate",outcome="predicted_on_time_actual_on_time",travel_mode="transit",provider="odsay_transit",algorithm_version="odsay_transfer_feasibility_v2",instance="app-1"}'
+        values: '0 10 20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180'
+      - series: 'nolate_eta_on_time_outcomes_total{application="noLate",outcome="predicted_on_time_actual_late",travel_mode="transit",provider="odsay_transit",algorithm_version="odsay_transfer_feasibility_v2",instance="app-1"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18'
+    alert_rule_test:
+      - eval_time: 85m
+        alertname: NoLateEtaFalseSafeRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              travel_mode: transit
+              provider: odsay_transit
+              algorithm_version: odsay_transfer_feasibility_v2
+            exp_annotations:
+              summary: "NoLate ETA false-safe rate is elevated"
+              description: "More than 5% of at least 50 predicted-on-time eligible observations arrived late."

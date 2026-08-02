@@ -10,13 +10,16 @@ import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.application.TrafficClient
+import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
+import com.noLate.schedule.application.TrafficResult
 import com.noLate.schedule.application.sanitizeTrafficFailureReason
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
 import com.noLate.schedule.application.service.policy.DepartureReminderDecision
 import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
 import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
@@ -43,8 +46,9 @@ class SchedulePushJobWorker(
     private val departureReminderPolicy: DepartureReminderPolicy,
     private val trafficChangePolicy: TrafficChangePolicy,
     private val pushJobCoordinator: SchedulePushJobCoordinator,
+    @Value("\${schedule.push.enabled:true}") private val enabled: Boolean = true,
     @Value("\${schedule.push.batch-size:50}") private val batchSize: Int,
-    @Value("\${schedule.push.retry-delay-minutes:5}") private val retryDelayMinutes: Long,
+    @Value("\${schedule.push.retry-delay-minutes:1}") private val retryDelayMinutes: Long,
     @Value("\${schedule.push.max-retry-count:3}") private val maxRetryCount: Int,
     @Value("\${schedule.push.delivery-grace-minutes:10}") private val deliveryGraceMinutes: Long = 10,
     @Value("\${schedule.push.departure-alert-lead-minutes:15}") private val departureAlertLeadMinutes: Int,
@@ -56,10 +60,13 @@ class SchedulePushJobWorker(
     @Value("\${schedule.traffic.live-comparator-max-age-minutes:60}")
     private val liveComparatorMaxAgeMinutes: Long =
         SchedulePushJob.DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES,
+    @Value("\${schedule.push.eta-event-ttl-seconds:120}")
+    private val etaEventTtlSeconds: Long = DEFAULT_ETA_EVENT_TTL_SECONDS,
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
     private val clock: Clock = Clock.systemUTC(),
     private val operationalMetrics: NoLateOperationalMetrics? = null,
+    private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
 ) {
     init {
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
@@ -68,6 +75,13 @@ class SchedulePushJobWorker(
         ) {
             "schedule.traffic.live-comparator-max-age-minutes는 " +
                 "1~${SchedulePushJob.MAX_LIVE_COMPARATOR_AGE_MINUTES} 사이여야 합니다."
+        }
+        require(etaEventTtlSeconds in MIN_ETA_EVENT_TTL_SECONDS..MAX_ETA_EVENT_TTL_SECONDS) {
+            "schedule.push.eta-event-ttl-seconds는 " +
+                "$MIN_ETA_EVENT_TTL_SECONDS~$MAX_ETA_EVENT_TTL_SECONDS 사이여야 합니다."
+        }
+        require(retryDelayMinutes >= 1 && retryDelayMinutes * 60 < etaEventTtlSeconds) {
+            "schedule.push.retry-delay-minutes는 ETA event TTL보다 짧아야 합니다."
         }
     }
 
@@ -80,6 +94,8 @@ class SchedulePushJobWorker(
     }
 
     fun runDueJobs(now: Instant): Int {
+        if (!enabled) return 0
+
         val recoveryAt = currentAtOrAfter(now)
         val recoveredCount = pushJobCoordinator.recoverStaleProcessingJobs(
             now = recoveryAt,
@@ -127,14 +143,22 @@ class SchedulePushJobWorker(
             // 일정이 시작된 뒤에는 "출발" 알림의 의미가 사라지므로 남은 후속 푸시를 종료한다.
             if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
                 job.complete()
-                pushJobCoordinator.persist(job, workerId)
+                persistMeasuredTransition(
+                    job = job,
+                    outcome = EtaJobMetricOutcome.PROCESSED,
+                    alarmIntent = job.cancelAlarmIntent(),
+                )
                 return
             }
 
             val schedule = scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)
                 ?: run {
                     job.cancel()
-                    pushJobCoordinator.persist(job, workerId)
+                    persistMeasuredTransition(
+                        job = job,
+                        outcome = EtaJobMetricOutcome.PROCESSED,
+                        alarmIntent = job.cancelAlarmIntent(),
+                    )
                     return
                 }
             // 공유 범위 축소와 이미 선점된 worker가 경합해도 발송 직전 유효 이동 권한을 다시
@@ -144,15 +168,28 @@ class SchedulePushJobWorker(
                 scheduleAccessPolicy?.resolve(job.memberId, schedule)?.travelEnabled == false
             ) {
                 job.cancel()
-                pushJobCoordinator.persist(job, workerId)
+                persistMeasuredTransition(
+                    job = job,
+                    outcome = EtaJobMetricOutcome.PROCESSED,
+                    alarmIntent = job.cancelAlarmIntent(),
+                )
                 return
             }
             val route = resolveRouteSource(schedule, job.memberId)
                 ?: run {
                     job.cancel()
-                    pushJobCoordinator.persist(job, workerId)
+                    persistMeasuredTransition(
+                        job = job,
+                        outcome = EtaJobMetricOutcome.PROCESSED,
+                        alarmIntent = job.cancelAlarmIntent(),
+                    )
                     return
                 }
+            // A previous check that intentionally scheduled exactly +1 second is a durable
+            // semantic catch-up marker. It forces a new cN payload even when the latest ETA change
+            // would otherwise fall outside a normal reminder/traffic-increase boundary.
+            val semanticCatchUpDue = job.lastCheckedAt
+                ?.plusSeconds(1) == job.nextCheckAt
 
             val selectedRoute = SelectedRouteMetadata.parse(
                 objectMapper = objectMapper,
@@ -189,9 +226,23 @@ class SchedulePushJobWorker(
                 selectedRouteTravelMinutes = trustedSelectedMinutes,
                 selectedRouteOption = selectedRoute.routeOption,
                 selectedTransitItineraryJson = selectedRoute.transitItineraryJson,
+                evaluatedAt = now,
+                plannedDepartureAt = maxOf(
+                    now,
+                    job.lastRecommendedDepartureAt ?: job.departureAt,
+                ),
+                targetArrivalAt = schedule.startAt,
                 maxTravelMinutes = maxTravelMinutes,
             )
             val trafficResult = trafficClient.getTravelMinutes(request)
+            val etaFailureReason = sanitizeTrafficFailureReason(trafficResult.failureReason)
+            val previousEtaFailureReason = sanitizeTrafficFailureReason(job.lastEtaFailureReason)
+            val transferFailureReason = etaFailureReason.takeIf { it.isTransitTransferFailure() }
+            val previousTransferFailureReason = previousEtaFailureReason
+                .takeIf { it.isTransitTransferFailure() }
+            val transferFailureTransition = transferFailureReason != null &&
+                transferFailureReason != previousTransferFailureReason
+            val predictedArrivalAt = trafficResult.userVisiblePredictedArrivalAt(schedule.startAt)
             operationalMetrics.recordSafely {
                 recordEtaResolution(
                     source = trafficResult.source,
@@ -211,7 +262,26 @@ class SchedulePushJobWorker(
                         routeFingerprint = routeFingerprint,
                     )
                 }
-            val recommendedDepartureAt = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+            val recommendedDepartureAt = trafficResult.actionableRecommendedDepartureAt()
+                ?.takeUnless { it.isAfter(schedule.startAt) }
+                // Provider timeout/degraded 결과는 직전 fresh 알람을 늦추거나 앞당기지 않는다.
+                // 첫 조회 실패에서도 사용자가 저장한 기준 출발시각을 그대로 유지한다.
+                ?: (job.lastRecommendedDepartureAt ?: job.departureAt)
+                    .takeIf { !trafficResult.accepted }
+                    ?.takeUnless { it.isAfter(schedule.startAt) }
+                ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+            val alarmIntent = departureAlarmSyncService?.let {
+                SchedulePushAlarmIntent.AutomaticEta(
+                    memberId = job.memberId,
+                    scheduleId = job.scheduleId,
+                    notificationEnabled = transferFailureReason == null,
+                    alertMode = route.alertMode,
+                    recommendedDepartureAt = recommendedDepartureAt,
+                    scheduleTitle = schedule.title,
+                    resumeCanceledAfterTransitTransferFailure =
+                        etaFailureReason == null && previousTransferFailureReason != null,
+                )
+            }
             val reminderDecision = departureReminderPolicy.decide(
                 now = now,
                 recommendedDepartureAt = recommendedDepartureAt,
@@ -243,6 +313,21 @@ class SchedulePushJobWorker(
                 previousTravelMinutes = comparableLiveTravelMinutes,
                 currentTravelMinutes = travelMinutes,
             )
+            val departureAdvanceMinutes = job.lastRecommendedDepartureAt
+                ?.takeIf {
+                    trafficResult.recommendedDepartureAt != null &&
+                        !trafficResult.stale &&
+                        trafficResult.source in setOf(
+                            TrafficSource.LIVE_PROVIDER,
+                            TrafficSource.TIMETABLE_PROVIDER,
+                        )
+                }
+                ?.takeIf { recommendedDepartureAt.isBefore(it) }
+                ?.let { previous ->
+                    Duration.between(recommendedDepartureAt, previous).toMinutes().toInt()
+                }
+                ?.coerceAtLeast(0)
+                ?: 0
             val showDepartureActions = reminderDecision.departNowAction ||
                 (
                     (job.handledDepartureNoticeAt ?: job.departureNoticeSentAt) != null &&
@@ -251,12 +336,34 @@ class SchedulePushJobWorker(
             // 이동 시간이 늘어난 경우만 즉시 보낸다. 줄어든 경우는 다음 경계 시각만 재계산해 불필요한 알림을 줄인다.
             val deduplicationKey = schedulePushInboxDeduplicationKey(job)
             val persistedEvent = notificationUseCase.findPersistedEvent(job.memberId, deduplicationKey)
+            val dispatchCheckedAt = currentAtOrAfter(now)
+            val persistedEventExpiresAt = persistedEvent?.data
+                ?.get(SCHEDULE_ETA_EVENT_EXPIRES_AT)
+                ?.let { raw -> runCatching { Instant.parse(raw) }.getOrNull() }
+            val persistedEventExpired = persistedEvent != null && (
+                persistedEventExpiresAt == null ||
+                    !dispatchCheckedAt.isBefore(persistedEventExpiresAt)
+                )
+            val eventExpiresAt = persistedEventExpiresAt
+                ?: dispatchCheckedAt.plusSeconds(etaEventTtlSeconds)
             val shouldPush =
-                persistedEvent != null ||
+                !persistedEventExpired && (
+                    persistedEvent != null ||
                     reminderDecision != DepartureReminderDecision.NONE ||
-                    trafficChangeMinutes > 0
+                    trafficChangeMinutes > 0 ||
+                    departureAdvanceMinutes > 0 ||
+                    semanticCatchUpDue ||
+                    transferFailureTransition
+                    )
 
-            val pushOutcome = if (shouldPush) {
+            val pushOutcome = if (persistedEventExpired) {
+                // 같은 check의 immutable payload가 안전 TTL을 넘겼다. 외부 provider 호출 없이
+                // 현재 check를 닫아 cN outbox를 stale로 만들고, 다음 tick에서 새 ETA/cN+1을 만든다.
+                SchedulePushOutcome(catchUpRequired = true)
+            } else if (shouldPush) {
+                val onTimeArrivalPossible = predictedArrivalAt?.let {
+                    !it.isAfter(schedule.startAt)
+                }
                 val liveMessage = trafficChangePolicy.createMessage(
                     scheduleTitle = schedule.title,
                     previousTravelMinutes = comparableLiveTravelMinutes,
@@ -268,22 +375,40 @@ class SchedulePushJobWorker(
                         reminderBoundaryAt = reminderBoundaryAt,
                         recommendedDepartureAt = recommendedDepartureAt,
                     ),
+                    departureAdvanceMinutes = departureAdvanceMinutes,
+                    onTimeArrivalPossible = onTimeArrivalPossible,
+                    predictedArrivalAt = predictedArrivalAt,
+                    transferFailureReason = transferFailureReason,
                 )
                 val liveData = mapOf(
                     "type" to pushPayloadType(reminderDecision, showDepartureActions),
                     "scheduleId" to job.scheduleId.toString(),
                     "travelMinutes" to travelMinutes.toString(),
                     "recommendedDepartureAt" to recommendedDepartureAt.toString(),
+                    "predictedArrivalAt" to (predictedArrivalAt?.toString() ?: ""),
+                    "onTimeArrivalPossible" to (onTimeArrivalPossible?.toString() ?: ""),
+                    "etaSource" to trafficResult.source.name,
+                    "etaStale" to trafficResult.stale.toString(),
+                    "etaFailureReason" to (etaFailureReason ?: ""),
+                    "transitTransferFeasibility" to transferFailureReason.toTransferFeasibilityPayload(),
+                    "etaRouteProvenance" to (
+                        trafficResult.transitRouteProvenance?.name ?: ""
+                    ),
+                    "etaTimingBasis" to (trafficResult.transitTimingBasis?.name ?: ""),
                     "departNow" to showDepartureActions.toString(),
                     "departureReminderDecision" to reminderDecision.name,
                     "reminderBoundaryAt" to (reminderBoundaryAt?.toString() ?: ""),
                     "snoozeMinutes" to departureSnoozeMinutes.toString(),
                     "trafficChangeMinutes" to (liveMessage.trafficChangeMinutes?.toString() ?: "0"),
+                    "departureAdvanceMinutes" to departureAdvanceMinutes.toString(),
                     "schedulePushJobId" to (job.id?.toString() ?: ""),
                     "schedulePushCheckCount" to job.checkCount.toString(),
                     "notificationGeneration" to job.notificationGeneration.toString(),
                     "notificationInputFingerprint" to job.notificationInputFingerprint,
+                    SCHEDULE_ETA_EVENT_EXPIRES_AT to eventExpiresAt.toString(),
                 )
+                val persistedMeaningChanged = persistedEvent != null &&
+                    ETA_PUSH_SEMANTIC_KEYS.any { key -> persistedEvent.data[key] != liveData[key] }
                 val dispatchFence = job.id?.let {
                     PushDispatchFence(
                         jobId = it,
@@ -291,6 +416,8 @@ class SchedulePushJobWorker(
                         jobVersion = requireNotNull(job.version),
                         notificationGeneration = job.notificationGeneration,
                         notificationInputFingerprint = job.notificationInputFingerprint,
+                        expectedCheckCount = job.checkCount,
+                        sourceExpiresAt = eventExpiresAt,
                         expectedMemberId = job.memberId,
                         expectedScheduleId = job.scheduleId,
                     )
@@ -315,15 +442,6 @@ class SchedulePushJobWorker(
                         dispatchFence = dispatchFence,
                     )
                 }
-                if (sendResult.fenceRejected) {
-                    log.info(
-                        "Schedule push fence rejected stale worker. jobId={}, generation={}, workerId={}",
-                        job.id,
-                        job.notificationGeneration,
-                        workerId,
-                    )
-                    return
-                }
                 val eventSnapshot = sendResult.eventSnapshot ?: persistedEvent
                 val eventDecision = eventSnapshot?.data
                     ?.get("departureReminderDecision")
@@ -338,72 +456,122 @@ class SchedulePushJobWorker(
                     ?.takeIf(String::isNotBlank)
                     ?.let { runCatching { Instant.parse(it) }.getOrNull() }
                     ?: reminderBoundaryAt
-                log.info(
-                    "Schedule push handled. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, attempted={}, sent={}, alreadyDelivered={}, ambiguous={}, deduplicated={}, failed={}, retryableFailed={}",
-                    job.id,
-                    job.scheduleId,
-                    reminderDecision,
-                    travelMinutes,
-                    sendResult.requestedCount,
-                    sendResult.attemptedCount,
-                    sendResult.sentCount,
-                    sendResult.alreadyDeliveredCount,
-                    sendResult.ambiguousCount,
-                    sendResult.deduplicatedCount,
-                    sendResult.failedCount,
-                    sendResult.retryableFailedCount,
-                )
-                if (sendResult.retryableFailedCount > 0) {
-                    // 일부 기기가 성공했더라도 같은 generation/check event를 유지해야 다음
-                    // 실행에서 SUCCESS는 건너뛰고 FAILED 기기만 다시 claim할 수 있다.
-                    if (sendResult.confirmedSuccessCount > 0) {
-                        job.recordConfirmedPush(
-                            if (sendResult.sentCount > 0) now
-                            else sendResult.alreadyDeliveredAt ?: now
+                if (sendResult.fenceRejected) {
+                    // Lease/generation을 잃었다면 아래 persist가 현재 source row 검증에서 no-op이
+                    // 된다. 여전히 lease를 소유하고 ETA TTL만 만료된 경우에는 앞 기기의 확정/모호
+                    // 결과를 보존하며 cN을 닫고 다음 tick에 fresh cN+1을 만든다.
+                    log.info(
+                        "Schedule push fence rejected during dispatch. " +
+                            "jobId={}, generation={}, workerId={}, handled={}",
+                        job.id,
+                        job.notificationGeneration,
+                        workerId,
+                        sendResult.durablyHandledCount,
+                    )
+                    SchedulePushOutcome(
+                        notificationHandled = sendResult.durablyHandledCount > 0,
+                        confirmedSuccess = sendResult.confirmedSuccessCount > 0,
+                        uncertain = sendResult.ambiguousCount > 0,
+                        confirmedAt = when {
+                            sendResult.sentCount > 0 -> now
+                            sendResult.alreadyDeliveredCount > 0 -> sendResult.alreadyDeliveredAt
+                            else -> null
+                        },
+                        decision = eventDecision,
+                        notifiedDepartureAt = eventRecommendedDepartureAt,
+                        reminderBoundaryAt = eventReminderBoundaryAt,
+                        catchUpRequired = true,
+                    )
+                } else {
+                    log.info(
+                        "Schedule push handled. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, attempted={}, sent={}, alreadyDelivered={}, ambiguous={}, deduplicated={}, failed={}, retryableFailed={}",
+                        job.id,
+                        job.scheduleId,
+                        reminderDecision,
+                        travelMinutes,
+                        sendResult.requestedCount,
+                        sendResult.attemptedCount,
+                        sendResult.sentCount,
+                        sendResult.alreadyDeliveredCount,
+                        sendResult.ambiguousCount,
+                        sendResult.deduplicatedCount,
+                        sendResult.failedCount,
+                        sendResult.retryableFailedCount,
+                    )
+                    if (sendResult.retryableFailedCount > 0) {
+                        // 일부 기기가 성공했더라도 같은 generation/check event를 유지해야 다음
+                        // 실행에서 SUCCESS는 건너뛰고 FAILED 기기만 다시 claim할 수 있다.
+                        if (sendResult.confirmedSuccessCount > 0) {
+                            job.recordConfirmedPush(
+                                if (sendResult.sentCount > 0) now
+                                else sendResult.alreadyDeliveredAt ?: now
+                            )
+                        }
+                        job.recordRetryEtaEvaluation(
+                            trafficResult = trafficResult,
+                            travelMinutes = travelMinutes,
+                            recommendedDepartureAt = recommendedDepartureAt,
+                            predictedArrivalAt = predictedArrivalAt,
+                            etaFailureReason = etaFailureReason,
+                            travelMode = route.travelMode,
+                            routeFingerprint = routeFingerprint,
+                            now = now,
                         )
+                        val transition = scheduleRetryAfterPushFailure(
+                            job = job,
+                            now = now,
+                            requestedCount = sendResult.requestedCount,
+                            failedCount = sendResult.retryableFailedCount,
+                        )
+                        persistMeasuredTransition(
+                            job = job,
+                            outcome = transition,
+                            uncertainDelivery = sendResult.ambiguousCount > 0,
+                            alarmIntent = alarmIntent,
+                        )
+                        return
                     }
-                    val transition = scheduleRetryAfterPushFailure(
-                        job = job,
-                        now = now,
-                        requestedCount = sendResult.requestedCount,
-                        failedCount = sendResult.retryableFailedCount,
+                    if (sendResult.durablyHandledCount == 0) {
+                        // FCM/APNs가 한 기기에도 전달하지 못했다면 성공 이력을 기록하지 않는다.
+                        // 특히 DEPART_NOW를 완료 처리하면 다시 보낼 방법이 없어 반드시 재시도해야 한다.
+                        job.recordRetryEtaEvaluation(
+                            trafficResult = trafficResult,
+                            travelMinutes = travelMinutes,
+                            recommendedDepartureAt = recommendedDepartureAt,
+                            predictedArrivalAt = predictedArrivalAt,
+                            etaFailureReason = etaFailureReason,
+                            travelMode = route.travelMode,
+                            routeFingerprint = routeFingerprint,
+                            now = now,
+                        )
+                        val transition = scheduleRetryAfterPushFailure(
+                            job = job,
+                            now = now,
+                            requestedCount = sendResult.requestedCount,
+                            failedCount = sendResult.failedCount,
+                        )
+                        persistMeasuredTransition(
+                            job = job,
+                            outcome = transition,
+                            alarmIntent = alarmIntent,
+                        )
+                        return
+                    }
+                    SchedulePushOutcome(
+                        notificationHandled = true,
+                        confirmedSuccess = sendResult.confirmedSuccessCount > 0,
+                        uncertain = sendResult.ambiguousCount > 0,
+                        confirmedAt = when {
+                            sendResult.sentCount > 0 -> now
+                            sendResult.alreadyDeliveredCount > 0 -> sendResult.alreadyDeliveredAt
+                            else -> null
+                        },
+                        decision = eventDecision,
+                        notifiedDepartureAt = eventRecommendedDepartureAt,
+                        reminderBoundaryAt = eventReminderBoundaryAt,
+                        catchUpRequired = persistedMeaningChanged,
                     )
-                    persistMeasuredTransition(
-                        job = job,
-                        outcome = transition,
-                        uncertainDelivery = sendResult.ambiguousCount > 0,
-                    )
-                    return
                 }
-                if (sendResult.durablyHandledCount == 0) {
-                    // FCM/APNs가 한 기기에도 전달하지 못했다면 성공 이력을 기록하지 않는다.
-                    // 특히 DEPART_NOW를 완료 처리하면 다시 보낼 방법이 없어 반드시 재시도해야 한다.
-                    val transition = scheduleRetryAfterPushFailure(
-                        job = job,
-                        now = now,
-                        requestedCount = sendResult.requestedCount,
-                        failedCount = sendResult.failedCount,
-                    )
-                    persistMeasuredTransition(job, transition)
-                    return
-                }
-                SchedulePushOutcome(
-                    notificationHandled = true,
-                    confirmedSuccess = sendResult.confirmedSuccessCount > 0,
-                    uncertain = sendResult.ambiguousCount > 0,
-                    confirmedAt = when {
-                        sendResult.sentCount > 0 -> now
-                        sendResult.alreadyDeliveredCount > 0 -> sendResult.alreadyDeliveredAt
-                        else -> null
-                    },
-                    decision = eventDecision,
-                    notifiedDepartureAt = eventRecommendedDepartureAt,
-                    reminderBoundaryAt = eventReminderBoundaryAt,
-                    catchUpRequired =
-                        persistedEvent != null &&
-                            reminderDecision != DepartureReminderDecision.NONE &&
-                            reminderDecision != eventDecision,
-                )
             } else {
                 log.info(
                     "Schedule ETA refreshed without push. jobId={}, scheduleId={}, travelMinutes={}, recommendedDepartureAt={}",
@@ -415,15 +583,16 @@ class SchedulePushJobWorker(
                 SchedulePushOutcome()
             }
 
+            val transitionAt = maxOf(now, Instant.now(clock), trafficResult.fetchedAt ?: now)
             val nextCheckAt = if (pushOutcome.catchUpRequired) {
                 // 이전 immutable event를 끝낸 사이 live reminder 경계를 넘었다. 같은 run에서
                 // 즉시 재선점해 batch를 독점하지 않되 다음 scheduler tick에는 새 check/event로
                 // 현재 의미(DEPART_NOW 등)를 처리한다.
-                now.plusSeconds(1)
+                transitionAt.plusSeconds(1)
             } else {
                 nextCheckAt(
                     job = job,
-                    now = now,
+                    now = transitionAt,
                     recommendedDepartureAt = recommendedDepartureAt,
                     scheduleAt = schedule.startAt,
                     effectiveDepartureNoticeSentAt = if (
@@ -431,7 +600,7 @@ class SchedulePushJobWorker(
                         pushOutcome.decision == DepartureReminderDecision.DEPART_NOW &&
                         (job.handledDepartureNoticeAt ?: job.departureNoticeSentAt) == null
                     ) {
-                        now
+                        transitionAt
                     } else {
                         job.handledDepartureNoticeAt ?: job.departureNoticeSentAt
                     },
@@ -467,15 +636,18 @@ class SchedulePushJobWorker(
                 etaSource = trafficResult.source,
                 liveFetchedAt = trafficResult.fetchedAt,
                 etaStale = trafficResult.stale,
-                etaFailureReason = sanitizeTrafficFailureReason(trafficResult.failureReason),
+                etaFailureReason = etaFailureReason,
+                predictedArrivalAt = predictedArrivalAt,
+                etaTravelMode = route.travelMode,
                 etaRouteFingerprint = routeFingerprint,
                 liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
-                now = maxOf(now, Instant.now(clock), trafficResult.fetchedAt ?: now),
+                now = transitionAt,
             )
             persistMeasuredTransition(
                 job = job,
                 outcome = EtaJobMetricOutcome.PROCESSED,
                 uncertainDelivery = pushOutcome.uncertain,
+                alarmIntent = alarmIntent,
             )
         } catch (exception: Exception) {
             operationalMetrics.recordSafely {
@@ -509,9 +681,10 @@ class SchedulePushJobWorker(
         job: SchedulePushJob,
         outcome: EtaJobMetricOutcome,
         uncertainDelivery: Boolean = false,
+        alarmIntent: SchedulePushAlarmIntent? = null,
     ) {
         val persisted = runCatching {
-            pushJobCoordinator.persist(job, workerId)
+            pushJobCoordinator.persist(job, workerId, alarmIntent)
         }.onFailure { failure ->
             log.error(
                 "Schedule push state transition persistence failed. " +
@@ -534,6 +707,39 @@ class SchedulePushJobWorker(
             }
         }
     }
+
+    private fun SchedulePushJob.recordRetryEtaEvaluation(
+        trafficResult: TrafficResult,
+        travelMinutes: Int,
+        recommendedDepartureAt: Instant,
+        predictedArrivalAt: Instant?,
+        etaFailureReason: String?,
+        travelMode: ScheduleTravelMode?,
+        routeFingerprint: String,
+        now: Instant,
+    ) {
+        recordEtaEvaluationBeforeRetry(
+            travelMinutes = travelMinutes,
+            recommendedDepartureAt = recommendedDepartureAt,
+            etaSource = trafficResult.source,
+            liveFetchedAt = trafficResult.fetchedAt,
+            etaStale = trafficResult.stale,
+            etaFailureReason = etaFailureReason,
+            predictedArrivalAt = predictedArrivalAt,
+            etaTravelMode = travelMode,
+            etaRouteFingerprint = routeFingerprint,
+            liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
+            now = maxOf(now, Instant.now(clock), trafficResult.fetchedAt ?: now),
+        )
+    }
+
+    private fun SchedulePushJob.cancelAlarmIntent(): SchedulePushAlarmIntent? =
+        departureAlarmSyncService?.let {
+            SchedulePushAlarmIntent.Cancel(
+                memberId = memberId,
+                scheduleId = scheduleId,
+            )
+        }
 
     private fun nextCheckAt(
         job: SchedulePushJob,
@@ -619,6 +825,7 @@ class SchedulePushJobWorker(
                 destinationLat = destination.destinationLat,
                 destinationLng = destination.destinationLng,
                 routeJson = personal.routeJson,
+                alertMode = personal.alertMode,
             )
         }
 
@@ -633,6 +840,7 @@ class SchedulePushJobWorker(
             destinationLat = legacy.destinationLat,
             destinationLng = legacy.destinationLng,
             routeJson = legacy.routeJson,
+            alertMode = legacy.alertMode,
         )
     }
 
@@ -655,6 +863,38 @@ class SchedulePushJobWorker(
         previousTravelMinutes
             ?.let { currentTravelMinutes - it }
             ?: 0
+
+    private fun String?.isTransitTransferFailure(): Boolean =
+        this == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED ||
+            this == TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN
+
+    private fun String?.toTransferFeasibilityPayload(): String = when (this) {
+        TrafficFailureReasons.TRANSIT_TRANSFER_MISSED -> "MISSED"
+        TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN -> "UNKNOWN"
+        else -> ""
+    }
+
+    /**
+     * 정상 ETA만 정시 가능으로 승격한다. 현재 확인된 차량이 마감 뒤 도착하는 경우는
+     * 명시적으로 false를 유지하지만, 환승 실패/불확실 등 degraded 진단값은 null로 둔다.
+     */
+    private fun TrafficResult.userVisiblePredictedArrivalAt(targetArrivalAt: Instant): Instant? {
+        val predicted = predictedArrivalAt ?: return null
+        if (accepted) return predicted
+        return predicted.takeIf {
+            failureReason == TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE &&
+                predicted.isAfter(targetArrivalAt)
+        }
+    }
+
+    /**
+     * Degraded 진단의 provider 추천시각은 native alarm/푸시를 바꾸지 못한다. 단, 현재 확인된
+     * 동일 경로로 정시 도착이 불가능해 즉시 출발을 명시한 결과만 예외적으로 보존한다.
+     */
+    private fun TrafficResult.actionableRecommendedDepartureAt(): Instant? =
+        recommendedDepartureAt?.takeIf {
+            accepted || failureReason == TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE
+        }
 
     private fun reminderMinutesBeforeDeparture(
         reminderBoundaryAt: Instant?,
@@ -709,6 +949,28 @@ class SchedulePushJobWorker(
     }
 }
 
+private const val MIN_ETA_EVENT_TTL_SECONDS = 30L
+private const val MAX_ETA_EVENT_TTL_SECONDS = 300L
+private const val DEFAULT_ETA_EVENT_TTL_SECONDS = 120L
+private val ETA_PUSH_SEMANTIC_KEYS = setOf(
+    "type",
+    "travelMinutes",
+    "recommendedDepartureAt",
+    "predictedArrivalAt",
+    "onTimeArrivalPossible",
+    "etaSource",
+    "etaStale",
+    "etaFailureReason",
+    "transitTransferFeasibility",
+    "etaRouteProvenance",
+    "etaTimingBasis",
+    "departNow",
+    "departureReminderDecision",
+    "reminderBoundaryAt",
+    "trafficChangeMinutes",
+    "departureAdvanceMinutes",
+)
+
 private data class PushRouteSource(
     val travelMinutes: Int?,
     val travelMode: ScheduleTravelMode?,
@@ -717,6 +979,7 @@ private data class PushRouteSource(
     val destinationLat: Double?,
     val destinationLng: Double?,
     val routeJson: String?,
+    val alertMode: ScheduleAlertMode,
 )
 
 private data class SchedulePushOutcome(

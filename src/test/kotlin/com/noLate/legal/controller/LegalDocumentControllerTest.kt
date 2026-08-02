@@ -66,6 +66,12 @@ class LegalDocumentControllerTest {
         assertTrue(document.sections.any { section ->
             section.body.any { it.contains("외부 계정 삭제 요청 기록") && it.contains("30일") }
         })
+        assertTrue(document.sections.any { section ->
+            section.body.any { it.contains("푸시 수신·표시·알람 예약") }
+        })
+        assertTrue(document.sections.any { section ->
+            section.body.any { it.contains("ETA 정확도 개선 참여 시") && it.contains("위치를 추가 수집하지 않습니다") }
+        })
     }
 
     @Test

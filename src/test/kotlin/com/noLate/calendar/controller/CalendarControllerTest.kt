@@ -18,7 +18,7 @@ class CalendarControllerTest {
     lateinit var calendarMetadataQueryService: CalendarMetadataQueryService
 
     @Test
-    fun `공개 메타데이터 날짜 범위를 캐시 조회 서비스에 전달한다`() {
+    fun `캘린더 메타데이터 날짜 범위를 캐시 조회 서비스에 전달한다`() {
         val startDate = LocalDate.of(2026, 9, 1)
         val endDate = LocalDate.of(2026, 9, 30)
         val expected = listOf(

@@ -80,6 +80,15 @@ class NotificationDeviceToken(
     @Column(name = "retirement_requested", nullable = false)
     var retirementRequested: Boolean = false,
 
+    /**
+     * 클라이언트가 인증된 per-delivery lifecycle ACK 계약을 지원한다고 등록한 버전이다.
+     *
+     * null은 capability 도입 전 또는 ACK를 보장하지 않는 클라이언트다. 이 값은 provider
+     * 성공률과 실수신률의 분모를 섞지 않도록 event manifest에 그대로 동결된다.
+     */
+    @Column(name = "delivery_ack_capability_version")
+    var deliveryAckCapabilityVersion: Int? = null,
+
 ) : BaseEntity() {
 
     fun replaceOwnership(
@@ -89,6 +98,7 @@ class NotificationDeviceToken(
         token: String,
         tokenFingerprint: String,
         deviceFingerprint: String?,
+        deliveryAckCapabilityVersion: Int? = null,
     ) {
         val changed =
             this.memberId != memberId ||
@@ -101,6 +111,7 @@ class NotificationDeviceToken(
         this.token = token
         this.tokenFingerprint = tokenFingerprint
         this.deviceFingerprint = deviceFingerprint
+        this.deliveryAckCapabilityVersion = deliveryAckCapabilityVersion
         if (changed) {
             ownershipVersion += 1
             dispatchLeaseId = null

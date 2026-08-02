@@ -13,6 +13,7 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.infrastructure.ScheduleShareInvitationAcceptanceRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -31,6 +32,7 @@ class ScheduleSharingServiceDisabledTest {
     private val categoryRepository = mock<ScheduleCategoryRepository>()
     private val categoryShareRepository = mock<ScheduleCategoryShareRepository>()
     private val invitationRepository = mock<ScheduleShareInvitationRepository>()
+    private val invitationAcceptanceRepository = mock<ScheduleShareInvitationAcceptanceRepository>()
     private val memberRepository = mock<MemberRepository>()
     private val calendarRepository = mock<ScheduleCalendarRepository>()
     private val calendarMemberRepository = mock<ScheduleCalendarMemberRepository>()
@@ -41,6 +43,7 @@ class ScheduleSharingServiceDisabledTest {
         categoryRepository = categoryRepository,
         categoryShareRepository = categoryShareRepository,
         invitationRepository = invitationRepository,
+        invitationAcceptanceRepository = invitationAcceptanceRepository,
         memberRepository = memberRepository,
         calendarRepository = calendarRepository,
         calendarMemberRepository = calendarMemberRepository,

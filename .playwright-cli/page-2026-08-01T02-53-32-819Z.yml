@@ -1,0 +1,14 @@
+- main [ref=f1e2]:
+  - region [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - generic [ref=f1e5]: "N"
+      - generic [ref=f1e6]: NoLate Operations
+    - heading "공유 안전 운영" [level=1] [ref=f1e7]
+    - paragraph [ref=f1e8]: 운영자로 등록된 NoLate 계정으로 로그인해 신고를 검토하고 처리합니다.
+    - generic [ref=f1e9]:
+      - generic [ref=f1e10]: 이메일
+      - textbox "이메일" [ref=f1e11]: reporter@nolate.test
+      - generic [ref=f1e12]: 비밀번호
+      - textbox "비밀번호" [ref=f1e13]
+      - button "운영 대시보드 열기" [active] [ref=f1e14] [cursor=pointer]
+      - alert [ref=f1e15]: 운영자로 등록되지 않은 계정입니다.

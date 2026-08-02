@@ -127,4 +127,15 @@ class ScheduleRoute(
     @Column(name = "notification_interval_minutes")
     @Comment("재알림 간격(분)")
     var notificationIntervalMinutes: Int? = null,
+
+    /** 추천 출발 시각을 일반 알림 또는 기기 알람으로 제시할지 */
+    @Enumerated(EnumType.STRING)
+    @Column(
+        name = "alert_mode",
+        nullable = false,
+        length = 20,
+        columnDefinition = "varchar(20) default 'STANDARD'",
+    )
+    @Comment("출발 알림 표시 방식: STANDARD 또는 ALARM")
+    var alertMode: ScheduleAlertMode = ScheduleAlertMode.STANDARD,
 )

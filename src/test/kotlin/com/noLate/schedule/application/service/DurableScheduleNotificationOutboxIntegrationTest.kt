@@ -41,6 +41,7 @@ import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCalendarMember
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleDepartureStatus
 import com.noLate.schedule.domain.ScheduleRouteSetupReminder
 import com.noLate.schedule.domain.ScheduleShare
@@ -55,6 +56,7 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
+import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
@@ -114,6 +116,8 @@ import java.util.concurrent.atomic.AtomicInteger
     ScheduleSharingAvailabilityPolicy::class,
     RouteSetupReminderPolicy::class,
     SchedulePushSourceFreshnessValidator::class,
+    DepartureAlarmSyncService::class,
+    DepartureAlarmSyncOutboxListener::class,
     ScheduleTravelAccessCleanupService::class,
     ScheduleSharePushNotificationListener::class,
     ScheduleDeparturePushNotificationListener::class,
@@ -163,10 +167,13 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
     private val travelPlanRepository: ScheduleTravelPlanRepository,
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService,
+    private val departureAlarmSyncService: DepartureAlarmSyncService,
+    private val departureAlarmSyncStateRepository: DepartureAlarmSyncStateRepository,
 ) {
     @BeforeEach
     fun clean() {
         pushClient.reset()
+        departureAlarmSyncStateRepository.deleteAll()
         deliveryRepository.deleteAll()
         historyRepository.deleteAll()
         notificationRepository.deleteAll()
@@ -211,6 +218,55 @@ class DurableScheduleNotificationOutboxIntegrationTest @Autowired constructor(
         val data = objectMapper.readValue(notification.dataJson, Map::class.java)
         assertEquals(notification.logicalEventKey, data["logicalEventKey"])
         assertEquals("71", data["recipientMemberId"])
+    }
+
+    @Test
+    fun `latest cancel survives schedule cleanup and supersedes an older alarm upsert`() {
+        val memberId = 71L
+        val scheduleId = 9_071L
+        val token = "alarm-cleanup-token"
+        register(memberId, "alarm-cleanup-device", token)
+
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            departureAlarmSyncService.synchronizeConfigured(
+                memberId = memberId,
+                scheduleId = scheduleId,
+                notificationEnabled = true,
+                alertMode = ScheduleAlertMode.ALARM,
+                triggerAt = NOW.plusSeconds(1_800),
+                scheduleTitle = "팀 회의",
+            )
+        }
+        val upsertSource = notificationRepository.findAll().single()
+        assertTrue(!upsertSource.inboxVisible)
+        assertEquals(1, upsertSource.manifestRecipientCount)
+
+        TransactionTemplate(transactionManager).executeWithoutResult {
+            departureAlarmSyncService.cancel(memberId, scheduleId)
+            // Owner deletion/account cleanup uses these bulk methods after cancellation. Both the
+            // old command and the new tombstone are control-plane rows and must remain dispatchable.
+            deliveryRepository.deleteAllByScheduleIdIn(listOf(scheduleId))
+            notificationRepository.deleteAllByScheduleIdIn(listOf(scheduleId))
+        }
+
+        val sources = notificationRepository.findAll().sortedBy { it.id }
+        assertEquals(2, sources.size)
+        assertTrue(sources.all { !it.inboxVisible })
+        assertEquals(2, deliveryRepository.findAll().size)
+
+        assertEquals(1, newWorker().runDueEvents(NOW))
+        assertEquals(0, pushClient.attempts(token))
+        val oldDelivery = deliveryRepository
+            .findAllByMemberIdAndEventKeyOrderByIdAsc(memberId, upsertSource.logicalEventKey)
+            .single()
+        assertEquals(PushDeliveryStatus.SUPERSEDED, oldDelivery.status)
+
+        assertEquals(1, newWorker().runDueEvents(NOW))
+        assertEquals(1, pushClient.attempts(token))
+        val delivered = pushClient.calls(token).single()
+        assertEquals("DEPARTURE_ALARM_SYNC", delivered.data["type"])
+        assertEquals("CANCEL", delivered.data["alarmOperation"])
+        assertEquals("1", delivered.data["alarmGeneration"])
     }
 
     @Test

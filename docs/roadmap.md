@@ -71,6 +71,13 @@ App Store와 Google Play 동시 출시 준비는 별도 릴리스 트랙으로 �
 8. CI에 BE test, FE test, FE typecheck 추가
 9. 공유 참가자 첫 출발 자동 push와 오너 지정 출발 확인 push를 실기기 2대에서 수신·클릭 검증
 10. 포그라운드 push 직후 공유함·알림 배지가 갱신되고 유휴 상태에서 45초 반복 요청이 발생하지 않는지 TestFlight에서 확인
+11. 후속 외부 연동: 공공데이터포털 로그인이 가능해지면
+    `서울특별시_정류소정보조회 서비스` 개발계정을 신청하고 서울 버스 실시간 도착정보를 활성화한다.
+    완료 조건은 비밀 저장소를 통한 `SEOUL_BUS_API_KEY` 주입, 신뢰된 HTTPS egress 경계,
+    `getStationByName -> getStationByUid` 실서버 성공, provider `mkTm` freshness 검증,
+    ODsay 선택 경로의 첫 승차 대기시간 반영 E2E 통과다. 그 전까지 서울 버스 실시간 보정은
+    비활성으로 두고 ODsay 시간표 ETA를 degraded 상태로 보존한다. 서울 도착정보 없이
+    `schedule.push.enabled=true` 운영 배포를 허용하도록 readiness guard를 우회하지 않는다.
 
 ## Verification Commands
 

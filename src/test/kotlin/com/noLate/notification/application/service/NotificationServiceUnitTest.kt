@@ -314,6 +314,7 @@ class NotificationTokenServiceUnitTest {
                 tokenFingerprint = any(),
                 accessTokenIssuedAt = any(),
                 accessTokenSessionGeneration = any(),
+                deliveryAckCapabilityVersion = isNull(),
             )
         ).thenThrow(CannotAcquireLockException("synthetic lock timeout"))
             .thenReturn(NotificationTokenRegistrationResult(0, "created"))
@@ -336,6 +337,7 @@ class NotificationTokenServiceUnitTest {
             tokenFingerprint = any(),
             accessTokenIssuedAt = any(),
             accessTokenSessionGeneration = any(),
+            deliveryAckCapabilityVersion = isNull(),
         )
     }
 
@@ -353,6 +355,7 @@ class NotificationTokenServiceUnitTest {
                 tokenFingerprint = any(),
                 accessTokenIssuedAt = any(),
                 accessTokenSessionGeneration = any(),
+                deliveryAckCapabilityVersion = isNull(),
             )
         ).thenThrow(DuplicateKeyException("fingerprint unique collision"))
             .thenReturn(NotificationTokenRegistrationResult(0, "updated"))
@@ -375,6 +378,7 @@ class NotificationTokenServiceUnitTest {
             tokenFingerprint = any(),
             accessTokenIssuedAt = any(),
             accessTokenSessionGeneration = any(),
+            deliveryAckCapabilityVersion = isNull(),
         )
     }
 
@@ -393,6 +397,7 @@ class NotificationTokenServiceUnitTest {
                 tokenFingerprint = any(),
                 accessTokenIssuedAt = any(),
                 accessTokenSessionGeneration = any(),
+                deliveryAckCapabilityVersion = isNull(),
             )
         ).thenThrow(expected)
 
@@ -417,6 +422,7 @@ class NotificationTokenServiceUnitTest {
             tokenFingerprint = any(),
             accessTokenIssuedAt = any(),
             accessTokenSessionGeneration = any(),
+            deliveryAckCapabilityVersion = isNull(),
         )
     }
 
@@ -434,6 +440,7 @@ class NotificationTokenServiceUnitTest {
                 tokenFingerprint = any(),
                 accessTokenIssuedAt = any(),
                 accessTokenSessionGeneration = any(),
+                deliveryAckCapabilityVersion = isNull(),
             )
         ).thenThrow(IllegalArgumentException("non-transient"))
 
@@ -457,6 +464,7 @@ class NotificationTokenServiceUnitTest {
             tokenFingerprint = any(),
             accessTokenIssuedAt = any(),
             accessTokenSessionGeneration = any(),
+            deliveryAckCapabilityVersion = isNull(),
         )
     }
 
@@ -475,6 +483,7 @@ class NotificationTokenServiceUnitTest {
                 tokenFingerprint = any(),
                 accessTokenIssuedAt = any(),
                 accessTokenSessionGeneration = any(),
+                deliveryAckCapabilityVersion = isNull(),
             )
         ).thenThrow(transient, transient, transient)
 
@@ -500,6 +509,7 @@ class NotificationTokenServiceUnitTest {
             tokenFingerprint = any(),
             accessTokenIssuedAt = any(),
             accessTokenSessionGeneration = any(),
+            deliveryAckCapabilityVersion = isNull(),
         )
     }
 

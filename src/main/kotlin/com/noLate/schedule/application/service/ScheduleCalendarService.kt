@@ -19,6 +19,9 @@ import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.sharing.application.SharingBlockPolicy
+import com.noLate.sharing.application.SharingMutationRateLimiter
+import com.noLate.sharing.application.SharingMutationScope
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.dao.CannotAcquireLockException
 import org.springframework.stereotype.Service
@@ -34,6 +37,8 @@ class ScheduleCalendarService(
     private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
     private val mutationFenceObserver: ScheduleCalendarMutationFenceObserver? = null,
     private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
+    private val sharingBlockPolicy: SharingBlockPolicy? = null,
+    private val sharingMutationRateLimiter: SharingMutationRateLimiter? = null,
 ) {
 
     @Transactional
@@ -79,12 +84,13 @@ class ScheduleCalendarService(
         if (memberships.isEmpty()) return emptyList()
 
         return calendarRepository.findAllVisibleByMemberId(memberId).mapNotNull { calendar ->
+            if (sharingBlockPolicy?.isInteractionBlocked(memberId, calendar.ownerMemberId) == true) {
+                return@mapNotNull null
+            }
             val membership = calendar.id?.let(memberships::get) ?: return@mapNotNull null
             calendar.toDto(
                 membership = membership,
-                memberCount = calendarMemberRepository
-                    .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(requireNotNull(calendar.id))
-                    .size,
+                memberCount = visibleMemberCount(memberId, requireNotNull(calendar.id)),
             )
         }
     }
@@ -93,10 +99,11 @@ class ScheduleCalendarService(
     fun getCalendar(memberId: Long, calendarId: Long): ScheduleCalendarDto {
         sharingAvailabilityPolicy.requireEnabled()
         val calendar = findActiveCalendar(calendarId)
+        sharingBlockPolicy?.requireInteractionAllowed(memberId, calendar.ownerMemberId)
         val membership = findActiveMembership(calendarId, memberId)
         return calendar.toDto(
             membership,
-            calendarMemberRepository.findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId).size,
+            visibleMemberCount(memberId, calendarId),
         )
     }
 
@@ -151,13 +158,27 @@ class ScheduleCalendarService(
     @Transactional(readOnly = true)
     fun getMembers(memberId: Long, calendarId: Long): List<ScheduleCalendarMemberDto> {
         sharingAvailabilityPolicy.requireEnabled()
-        findActiveCalendar(calendarId)
+        val calendar = findActiveCalendar(calendarId)
+        sharingBlockPolicy?.requireInteractionAllowed(memberId, calendar.ownerMemberId)
         findActiveMembership(calendarId, memberId)
         val memberships = calendarMemberRepository
             .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .filterNot {
+                sharingBlockPolicy?.isInteractionBlocked(memberId, it.memberId) == true
+            }
         val members = memberRepository.findAllById(memberships.map { it.memberId })
             .associateBy { requireNotNull(it.id) }
         return memberships.map { it.toDto(members[it.memberId]) }
+    }
+
+    private fun visibleMemberCount(memberId: Long, calendarId: Long): Int {
+        val memberIds = calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+        val blockedMemberIds = sharingBlockPolicy
+            ?.blockedCounterpartIds(memberId, memberIds)
+            .orEmpty()
+        return memberIds.count { it !in blockedMemberIds }
     }
 
     /**
@@ -176,6 +197,12 @@ class ScheduleCalendarService(
         presentedSessionGeneration: Long,
     ): ScheduleCalendarMemberDto {
         sharingAvailabilityPolicy.requireEnabled()
+        if (authenticatedActorMemberId == ownerMemberId) {
+            sharingMutationRateLimiter?.requirePermit(
+                ownerMemberId,
+                SharingMutationScope.DIRECT_SHARE,
+            )
+        }
         // 잠금 전에 target 엔티티를 persistence context에 올리면 lock 대기 중 withdrawal이
         // commit된 뒤에도 stale deleted=false 상태를 재사용할 수 있다. ID만 해석한 뒤
         // actor와 recipient를 함께 정렬 잠금하고, 잠긴 fresh Member로 상태를 검증한다.
@@ -193,6 +220,7 @@ class ScheduleCalendarService(
             throw BusinessException(ErrorCode.INVALID_INPUT, "캘린더 소유자는 다시 초대할 수 없습니다.")
         }
         validateGrantableRole(role)
+        sharingBlockPolicy?.requireInteractionAllowed(ownerMemberId, targetMemberId)
 
         val existing = calendarMemberRepository.findForUpdate(calendarId, targetMemberId)
         val newlyActivated = existing?.status != ScheduleCalendarMemberStatus.ACTIVE || existing.deleted
@@ -238,6 +266,7 @@ class ScheduleCalendarService(
         val activeTarget = lockedMembers[targetMemberId]
             ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
         lockOwnedCalendar(calendarId, ownerMemberId)
+        sharingBlockPolicy?.requireInteractionAllowed(ownerMemberId, targetMemberId)
         val membership = calendarMemberRepository.findForUpdate(calendarId, targetMemberId)
             ?.takeIf { !it.deleted && it.status == ScheduleCalendarMemberStatus.ACTIVE }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_MEMBER_NOT_FOUND)
@@ -357,6 +386,7 @@ class ScheduleCalendarService(
         if (targetMemberId == ownerMemberId) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "현재 소유자에게 소유권을 이전할 수 없습니다.")
         }
+        sharingBlockPolicy?.requireInteractionAllowed(ownerMemberId, targetMemberId)
 
         val locked = calendarMemberRepository
             .findAllForUpdate(calendarId, listOf(ownerMemberId, targetMemberId).sorted())

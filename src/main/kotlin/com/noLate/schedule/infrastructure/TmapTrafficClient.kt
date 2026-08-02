@@ -5,8 +5,8 @@ import com.noLate.global.observability.EtaProviderMetricOutcome
 import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.global.observability.recordSafely
 import com.noLate.schedule.application.EtaTravelTimePolicy
-import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
+import com.noLate.schedule.application.TrafficProviderClient
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.TrafficResult
 import com.noLate.schedule.application.fallbackResult
@@ -35,7 +35,7 @@ class TmapTrafficClient(
     @Value("\${schedule.traffic.max-travel-minutes:1440}")
     private val maxTravelMinutes: Int = EtaTravelTimePolicy.DEFAULT_MAX_TRAVEL_MINUTES,
     private val operationalMetrics: NoLateOperationalMetrics? = null,
-) : TrafficClient {
+) : TrafficProviderClient {
     init {
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
     }

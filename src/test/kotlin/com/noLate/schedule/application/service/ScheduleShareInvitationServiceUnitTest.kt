@@ -8,6 +8,7 @@ import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleShareInvitation
+import com.noLate.schedule.domain.ScheduleShareInvitationAcceptance
 import com.noLate.schedule.domain.ScheduleShareInvitationStatus
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareResourceType
@@ -15,6 +16,7 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.infrastructure.ScheduleShareInvitationAcceptanceRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
@@ -28,6 +30,7 @@ import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
 import org.mockito.kotlin.check
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.never
 import org.mockito.kotlin.whenever
 import org.springframework.mock.env.MockEnvironment
 import java.time.Clock
@@ -53,6 +56,9 @@ class ScheduleShareInvitationServiceUnitTest {
     lateinit var invitationRepository: ScheduleShareInvitationRepository
 
     @Mock
+    lateinit var invitationAcceptanceRepository: ScheduleShareInvitationAcceptanceRepository
+
+    @Mock
     lateinit var memberRepository: MemberRepository
 
     private val clock = Clock.fixed(Instant.parse("2026-07-11T00:00:00Z"), ZoneOffset.UTC)
@@ -67,6 +73,7 @@ class ScheduleShareInvitationServiceUnitTest {
             categoryRepository = categoryRepository,
             categoryShareRepository = categoryShareRepository,
             invitationRepository = invitationRepository,
+            invitationAcceptanceRepository = invitationAcceptanceRepository,
             memberRepository = memberRepository,
             clock = clock,
             tokenGenerator = tokenGenerator,
@@ -123,8 +130,10 @@ class ScheduleShareInvitationServiceUnitTest {
         )
         whenever(invitationRepository.findByTokenHashAndDeletedFalse(invitation.tokenHash))
             .thenReturn(invitation)
-        whenever(invitationRepository.findActiveByTokenHashForUpdate(invitation.tokenHash))
+        whenever(invitationRepository.findByTokenHashForUpdate(invitation.tokenHash))
             .thenReturn(invitation)
+        whenever(invitationAcceptanceRepository.findByInvitationIdAndMemberId(70L, 2L))
+            .thenReturn(null)
         whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
         whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L))
@@ -167,8 +176,10 @@ class ScheduleShareInvitationServiceUnitTest {
         )
         whenever(invitationRepository.findByTokenHashAndDeletedFalse(invitation.tokenHash))
             .thenReturn(invitation)
-        whenever(invitationRepository.findActiveByTokenHashForUpdate(invitation.tokenHash))
+        whenever(invitationRepository.findByTokenHashForUpdate(invitation.tokenHash))
             .thenReturn(invitation)
+        whenever(invitationAcceptanceRepository.findByInvitationIdAndMemberId(70L, 2L))
+            .thenReturn(null)
         whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
 
@@ -185,6 +196,53 @@ class ScheduleShareInvitationServiceUnitTest {
             ScheduleShareInvitationStatus.EXPIRED,
             invitation.toDto(effectiveAt = clock.instant()).status,
         )
+    }
+
+    @Test
+    fun `repeated acceptance by the same member returns the active grant without consuming the link again`() {
+        val invitation = ScheduleShareInvitation(
+            id = 70L,
+            resourceType = ScheduleShareResourceType.SCHEDULE,
+            resourceId = 10L,
+            ownerMemberId = 1L,
+            permission = ScheduleSharePermission.VIEWER,
+            tokenHash = ShareInvitationTokenHasher.hash("plain-token"),
+            status = ScheduleShareInvitationStatus.ACCEPTED,
+            expiresAt = Instant.parse("2026-07-12T00:00:00Z"),
+            maxAcceptCount = 1,
+            acceptedCount = 1,
+            acceptedMemberId = 2L,
+        )
+        val share = ScheduleShare(
+            id = 80L,
+            scheduleId = 10L,
+            ownerMemberId = 1L,
+            targetMemberId = 2L,
+        )
+        whenever(invitationRepository.findByTokenHashAndDeletedFalse(invitation.tokenHash))
+            .thenReturn(invitation)
+        whenever(invitationRepository.findByTokenHashForUpdate(invitation.tokenHash))
+            .thenReturn(invitation)
+        whenever(invitationAcceptanceRepository.findByInvitationIdAndMemberId(70L, 2L))
+            .thenReturn(
+                ScheduleShareInvitationAcceptance(
+                    id = 90L,
+                    invitationId = 70L,
+                    memberId = 2L,
+                    acceptedAt = clock.instant(),
+                )
+            )
+        whenever(memberRepository.findByIdForUpdate(2L))
+            .thenReturn(Member(id = 2L, name = "Target", email = "target@example.com"))
+        whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L))
+            .thenReturn(share)
+
+        val result = service.acceptInvitation(2L, "plain-token", 0L)
+
+        assertEquals("80", result.share.id)
+        assertEquals(1, invitation.acceptedCount)
+        verify(invitationRepository, never()).saveAndFlush(any())
+        verify(invitationAcceptanceRepository, never()).saveAndFlush(any())
     }
 
     @Test
