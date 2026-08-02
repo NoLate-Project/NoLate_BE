@@ -138,8 +138,13 @@ tasks.named('test') {
     // 모든 Gradle test 실행에 전용 profile을 강제한다.
     systemProperty 'spring.profiles.active', 'test'
     // 일반 테스트에서는 외부 API 비용과 네트워크 의존성을 막기 위해 external 태그를 제외한다.
+    // Docker 이미지 빌드 중에는 Docker Engine을 사용할 수 없으므로 MySQL
+    // Testcontainers 테스트만 제외한다. CI의 별도 MySQL E2E gate는 이 옵션을 사용하지 않는다.
     useJUnitPlatform {
         excludeTags 'external'
+        if (providers.gradleProperty('excludeMysqlTests').map { it.toBoolean() }.getOrElse(false)) {
+            excludeTags 'mysql'
+        }
     }
 }
 

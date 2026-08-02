@@ -19,7 +19,9 @@ RUN test ! -f src/main/resources/env.properties && \
       -iname '*serviceAccount*.json' \
     \) | grep -q .
 
-RUN ./gradlew --no-daemon clean test bootWar
+# Testcontainers cannot access the host Docker Engine from a BuildKit build step.
+# MySQL integration tests remain mandatory in the host/CI gate and are excluded only here.
+RUN ./gradlew --no-daemon clean test bootWar -PexcludeMysqlTests=true
 
 RUN WAR_FILE=$(find build/libs -name "*.war" ! -name "*plain*" | head -n 1) && \
     cp "$WAR_FILE" /workspace/app.war
