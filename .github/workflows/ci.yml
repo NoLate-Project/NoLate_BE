@@ -38,6 +38,8 @@ jobs:
       - run: chmod +x gradlew
       - name: Enforce quick-schedule 90% reliability gate
         run: ./gradlew --no-daemon clean quickScheduleReliabilityTest
+      - name: Enforce sharing MySQL E2E gate
+        run: ./gradlew --no-daemon test --tests com.noLate.schedule.application.service.SharedCalendarMySqlConcurrencyIntegrationTest
       - run: ./gradlew --no-daemon test bootWar
       - name: Verify WAR contains no credential files
         run: |

@@ -5,8 +5,6 @@ import com.noLate.calendar.domain.CalendarDayDto
 import com.noLate.calendar.domain.CalendarHolidayDto
 import com.noLate.calendar.infrastructure.CalendarDayCacheRepository
 import com.noLate.calendar.infrastructure.KasiCalendarClient
-import com.noLate.calendar.infrastructure.KasiHoliday
-import com.noLate.calendar.infrastructure.KasiLunarDay
 import com.noLate.calendar.infrastructure.PublicHolidayRepository
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
@@ -21,8 +19,23 @@ import java.time.YearMonth
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+
+data class CalendarMetadataSnapshot(
+    val days: List<CalendarDayDto>,
+    val cacheableMonths: Set<YearMonth>,
+    val refreshPlans: List<CalendarMetadataRefreshPlan>,
+)
+
+data class CalendarMetadataRefreshPlan(
+    val month: YearMonth,
+    val lunar: Boolean,
+    val holidays: Boolean,
+)
 
 @Service
 class CalendarMetadataService(
@@ -36,10 +49,28 @@ class CalendarMetadataService(
     private val log = LoggerFactory.getLogger(javaClass)
     private val cacheTtlHours = cacheTtlHours.coerceAtLeast(1)
     private val refreshExecutor: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
+    private val inFlightRefreshes =
+        ConcurrentHashMap<RefreshKey, CompletableFuture<Boolean>>()
+    private val monthWriteLocks = Array(MONTH_WRITE_LOCK_STRIPES) { ReentrantLock() }
 
+    /**
+     * Direct callers get the current DB snapshot immediately. KASI is only scheduled after the
+     * snapshot has been built, and is never joined on the request thread.
+     *
+     * The HTTP query path uses [loadCurrentSnapshot] and schedules refresh only after its Redis
+     * read/fill has completed, which prevents a cold placeholder from racing a completed refill.
+     */
     fun getDays(startDate: LocalDate, endDate: LocalDate): List<CalendarDayDto> {
+        val snapshot = loadCurrentSnapshot(startDate, endDate)
+        refreshCacheAsync(snapshot.refreshPlans)
+        return snapshot.days
+    }
+
+    fun loadCurrentSnapshot(
+        startDate: LocalDate,
+        endDate: LocalDate,
+    ): CalendarMetadataSnapshot {
         validateRange(startDate, endDate)
-        refreshCacheWhenNeeded(startDate, endDate)
 
         val dayCaches = calendarDayCacheRepository
             .findAllByDateBetweenOrderByDateAsc(startDate, endDate)
@@ -47,8 +78,15 @@ class CalendarMetadataService(
         val holidaysByDate = publicHolidayRepository
             .findAllByHolidayDateBetweenOrderByHolidayDateAscIdAsc(startDate, endDate)
             .groupBy { it.holidayDate }
+        val months = monthsBetween(startDate, endDate)
+        val refreshPlans = buildRefreshPlans(
+            months = months,
+            startDate = startDate,
+            endDate = endDate,
+            cachedByDate = dayCaches,
+        )
 
-        return startDate.datesUntil(endDate.plusDays(1)).map { date ->
+        val days = startDate.datesUntil(endDate.plusDays(1)).map { date ->
             val cache = dayCaches[date]
             CalendarDayDto(
                 date = date.toString(),
@@ -64,22 +102,93 @@ class CalendarMetadataService(
                             type = holiday.type,
                         )
                     },
+                metadataComplete = cache.isMetadataComplete(),
             )
         }.toList()
+
+        return CalendarMetadataSnapshot(
+            days = days,
+            cacheableMonths = months
+                .filterTo(mutableSetOf()) { month ->
+                    isFullyLoadedMonth(
+                        month = month,
+                        startDate = startDate,
+                        endDate = endDate,
+                        cachedByDate = dayCaches,
+                    )
+                },
+            refreshPlans = refreshPlans,
+        )
     }
 
-    private fun refreshCacheWhenNeeded(startDate: LocalDate, endDate: LocalDate) {
+    /**
+     * Starts one refresh per month/kind for this application instance. Concurrent callers reuse
+     * the same future, so a swipe burst cannot fan out duplicate KASI requests.
+     */
+    fun refreshCacheAsync(
+        plans: Collection<CalendarMetadataRefreshPlan>,
+        onMonthsRefreshed: (Set<YearMonth>) -> Unit = {},
+    ) {
         if (!kasiCalendarClient.isAvailable()) return
+
+        val combinedPlans = plans
+            .groupBy(CalendarMetadataRefreshPlan::month)
+            .map { (month, monthPlans) ->
+                CalendarMetadataRefreshPlan(
+                    month = month,
+                    lunar = monthPlans.any(CalendarMetadataRefreshPlan::lunar),
+                    holidays = monthPlans.any(CalendarMetadataRefreshPlan::holidays),
+                )
+            }
+            .filter { it.lunar || it.holidays }
+        if (combinedPlans.isEmpty()) return
+
+        val refreshesByMonth = combinedPlans.associate { plan ->
+            plan.month to buildList {
+                if (plan.lunar) add(refreshSingleFlight(RefreshKey(plan.month, RefreshKind.LUNAR)))
+                if (plan.holidays) {
+                    add(refreshSingleFlight(RefreshKey(plan.month, RefreshKind.HOLIDAYS)))
+                }
+            }
+        }
+        val allRefreshes = refreshesByMonth.values.flatten()
+
+        CompletableFuture.allOf(*allRefreshes.toTypedArray()).whenCompleteAsync(
+            { _, _ ->
+                val refreshedMonths = refreshesByMonth
+                    .filterValues { refreshes ->
+                        refreshes.any { refresh ->
+                            runCatching { refresh.getNow(false) }.getOrDefault(false)
+                        }
+                    }
+                    .keys
+                if (refreshedMonths.isNotEmpty()) {
+                    runCatching { onMonthsRefreshed(refreshedMonths) }
+                        .onFailure { exception ->
+                            log.warn(
+                                "Calendar metadata Redis refill failed ({})",
+                                exception.javaClass.simpleName,
+                            )
+                        }
+                }
+            },
+            refreshExecutor,
+        )
+    }
+
+    private fun buildRefreshPlans(
+        months: List<YearMonth>,
+        startDate: LocalDate,
+        endDate: LocalDate,
+        cachedByDate: Map<LocalDate, CalendarDayCache>,
+    ): List<CalendarMetadataRefreshPlan> {
+        if (!kasiCalendarClient.isAvailable()) return emptyList()
 
         val now = LocalDateTime.now(clock.withZone(SEOUL_ZONE))
         val staleBefore = now.minusHours(cacheTtlHours)
-        val cachedByDate = calendarDayCacheRepository
-            .findAllByDateBetweenOrderByDateAsc(startDate, endDate)
-            .associateBy { it.date }
-
-        val refreshPlans = monthsBetween(startDate, endDate).map { month ->
+        return months.map { month ->
             val requestedDates = requestedDatesInMonth(month, startDate, endDate)
-            MonthRefreshPlan(
+            CalendarMetadataRefreshPlan(
                 month = month,
                 lunar = requestedDates.any { date ->
                     cachedByDate[date].isLunarStale(staleBefore)
@@ -89,47 +198,70 @@ class CalendarMetadataService(
                 },
             )
         }
+    }
 
-        // 월간 달력은 앞뒤 주 때문에 보통 2~3개 월에 걸친다. KASI 호출을 순차 실행하면
-        // 최초 조회가 앱의 10초 HTTP timeout을 넘을 수 있으므로 네트워크 I/O만 병렬화하고,
-        // 같은 캐시 row를 갱신하는 DB 쓰기는 아래에서 순차 실행한다.
-        val fetches = refreshPlans.map { plan ->
-            MonthRefreshFetch(
-                month = plan.month,
-                lunar = plan.lunar.takeIf { it }?.let {
-                    CompletableFuture.supplyAsync(
-                        { runCatching { kasiCalendarClient.fetchLunarMonth(plan.month) } },
-                        refreshExecutor,
-                    )
-                },
-                holidays = plan.holidays.takeIf { it }?.let {
-                    CompletableFuture.supplyAsync(
-                        { runCatching { kasiCalendarClient.fetchHolidayMonth(plan.month) } },
-                        refreshExecutor,
-                    )
-                },
-            )
+    private fun refreshSingleFlight(key: RefreshKey): CompletableFuture<Boolean> {
+        val promise = CompletableFuture<Boolean>()
+        val existing = inFlightRefreshes.putIfAbsent(key, promise)
+        if (existing != null) return existing
+
+        promise.whenComplete { _, _ -> inFlightRefreshes.remove(key, promise) }
+        runCatching {
+            refreshExecutor.submit {
+                val refreshed = runCatching { refreshMonthKind(key) }
+                    .onFailure { exception ->
+                        logRefreshFailure(key.kind.logName, key.month, exception)
+                    }
+                    .isSuccess
+                promise.complete(refreshed)
+            }
+        }.onFailure { exception ->
+            logRefreshFailure(key.kind.logName, key.month, exception)
+            promise.complete(false)
         }
+        return promise
+    }
 
-        fetches.forEach { fetch ->
-            fetch.lunar?.join()?.fold(
-                onSuccess = { lunarDays ->
-                    runCatching {
-                        calendarCacheWriter.storeLunarMonth(lunarDays, now)
-                    }.onFailure { exception -> logRefreshFailure("lunar", fetch.month, exception) }
-                },
-                onFailure = { exception -> logRefreshFailure("lunar", fetch.month, exception) },
-            )
-            fetch.holidays?.join()?.fold(
-                onSuccess = { holidays ->
-                    runCatching {
-                        calendarCacheWriter.replaceHolidayMonth(fetch.month, holidays, now)
-                    }.onFailure { exception -> logRefreshFailure("holiday", fetch.month, exception) }
-                },
-                onFailure = { exception -> logRefreshFailure("holiday", fetch.month, exception) },
-            )
+    private fun refreshMonthKind(key: RefreshKey) {
+        when (key.kind) {
+            RefreshKind.LUNAR -> {
+                val lunarDays = kasiCalendarClient.fetchLunarMonth(key.month)
+                val syncedAt = LocalDateTime.now(clock.withZone(SEOUL_ZONE))
+                monthWriteLock(key.month).withLock {
+                    calendarCacheWriter.storeLunarMonth(lunarDays, syncedAt)
+                }
+            }
+            RefreshKind.HOLIDAYS -> {
+                val holidays = kasiCalendarClient.fetchHolidayMonth(key.month)
+                val syncedAt = LocalDateTime.now(clock.withZone(SEOUL_ZONE))
+                monthWriteLock(key.month).withLock {
+                    calendarCacheWriter.replaceHolidayMonth(key.month, holidays, syncedAt)
+                }
+            }
         }
     }
+
+    private fun isFullyLoadedMonth(
+        month: YearMonth,
+        startDate: LocalDate,
+        endDate: LocalDate,
+        cachedByDate: Map<LocalDate, CalendarDayCache>,
+    ): Boolean {
+        if (startDate > month.atDay(1) || endDate < month.atEndOfMonth()) return false
+
+        return (1..month.lengthOfMonth()).all { dayOfMonth ->
+            val cached = cachedByDate[month.atDay(dayOfMonth)] ?: return@all false
+            cached.lunarYear != null &&
+                cached.lunarMonth != null &&
+                cached.lunarDay != null &&
+                cached.leapMonth != null &&
+                cached.lunarSyncedAt != null &&
+                cached.holidaysSyncedAt != null
+        }
+    }
+
+    private fun monthWriteLock(month: YearMonth): ReentrantLock =
+        monthWriteLocks[Math.floorMod(month.hashCode(), monthWriteLocks.size)]
 
     private fun logRefreshFailure(kind: String, month: YearMonth, exception: Throwable) {
         // 외부 요청 예외에는 인증키가 포함될 수 있으므로 메시지/스택을 남기지 않는다.
@@ -186,21 +318,28 @@ class CalendarMetadataService(
     private fun CalendarDayCache?.isHolidayStale(staleBefore: LocalDateTime): Boolean =
         this?.holidaysSyncedAt?.isBefore(staleBefore) != false
 
+    private fun CalendarDayCache?.isMetadataComplete(): Boolean =
+        this?.lunarYear != null &&
+            lunarMonth != null &&
+            lunarDay != null &&
+            leapMonth != null &&
+            lunarSyncedAt != null &&
+            holidaysSyncedAt != null
+
     companion object {
         // FE가 이전·현재·다음 달과 각 월의 바깥 주를 한 번에 요청할 때의 최대 범위다.
         const val MAX_RANGE_DAYS = 98L
         private val SEOUL_ZONE: ZoneId = ZoneId.of("Asia/Seoul")
+        private const val MONTH_WRITE_LOCK_STRIPES = 64
     }
 
-    private data class MonthRefreshPlan(
+    private data class RefreshKey(
         val month: YearMonth,
-        val lunar: Boolean,
-        val holidays: Boolean,
+        val kind: RefreshKind,
     )
 
-    private data class MonthRefreshFetch(
-        val month: YearMonth,
-        val lunar: CompletableFuture<Result<List<KasiLunarDay>>>?,
-        val holidays: CompletableFuture<Result<List<KasiHoliday>>>?,
-    )
+    private enum class RefreshKind(val logName: String) {
+        LUNAR("lunar"),
+        HOLIDAYS("holiday"),
+    }
 }

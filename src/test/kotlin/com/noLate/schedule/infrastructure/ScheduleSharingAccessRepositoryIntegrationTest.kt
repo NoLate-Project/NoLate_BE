@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
+import org.springframework.data.domain.PageRequest
 import org.springframework.test.context.TestPropertySource
 import java.time.Instant
 
@@ -71,6 +72,40 @@ class ScheduleSharingAccessRepositoryIntegrationTest @Autowired constructor(
 
         assertEquals(listOf(fixture.directScheduleId, fixture.categoryScheduleId), visibleSchedules.map { it.id })
         assertEquals(listOf(fixture.categoryId), visibleCategories.map { it.id })
+    }
+
+    @Test
+    fun `shared and owned searches apply their limit in the database query`() {
+        val fixture = createFixture()
+        categoryShareRepository.saveAndFlush(
+            ScheduleCategoryShare(
+                categoryId = fixture.categoryId,
+                ownerMemberId = fixture.ownerId,
+                targetMemberId = fixture.targetId,
+                permission = ScheduleSharePermission.VIEWER,
+                status = ScheduleShareStatus.ACTIVE,
+            )
+        )
+
+        val sharedResult = scheduleRepository.searchScheduleList(
+            memberId = fixture.targetId,
+            keyword = null,
+            categoryId = null,
+            rangeStart = null,
+            rangeEnd = null,
+            pageable = PageRequest.of(0, 1),
+        )
+        val ownedResult = scheduleRepository.searchOwnedScheduleList(
+            memberId = fixture.ownerId,
+            keyword = null,
+            categoryId = null,
+            rangeStart = null,
+            rangeEnd = null,
+            pageable = PageRequest.of(0, 1),
+        )
+
+        assertEquals(listOf(fixture.directScheduleId), sharedResult.map { it.id })
+        assertEquals(listOf(fixture.directScheduleId), ownedResult.map { it.id })
     }
 
     private fun createFixture(): AccessFixture {

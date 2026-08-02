@@ -24,12 +24,17 @@ import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCalendarStatus
 import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.domain.ScheduleType
 import com.noLate.subscription.application.SubscriptionPolicyService
 import jakarta.transaction.Transactional
 import org.springframework.data.domain.PageRequest
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.support.TransactionTemplate
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -55,8 +60,20 @@ class ScheduleService(
     private val calendarCacheAudienceResolver: ScheduleCalendarCacheAudienceResolver? = null,
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
     private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
+    transactionManager: PlatformTransactionManager? = null,
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
+    private val calendarReadTransaction = transactionManager?.let { manager ->
+        TransactionTemplate(manager).apply {
+            isReadOnly = true
+        }
+    }
+
+    init {
+        check(calendarCacheService == null || calendarReadTransaction != null) {
+            "Calendar cache coordination requires a transaction manager for short DB loads."
+        }
+    }
 
     @Transactional
     fun addSchedule(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
@@ -135,7 +152,11 @@ class ScheduleService(
     }
 
     @Transactional
-    fun updateSchedule(memberId: Long, scheduleId: Long, scheduleDto: ScheduleDto): ScheduleDto {
+    fun updateSchedule(
+        memberId: Long,
+        scheduleId: Long,
+        scheduleDto: ScheduleDto,
+    ): ScheduleDto {
         val existingSchedule = findEditableActive(memberId, scheduleId)
         val previousAudience = cacheAudience(existingSchedule)
         val authorizedDto = withAuthorizedCalendar(
@@ -225,10 +246,10 @@ class ScheduleService(
 
     @Transactional
     fun getScheduleDetail(memberId: Long, scheduleId: Long): ScheduleDto {
-        return toVisibleDtos(memberId, listOf(findActive(memberId, scheduleId))).single()
+        return toVisibleDtos(memberId, listOf(findActive(memberId, scheduleId))).singleOrNull()
+            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
     }
 
-    @Transactional
     fun getCalendarScheduleList(memberId: Long, startAt: String, endAt: String): List<ScheduleDto> {
         val rangeStart = parseInstant(startAt, "startAt")
         val rangeEnd = parseInstant(endAt, "endAt")
@@ -236,24 +257,32 @@ class ScheduleService(
         if (rangeEnd.isBefore(rangeStart)) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "endAt must be after startAt.")
         }
+        if (Duration.between(rangeStart, rangeEnd) > MAX_CALENDAR_RANGE) {
+            throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                "Calendar schedule range must not exceed $MAX_CALENDAR_RANGE_DAYS days.",
+            )
+        }
 
         val loader = { loadStart: Instant, loadEnd: Instant ->
-            toVisibleDtos(
-                memberId,
-                if (sharingAvailabilityPolicy.enabled) {
-                    scheduleRepository.findOverlappingScheduleList(
-                        memberId = memberId,
-                        rangeStart = loadStart,
-                        rangeEnd = loadEnd,
-                    )
-                } else {
-                    scheduleRepository.findOwnedOverlappingScheduleList(
-                        memberId = memberId,
-                        rangeStart = loadStart,
-                        rangeEnd = loadEnd,
-                    )
-                },
-            )
+            executeCalendarRead {
+                toVisibleDtos(
+                    memberId,
+                    if (sharingAvailabilityPolicy.enabled) {
+                        scheduleRepository.findOverlappingScheduleList(
+                            memberId = memberId,
+                            rangeStart = loadStart,
+                            rangeEnd = loadEnd,
+                        )
+                    } else {
+                        scheduleRepository.findOwnedOverlappingScheduleList(
+                            memberId = memberId,
+                            rangeStart = loadStart,
+                            rangeEnd = loadEnd,
+                        )
+                    },
+                )
+            }
         }
         // owner-only와 공유 포함 DTO는 Redis namespace가 다르다. 기능을 끈 인스턴스도
         // 공유 결과를 재노출하지 않으면서 동일한 월 캐시를 안전하게 사용할 수 있다.
@@ -269,6 +298,19 @@ class ScheduleService(
     fun getCalendarCacheRevision(memberId: Long): Long =
         calendarCacheService?.currentRevision(memberId, calendarCacheScope())
             ?: calendarCacheScope().clientRevision(0L)
+
+    /**
+     * Cache coordination and follower waits must stay outside a DB transaction. Otherwise a cold
+     * miss burst can occupy the whole Hikari pool while every follower waits for the same leader,
+     * and MySQL repeatable-read can hide a revision committed during the leader load. Only the
+     * repository/entity projection itself needs one short read-only transaction.
+     */
+    private fun <T : Any> executeCalendarRead(block: () -> T): T {
+        val template = checkNotNull(calendarReadTransaction) {
+            "Calendar schedule reads require a transaction manager."
+        }
+        return requireNotNull(template.execute { block() })
+    }
 
     @Transactional
     fun getDailyScheduleList(memberId: Long, date: String): List<ScheduleDto> {
@@ -328,24 +370,42 @@ class ScheduleService(
         categoryId: String?,
         startAt: String?,
         endAt: String?,
+        limit: Int? = null,
     ): List<ScheduleDto> {
+        val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
+        if (
+            normalizedKeyword != null &&
+            normalizedKeyword.codePointCount(0, normalizedKeyword.length) < MIN_SEARCH_KEYWORD_LENGTH
+        ) {
+            throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                "Search keyword must be at least $MIN_SEARCH_KEYWORD_LENGTH characters.",
+            )
+        }
+        // A missing/blank keyword deliberately remains compatible with category/date-only searches.
+        // The cap is enforced here as well as in the DB query so every caller receives the same policy.
+        val normalizedLimit = (limit ?: DEFAULT_SEARCH_LIMIT).coerceIn(1, MAX_SEARCH_LIMIT)
+        val pageable = PageRequest.of(0, normalizedLimit)
+
         return toVisibleDtos(
             memberId,
             if (sharingAvailabilityPolicy.enabled) {
                 scheduleRepository.searchScheduleList(
                     memberId = memberId,
-                    keyword = keyword?.takeIf { it.isNotBlank() },
-                    categoryId = categoryId?.takeIf { it.isNotBlank() },
+                    keyword = normalizedKeyword,
+                    categoryId = categoryId?.trim()?.takeIf { it.isNotEmpty() },
                     rangeStart = startAt?.let { parseInstant(it, "startAt") },
                     rangeEnd = endAt?.let { parseInstant(it, "endAt") },
+                    pageable = pageable,
                 )
             } else {
                 scheduleRepository.searchOwnedScheduleList(
                     memberId = memberId,
-                    keyword = keyword?.takeIf { it.isNotBlank() },
-                    categoryId = categoryId?.takeIf { it.isNotBlank() },
+                    keyword = normalizedKeyword,
+                    categoryId = categoryId?.trim()?.takeIf { it.isNotEmpty() },
                     rangeStart = startAt?.let { parseInstant(it, "startAt") },
                     rangeEnd = endAt?.let { parseInstant(it, "endAt") },
+                    pageable = pageable,
                 )
             },
         )
@@ -394,10 +454,26 @@ class ScheduleService(
         }
         if (ownerScopedSchedules.isEmpty()) return emptyList()
 
-        val accessByScheduleId = scheduleAccessPolicy
-            ?.resolveAll(memberId, ownerScopedSchedules)
-            .orEmpty()
-        val visibleSchedules = if (scheduleAccessPolicy == null) {
+        // The repository has already enforced visibility, and an all-owned result
+        // needs no share/category/calendar grant lookup. This is the common calendar
+        // path and avoids four fixed DB reads on each cold monthly cache fill.
+        val allSchedulesOwned = ownerScopedSchedules.all { it.memberId == memberId }
+        val accessByScheduleId = if (allSchedulesOwned) {
+            if (scheduleAccessPolicy == null) {
+                emptyMap()
+            } else {
+                ownerScopedSchedules.mapNotNull { schedule ->
+                    schedule.id?.let { scheduleId ->
+                        scheduleId to ownerAccessDecision(schedule)
+                    }
+                }.toMap()
+            }
+        } else {
+            scheduleAccessPolicy
+                ?.resolveAll(memberId, ownerScopedSchedules)
+                .orEmpty()
+        }
+        val visibleSchedules = if (scheduleAccessPolicy == null || allSchedulesOwned) {
             ownerScopedSchedules
         } else {
             ownerScopedSchedules.filter { schedule ->
@@ -478,6 +554,29 @@ class ScheduleService(
                 ),
             )
         }
+    }
+
+    /**
+     * Mirrors the central policy's owner result without touching any share repository.
+     * Owner visibility is already established by the schedule row itself.
+     */
+    private fun ownerAccessDecision(schedule: Schedule): ScheduleAccessDecision {
+        val travelEnabled = schedule.scheduleType == ScheduleType.ROUTE ||
+            schedule.route != null ||
+            schedule.routeSetupRequired
+        return ScheduleAccessDecision(
+            canView = true,
+            canEdit = true,
+            travelEnabled = travelEnabled,
+            canViewAllTravelPlans = true,
+            effectivePermission = ScheduleSharePermission.OWNER,
+            effectiveContentMode = if (travelEnabled) {
+                ScheduleShareContentMode.SCHEDULE_AND_TRAVEL
+            } else {
+                ScheduleShareContentMode.SCHEDULE_ONLY
+            },
+            calendarRole = ScheduleCalendarRole.OWNER,
+        )
     }
 
     private fun strongestPermission(
@@ -878,6 +977,11 @@ class ScheduleService(
     }
 
     companion object {
+        private const val MAX_CALENDAR_RANGE_DAYS = 190L
+        private val MAX_CALENDAR_RANGE: Duration = Duration.ofDays(MAX_CALENDAR_RANGE_DAYS)
+        private const val MIN_SEARCH_KEYWORD_LENGTH = 2
+        private const val DEFAULT_SEARCH_LIMIT = 20
+        private const val MAX_SEARCH_LIMIT = 50
         private const val MAX_EXTERNAL_SOURCE_VALUE_LENGTH = 1_024
     }
 }

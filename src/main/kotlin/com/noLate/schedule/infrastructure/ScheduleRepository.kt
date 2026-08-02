@@ -429,6 +429,7 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         @Param("categoryId") categoryId: String?,
         @Param("rangeStart") rangeStart: Instant?,
         @Param("rangeEnd") rangeEnd: Instant?,
+        pageable: Pageable,
     ): List<Schedule>
 
     @Query(
@@ -456,6 +457,7 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         @Param("categoryId") categoryId: String?,
         @Param("rangeStart") rangeStart: Instant?,
         @Param("rangeEnd") rangeEnd: Instant?,
+        pageable: Pageable,
     ): List<Schedule>
 
     @Query(

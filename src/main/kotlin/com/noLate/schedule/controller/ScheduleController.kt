@@ -281,8 +281,14 @@ class ScheduleController(
     /**
      * 일정 검색/필터 조회.
      * 키워드, 카테고리, 기간 조건으로 일정 목록을 좁힌다.
+     * 키워드는 생략할 수 있지만, 전달할 때는 앞뒤 공백을 제외하고 2자 이상이어야 한다.
+     * 결과 개수는 기본 20개이며 서버에서 최대 50개로 제한한다.
      */
-    @Operation(summary = "일정 검색/필터 조회")
+    @Operation(
+        summary = "일정 검색/필터 조회",
+        description = "키워드는 생략하거나 공백으로 보낼 수 있으며, 실제 검색어는 공백 제거 후 최소 2자여야 합니다. " +
+            "결과는 기본 20개, 최대 50개로 제한됩니다.",
+    )
     @GetMapping("/search")
     fun searchScheduleList(
         @AuthenticationPrincipal principal: MemberPrincipal?,
@@ -290,6 +296,7 @@ class ScheduleController(
         @RequestParam(required = false) categoryId: String?,
         @RequestParam(required = false) startAt: String?,
         @RequestParam(required = false) endAt: String?,
+        @RequestParam(required = false) limit: Int? = null,
     ): ApiResponse<List<ScheduleDto>> {
         val result = scheduleUseCase.searchScheduleList(
             memberId = requireMemberId(principal),
@@ -297,6 +304,7 @@ class ScheduleController(
             categoryId = categoryId,
             startAt = startAt,
             endAt = endAt,
+            limit = limit,
         )
         return ApiResponse.success(result)
     }

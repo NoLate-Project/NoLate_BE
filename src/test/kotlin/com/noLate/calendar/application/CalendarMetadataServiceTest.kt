@@ -5,14 +5,19 @@ import com.noLate.calendar.domain.PublicHoliday
 import com.noLate.calendar.infrastructure.CalendarDayCacheRepository
 import com.noLate.calendar.infrastructure.KasiCalendarClient
 import com.noLate.calendar.infrastructure.KasiCalendarException
+import com.noLate.calendar.infrastructure.KasiHoliday
+import com.noLate.calendar.infrastructure.KasiLunarDay
 import com.noLate.calendar.infrastructure.PublicHolidayRepository
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.extension.ExtendWith
+import org.mockito.Mockito.timeout
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
@@ -24,6 +29,9 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
+import java.time.YearMonth
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @ExtendWith(MockitoExtension::class)
 class CalendarMetadataServiceTest {
@@ -41,6 +49,12 @@ class CalendarMetadataServiceTest {
 
     private val startDate = LocalDate.of(2026, 9, 25)
     private val endDate = LocalDate.of(2026, 9, 27)
+    private val services = mutableListOf<CalendarMetadataService>()
+
+    @AfterEach
+    fun closeExecutors() {
+        services.forEach(CalendarMetadataService::closeRefreshExecutor)
+    }
 
     @Test
     fun `연동이 비활성화되어도 캐시와 빈 날짜를 범위 전체에 반환한다`() {
@@ -83,8 +97,73 @@ class CalendarMetadataServiceTest {
 
         assertEquals(2026, result.single { it.date == startDate.toString() }.lunarYear)
         assertEquals("추석", result.single { it.date == startDate.toString() }.holidays.single().name)
-        verify(kasiCalendarClient).fetchLunarMonth(any())
-        verify(kasiCalendarClient).fetchHolidayMonth(any())
+        verify(kasiCalendarClient, timeout(2_000)).fetchLunarMonth(any())
+        verify(kasiCalendarClient, timeout(2_000)).fetchHolidayMonth(any())
+    }
+
+    @Test
+    fun `KASI 응답이 끝나지 않아도 현재 DB snapshot을 즉시 반환한다`() {
+        val fetchesStarted = CountDownLatch(2)
+        val releaseFetches = CountDownLatch(1)
+        whenever(kasiCalendarClient.isAvailable()).thenReturn(true)
+        whenever(calendarDayCacheRepository.findAllByDateBetweenOrderByDateAsc(startDate, endDate))
+            .thenReturn(emptyList())
+        whenever(publicHolidayRepository.findAllByHolidayDateBetweenOrderByHolidayDateAscIdAsc(startDate, endDate))
+            .thenReturn(emptyList())
+        whenever(kasiCalendarClient.fetchLunarMonth(any())).thenAnswer {
+            fetchesStarted.countDown()
+            releaseFetches.await(5, TimeUnit.SECONDS)
+            listOf(lunarDay(startDate))
+        }
+        whenever(kasiCalendarClient.fetchHolidayMonth(any())).thenAnswer {
+            fetchesStarted.countDown()
+            releaseFetches.await(5, TimeUnit.SECONDS)
+            listOf(KasiHoliday(startDate, "추석", "PUBLIC_HOLIDAY"))
+        }
+
+        val result = service().getDays(startDate, endDate)
+
+        assertEquals(3, result.size)
+        assertNull(result.first().lunarYear)
+        assertTrue(fetchesStarted.await(2, TimeUnit.SECONDS))
+        verify(calendarCacheWriter, never()).storeLunarMonth(any(), any())
+        verify(calendarCacheWriter, never()).replaceHolidayMonth(any(), any(), any())
+
+        releaseFetches.countDown()
+        verify(calendarCacheWriter, timeout(2_000)).storeLunarMonth(any(), any())
+        verify(calendarCacheWriter, timeout(2_000)).replaceHolidayMonth(any(), any(), any())
+    }
+
+    @Test
+    fun `동시 cold 조회는 월과 metadata 종류별 KASI 요청 하나를 공유한다`() {
+        val fetchesStarted = CountDownLatch(2)
+        val releaseFetches = CountDownLatch(1)
+        whenever(kasiCalendarClient.isAvailable()).thenReturn(true)
+        whenever(calendarDayCacheRepository.findAllByDateBetweenOrderByDateAsc(startDate, endDate))
+            .thenReturn(emptyList())
+        whenever(publicHolidayRepository.findAllByHolidayDateBetweenOrderByHolidayDateAscIdAsc(startDate, endDate))
+            .thenReturn(emptyList())
+        whenever(kasiCalendarClient.fetchLunarMonth(any())).thenAnswer {
+            fetchesStarted.countDown()
+            releaseFetches.await(5, TimeUnit.SECONDS)
+            listOf(lunarDay(startDate))
+        }
+        whenever(kasiCalendarClient.fetchHolidayMonth(any())).thenAnswer {
+            fetchesStarted.countDown()
+            releaseFetches.await(5, TimeUnit.SECONDS)
+            emptyList<KasiHoliday>()
+        }
+        val service = service()
+
+        service.getDays(startDate, endDate)
+        assertTrue(fetchesStarted.await(2, TimeUnit.SECONDS))
+        service.getDays(startDate, endDate)
+        releaseFetches.countDown()
+
+        verify(kasiCalendarClient, timeout(2_000).times(1))
+            .fetchLunarMonth(YearMonth.of(2026, 9))
+        verify(kasiCalendarClient, timeout(2_000).times(1))
+            .fetchHolidayMonth(YearMonth.of(2026, 9))
     }
 
     @Test
@@ -128,6 +207,14 @@ class CalendarMetadataServiceTest {
         calendarCacheWriter = calendarCacheWriter,
         clock = Clock.fixed(Instant.parse("2026-07-20T00:00:00Z"), ZoneOffset.UTC),
         cacheTtlHours = 168,
+    ).also(services::add)
+
+    private fun lunarDay(date: LocalDate) = KasiLunarDay(
+        date = date,
+        lunarYear = 2026,
+        lunarMonth = 8,
+        lunarDay = 15,
+        leapMonth = false,
     )
 
     private fun cachedDay(date: LocalDate) = CalendarDayCache(

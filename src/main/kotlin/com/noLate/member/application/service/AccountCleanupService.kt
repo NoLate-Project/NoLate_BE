@@ -28,6 +28,7 @@ import com.noLate.schedule.infrastructure.ScheduleNotificationActionReceiptRepos
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.infrastructure.ScheduleShareInvitationAcceptanceRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
@@ -38,6 +39,7 @@ import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCalendarStatus
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.sharing.infrastructure.SharingMemberBlockRepository
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
@@ -70,6 +72,7 @@ class AccountCleanupService(
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
     private val invitationRepository: ScheduleShareInvitationRepository,
+    private val invitationAcceptanceRepository: ScheduleShareInvitationAcceptanceRepository,
     private val scheduleRepository: ScheduleRepository,
     private val categoryRepository: ScheduleCategoryRepository,
     private val favoriteRepository: FavoritePlaceRepository,
@@ -86,6 +89,7 @@ class AccountCleanupService(
     private val departureAlarmFireEventRepository: DepartureAlarmFireEventRepository,
     private val departureAlarmScheduleReceiptRepository: DepartureAlarmScheduleReceiptRepository,
     private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
+    private val sharingMemberBlockRepository: SharingMemberBlockRepository? = null,
     private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
 ) {
     /**
@@ -238,6 +242,13 @@ class AccountCleanupService(
         travelPlanRepository.deleteAllByMemberId(memberId)
         departureAlarmSyncStateRepository.deleteAllByMemberId(memberId)
         quickScheduleReliabilityTelemetryService?.deleteForMember(memberId)
+        val ownedInvitationIds = invitationRepository
+            .findAllByOwnerMemberIdAndDeletedFalseOrderByIdDesc(memberId)
+            .mapNotNull { it.id }
+        if (ownedInvitationIds.isNotEmpty()) {
+            invitationAcceptanceRepository.deleteAllByInvitationIdIn(ownedInvitationIds)
+        }
+        invitationAcceptanceRepository.deleteAllByMemberId(memberId)
         invitationRepository.deleteAllByOwnerMemberId(memberId)
 
         scheduleRepository.deleteAll(
@@ -251,6 +262,10 @@ class AccountCleanupService(
         memberSettingRepository.deleteAllByMemberId(memberId)
         memberConsentRepository.deleteAllByMemberId(memberId)
         tokenRetirementService.retireAllByMember(memberId)
+        // 신고 기록은 운영 검토와 오남용 감사를 위해 보존하되, 탈퇴 회원을 포함한 차단
+        // 관계는 더 이상 유효한 계정 관계가 아니므로 양방향 모두 물리적으로 정리한다.
+        sharingMemberBlockRepository
+            ?.deleteAllByBlockerMemberIdOrBlockedMemberId(memberId, memberId)
         // 회원 row는 감사/참조 안정성을 위해 남기되 재식별 정보를 제거하고 인증을 차단한다.
         lockedMember.name = "탈퇴 회원"
         lockedMember.email = "deleted-$memberId-${UUID.randomUUID()}@deleted.invalid"

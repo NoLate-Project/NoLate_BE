@@ -48,6 +48,17 @@ interface ScheduleShareInvitationRepository : JpaRepository<ScheduleShareInvitat
         """
         select i
         from ScheduleShareInvitation i
+        where i.tokenHash = :tokenHash
+          and i.deleted = false
+        """
+    )
+    fun findByTokenHashForUpdate(@Param("tokenHash") tokenHash: String): ScheduleShareInvitation?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select i
+        from ScheduleShareInvitation i
         where i.resourceType = :resourceType
           and i.resourceId = :resourceId
           and i.status = :status

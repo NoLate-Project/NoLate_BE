@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%229%22 fill=%22%232f80ff%22/><text x=%2216%22 y=%2222%22 text-anchor=%22middle%22 font-family=%22Arial%22 font-size=%2218%22 font-weight=%22700%22 fill=%22white%22>N</text></svg>">
+  <title>NoLate 공유 안전 운영</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17223b;
+      --muted: #68758b;
+      --line: #dce3ed;
+      --surface: rgba(255,255,255,.92);
+      --blue: #2f80ff;
+      --blue-dark: #1b61c8;
+      --amber: #b96a00;
+      --red: #c43838;
+      --green: #187b54;
+      --shadow: 0 18px 50px rgba(33,48,78,.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 8% 0%, rgba(47,128,255,.17), transparent 32rem),
+        linear-gradient(145deg, #f7f9fc, #edf2f8);
+    }
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .shell { width: min(1160px, calc(100% - 32px)); margin: 0 auto; padding: 34px 0 54px; }
+    .brand { display: flex; align-items: center; gap: 11px; font-weight: 800; letter-spacing: -.02em; }
+    .brand-mark {
+      display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px;
+      color: white; background: var(--blue); box-shadow: 0 8px 20px rgba(47,128,255,.3);
+    }
+    .panel { background: var(--surface); border: 1px solid rgba(211,220,233,.9); border-radius: 24px; box-shadow: var(--shadow); }
+    .login { width: min(440px, 100%); margin: 12vh auto 0; padding: 32px; }
+    .login h1 { margin: 28px 0 8px; font-size: clamp(27px, 5vw, 38px); letter-spacing: -.045em; }
+    .login p { margin: 0 0 26px; color: var(--muted); line-height: 1.6; }
+    label { display: block; margin: 16px 0 7px; font-size: 13px; font-weight: 750; }
+    input, textarea {
+      width: 100%; border: 1px solid var(--line); border-radius: 13px; background: white;
+      color: var(--ink); padding: 13px 14px; outline: none; transition: border .15s, box-shadow .15s;
+    }
+    input:focus, textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(47,128,255,.13); }
+    textarea { min-height: 100px; resize: vertical; }
+    .primary {
+      width: 100%; margin-top: 22px; border: 0; border-radius: 13px; padding: 14px 18px;
+      color: white; background: var(--blue); font-weight: 800;
+    }
+    .primary:hover { background: var(--blue-dark); }
+    .message { min-height: 22px; margin-top: 12px; color: var(--red); font-size: 13px; }
+    .hidden { display: none !important; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 30px; }
+    .header-copy h1 { margin: 16px 0 5px; font-size: clamp(28px, 4vw, 44px); letter-spacing: -.05em; }
+    .header-copy p { margin: 0; color: var(--muted); }
+    .ghost { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; background: white; color: var(--ink); font-weight: 700; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+    .stat { padding: 18px 20px; }
+    .stat span { color: var(--muted); font-size: 13px; font-weight: 700; }
+    .stat strong { display: block; margin-top: 8px; font-size: 30px; letter-spacing: -.03em; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 20px; margin-bottom: 14px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; }
+    .filter { border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; background: white; color: var(--muted); font-weight: 750; }
+    .filter.active { color: white; border-color: var(--blue); background: var(--blue); }
+    .sync { color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .queue { display: grid; gap: 12px; }
+    .report { padding: 21px; }
+    .report-top { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+    .eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; font-weight: 750; }
+    .badge { border-radius: 999px; padding: 5px 9px; background: #eef4ff; color: var(--blue-dark); }
+    .badge.reviewing { background: #fff3df; color: var(--amber); }
+    .badge.resolved { background: #e8f7f0; color: var(--green); }
+    .badge.dismissed { background: #f0f2f5; color: #657084; }
+    .report h2 { margin: 13px 0 8px; font-size: 20px; letter-spacing: -.025em; }
+    .report p { margin: 0; color: #455269; line-height: 1.55; white-space: pre-wrap; }
+    .people { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    .people strong { color: var(--ink); }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 17px; }
+    .action { border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; background: white; color: var(--ink); font-weight: 750; }
+    .action.resolve { color: var(--green); }
+    .action.dismiss { color: var(--red); }
+    .empty { padding: 58px 24px; text-align: center; color: var(--muted); }
+    dialog { width: min(520px, calc(100% - 28px)); border: 0; border-radius: 22px; padding: 0; box-shadow: var(--shadow); }
+    dialog::backdrop { background: rgba(10,18,33,.48); backdrop-filter: blur(4px); }
+    .dialog-body { padding: 25px; }
+    .dialog-body h2 { margin: 0 0 8px; letter-spacing: -.025em; }
+    .dialog-body p { margin: 0 0 18px; color: var(--muted); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
+    .dialog-actions .primary { width: auto; margin: 0; padding: 10px 16px; }
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 20px, 1160px); padding-top: 20px; }
+      header, .toolbar { align-items: flex-start; flex-direction: column; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .report-top { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section id="login" class="login panel" aria-labelledby="login-title">
+      <div class="brand"><span class="brand-mark">N</span><span>NoLate Operations</span></div>
+      <h1 id="login-title">공유 안전 운영</h1>
+      <p>운영자로 등록된 NoLate 계정으로 로그인해 신고를 검토하고 처리합니다.</p>
+      <form id="login-form">
+        <label for="email">이메일</label>
+        <input id="email" name="email" type="email" autocomplete="username" required>
+        <label for="password">비밀번호</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button class="primary" type="submit">운영 대시보드 열기</button>
+        <div id="login-message" class="message" role="alert"></div>
+      </form>
+    </section>
+
+    <section id="dashboard" class="hidden" aria-labelledby="dashboard-title">
+      <header>
+        <div class="header-copy">
+          <div class="brand"><span class="brand-mark">N</span><span>NoLate Operations</span></div>
+          <h1 id="dashboard-title">공유 안전 큐</h1>
+          <p>오래 접수된 신고부터 최대 100건을 보여줍니다.</p>
+        </div>
+        <button id="logout" class="ghost" type="button">로그아웃</button>
+      </header>
+      <div class="stats" aria-label="신고 상태 요약">
+        <div class="stat panel"><span>접수</span><strong id="count-submitted">0</strong></div>
+        <div class="stat panel"><span>검토 중</span><strong id="count-reviewing">0</strong></div>
+        <div class="stat panel"><span>처리 완료</span><strong id="count-resolved">0</strong></div>
+        <div class="stat panel"><span>기각</span><strong id="count-dismissed">0</strong></div>
+      </div>
+      <div class="toolbar panel">
+        <div id="filters" class="filters" aria-label="상태 필터"></div>
+        <div id="sync" class="sync" aria-live="polite"></div>
+      </div>
+      <div id="queue" class="queue" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <dialog id="moderation-dialog">
+    <form id="moderation-form" class="dialog-body" method="dialog">
+      <h2 id="dialog-title">신고 처리</h2>
+      <p id="dialog-description"></p>
+      <label for="resolution-note">처리 메모 (선택, 500자 이내)</label>
+      <textarea id="resolution-note" maxlength="500" placeholder="판단 근거나 후속 조치를 기록하세요."></textarea>
+      <div id="dialog-message" class="message" role="alert"></div>
+      <div class="dialog-actions">
+        <button id="dialog-cancel" class="ghost" type="button">취소</button>
+        <button id="dialog-submit" class="primary" type="submit">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    (() => {
+      const statuses = ["SUBMITTED", "REVIEWING", "RESOLVED", "DISMISSED"];
+      const statusLabels = { SUBMITTED: "접수", REVIEWING: "검토 중", RESOLVED: "처리 완료", DISMISSED: "기각" };
+      const reasonLabels = {
+        UNWANTED_SHARING: "원치 않는 공유", HARASSMENT: "괴롭힘", SPAM: "스팸",
+        INAPPROPRIATE_CONTENT: "부적절한 내용", PRIVACY_CONCERN: "개인정보 우려", OTHER: "기타"
+      };
+      const resourceLabels = { SCHEDULE: "일정", CATEGORY: "카테고리", CALENDAR: "공유 캘린더" };
+      let token = sessionStorage.getItem("nolate-sharing-admin-token") || "";
+      let selectedStatus = "SUBMITTED";
+      let pendingAction = null;
+
+      const byId = id => document.getElementById(id);
+      const login = byId("login");
+      const dashboard = byId("dashboard");
+      const queue = byId("queue");
+      const dialog = byId("moderation-dialog");
+
+      async function request(path, options = {}) {
+        const response = await fetch(path, {
+          ...options,
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) }
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.success === false) throw new Error(body.errorMessage || `요청 실패 (${response.status})`);
+        return body.data;
+      }
+
+      function setView(authenticated) {
+        login.classList.toggle("hidden", authenticated);
+        dashboard.classList.toggle("hidden", !authenticated);
+      }
+
+      function formatDate(value) {
+        if (!value) return "시각 없음";
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(date);
+      }
+
+      function renderFilters() {
+        const container = byId("filters");
+        container.replaceChildren();
+        statuses.forEach(status => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `filter${selectedStatus === status ? " active" : ""}`;
+          button.textContent = statusLabels[status];
+          button.setAttribute("aria-pressed", String(selectedStatus === status));
+          button.addEventListener("click", () => { selectedStatus = status; loadDashboard(); });
+          container.append(button);
+        });
+      }
+
+      function appendText(parent, tag, text, className) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        node.textContent = text;
+        parent.append(node);
+        return node;
+      }
+
+      function actionButton(report, status, label, className = "") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `action ${className}`.trim();
+        button.textContent = label;
+        button.addEventListener("click", () => openModeration(report, status));
+        return button;
+      }
+
+      function renderReports(reports) {
+        queue.replaceChildren();
+        if (!reports.length) {
+          appendText(queue, "div", "이 상태의 신고가 없습니다.", "empty panel");
+          return;
+        }
+        reports.forEach(report => {
+          const card = document.createElement("article");
+          card.className = "report panel";
+          const top = document.createElement("div"); top.className = "report-top";
+          const copy = document.createElement("div");
+          const eyebrow = document.createElement("div"); eyebrow.className = "eyebrow";
+          appendText(eyebrow, "span", statusLabels[report.status], `badge ${report.status.toLowerCase()}`);
+          appendText(eyebrow, "span", `#${report.id} · ${resourceLabels[report.resourceType] || report.resourceType} #${report.resourceId}`);
+          copy.append(eyebrow);
+          appendText(copy, "h2", reasonLabels[report.reason] || report.reason);
+          appendText(copy, "p", report.details || "신고자가 추가 설명을 남기지 않았습니다.");
+          appendText(top, "time", formatDate(report.createdAt), "sync");
+          top.prepend(copy); card.append(top);
+          const people = document.createElement("div"); people.className = "people";
+          appendText(people, "span", `신고자  ${report.reporterEmail || `회원 #${report.reporterMemberId}`}`);
+          appendText(people, "span", `신고 대상  ${report.reportedEmail || `회원 #${report.reportedMemberId}`}`);
+          if (report.moderatorMemberId) appendText(people, "span", `처리 운영자  #${report.moderatorMemberId}`);
+          card.append(people);
+          if (report.resolutionNote) appendText(card, "p", `처리 메모: ${report.resolutionNote}`);
+          if (report.status === "SUBMITTED" || report.status === "REVIEWING") {
+            const actions = document.createElement("div"); actions.className = "actions";
+            if (report.status === "SUBMITTED") actions.append(actionButton(report, "REVIEWING", "검토 시작"));
+            actions.append(actionButton(report, "RESOLVED", "처리 완료", "resolve"));
+            actions.append(actionButton(report, "DISMISSED", "기각", "dismiss"));
+            card.append(actions);
+          }
+          queue.append(card);
+        });
+      }
+
+      async function loadDashboard() {
+        renderFilters();
+        byId("sync").textContent = "불러오는 중…";
+        try {
+          const data = await request(`/api/sharing-moderation/reports?status=${encodeURIComponent(selectedStatus)}`);
+          statuses.forEach(status => byId(`count-${status.toLowerCase()}`).textContent = String(data.counts[status] || 0));
+          renderReports(data.reports || []);
+          byId("sync").textContent = `${formatDate(new Date().toISOString())} 갱신`;
+          setView(true);
+        } catch (error) {
+          token = ""; sessionStorage.removeItem("nolate-sharing-admin-token"); setView(false);
+          byId("login-message").textContent = error.message === "권한이 없습니다." ? "운영자로 등록되지 않은 계정입니다." : error.message;
+        }
+      }
+
+      function openModeration(report, status) {
+        pendingAction = { reportId: report.id, status };
+        byId("dialog-title").textContent = `${statusLabels[status]} 처리`;
+        byId("dialog-description").textContent = `신고 #${report.id}의 상태를 ${statusLabels[status]}(으)로 변경합니다.`;
+        byId("resolution-note").value = report.resolutionNote || "";
+        byId("dialog-message").textContent = "";
+        dialog.showModal();
+      }
+
+      byId("login-form").addEventListener("submit", async event => {
+        event.preventDefault(); byId("login-message").textContent = "";
+        try {
+          const data = await request("/api/member/auth/login", {
+            method: "POST",
+            body: JSON.stringify({ email: byId("email").value.trim(), password: byId("password").value })
+          });
+          token = data.accessToken; sessionStorage.setItem("nolate-sharing-admin-token", token);
+          byId("password").value = ""; await loadDashboard();
+        } catch (error) { byId("login-message").textContent = error.message; }
+      });
+
+      byId("moderation-form").addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!pendingAction) return;
+        byId("dialog-submit").disabled = true; byId("dialog-message").textContent = "";
+        try {
+          await request(`/api/sharing-moderation/reports/${pendingAction.reportId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: pendingAction.status, resolutionNote: byId("resolution-note").value })
+          });
+          dialog.close(); pendingAction = null; await loadDashboard();
+        } catch (error) { byId("dialog-message").textContent = error.message; }
+        finally { byId("dialog-submit").disabled = false; }
+      });
+
+      byId("dialog-cancel").addEventListener("click", () => { pendingAction = null; dialog.close(); });
+      byId("logout").addEventListener("click", () => { token = ""; sessionStorage.removeItem("nolate-sharing-admin-token"); setView(false); });
+      renderFilters();
+      if (token) loadDashboard(); else setView(false);
+    })();
+  </script>
+</body>
+</html>

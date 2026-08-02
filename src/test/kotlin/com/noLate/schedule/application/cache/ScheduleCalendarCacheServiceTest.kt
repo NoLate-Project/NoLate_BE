@@ -5,14 +5,19 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class ScheduleCalendarCacheServiceTest {
     private val store = InMemoryScheduleCalendarCacheStore()
@@ -58,6 +63,204 @@ class ScheduleCalendarCacheServiceTest {
 
         assertEquals(1, loadCount)
         assertEquals(first.map { it.id }, second.map { it.id })
+    }
+
+    @Test
+    fun `동일 월의 동시 cold miss 20개는 loader 한 번을 공유한다`() {
+        val concurrentStore = CoordinatedScheduleCalendarCacheStore(expectedInitialReads = 20)
+        val concurrentService = cacheService(concurrentStore)
+        val loadCount = AtomicInteger()
+        val loaderStarted = CountDownLatch(1)
+        val releaseLoader = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(20)
+        val rangeStart = Instant.parse("2026-07-01T00:00:00Z")
+        val rangeEnd = Instant.parse("2026-07-31T14:59:59Z")
+
+        try {
+            val requests = (1..20).map {
+                executor.submit<List<ScheduleDto>> {
+                    concurrentService.getOrLoad(
+                        memberId = 101,
+                        scope = ScheduleCalendarCacheScope.SHARING_ENABLED,
+                        rangeStart = rangeStart,
+                        rangeEnd = rangeEnd,
+                    ) { _, _ ->
+                        loadCount.incrementAndGet()
+                        loaderStarted.countDown()
+                        assertTrue(releaseLoader.await(5, TimeUnit.SECONDS))
+                        listOf(schedule(1, "2026-07-10T01:00:00Z"))
+                    }
+                }
+            }
+
+            assertTrue(loaderStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(concurrentStore.awaitInitialReads(5, TimeUnit.SECONDS))
+            // All requests have observed the miss. Give each one time to attach to the month future
+            // before allowing the elected leader to finish.
+            Thread.sleep(100)
+            releaseLoader.countDown()
+
+            val results = requests.map { it.get(5, TimeUnit.SECONDS) }
+            assertEquals(1, loadCount.get())
+            assertTrue(results.all { result -> result.map { it.id } == listOf(1L) })
+        } finally {
+            releaseLoader.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `Redis store failure still shares one loaded result with concurrent followers`() {
+        val failingStore = CoordinatedScheduleCalendarCacheStore(
+            expectedInitialReads = 20,
+            failWrites = true,
+        )
+        val concurrentService = cacheService(failingStore)
+        val loadCount = AtomicInteger()
+        val loaderStarted = CountDownLatch(1)
+        val releaseLoader = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(20)
+        val rangeStart = Instant.parse("2026-08-01T00:00:00Z")
+        val rangeEnd = Instant.parse("2026-08-31T14:59:59Z")
+
+        try {
+            val requests = (1..20).map {
+                executor.submit<List<ScheduleDto>> {
+                    concurrentService.getOrLoad(
+                        memberId = 102,
+                        scope = ScheduleCalendarCacheScope.SHARING_ENABLED,
+                        rangeStart = rangeStart,
+                        rangeEnd = rangeEnd,
+                    ) { _, _ ->
+                        loadCount.incrementAndGet()
+                        loaderStarted.countDown()
+                        assertTrue(releaseLoader.await(5, TimeUnit.SECONDS))
+                        listOf(schedule(2, "2026-08-10T01:00:00Z"))
+                    }
+                }
+            }
+
+            assertTrue(loaderStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(failingStore.awaitInitialReads(5, TimeUnit.SECONDS))
+            Thread.sleep(100)
+            releaseLoader.countDown()
+
+            val results = requests.map { it.get(5, TimeUnit.SECONDS) }
+            assertEquals(1, loadCount.get())
+            assertEquals(1, failingStore.putAllCount.get())
+            assertTrue(results.all { result -> result.map { it.id } == listOf(2L) })
+        } finally {
+            releaseLoader.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `cache serialization failure returns the first DB result without loading again`() {
+        val isolatedStore = CoordinatedScheduleCalendarCacheStore(expectedInitialReads = 0)
+        val failingMapper = mock<ObjectMapper>()
+        whenever(failingMapper.writeValueAsString(any()))
+            .thenThrow(IllegalStateException("serialization unavailable"))
+        val isolatedService = cacheService(isolatedStore, failingMapper)
+        val loadCount = AtomicInteger()
+
+        val result = isolatedService.getOrLoad(
+            memberId = 104,
+            scope = ScheduleCalendarCacheScope.SHARING_ENABLED,
+            rangeStart = Instant.parse("2026-10-01T00:00:00Z"),
+            rangeEnd = Instant.parse("2026-10-31T14:59:59Z"),
+        ) { _, _ ->
+            loadCount.incrementAndGet()
+            listOf(schedule(4, "2026-10-10T01:00:00Z"))
+        }
+
+        assertEquals(1, loadCount.get())
+        assertEquals(0, isolatedStore.putAllCount.get())
+        assertEquals(listOf(4L), result.map { it.id })
+    }
+
+    @Test
+    fun `Redis read failure falls through to one DB load`() {
+        val failingReadStore = object : ScheduleCalendarCacheStore {
+            override fun getAll(keys: List<String>): Map<String, String> =
+                throw IllegalStateException("Redis read unavailable")
+
+            override fun putAll(values: Map<String, String>, ttl: Duration) = Unit
+        }
+        val isolatedService = cacheService(failingReadStore)
+        val loadCount = AtomicInteger()
+
+        val result = isolatedService.getOrLoad(
+            memberId = 105,
+            scope = ScheduleCalendarCacheScope.SHARING_ENABLED,
+            rangeStart = Instant.parse("2026-11-01T00:00:00Z"),
+            rangeEnd = Instant.parse("2026-11-30T14:59:59Z"),
+        ) { _, _ ->
+            loadCount.incrementAndGet()
+            listOf(schedule(5, "2026-11-10T01:00:00Z"))
+        }
+
+        assertEquals(1, loadCount.get())
+        assertEquals(listOf(5L), result.map { it.id })
+    }
+
+    @Test
+    fun `unreadable Redis payload falls through to one DB load`() {
+        val unreadableStore = object : ScheduleCalendarCacheStore {
+            override fun getAll(keys: List<String>): Map<String, String> =
+                keys.associateWith { "{not-json" }
+
+            override fun putAll(values: Map<String, String>, ttl: Duration) = Unit
+        }
+        val isolatedService = cacheService(unreadableStore)
+        val loadCount = AtomicInteger()
+
+        val result = isolatedService.getOrLoad(
+            memberId = 106,
+            scope = ScheduleCalendarCacheScope.SHARING_ENABLED,
+            rangeStart = Instant.parse("2026-12-01T00:00:00Z"),
+            rangeEnd = Instant.parse("2026-12-31T14:59:59Z"),
+        ) { _, _ ->
+            loadCount.incrementAndGet()
+            listOf(schedule(6, "2026-12-10T01:00:00Z"))
+        }
+
+        assertEquals(1, loadCount.get())
+        assertEquals(listOf(6L), result.map { it.id })
+    }
+
+    @Test
+    fun `loader failure is propagated once and releases the in-flight claim`() {
+        val isolatedStore = CoordinatedScheduleCalendarCacheStore(expectedInitialReads = 0)
+        val isolatedService = cacheService(isolatedStore)
+        val loadCount = AtomicInteger()
+        val rangeStart = Instant.parse("2026-09-01T00:00:00Z")
+        val rangeEnd = Instant.parse("2026-09-30T14:59:59Z")
+
+        assertThrows<IllegalStateException> {
+            isolatedService.getOrLoad(
+                memberId = 103,
+                scope = ScheduleCalendarCacheScope.SHARING_ENABLED,
+                rangeStart = rangeStart,
+                rangeEnd = rangeEnd,
+            ) { _, _ ->
+                loadCount.incrementAndGet()
+                throw IllegalStateException("DB unavailable")
+            }
+        }
+
+        val recovered = isolatedService.getOrLoad(
+            memberId = 103,
+            scope = ScheduleCalendarCacheScope.SHARING_ENABLED,
+            rangeStart = rangeStart,
+            rangeEnd = rangeEnd,
+        ) { _, _ ->
+            loadCount.incrementAndGet()
+            listOf(schedule(3, "2026-09-10T01:00:00Z"))
+        }
+
+        assertEquals(2, loadCount.get())
+        assertEquals(listOf(3L), recovered.map { it.id })
     }
 
     @Test
@@ -271,7 +474,7 @@ class ScheduleCalendarCacheServiceTest {
         assertEquals(listOf(9L), result.map { it.id })
         assertEquals(1, loadCount)
         assertEquals(0, store.getAllCount)
-        assertThrows(IllegalStateException::class.java) {
+        assertThrows<IllegalStateException> {
             service.currentRevision(88, ScheduleCalendarCacheScope.SHARING_ENABLED)
         }
     }
@@ -284,6 +487,39 @@ class ScheduleCalendarCacheServiceTest {
         endAt = Instant.parse(startAt).plusSeconds(3600).toString(),
         category = ScheduleCategoryDto(id = "1", title = "기본", color = "#2F80FF"),
     )
+
+    private fun cacheService(
+        cacheStore: ScheduleCalendarCacheStore,
+        mapper: ObjectMapper = ObjectMapper().registerKotlinModule(),
+    ) = ScheduleCalendarCacheService(
+        store = cacheStore,
+        revisionService = revisionService,
+        objectMapper = mapper,
+        properties = properties,
+    )
+
+    private class CoordinatedScheduleCalendarCacheStore(
+        expectedInitialReads: Int,
+        private val failWrites: Boolean = false,
+    ) : ScheduleCalendarCacheStore {
+        private val values = ConcurrentHashMap<String, String>()
+        private val initialReads = CountDownLatch(expectedInitialReads)
+        val putAllCount = AtomicInteger()
+
+        override fun getAll(keys: List<String>): Map<String, String> {
+            initialReads.countDown()
+            return keys.mapNotNull { key -> values[key]?.let { key to it } }.toMap()
+        }
+
+        override fun putAll(values: Map<String, String>, ttl: Duration) {
+            putAllCount.incrementAndGet()
+            if (failWrites) throw IllegalStateException("Redis write unavailable")
+            this.values.putAll(values)
+        }
+
+        fun awaitInitialReads(timeout: Long, unit: TimeUnit): Boolean =
+            initialReads.await(timeout, unit)
+    }
 
     private class InMemoryScheduleCalendarCacheStore : ScheduleCalendarCacheStore {
         val values = mutableMapOf<String, String>()

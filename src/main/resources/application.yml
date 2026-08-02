@@ -2,6 +2,11 @@ spring:
   application:
     name: noLate
 
+  task:
+    scheduling:
+      # 기능별 worker flag와 분리된 Spring scheduling infrastructure 스위치다.
+      enabled: ${SPRING_TASK_SCHEDULING_ENABLED:true}
+
     # 공용 로컬값 다음에 프로젝트 루트의 Git 제외 파일을 읽는다.
     # Docker/운영 환경은 마운트된 /config/env.properties가 마지막에 같은 키를 덮어쓴다.
     # 비밀 파일을 resources 밖에 두어 로컬 빌드 산출물에도 인증키가 포함되지 않게 한다.
@@ -142,6 +147,7 @@ account-deletion:
   # 개인정보처리방침의 고정 고지와 맞추기 위해 enabled startup은 정확히 30d만 허용한다.
   request-record-retention: ${ACCOUNT_DELETION_REQUEST_RECORD_RETENTION:30d}
   processing-timeout: ${ACCOUNT_DELETION_PROCESSING_TIMEOUT:1h}
+  retention-cleanup-enabled: ${ACCOUNT_DELETION_RETENTION_CLEANUP_ENABLED:true}
   retention-cleanup-initial-delay: ${ACCOUNT_DELETION_RETENTION_CLEANUP_INITIAL_DELAY:1h}
   retention-cleanup-fixed-delay: ${ACCOUNT_DELETION_RETENTION_CLEANUP_FIXED_DELAY:1d}
   max-verification-attempts: ${ACCOUNT_DELETION_MAX_VERIFICATION_ATTEMPTS:5}
@@ -159,11 +165,28 @@ account-deletion:
 server:
   port: 5522
 
+app-links:
+  apple:
+    team-id: ${APP_LINKS_APPLE_TEAM_ID:457QQLB6H6}
+    bundle-id: ${APP_LINKS_APPLE_BUNDLE_ID:com.anonymous.nolatefe}
+  android:
+    package-name: ${APP_LINKS_ANDROID_PACKAGE_NAME:com.anonymous.nolate_fe}
+    # Play/App Signing의 SHA-256 지문을 쉼표로 구분한다. 빈 값은 endpoint를 fail-closed한다.
+    certificate-sha256-fingerprints: ${APP_LINKS_ANDROID_CERT_SHA256_FINGERPRINTS:}
+
 schedule:
   sharing:
     # 공유는 기본 제공 기능이다. 운영 kill switch는 exact lowercase "true"만 허용하는
     # 서버 정책을 거치므로 false/오타/공백 값은 모두 안전하게 비활성화된다.
     enabled: ${SCHEDULE_SHARING_ENABLED:true}
+    moderation:
+      # 일반 로그인 뒤 이 회원 ID allowlist를 한 번 더 통과해야 운영 API를 사용할 수 있다.
+      # 빈 값은 fail-closed이며 모든 운영자 접근을 거부한다.
+      operator-member-ids: ${SHARING_MODERATOR_MEMBER_IDS:}
+    rate-limit:
+      enabled: ${SHARING_RATE_LIMIT_ENABLED:true}
+      direct-share-per-hour: ${SHARING_DIRECT_SHARE_RATE_LIMIT:30}
+      invitation-create-per-hour: ${SHARING_INVITATION_CREATE_RATE_LIMIT:10}
   calendar-cache:
     enabled: ${SCHEDULE_CALENDAR_CACHE_ENABLED:true}
     ttl: ${SCHEDULE_CALENDAR_CACHE_TTL:15m}

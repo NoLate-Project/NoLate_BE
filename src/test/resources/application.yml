@@ -39,6 +39,8 @@ schedule:
   sharing:
     # Tests fail closed unless a sharing regression explicitly opts in.
     enabled: false
+    rate-limit:
+      enabled: false
   calendar-cache:
     enabled: false
   push:

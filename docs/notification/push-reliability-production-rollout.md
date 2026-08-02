@@ -544,10 +544,11 @@ WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
 ## 5. Deploy and resume
 
 1. 첫 새 인스턴스에는 반드시 `SCHEDULE_PUSH_ENABLED=false`를 명시한다.
-   이 값은 `SchedulingConfiguration`의 전역 `@EnableScheduling` gate이므로 schedule push,
-   route-setup, durable outbox의 모든 `@Scheduled` 진입점을 함께 멈춘다. 배포 환경의 실제
-   resolved property가 `false`인지 확인하고, scheduler 실행 thread와 job/outbox claim 증가가
-   모두 0인지 확인한다. prod 기본값도 fail-safe `false`지만 배포 선언에 값을 명시한다.
+   이 값은 ETA schedule-push job claim만 멈춘다. Scheduling infrastructure와 route-setup,
+   durable outbox, token/alarm/retention cleanup은 각자의 enable flag에 따라 계속 동작한다.
+   따라서 push job claim 증가가 0인지 확인하되, 기존 outbox drain과 cleanup 활동은 정상으로
+   간주한다. maintenance에서 모든 scheduler를 멈춰야 한다면
+   `SPRING_TASK_SCHEDULING_ENABLED=false`를 별도로 사용하고 각 backlog의 영향도 함께 승인한다.
 2. worker-off 상태로 새 애플리케이션 한 인스턴스를 배포한다. `ApplicationReadyEvent`
    startup backfill은 scheduler와 별개로 실행되므로 future owner와 participant travel-plan
    job이 full runtime fingerprint로 재구성됐는지 count를 확인한다. Backfill은 scan 전체를
@@ -560,10 +561,11 @@ WHERE history.payload_type = 'CALENDAR_SHARE_RECEIVED'
    mandatory drain 때문에 기존 endpoint는 하나도 승계되지 않으며, generation claim이 없는
    JWT는 의도적으로 재로그인이 필요하다. 동일 event/zero-device 검증용 row는 provider를
    호출하지 않는 승인된 진단 절차로만 만든다.
-5. worker-off 인스턴스를 종료하고 scheduler thread와 실행 중 claim이 다시 0인지 확인한다.
+5. worker-off 인스턴스를 종료하고 실행 중 schedule-push claim이 다시 0인지 확인한다.
    같은 검증된 artifact를 `SCHEDULE_PUSH_ENABLED=true`로 명시해 제한된 한 인스턴스로
-   재시작한다. 이 재시작이 API, schedule push, route-setup, durable outbox를 함께 재개하는
-   유일한 전환점이다.
+   재시작한다. 운영 startup guard는 이때 `SPRING_TASK_SCHEDULING_ENABLED=true`,
+   `NOTIFICATION_PUSH_OUTBOX_ENABLED=true`, `FIREBASE_ENABLED=true`가 아니면 기동을 거절한다.
+   route-setup, durable outbox와 cleanup worker는 이 전환과 독립적으로 계속 동작한다.
 6. 동일 event redrive, zero-device event, token ownership transfer, outbox retry 지표와
    backlog/lease/error 지표가 안정된 뒤 나머지 새 인스턴스를 올린다.
 

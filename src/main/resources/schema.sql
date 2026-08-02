@@ -176,6 +176,64 @@ CREATE TABLE IF NOT EXISTS schedule_share_invitations (
     INDEX idx_schedule_share_invitations_status_expires (status, expires_at)
 ) COMMENT='Link-based schedule and category share invitations';
 
+CREATE TABLE IF NOT EXISTS schedule_share_invitation_acceptances (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Invitation acceptance primary key',
+    invitation_id BIGINT NOT NULL COMMENT 'Accepted invitation id',
+    member_id BIGINT NOT NULL COMMENT 'Member who accepted the invitation',
+    accepted_at DATETIME(6) NOT NULL COMMENT 'First successful acceptance time',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_share_invitation_acceptance_member (invitation_id, member_id),
+    INDEX idx_share_invitation_acceptance_member (member_id, accepted_at)
+) COMMENT='Durable per-member idempotency ledger for invitation acceptance';
+
+CREATE TABLE IF NOT EXISTS sharing_member_blocks (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Sharing block primary key',
+    blocker_member_id BIGINT NOT NULL COMMENT 'Member who initiated the block',
+    blocked_member_id BIGINT NOT NULL COMMENT 'Member hidden from sharing interactions',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_sharing_member_blocks_pair (blocker_member_id, blocked_member_id),
+    INDEX idx_sharing_member_blocks_blocker (blocker_member_id, deleted),
+    INDEX idx_sharing_member_blocks_blocked (blocked_member_id, deleted),
+    CONSTRAINT chk_sharing_member_blocks_not_self CHECK (blocker_member_id <> blocked_member_id)
+) COMMENT='Recoverable member blocks enforced across schedule sharing';
+
+CREATE TABLE IF NOT EXISTS sharing_reports (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Sharing report primary key',
+    reporter_member_id BIGINT NOT NULL COMMENT 'Member submitting the report',
+    reported_member_id BIGINT NOT NULL COMMENT 'Member whose shared content is reported',
+    resource_type VARCHAR(30) NOT NULL COMMENT 'SCHEDULE, CATEGORY, or CALENDAR',
+    resource_id BIGINT NOT NULL COMMENT 'Reported sharing resource id',
+    reason VARCHAR(40) NOT NULL COMMENT 'Normalized report reason',
+    details VARCHAR(500) NULL COMMENT 'Optional reporter-provided context',
+    status VARCHAR(30) NOT NULL COMMENT 'Moderation lifecycle status',
+    moderator_member_id BIGINT NULL COMMENT 'Last operator who changed moderation status',
+    resolution_note VARCHAR(500) NULL COMMENT 'Operator moderation note',
+    resolved_at DATETIME(6) NULL COMMENT 'Final moderation time',
+    created_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NULL,
+    deleted_at DATETIME(6) NULL,
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    create_dt DATETIME(6) NULL,
+    update_dt DATETIME(6) NULL,
+    PRIMARY KEY (id),
+    INDEX idx_sharing_reports_reporter_created (reporter_member_id, created_at),
+    INDEX idx_sharing_reports_status_created (status, created_at),
+    INDEX idx_sharing_reports_resource (resource_type, resource_id, reported_member_id),
+    CONSTRAINT chk_sharing_reports_not_self CHECK (reporter_member_id <> reported_member_id)
+) COMMENT='User reports for shared schedule content and senders';
+
 CREATE TABLE IF NOT EXISTS schedule_routes (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule route primary key',
     schedule_id BIGINT NOT NULL COMMENT 'Schedule id',

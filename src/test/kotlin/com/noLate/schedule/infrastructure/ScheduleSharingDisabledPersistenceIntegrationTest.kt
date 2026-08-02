@@ -196,6 +196,7 @@ class ScheduleSharingDisabledPersistenceIntegrationTest @Autowired constructor(
                 categoryId = null,
                 rangeStart = null,
                 rangeEnd = null,
+                pageable = PageRequest.of(0, 20),
             ).isEmpty()
         )
         assertTrue(
@@ -231,6 +232,7 @@ class ScheduleSharingDisabledPersistenceIntegrationTest @Autowired constructor(
                 categoryId = null,
                 rangeStart = null,
                 rangeEnd = null,
+                pageable = PageRequest.of(0, 20),
             ).map { it.id },
         )
         assertEquals(

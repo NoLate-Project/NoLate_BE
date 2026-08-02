@@ -473,8 +473,9 @@ class ScheduleUseCase(
         categoryId: String?,
         startAt: String?,
         endAt: String?,
+        limit: Int? = null,
     ): List<ScheduleDto> {
-        return scheduleService.searchScheduleList(memberId, keyword, categoryId, startAt, endAt)
+        return scheduleService.searchScheduleList(memberId, keyword, categoryId, startAt, endAt, limit)
     }
 
     /**

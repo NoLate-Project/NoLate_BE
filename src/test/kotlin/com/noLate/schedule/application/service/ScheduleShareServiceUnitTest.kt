@@ -18,6 +18,7 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.infrastructure.ScheduleShareInvitationAcceptanceRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -56,6 +57,9 @@ class ScheduleShareServiceUnitTest {
     lateinit var invitationRepository: ScheduleShareInvitationRepository
 
     @Mock
+    lateinit var invitationAcceptanceRepository: ScheduleShareInvitationAcceptanceRepository
+
+    @Mock
     lateinit var memberRepository: MemberRepository
 
     @Mock
@@ -75,6 +79,7 @@ class ScheduleShareServiceUnitTest {
             categoryRepository = categoryRepository,
             categoryShareRepository = categoryShareRepository,
             invitationRepository = invitationRepository,
+            invitationAcceptanceRepository = invitationAcceptanceRepository,
             memberRepository = memberRepository,
             eventPublisher = eventPublisher,
             clock = clock,

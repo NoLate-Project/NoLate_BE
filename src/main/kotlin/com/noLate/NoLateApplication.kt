@@ -9,10 +9,15 @@ import org.springframework.scheduling.annotation.EnableScheduling
 @SpringBootApplication
 class NoLateApplication
 
+/**
+ * Scheduling infrastructure is an application concern, not a schedule-push feature flag.
+ * Individual workers own their enable switches; tests can still disable the infrastructure with
+ * Spring's canonical `spring.task.scheduling.enabled=false` property.
+ */
 @Configuration
 @EnableScheduling
 @ConditionalOnProperty(
-    prefix = "schedule.push",
+    prefix = "spring.task.scheduling",
     name = ["enabled"],
     havingValue = "true",
     matchIfMissing = true,

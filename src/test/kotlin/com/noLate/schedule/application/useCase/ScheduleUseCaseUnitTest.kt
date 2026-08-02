@@ -26,6 +26,7 @@ import com.noLate.schedule.domain.ScheduleOriginSource
 import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
+import com.noLate.schedule.domain.ScheduleRecognitionAlternative
 import com.noLate.schedule.domain.ScheduleTravelMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -134,6 +135,9 @@ class ScheduleUseCaseUnitTest {
         // enum이 Controller에서만 역직렬화되고 중간 계층에서 버려지면 음성 전용 무AI 정책을
         // 적용할 수 없다. UseCase가 VOICE_TRANSCRIPT를 그대로 전달하는지 별도로 고정한다.
         val text = "수요일 저녁 7시 강남역에서 판교 네이버까지"
+        val alternatives = listOf(
+            ScheduleRecognitionAlternative("수요일 저녁 7시 강남역에서 판교 네이버까지 회의", 0.92),
+        )
         val parsed = ScheduleParseDto(title = "판교 네이버 19:00", date = "2026-07-15", time = "19:00")
         whenever(
             scheduleHybridParserService.parse(
@@ -141,6 +145,8 @@ class ScheduleUseCaseUnitTest {
                 ScheduleParseInputType.VOICE_TRANSCRIPT,
                 "2026-07-11",
                 60,
+                0.76,
+                alternatives,
             )
         ).thenReturn(parsed)
 
@@ -149,6 +155,8 @@ class ScheduleUseCaseUnitTest {
             inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
             referenceDate = "2026-07-11",
             defaultDurationMinutes = 60,
+            recognitionConfidence = 0.76,
+            recognitionAlternatives = alternatives,
         )
 
         verify(scheduleHybridParserService).parse(
@@ -156,6 +164,8 @@ class ScheduleUseCaseUnitTest {
             ScheduleParseInputType.VOICE_TRANSCRIPT,
             "2026-07-11",
             60,
+            0.76,
+            alternatives,
         )
         assertEquals(parsed, result)
     }
@@ -164,6 +174,9 @@ class ScheduleUseCaseUnitTest {
     fun `출발지가 없으면 회원 계정의 기본 주소를 사용한다`() {
         // 파서 결과에는 사용자가 실제로 말하거나 적은 출발지만 들어간다. 회원별 기본값은
         // 인증된 memberId를 아는 UseCase에서 보완해 다른 회원의 장소가 섞이지 않게 한다.
+        val recognitionAlternatives = listOf(
+            ScheduleRecognitionAlternative("토요일 오후 8시 강남 용용선생", 0.93),
+        )
         val parsed = ScheduleParseDto(
             title = "강남 용용선생 08:00",
             date = "2026-07-18",
@@ -177,6 +190,8 @@ class ScheduleUseCaseUnitTest {
                 ScheduleParseInputType.VOICE_TRANSCRIPT,
                 "2026-07-16",
                 60,
+                0.79,
+                recognitionAlternatives,
             ),
         ).thenReturn(parsed)
         whenever(favoritePlaceService.getDefaultOrigin(7L)).thenReturn(
@@ -198,6 +213,8 @@ class ScheduleUseCaseUnitTest {
             inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
             referenceDate = "2026-07-16",
             defaultDurationMinutes = 60,
+            recognitionConfidence = 0.79,
+            recognitionAlternatives = recognitionAlternatives,
         )
 
         assertEquals("우리 집", result.origin?.name)
@@ -831,6 +848,7 @@ class ScheduleUseCaseUnitTest {
                 categoryId = eq("1"),
                 startAt = eq("2026-06-01T00:00:00Z"),
                 endAt = eq("2026-06-30T23:59:59Z"),
+                limit = eq(35),
             )
         ).thenReturn(listOf(scheduleDto()))
 
@@ -840,6 +858,7 @@ class ScheduleUseCaseUnitTest {
             categoryId = "1",
             startAt = "2026-06-01T00:00:00Z",
             endAt = "2026-06-30T23:59:59Z",
+            limit = 35,
         )
 
         verify(scheduleService, times(1)).searchScheduleList(
@@ -848,6 +867,7 @@ class ScheduleUseCaseUnitTest {
             categoryId = "1",
             startAt = "2026-06-01T00:00:00Z",
             endAt = "2026-06-30T23:59:59Z",
+            limit = 35,
         )
         assertEquals(1, result.size)
     }

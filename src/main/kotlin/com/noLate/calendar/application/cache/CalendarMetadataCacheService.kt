@@ -13,6 +13,11 @@ import java.time.YearMonth
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.locks.ReentrantLock
 
+data class CalendarMetadataCacheLoad(
+    val days: List<CalendarDayDto>,
+    val cacheableMonths: Set<YearMonth>,
+)
+
 @Service
 class CalendarMetadataCacheService(
     private val store: CalendarMetadataCacheStore,
@@ -27,14 +32,25 @@ class CalendarMetadataCacheService(
         startDate: LocalDate,
         endDate: LocalDate,
         loader: (LocalDate, LocalDate) -> List<CalendarDayDto>,
+    ): List<CalendarDayDto> = getOrLoadSnapshot(startDate, endDate) { loadStart, loadEnd ->
+        CalendarMetadataCacheLoad(
+            days = loader(loadStart, loadEnd),
+            cacheableMonths = monthsBetween(loadStart, loadEnd).toSet(),
+        )
+    }
+
+    fun getOrLoadSnapshot(
+        startDate: LocalDate,
+        endDate: LocalDate,
+        loader: (LocalDate, LocalDate) -> CalendarMetadataCacheLoad,
     ): List<CalendarDayDto> {
         validateRange(startDate, endDate)
-        if (!properties.enabled) return loader(startDate, endDate)
+        if (!properties.enabled) return loader(startDate, endDate).days
 
         val months = monthsBetween(startDate, endDate)
         val keys = months.associateWith(::cacheKey)
         val firstRead = readCachedMonthsOrNull(months, keys)
-            ?: return loader(startDate, endDate)
+            ?: return loader(startDate, endDate).days
         if (firstRead.size == months.size) {
             log.info(
                 "Calendar metadata cache HIT months={}",
@@ -47,7 +63,7 @@ class CalendarMetadataCacheService(
         return withMonthLocks(initiallyMissingMonths) {
             // 같은 인스턴스의 선행 요청이 적재했을 수 있으므로 lock 획득 후 다시 확인한다.
             val cachedByMonth = readCachedMonthsOrNull(months, keys)
-                ?: return@withMonthLocks loader(startDate, endDate)
+                ?: return@withMonthLocks loader(startDate, endDate).days
             val missingMonths = months.filterNot(cachedByMonth::containsKey)
             if (missingMonths.isEmpty()) {
                 log.info(
@@ -65,15 +81,54 @@ class CalendarMetadataCacheService(
                 "Calendar metadata cache MISS missingMonths={}",
                 missingMonths.joinToString(","),
             )
-            val loadedByMonth = loadMissingMonths(missingMonths, loader)
-            storeLoadedMonths(loadedByMonth, keys)
+            val loaded = loadMonths(missingMonths, loader)
+            storeLoadedMonths(
+                loadedByMonth = loaded.daysByMonth,
+                cacheableMonths = loaded.cacheableMonths,
+                keys = keys,
+            )
 
             filterRange(
                 months.flatMap { month ->
-                    cachedByMonth[month] ?: loadedByMonth[month].orEmpty()
+                    cachedByMonth[month] ?: loaded.daysByMonth[month].orEmpty()
                 },
                 startDate,
                 endDate,
+            )
+        }
+    }
+
+    /**
+     * Rebuilds only months whose DB refresh completed. Ready snapshots overwrite the old value in
+     * one Redis SET; an incomplete placeholder is deleted rather than being retained for the TTL.
+     */
+    fun refillMonths(
+        months: Collection<YearMonth>,
+        loader: (LocalDate, LocalDate) -> CalendarMetadataCacheLoad,
+    ) {
+        if (!properties.enabled) return
+        val targetMonths = months.distinct().sorted()
+        if (targetMonths.isEmpty()) return
+
+        withMonthLocks(targetMonths) {
+            val keys = targetMonths.associateWith(::cacheKey)
+            val loaded = loadMonths(targetMonths, loader)
+            val incompleteMonths = targetMonths.minus(loaded.cacheableMonths)
+
+            if (incompleteMonths.isNotEmpty()) {
+                runCatching {
+                    store.deleteAll(incompleteMonths.map(keys::getValue))
+                }.onFailure { error ->
+                    log.warn(
+                        "Calendar metadata cache invalidation failed. error={}",
+                        error.javaClass.simpleName,
+                    )
+                }
+            }
+            storeLoadedMonths(
+                loadedByMonth = loaded.daysByMonth,
+                cacheableMonths = loaded.cacheableMonths,
+                keys = keys,
             )
         }
     }
@@ -121,23 +176,27 @@ class CalendarMetadataCacheService(
         null
     }
 
-    private fun loadMissingMonths(
-        missingMonths: List<YearMonth>,
-        loader: (LocalDate, LocalDate) -> List<CalendarDayDto>,
-    ): Map<YearMonth, List<CalendarDayDto>> = buildMap {
-        groupLoadableMonths(missingMonths).forEach { group ->
-            val loadedDays = loader(group.first().atDay(1), group.last().atEndOfMonth())
+    private fun loadMonths(
+        months: List<YearMonth>,
+        loader: (LocalDate, LocalDate) -> CalendarMetadataCacheLoad,
+    ): LoadedMonths {
+        val daysByMonth = mutableMapOf<YearMonth, List<CalendarDayDto>>()
+        val cacheableMonths = mutableSetOf<YearMonth>()
+        groupLoadableMonths(months).forEach { group ->
+            val loaded = loader(group.first().atDay(1), group.last().atEndOfMonth())
             group.forEach { month ->
-                put(
-                    month,
-                    loadedDays.filter { day ->
-                        runCatching {
-                            YearMonth.from(LocalDate.parse(day.date)) == month
-                        }.getOrDefault(false)
-                    },
-                )
+                daysByMonth[month] = loaded.days.filter { day ->
+                    runCatching {
+                        YearMonth.from(LocalDate.parse(day.date)) == month
+                    }.getOrDefault(false)
+                }
+                if (month in loaded.cacheableMonths) cacheableMonths += month
             }
         }
+        return LoadedMonths(
+            daysByMonth = daysByMonth,
+            cacheableMonths = cacheableMonths,
+        )
     }
 
     private fun groupLoadableMonths(months: List<YearMonth>): List<List<YearMonth>> {
@@ -162,10 +221,11 @@ class CalendarMetadataCacheService(
 
     private fun storeLoadedMonths(
         loadedByMonth: Map<YearMonth, List<CalendarDayDto>>,
+        cacheableMonths: Set<YearMonth>,
         keys: Map<YearMonth, String>,
     ) {
         val completeMonths = loadedByMonth.filter { (month, days) ->
-            isCompleteMonth(month, days)
+            month in cacheableMonths && isCacheReadyMonth(month, days)
         }
         if (completeMonths.size != loadedByMonth.size) {
             log.warn(
@@ -195,16 +255,23 @@ class CalendarMetadataCacheService(
 
     private fun deserializeMonth(month: YearMonth, json: String): List<CalendarDayDto> {
         val days = objectMapper.readValue(json, listType)
-        require(isCompleteMonth(month, days))
+        require(isCacheReadyMonth(month, days))
         return days
     }
 
-    private fun isCompleteMonth(month: YearMonth, days: List<CalendarDayDto>): Boolean {
+    private fun isCacheReadyMonth(month: YearMonth, days: List<CalendarDayDto>): Boolean {
         if (days.size != month.lengthOfMonth()) return false
         val dates = runCatching { days.map { LocalDate.parse(it.date) } }.getOrNull()
             ?: return false
         return dates.toSet().size == month.lengthOfMonth()
             && dates.all { YearMonth.from(it) == month }
+            && days.all { day ->
+                day.metadataComplete &&
+                day.lunarYear != null &&
+                    day.lunarMonth != null &&
+                    day.lunarDay != null &&
+                    day.leapMonth != null
+            }
     }
 
     private fun validateRange(startDate: LocalDate, endDate: LocalDate) {
@@ -244,7 +311,12 @@ class CalendarMetadataCacheService(
         .sortedBy(CalendarDayDto::date)
 
     private fun cacheKey(month: YearMonth): String =
-        "nolate:calendar:metadata:v1:month:$month"
+        "nolate:calendar:metadata:v2:month:$month"
+
+    private data class LoadedMonths(
+        val daysByMonth: Map<YearMonth, List<CalendarDayDto>>,
+        val cacheableMonths: Set<YearMonth>,
+    )
 
     private companion object {
         const val FILL_LOCK_STRIPES = 64
