@@ -55,7 +55,7 @@ class LegalDocumentControllerTest {
         assertTrue(response.success)
         assertEquals(LegalDocumentType.PRIVACY_POLICY, document.type)
         assertEquals("개인정보처리방침", document.title)
-        assertEquals("2026.08.01", document.version)
+        assertEquals("2026.08.04", document.version)
         assertTrue(document.sections.any { it.title.contains("외부 캘린더") })
         assertTrue(document.sections.any { section ->
             section.body.any { it.contains("Google Calendar") && it.contains("서버에는 저장하지 않습니다") }
@@ -71,6 +71,13 @@ class LegalDocumentControllerTest {
         })
         assertTrue(document.sections.any { section ->
             section.body.any { it.contains("ETA 정확도 개선 참여 시") && it.contains("위치를 추가 수집하지 않습니다") }
+        })
+        assertTrue(document.sections.any { section ->
+            section.body.any {
+                it.contains("화면 전환 성능 정보") &&
+                    it.contains("일정 식별값") &&
+                    it.contains("저장하지 않습니다")
+            }
         })
     }
 

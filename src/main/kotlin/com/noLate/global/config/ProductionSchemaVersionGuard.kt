@@ -191,6 +191,8 @@ class ProductionSchemaVersionGuard(
             "2026-08-04-schedule-route-optimistic-lock-v1"
         const val DEPARTURE_ALARM_PLAN_V2_SCHEMA_VERSION =
             "2026-08-04-departure-alarm-plan-v2"
+        const val NAVIGATION_PERFORMANCE_SCHEMA_VERSION =
+            "2026-08-04-navigation-performance-v1"
 
         val REQUIRED_SCHEMA_VERSIONS = listOf(
             PUSH_RELIABILITY_SCHEMA_VERSION,
@@ -206,6 +208,7 @@ class ProductionSchemaVersionGuard(
             PUSH_DELIVERY_ACK_CAPABILITY_SCHEMA_VERSION,
             SCHEDULE_ROUTE_OPTIMISTIC_LOCK_SCHEMA_VERSION,
             DEPARTURE_ALARM_PLAN_V2_SCHEMA_VERSION,
+            NAVIGATION_PERFORMANCE_SCHEMA_VERSION,
         )
     }
 }
