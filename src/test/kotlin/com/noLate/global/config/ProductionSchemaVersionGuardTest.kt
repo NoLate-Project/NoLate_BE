@@ -99,6 +99,31 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
+    fun `navigation performance migration creates telemetry before the production marker`() {
+        val migration = Files.readString(
+            Path.of("docs/performance/migrations/2026-08-04-navigation-performance.sql"),
+        )
+        val table = migration.indexOf("CREATE TABLE IF NOT EXISTS navigation_performance_events")
+        val postcondition = migration.indexOf("CALL assert_navigation_performance_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(table >= 0)
+        assertTrue(postcondition > table)
+        assertTrue(marker > postcondition)
+        assertTrue(
+            migration.contains(ProductionSchemaVersionGuard.NAVIGATION_PERFORMANCE_SCHEMA_VERSION),
+        )
+        assertTrue(
+            ProductionSchemaVersionGuard.NAVIGATION_PERFORMANCE_SCHEMA_VERSION in
+                ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS,
+        )
+        assertTrue(migration.contains("idx_nav_perf_screen"))
+        assertTrue(migration.contains("expires_at"))
+    }
+
+    @Test
     fun `production refuses automatic Hibernate schema mutation`() {
         val error = assertThrows(IllegalStateException::class.java) {
             guard(markerDatabase(), ddlMode = "update").afterSingletonsInstantiated()

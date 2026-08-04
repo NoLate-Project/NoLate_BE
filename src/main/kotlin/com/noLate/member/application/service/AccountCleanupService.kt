@@ -16,6 +16,7 @@ import com.noLate.notification.infrastructure.DepartureAlarmPresentationAssignme
 import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
+import com.noLate.performance.application.NavigationPerformanceService
 import com.noLate.routehistory.infrastructure.RecentRoutePlaceRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
@@ -94,6 +95,7 @@ class AccountCleanupService(
     private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
     private val sharingMemberBlockRepository: SharingMemberBlockRepository? = null,
     private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
+    private val navigationPerformanceService: NavigationPerformanceService? = null,
 ) {
     /**
      * Owner withdrawal and participant mutation share one member-row order. The first scan is only
@@ -248,6 +250,7 @@ class AccountCleanupService(
         travelPlanRepository.deleteAllByMemberId(memberId)
         departureAlarmSyncStateRepository.deleteAllByMemberId(memberId)
         quickScheduleReliabilityTelemetryService?.deleteForMember(memberId)
+        navigationPerformanceService?.deleteForMember(memberId)
         val ownedInvitationIds = invitationRepository
             .findAllByOwnerMemberIdAndDeletedFalseOrderByIdDesc(memberId)
             .mapNotNull { it.id }
