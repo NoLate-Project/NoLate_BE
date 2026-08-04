@@ -178,11 +178,16 @@ internal class FirebasePushClient(
     private fun createStandardVisibleDeliveryControls(
         data: Map<String, String>,
     ): StandardVisibleDeliveryControls {
-        val stableIdentifier = data["logicalEventKey"]
-            ?.takeIf(String::isNotBlank)
-            ?.let(OpaquePushIdentifier::fingerprint)
+        val logicalEventKey = data["logicalEventKey"]?.takeIf(String::isNotBlank)
         val rawExpiresAt = data[ETA_EVENT_EXPIRES_AT_KEY]
-            ?: return StandardVisibleDeliveryControls(stableIdentifier = stableIdentifier)
+            ?: return StandardVisibleDeliveryControls(
+                stableIdentifier = logicalEventKey?.let(OpaquePushIdentifier::fingerprint),
+            )
+        if (logicalEventKey == null) {
+            throw PushPayloadRejectedException(
+                "ETA push has no stable logical event identity.",
+            )
+        }
         val expiresAt = runCatching { Instant.parse(rawExpiresAt) }
             .getOrElse {
                 throw PushPayloadRejectedException(
@@ -208,7 +213,7 @@ internal class FirebasePushClient(
             )
         }
         return StandardVisibleDeliveryControls(
-            stableIdentifier = stableIdentifier,
+            stableIdentifier = OpaquePushIdentifier.fingerprint(logicalEventKey),
             expiresAt = expiresAt,
             androidTtlMillis = androidTtlMillis,
         )
@@ -220,9 +225,6 @@ internal class FirebasePushClient(
         AndroidConfig.builder()
             .setPriority(AndroidConfig.Priority.HIGH)
             .apply {
-                deliveryControls.stableIdentifier?.let {
-                    setCollapseKey(it)
-                }
                 deliveryControls.androidTtlMillis?.let {
                     setTtl(it)
                 }

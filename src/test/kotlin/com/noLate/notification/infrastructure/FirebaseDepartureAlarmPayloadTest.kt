@@ -116,8 +116,6 @@ class FirebaseDepartureAlarmPayloadTest {
         assertThat(firstIdentifier.toByteArray(StandardCharsets.US_ASCII)).hasSize(64)
         assertThat(firstIdentifier).doesNotContain(rawEventKey)
 
-        val android = field<Any>(first, "androidConfig")
-        assertThat(field<String>(android, "collapseKey")).isEqualTo(firstIdentifier)
         val apns = field<Any>(first, "apnsConfig")
         assertThat(field<Map<String, String>>(apns, "headers"))
             .containsEntry("apns-collapse-id", firstIdentifier)
@@ -132,7 +130,7 @@ class FirebaseDepartureAlarmPayloadTest {
         )
 
         val android = field<Any>(message, "androidConfig")
-        assertThat(field<Long>(android, "ttl")).isEqualTo(120_500L)
+        assertThat(field<String>(android, "ttl")).isEqualTo("120.500000000s")
         val apns = field<Any>(message, "apnsConfig")
         assertThat(field<Map<String, String>>(apns, "headers"))
             .containsEntry("apns-expiration", expiresAt.epochSecond.toString())
@@ -148,21 +146,34 @@ class FirebaseDepartureAlarmPayloadTest {
             Clock.fixed(now, ZoneOffset.UTC),
         )
 
-        listOf(
-            now.minusMillis(1).toString(),
-            now.toString(),
-            "not-an-instant",
-        ).forEach { expiresAt ->
+        val rejectedPayloads = listOf(
+            mapOf(
+                "logicalEventKey" to "event:expired-eta-41",
+                "etaEventExpiresAt" to now.minusMillis(1).toString(),
+            ),
+            mapOf(
+                "logicalEventKey" to "event:boundary-eta-41",
+                "etaEventExpiresAt" to now.toString(),
+            ),
+            mapOf(
+                "logicalEventKey" to "event:malformed-eta-41",
+                "etaEventExpiresAt" to "not-an-instant",
+            ),
+            mapOf(
+                "etaEventExpiresAt" to now.plusSeconds(120).toString(),
+            ),
+            mapOf(
+                "logicalEventKey" to " ",
+                "etaEventExpiresAt" to now.plusSeconds(120).toString(),
+            ),
+        )
+        rejectedPayloads.forEach { rejectedData ->
             assertThatThrownBy {
                 rejectingClient.sendToToken(
                     token = "token",
                     title = "출발 안내",
                     body = "지금 출발하세요",
-                    data = mapOf(
-                        "type" to "SCHEDULE_DEPARTURE_REMINDER",
-                        "logicalEventKey" to "event:rejected-eta-41",
-                        "etaEventExpiresAt" to expiresAt,
-                    ),
+                    data = mapOf("type" to "SCHEDULE_DEPARTURE_REMINDER") + rejectedData,
                 )
             }.isExactlyInstanceOf(PushPayloadRejectedException::class.java)
         }
