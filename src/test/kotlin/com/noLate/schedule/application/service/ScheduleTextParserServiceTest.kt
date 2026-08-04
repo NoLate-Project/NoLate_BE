@@ -9,6 +9,9 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 
 /**
  * 실제로 수집되는 예약 양식과 축약형을 예제로 고정해 규칙 파서의 호환성을 검증한다.
@@ -35,7 +38,7 @@ class ScheduleTextParserServiceTest {
 
         val result = parser.parse(text, "2026-01-01", 60)
 
-        assertEquals("향상교회 12:00", result.title)
+        assertEquals("12:00 향상교회", result.title)
         assertEquals(
             "예약자: 김예은\n촬영 종류: 웨딩본식 메인스냅",
             result.notes,
@@ -79,7 +82,7 @@ class ScheduleTextParserServiceTest {
 
         val result = parser.parse(text, "2026-01-01", 60)
 
-        assertEquals("그랜드 오스티엄 웨딩홀 3층 블리스홀 15:30", result.title)
+        assertEquals("15:30 그랜드 오스티엄 웨딩홀 3층 블리스홀", result.title)
         assertEquals(
             "예약자: 김혜림\n작가 배정: (m)이정우 (s)백진욱",
             result.notes,
@@ -127,7 +130,7 @@ class ScheduleTextParserServiceTest {
 
         val result = parser.parse(text, "2026-01-01", 60)
 
-        assertEquals("수원 더케이 웨딩컨벤션 14:30", result.title)
+        assertEquals("14:30 수원 더케이 웨딩컨벤션", result.title)
         assertEquals(
             "예약자: 고은샘\n촬영 종류: 메인스냅, 서브스냅, DVD2캠",
             result.notes,
@@ -154,8 +157,8 @@ class ScheduleTextParserServiceTest {
         assertEquals("14:30", result.time)
         assertEquals("2026-08-15T05:30:00Z", result.startAt)
         assertEquals("2026-08-15T07:00:00Z", result.endAt)
-        assertEquals("시민회관 14:30", result.title)
-        assertEquals("촬영 종류: 가족 촬영", result.notes)
+        assertEquals("가족 촬영", result.title)
+        assertNull(result.notes)
         assertEquals("시민회관", result.destination?.name)
     }
 
@@ -224,7 +227,7 @@ class ScheduleTextParserServiceTest {
             defaultDurationMinutes = 60,
         )
 
-        assertEquals("인천빌라드컨벤션 14:30", result.title)
+        assertEquals("14:30 인천빌라드컨벤션", result.title)
         assertEquals("예약자: 홍길동", result.notes)
         assertEquals("2026-06-30", result.date)
         assertEquals("14:30", result.time)
@@ -240,7 +243,7 @@ class ScheduleTextParserServiceTest {
             defaultDurationMinutes = 60,
         )
 
-        assertEquals("그랜드 오스티엄 웨딩홀 15:30", result.title)
+        assertEquals("15:30 그랜드 오스티엄 웨딩홀", result.title)
         assertEquals("예약자: 김혜림", result.notes)
         assertEquals("그랜드 오스티엄 웨딩홀", result.destination?.name)
     }
@@ -253,7 +256,7 @@ class ScheduleTextParserServiceTest {
             defaultDurationMinutes = 60,
         )
 
-        assertEquals("엘마리노앳인천 10:30", result.title)
+        assertEquals("10:30 엘마리노앳인천", result.title)
         assertEquals(
             """
                 예약자: 박지낭
@@ -318,6 +321,27 @@ class ScheduleTextParserServiceTest {
     }
 
     @Test
+    fun `parses relative voice time without treating duration as clock time`() {
+        val fixedParser = ScheduleTextParserService(
+            Clock.fixed(Instant.parse("2026-08-04T11:09:00Z"), ZoneOffset.UTC),
+        )
+
+        val result = fixedParser.parse(
+            text = "1시간 뒤에 강남역",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-08-04",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("21:09 강남역", result.title)
+        assertEquals("2026-08-04", result.date)
+        assertEquals("21:09", result.time)
+        assertEquals("2026-08-04T12:09:00Z", result.startAt)
+        assertEquals("강남역", result.destination?.name)
+        assertTrue(result.warnings.isEmpty())
+    }
+
+    @Test
     fun `parses voice transcript with next week and Korean number time`() {
         val result = parser.parse(
             text = "다음 주 월요일 오전 열 시 병원 진료",
@@ -345,9 +369,23 @@ class ScheduleTextParserServiceTest {
             defaultDurationMinutes = 60,
         )
 
-        assertEquals("강남역 15:30", result.title)
+        assertEquals("15:30 강남역", result.title)
         assertEquals("2026-07-12", result.date)
         assertEquals("15:30", result.time)
+        assertEquals("강남역", result.destination?.name)
+    }
+
+    @Test
+    fun `uses an explicitly labeled title instead of the generated time and place title`() {
+        val result = parser.parse(
+            text = "제목: 팀 주간회의\n일시: 2026-08-07 오후 3시\n장소: 강남역",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-08-01",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("팀 주간회의", result.title)
+        assertEquals("15:00", result.time)
         assertEquals("강남역", result.destination?.name)
     }
 
@@ -618,7 +656,7 @@ class ScheduleTextParserServiceTest {
         assertEquals("2026-06-30T22:00:00Z", result.startAt)
         assertEquals("강남역", result.origin?.name)
         assertEquals("판교 네이버", result.destination?.name)
-        assertEquals("판교 네이버 07:00", result.title)
+        assertEquals("07:00 판교 네이버", result.title)
         assertEquals(ScheduleOriginSource.TEXT, result.originSource)
         assertFalse(result.originRequired)
         assertFalse("origin" in result.missingFields)
@@ -638,7 +676,7 @@ class ScheduleTextParserServiceTest {
         assertEquals("2026-07-16T10:00:00Z", result.startAt)
         assertEquals("사당", result.origin?.name)
         assertEquals("신촌", result.destination?.name)
-        assertEquals("신촌 19:00", result.title)
+        assertEquals("19:00 신촌", result.title)
         assertFalse(result.originRequired)
     }
 
@@ -774,7 +812,7 @@ class ScheduleTextParserServiceTest {
         assertEquals("19:00", result.time)
         assertEquals("강남역", result.origin?.name)
         assertEquals("판교 네이버", result.destination?.name)
-        assertEquals("판교 네이버 19:00", result.title)
+        assertEquals("19:00 판교 네이버", result.title)
         assertFalse(result.originRequired)
     }
 
@@ -792,7 +830,7 @@ class ScheduleTextParserServiceTest {
         assertEquals("2026-07-18", result.date)
         assertEquals("08:00", result.time)
         assertEquals("강남 용용선생", result.destination?.name)
-        assertEquals("강남 용용선생 08:00", result.title)
+        assertEquals("08:00 강남 용용선생", result.title)
     }
 
     @Test

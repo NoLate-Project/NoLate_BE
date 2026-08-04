@@ -58,7 +58,7 @@ class ScheduleHybridParserServiceTest {
         )
 
         assertEquals(0, aiParser.calls)
-        assertEquals("향상교회 15:00", result.title)
+        assertEquals("15:00 향상교회", result.title)
         assertEquals(ScheduleParseSource.RULE, result.parseSource)
         assertFalse(result.aiAttempted)
         assertFalse(result.needsReview)
@@ -303,7 +303,7 @@ class ScheduleHybridParserServiceTest {
         )
 
         assertEquals(1, aiParser.calls)
-        assertEquals("강남 20:30", result.title)
+        assertEquals("20:30 강남", result.title)
         assertEquals("2026-05-30", result.date)
         assertEquals("20:30", result.time)
         assertEquals("강남", result.destination?.name)
@@ -342,7 +342,7 @@ class ScheduleHybridParserServiceTest {
         assertEquals(1, aiParser.calls)
         assertEquals("강남역", result.origin?.name)
         assertEquals("판교 네이버", result.destination?.name)
-        assertEquals("판교 네이버 07:00", result.title)
+        assertEquals("07:00 판교 네이버", result.title)
         assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
         assertTrue(result.needsReview)
         assertTrue(result.warnings.any { "오전·오후가 없어" in it })
@@ -567,6 +567,26 @@ class ScheduleHybridParserServiceTest {
         assertEquals(1, aiParser.calls)
         assertTrue(result.needsReview)
         assertTrue(result.warnings.any { "인식 신뢰도가 낮아" in it })
+    }
+
+    @Test
+    fun `zero voice confidence means score unavailable and does not poison rule confidence`() {
+        val aiParser = RecordingAiParser(ScheduleAiParseOutcome(attempted = true))
+        val service = ScheduleHybridParserService(ruleParser, aiParser)
+
+        val result = service.parse(
+            text = "2026년 8월 4일 오후 9시 강남역 회의",
+            inputType = ScheduleParseInputType.VOICE_TRANSCRIPT,
+            referenceDate = "2026-08-04",
+            defaultDurationMinutes = 60,
+            recognitionConfidence = 0.0,
+        )
+
+        assertEquals(0, aiParser.calls)
+        assertNull(result.confidence?.recognition)
+        assertTrue((result.confidence?.overall ?: 0.0) >= 0.90)
+        assertFalse(result.needsReview)
+        assertTrue(result.warnings.none { "인식 신뢰도" in it })
     }
 
     @Test
