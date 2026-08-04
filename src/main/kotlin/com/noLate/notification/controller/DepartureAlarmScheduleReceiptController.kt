@@ -46,6 +46,8 @@ class DepartureAlarmScheduleReceiptController(
             reason = request.reason,
             occurredAt = request.occurredAt,
             deviceId = request.deviceId,
+            occurrenceId = request.occurrenceId,
+            mutationSequence = request.mutationSequence,
         )
     )
 }
@@ -67,4 +69,8 @@ data class DepartureAlarmScheduleReceiptRequest(
     val reason: String? = null,
     val occurredAt: Instant,
     val deviceId: String,
+    /** null is accepted only for the legacy single-M0 client contract. */
+    val occurrenceId: String? = null,
+    /** Monotonic per generation+occurrence native apply revision. Required by the v2 contract. */
+    val mutationSequence: Long? = null,
 )

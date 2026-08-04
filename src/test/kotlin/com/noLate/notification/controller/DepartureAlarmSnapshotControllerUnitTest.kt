@@ -74,6 +74,8 @@ class DepartureAlarmSnapshotControllerUnitTest {
                 "alarmId" to "schedule:42:member:17",
                 "scheduleId" to "42",
                 "alarmGeneration" to "4",
+                "alarmValidationRevision" to "0",
+                "alarmPlanSchemaVersion" to "2",
             ),
             response.data?.commands?.last(),
         )

@@ -3,12 +3,15 @@ package com.noLate.notification.application.service
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.domain.AppNotification
+import com.noLate.notification.domain.DepartureAlarmPresentationAssignment
+import com.noLate.notification.domain.DepartureAlarmPresentationMode
 import com.noLate.notification.domain.PushDelivery
 import com.noLate.notification.domain.PushLogicalEventKey
 import com.noLate.notification.domain.PushManifestState
 import com.noLate.notification.domain.PushOutboxDispatchStatus
 import com.noLate.notification.domain.withPushAccountBinding
 import com.noLate.notification.infrastructure.AppNotificationRepository
+import com.noLate.notification.infrastructure.DepartureAlarmPresentationAssignmentRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import org.springframework.dao.ConcurrencyFailureException
@@ -28,11 +31,15 @@ data class PreparedPushEvent(
     val manifestRecipientCount: Int,
     val inboxCreated: Boolean,
     val fenceAccepted: Boolean,
+    val nativeAlarmCoveredRecipientCount: Int = 0,
     /** false이면 withdrawal이 먼저 linearize되어 source/manifest를 만들지 않은 terminal no-op이다. */
     val recipientActive: Boolean = true,
 ) {
     val emptyManifest: Boolean
         get() = manifestRecipientCount == 0
+
+    val nativeAlarmCovered: Boolean
+        get() = nativeAlarmCoveredRecipientCount > 0
 }
 
 /**
@@ -54,6 +61,7 @@ class PushEventOutboxService(
         persistInInbox: Boolean,
         fence: PushDispatchFence?,
         sessionFence: AuthenticatedPushSessionFence? = null,
+        nativeAlarmCoverageSelector: DepartureAlarmReminderCoverageSelector? = null,
     ): PreparedPushEvent {
         require(persistInInbox) {
             "Durable push events must be persisted; use the explicit ephemeral send path otherwise."
@@ -67,6 +75,7 @@ class PushEventOutboxService(
                 deduplicationKey = deduplicationKey,
                 fence = fence,
                 sessionFence = sessionFence,
+                nativeAlarmCoverageSelector = nativeAlarmCoverageSelector,
             )
         }
     }
@@ -180,6 +189,9 @@ class PushEventOutboxWriter(
     private val clock: Clock,
     private val fenceValidator: PushDispatchFenceValidator? = null,
     private val recipientAuthorizationValidator: PushRecipientAuthorizationValidator? = null,
+    private val departureAlarmReminderCoverageService: DepartureAlarmReminderCoverageService? = null,
+    private val departureAlarmPresentationAssignmentRepository:
+        DepartureAlarmPresentationAssignmentRepository? = null,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun prepareInline(
@@ -190,6 +202,7 @@ class PushEventOutboxWriter(
         deduplicationKey: String?,
         fence: PushDispatchFence?,
         sessionFence: AuthenticatedPushSessionFence? = null,
+        nativeAlarmCoverageSelector: DepartureAlarmReminderCoverageSelector? = null,
     ): PreparedPushEvent =
         prepareWithinTransaction(
             memberId = memberId,
@@ -200,6 +213,7 @@ class PushEventOutboxWriter(
             fence = fence,
             durableDispatch = false,
             sessionFence = sessionFence,
+            nativeAlarmCoverageSelector = nativeAlarmCoverageSelector,
         )
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -246,6 +260,7 @@ class PushEventOutboxWriter(
         durableDispatch: Boolean,
         sessionFence: AuthenticatedPushSessionFence? = null,
         inboxVisible: Boolean = true,
+        nativeAlarmCoverageSelector: DepartureAlarmReminderCoverageSelector? = null,
     ): PreparedPushEvent {
         // Global notification/withdrawal lock order starts with the recipient member. The active
         // check and every source/manifest write below are committed under this same row lock.
@@ -295,7 +310,11 @@ class PushEventOutboxWriter(
                 // OPEN should never commit in the normal writer transaction. If a preview/manual
                 // schema left one behind, only rows that were already persisted belong to that
                 // historical snapshot. Capturing today's tokens would expand a past event.
-                freezeOpenManifest(existing, captureCurrentRecipients = false)
+                freezeOpenManifest(
+                    existing,
+                    captureCurrentRecipients = false,
+                    nativeAlarmCoverageSelector = null,
+                )
             }
             if (durableDispatch &&
                 existing.manifestState == PushManifestState.FROZEN &&
@@ -325,7 +344,11 @@ class PushEventOutboxWriter(
                 manifestState = PushManifestState.OPEN,
             )
         )
-        freezeOpenManifest(notification, captureCurrentRecipients = true)
+        freezeOpenManifest(
+            notification,
+            captureCurrentRecipients = true,
+            nativeAlarmCoverageSelector = nativeAlarmCoverageSelector,
+        )
         if (durableDispatch) {
             notification.enqueueForDispatch(Instant.now(clock))
         }
@@ -340,19 +363,70 @@ class PushEventOutboxWriter(
     private fun freezeOpenManifest(
         notification: AppNotification,
         captureCurrentRecipients: Boolean,
+        nativeAlarmCoverageSelector: DepartureAlarmReminderCoverageSelector?,
     ) {
         val memberId = notification.memberId
         val eventKey = notification.logicalEventKey
         val existing = pushDeliveryRepository
             .findAllByMemberIdAndEventKey(memberId, eventKey)
             .sortedBy { it.id ?: Long.MAX_VALUE }
+        var nativeAlarmCoveredRecipientCount = 0
         val deliveries = if (existing.isNotEmpty() || !captureCurrentRecipients) {
             existing
         } else {
             val data = notification.toSnapshot(objectMapper).data
-            val frozen =
-                tokenRepository.findAllByMemberIdAndRetirementRequestedFalse(memberId)
+            val activeTokens = tokenRepository
+                .findAllByMemberIdAndRetirementRequestedFalse(memberId)
                 .distinctBy { it.deliveryDeviceKey() }
+            val coverage = nativeAlarmCoverageSelector
+                ?.also { selector ->
+                    require(selector.memberId == memberId) {
+                        "Native alarm coverage selector recipient does not match the event."
+                    }
+                }
+                ?.let { selector ->
+                    departureAlarmReminderCoverageService
+                        ?.resolveForLockedMember(selector, activeTokens)
+                }
+                ?: DepartureAlarmReminderCoverage(activeDeviceCount = activeTokens.size)
+            val coveredTokenOwnerships = coverage.coveredTokenOwnerships
+            nativeAlarmCoveredRecipientCount = coveredTokenOwnerships.size
+            if (nativeAlarmCoverageSelector != null && activeTokens.isNotEmpty()) {
+                val assignedAt = Instant.now(clock)
+                val assignments = activeTokens.map { token ->
+                    DepartureAlarmPresentationAssignment(
+                        memberId = memberId,
+                        logicalEventKey = eventKey,
+                        scheduleId = nativeAlarmCoverageSelector.scheduleId,
+                        alarmGeneration = coverage.alarmGeneration,
+                        occurrenceId = nativeAlarmCoverageSelector.occurrenceId,
+                        triggerAt = nativeAlarmCoverageSelector.occurrenceTriggerAt,
+                        deviceTokenId = requireNotNull(token.id),
+                        tokenOwnershipVersion = token.ownershipVersion,
+                        deviceFingerprint = token.deviceFingerprint,
+                        platform = token.platform,
+                        presentationMode = if (
+                            token.alarmOwnership() in coveredTokenOwnerships
+                        ) {
+                            DepartureAlarmPresentationMode.NATIVE_ALARM
+                        } else {
+                            DepartureAlarmPresentationMode.VISIBLE_FALLBACK
+                        },
+                        semanticWarningVisible =
+                            nativeAlarmCoverageSelector.semanticWarningVisible,
+                        assignedAt = assignedAt,
+                    )
+                }
+                requireNotNull(departureAlarmPresentationAssignmentRepository) {
+                    "Native alarm assignment repository is required for fallback measurement."
+                }.saveAllAndFlush(assignments)
+            }
+            val frozen =
+                activeTokens
+                .filterNot { token ->
+                    nativeAlarmCoverageSelector?.semanticWarningVisible != true &&
+                        token.alarmOwnership() in coveredTokenOwnerships
+                }
                 .map { token ->
                     PushDelivery(
                         memberId = memberId,
@@ -375,7 +449,11 @@ class PushEventOutboxWriter(
                 emptyList()
             }
         }
-        notification.freezeManifest(deliveries.size, Instant.now(clock))
+        notification.freezeManifest(
+            recipientCount = deliveries.size,
+            at = Instant.now(clock),
+            nativeAlarmCoveredRecipientCount = nativeAlarmCoveredRecipientCount,
+        )
         appNotificationRepository.saveAndFlush(notification)
     }
 
@@ -405,6 +483,7 @@ class PushEventOutboxWriter(
             logicalEventKey = notification.logicalEventKey,
             deliveryIds = deliveries.map { requireNotNull(it.id) },
             manifestRecipientCount = expectedCount,
+            nativeAlarmCoveredRecipientCount = notification.nativeAlarmCoveredRecipientCount,
             inboxCreated = inboxCreated,
             fenceAccepted = fenceAccepted,
             recipientActive = true,
@@ -417,6 +496,7 @@ class PushEventOutboxWriter(
             logicalEventKey = "",
             deliveryIds = emptyList(),
             manifestRecipientCount = 0,
+            nativeAlarmCoveredRecipientCount = 0,
             inboxCreated = false,
             fenceAccepted = true,
             recipientActive = false,
@@ -425,3 +505,14 @@ class PushEventOutboxWriter(
 
 private fun normalizeDeduplicationKey(value: String?): String? =
     value?.trim()?.takeIf(String::isNotEmpty)?.take(180)
+
+private fun com.noLate.notification.domain.NotificationDeviceToken.alarmOwnership():
+    DepartureAlarmTokenOwnership? {
+    val tokenId = id ?: return null
+    val fingerprint = deviceFingerprint ?: return null
+    return DepartureAlarmTokenOwnership(
+        deviceFingerprint = fingerprint,
+        deviceTokenId = tokenId,
+        tokenOwnershipVersion = ownershipVersion,
+    )
+}

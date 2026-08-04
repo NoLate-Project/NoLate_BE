@@ -13,6 +13,8 @@ import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.schedule.domain.DepartureAlarmSyncOperation
+import com.noLate.schedule.domain.DepartureAlarmPlanCodec
+import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
 import com.noLate.schedule.domain.MAX_DEPARTURE_ALARM_GENERATION
 import com.noLate.schedule.domain.departureAlarmId
 import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
@@ -21,6 +23,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
@@ -62,48 +65,63 @@ class DepartureAlarmScheduleReceiptService(
         reason: String?,
         occurredAt: Instant,
         deviceId: String,
+        occurrenceId: String? = null,
+        mutationSequence: Long? = null,
     ): DepartureAlarmScheduleReceiptResult {
         val canonicalReceiptId = canonicalUuid(receiptId)
+        val canonicalOccurrenceId = canonicalOccurrenceId(occurrenceId)
+        val canonicalTriggerAt = triggerAt?.truncatedTo(ChronoUnit.MILLIS)
+        val canonicalOccurredAt = occurredAt.truncatedTo(ChronoUnit.MILLIS)
         requireIdentity(memberId, recipientMemberId, alarmId, scheduleId, generation, deviceId)
         if (platform != PushPlatform.ANDROID && platform != PushPlatform.IOS) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "알람 기기 플랫폼이 올바르지 않습니다.")
         }
         requireCompatibleDeliveryMode(platform, deliveryMode)
-        requireDatabaseSafeInstant(occurredAt, "occurredAt")
-        triggerAt?.let { requireDatabaseSafeInstant(it, "triggerAt") }
+        requireDatabaseSafeInstant(canonicalOccurredAt, "occurredAt")
+        canonicalTriggerAt?.let { requireDatabaseSafeInstant(it, "triggerAt") }
         val recordedAt = Instant.now(clock)
         if (
-            occurredAt.isAfter(recordedAt.plusSeconds(MAX_FUTURE_SKEW_SECONDS)) ||
-            occurredAt.isBefore(recordedAt.minusSeconds(MAX_REPORT_AGE_SECONDS))
+            canonicalOccurredAt.isAfter(recordedAt.plusSeconds(MAX_FUTURE_SKEW_SECONDS)) ||
+            canonicalOccurredAt.isBefore(recordedAt.minusSeconds(MAX_REPORT_AGE_SECONDS))
         ) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "알람 예약 결과 시각이 허용 범위를 벗어났습니다.")
         }
         val failureReason = normalizeAndValidateShape(
             operation = operation,
-            triggerAt = triggerAt,
+            triggerAt = canonicalTriggerAt,
             outcome = outcome,
+            occurrenceId = canonicalOccurrenceId,
             applied = applied,
             scheduled = scheduled,
             reason = reason,
+            occurredAt = canonicalOccurredAt,
+            mutationSequence = mutationSequence,
         )
-        val commandReceiptKey = commandReceiptKey(
-            alarmId = alarmId,
-            generation = generation,
-            operation = operation,
-            triggerAt = triggerAt,
-            outcome = outcome,
-        )
-
         if (memberRepository.findActiveNotificationRecipientForUpdate(memberId) == null) {
             throw BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND)
         }
         val deviceFingerprint = OpaquePushIdentifier.fingerprint(deviceId)
-        val activeDeviceTokens = deviceTokenRepository
+        val receiptToken = deviceTokenRepository
             .findAllByMemberIdAndDeviceFingerprintForUpdate(memberId, deviceFingerprint)
             .filterNot { it.retirementRequested }
-        if (activeDeviceTokens.none { it.platform == platform }) {
-            throw BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND)
+            .singleOrNull { it.platform == platform }
+            ?: throw BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND)
+        val deviceTokenId = requireNotNull(receiptToken.id) {
+            "A persisted alarm receipt token must have an id."
         }
+        val tokenOwnershipVersion = receiptToken.ownershipVersion
+        val commandReceiptKey = commandReceiptKey(
+            alarmId = alarmId,
+            generation = generation,
+            operation = operation,
+            triggerAt = canonicalTriggerAt,
+            outcome = outcome,
+            occurrenceId = canonicalOccurrenceId,
+            occurredAt = canonicalOccurredAt,
+            deviceTokenId = deviceTokenId,
+            tokenOwnershipVersion = tokenOwnershipVersion,
+            mutationSequence = mutationSequence,
+        )
 
         val state = syncStateRepository.findByMemberIdAndScheduleIdForUpdate(memberId, scheduleId)
             ?: throw BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND)
@@ -116,7 +134,12 @@ class DepartureAlarmScheduleReceiptService(
         }
         if (
             generation == state.generation &&
-            (operation != state.operation || triggerAt != state.triggerAt)
+            !currentCommandMatches(
+                state = state,
+                operation = operation,
+                triggerAt = canonicalTriggerAt,
+                occurrenceId = canonicalOccurrenceId,
+            )
         ) {
             throw BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND)
         }
@@ -128,8 +151,10 @@ class DepartureAlarmScheduleReceiptService(
                 scheduleId = scheduleId,
                 generation = generation,
                 deviceFingerprint = deviceFingerprint,
+                deviceTokenId = deviceTokenId,
+                tokenOwnershipVersion = tokenOwnershipVersion,
                 operation = operation,
-                triggerAt = triggerAt,
+                triggerAt = canonicalTriggerAt,
                 outcome = outcome,
                 applied = applied,
                 scheduled = scheduled,
@@ -137,7 +162,9 @@ class DepartureAlarmScheduleReceiptService(
                 deliveryMode = deliveryMode,
                 source = source,
                 failureReason = failureReason,
-                occurredAt = occurredAt,
+                occurredAt = canonicalOccurredAt,
+                occurrenceId = canonicalOccurrenceId,
+                mutationSequence = mutationSequence,
             )
             return it.toResult(recorded = false)
         }
@@ -157,6 +184,8 @@ class DepartureAlarmScheduleReceiptService(
                 memberId = memberId,
                 clientReceiptId = canonicalReceiptId,
                 deviceFingerprint = deviceFingerprint,
+                deviceTokenId = deviceTokenId,
+                tokenOwnershipVersion = tokenOwnershipVersion,
                 commandReceiptKey = commandReceiptKey,
                 alarmId = alarmId,
                 scheduleId = scheduleId,
@@ -165,7 +194,9 @@ class DepartureAlarmScheduleReceiptService(
                 desiredOperationAtReceipt = state.operation,
                 generationRelation = relation,
                 operation = operation,
-                triggerAt = triggerAt,
+                triggerAt = canonicalTriggerAt,
+                occurrenceId = canonicalOccurrenceId,
+                mutationSequence = mutationSequence,
                 outcome = outcome,
                 applied = applied,
                 scheduled = scheduled,
@@ -173,7 +204,7 @@ class DepartureAlarmScheduleReceiptService(
                 deliveryMode = deliveryMode,
                 source = source,
                 failureReason = failureReason,
-                clientOccurredAt = occurredAt,
+                clientOccurredAt = canonicalOccurredAt,
                 serverRecordedAt = recordedAt,
             )
         ).toResult(recorded = true)
@@ -183,30 +214,40 @@ class DepartureAlarmScheduleReceiptService(
         operation: DepartureAlarmSyncOperation,
         triggerAt: Instant?,
         outcome: DepartureAlarmScheduleOutcome,
+        occurrenceId: String?,
         applied: Boolean,
         scheduled: Boolean,
         reason: String?,
-    ): String? = when (outcome) {
-        DepartureAlarmScheduleOutcome.SCHEDULED -> {
-            if (
-                operation != DepartureAlarmSyncOperation.UPSERT ||
-                triggerAt == null || !scheduled
-            ) invalidShape()
-            normalizeOptionalReason(reason)
-        }
-        DepartureAlarmScheduleOutcome.CANCELED -> {
-            if (
-                operation != DepartureAlarmSyncOperation.CANCEL ||
-                triggerAt != null || !applied || scheduled || reason != null
-            ) invalidShape()
-            null
-        }
-        DepartureAlarmScheduleOutcome.FAILED -> {
-            if (
-                scheduled ||
-                (operation == DepartureAlarmSyncOperation.CANCEL && applied)
-            ) invalidShape()
-            normalizeReason(reason)
+        occurredAt: Instant,
+        mutationSequence: Long?,
+    ): String? {
+        if ((occurrenceId == null) != (mutationSequence == null) ||
+            mutationSequence?.let { it <= 0 } == true
+        ) invalidShape()
+        if (operation == DepartureAlarmSyncOperation.CANCEL && occurrenceId != null) invalidShape()
+        return when (outcome) {
+            DepartureAlarmScheduleOutcome.SCHEDULED -> {
+                if (
+                    operation != DepartureAlarmSyncOperation.UPSERT ||
+                    triggerAt == null || !scheduled ||
+                    (occurrenceId != null && !occurredAt.isBefore(triggerAt))
+                ) invalidShape()
+                normalizeOptionalReason(reason)
+            }
+            DepartureAlarmScheduleOutcome.CANCELED -> {
+                if (
+                    operation != DepartureAlarmSyncOperation.CANCEL ||
+                    triggerAt != null || occurrenceId != null || !applied || scheduled || reason != null
+                ) invalidShape()
+                null
+            }
+            DepartureAlarmScheduleOutcome.FAILED -> {
+                if (
+                    scheduled ||
+                    (operation == DepartureAlarmSyncOperation.CANCEL && applied)
+                ) invalidShape()
+                normalizeReason(reason)
+            }
         }
     }
 
@@ -252,13 +293,23 @@ class DepartureAlarmScheduleReceiptService(
         operation: DepartureAlarmSyncOperation,
         triggerAt: Instant?,
         outcome: DepartureAlarmScheduleOutcome,
+        occurrenceId: String?,
+        occurredAt: Instant,
+        deviceTokenId: Long,
+        tokenOwnershipVersion: Long,
+        mutationSequence: Long?,
     ): String {
         val canonical = listOf(
             alarmId,
             generation.toString(),
             operation.name,
             triggerAt?.toString().orEmpty(),
+            occurrenceId.orEmpty(),
             outcome.name,
+            occurredAt.toString(),
+            deviceTokenId.toString(),
+            tokenOwnershipVersion.toString(),
+            mutationSequence?.toString().orEmpty(),
         ).joinToString("|") { value ->
             "${value.toByteArray(StandardCharsets.UTF_8).size}:$value"
         }
@@ -278,6 +329,9 @@ class DepartureAlarmScheduleReceiptService(
         scheduleId: Long,
         generation: Long,
         deviceFingerprint: String,
+        deviceTokenId: Long,
+        tokenOwnershipVersion: Long,
+        mutationSequence: Long?,
         operation: DepartureAlarmSyncOperation,
         triggerAt: Instant?,
         outcome: DepartureAlarmScheduleOutcome,
@@ -288,11 +342,16 @@ class DepartureAlarmScheduleReceiptService(
         source: DepartureAlarmScheduleSource,
         failureReason: String?,
         occurredAt: Instant,
+        occurrenceId: String?,
     ) {
         if (
             existing.alarmId != alarmId || existing.scheduleId != scheduleId ||
             existing.generation != generation || existing.deviceFingerprint != deviceFingerprint ||
+            existing.deviceTokenId != deviceTokenId ||
+            existing.tokenOwnershipVersion != tokenOwnershipVersion ||
+            existing.mutationSequence != mutationSequence ||
             existing.operation != operation || existing.triggerAt != triggerAt ||
+            existing.occurrenceId != occurrenceId ||
             existing.outcome != outcome || existing.applied != applied ||
             existing.scheduled != scheduled || existing.platform != platform ||
             existing.deliveryMode != deliveryMode ||
@@ -329,6 +388,41 @@ class DepartureAlarmScheduleReceiptService(
             ?: throw BusinessException(ErrorCode.INVALID_INPUT, "알람 예약 receipt 식별자가 올바르지 않습니다.")
     }
 
+    private fun canonicalOccurrenceId(value: String?): String? {
+        if (value == null) return null
+        val canonical = value.trim()
+        if (canonical !in SUPPORTED_OCCURRENCE_IDS || canonical != value) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "출발 알람 occurrenceId가 올바르지 않습니다.")
+        }
+        return canonical
+    }
+
+    private fun currentCommandMatches(
+        state: com.noLate.schedule.domain.DepartureAlarmSyncState,
+        operation: DepartureAlarmSyncOperation,
+        triggerAt: Instant?,
+        occurrenceId: String?,
+    ): Boolean {
+        if (operation != state.operation) return false
+        if (operation == DepartureAlarmSyncOperation.CANCEL) {
+            return occurrenceId == null && triggerAt == null
+        }
+        if (occurrenceId == null) {
+            return triggerAt == state.triggerAt
+        }
+        if (
+            state.alarmPlanSchemaVersion != DEPARTURE_ALARM_PLAN_SCHEMA_VERSION ||
+            state.alarmOccurrencesJson == null
+        ) {
+            return false
+        }
+        val occurrence = runCatching {
+            DepartureAlarmPlanCodec.decode(requireNotNull(state.alarmOccurrencesJson))
+                .occurrence(occurrenceId)
+        }.getOrNull() ?: return false
+        return triggerAt == occurrence.triggerInstant()
+    }
+
     private fun requireDatabaseSafeInstant(value: Instant, fieldName: String) {
         if (value < MIN_DATABASE_INSTANT || value >= MAX_DATABASE_INSTANT) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "$fieldName 값이 올바르지 않습니다.")
@@ -349,6 +443,7 @@ class DepartureAlarmScheduleReceiptService(
         const val MAX_REASON_LENGTH = 64
         const val MAX_FUTURE_SKEW_SECONDS = 5 * 60L
         const val MAX_REPORT_AGE_SECONDS = 30 * 24 * 60 * 60L
+        val SUPPORTED_OCCURRENCE_IDS = setOf("M15", "M10", "M5", "M0")
         val MIN_DATABASE_INSTANT: Instant = Instant.parse("2000-01-01T00:00:00Z")
         val MAX_DATABASE_INSTANT: Instant = Instant.parse("2100-01-01T00:00:00Z")
     }

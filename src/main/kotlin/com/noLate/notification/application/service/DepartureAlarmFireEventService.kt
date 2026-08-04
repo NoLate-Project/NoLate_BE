@@ -15,6 +15,8 @@ import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.DepartureAlarmFireEventRepository
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
+import com.noLate.schedule.domain.DepartureAlarmPlanCodec
 import com.noLate.schedule.domain.MAX_DEPARTURE_ALARM_GENERATION
 import com.noLate.schedule.domain.DepartureAlarmSyncOperation
 import com.noLate.schedule.domain.departureAlarmId
@@ -25,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 
 data class DepartureAlarmFireEventResult(
@@ -68,8 +71,13 @@ class DepartureAlarmFireEventService(
         timingBasis: DepartureAlarmFireTimingBasis = DepartureAlarmFireTimingBasis.EXACT_CALLBACK,
         sourceTriggerAt: Instant? = null,
         deviceId: String,
+        occurrenceId: String? = null,
     ): DepartureAlarmFireEventResult {
         val canonicalEventId = canonicalEventId(eventId)
+        val canonicalOccurrenceId = canonicalOccurrenceId(occurrenceId)
+        val canonicalScheduledFor = scheduledFor.truncatedTo(ChronoUnit.MILLIS)
+        val canonicalOccurredAt = occurredAt.truncatedTo(ChronoUnit.MILLIS)
+        val canonicalSourceTriggerAt = sourceTriggerAt?.truncatedTo(ChronoUnit.MILLIS)
         requireValidIdentity(
             memberId = memberId,
             recipientMemberId = recipientMemberId,
@@ -78,12 +86,12 @@ class DepartureAlarmFireEventService(
             generation = generation,
             deviceId = deviceId,
         )
-        requireDatabaseSafeInstant(scheduledFor, "scheduledFor")
-        requireDatabaseSafeInstant(occurredAt, "occurredAt")
-        sourceTriggerAt?.let { requireDatabaseSafeInstant(it, "sourceTriggerAt") }
-        requirePlausibleExecutionWindow(scheduledFor, occurredAt)
+        requireDatabaseSafeInstant(canonicalScheduledFor, "scheduledFor")
+        requireDatabaseSafeInstant(canonicalOccurredAt, "occurredAt")
+        canonicalSourceTriggerAt?.let { requireDatabaseSafeInstant(it, "sourceTriggerAt") }
+        requirePlausibleExecutionWindow(canonicalScheduledFor, canonicalOccurredAt)
         val recordedAt = Instant.now(clock)
-        requirePlausibleReportWindow(occurredAt, recordedAt)
+        requirePlausibleReportWindow(canonicalOccurredAt, recordedAt)
 
         // Account withdrawal uses the same member-first lock order and deletes this evidence
         // before committing. A stale authenticated request therefore cannot recreate telemetry
@@ -108,10 +116,10 @@ class DepartureAlarmFireEventService(
             throw BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND)
         }
         if (generation == state.generation) {
-            val originalTrigger = sourceTriggerAt ?: scheduledFor
+            val originalTrigger = canonicalSourceTriggerAt ?: canonicalScheduledFor
             if (
                 state.operation != DepartureAlarmSyncOperation.UPSERT ||
-                state.triggerAt != originalTrigger
+                !currentTriggerMatches(state, canonicalOccurrenceId, originalTrigger)
             ) {
                 throw BusinessException(ErrorCode.NOTIFICATION_NOT_FOUND)
             }
@@ -124,20 +132,22 @@ class DepartureAlarmFireEventService(
                 scheduleId = scheduleId,
                 generation = generation,
                 deviceFingerprint = deviceFingerprint,
-                scheduledFor = scheduledFor,
-                occurredAt = occurredAt,
+                scheduledFor = canonicalScheduledFor,
+                occurredAt = canonicalOccurredAt,
                 timingBasis = timingBasis,
-                sourceTriggerAt = sourceTriggerAt,
+                sourceTriggerAt = canonicalSourceTriggerAt,
+                occurrenceId = canonicalOccurrenceId,
             )
             return duplicateResult(it)
         }
         fireEventRepository
-            .findByMemberIdAndDeviceFingerprintAndAlarmIdAndGenerationAndScheduledFor(
+            .findDuplicatePhysicalOccurrence(
                 memberId = memberId,
                 deviceFingerprint = deviceFingerprint,
                 alarmId = alarmId,
                 generation = generation,
-                scheduledFor = scheduledFor,
+                occurrenceId = canonicalOccurrenceId,
+                scheduledFor = canonicalScheduledFor,
             )
             ?.let { return duplicateResult(it) }
 
@@ -146,7 +156,7 @@ class DepartureAlarmFireEventService(
         } else {
             DepartureAlarmGenerationRelation.STALE
         }
-        val fireDelaySeconds = Duration.between(scheduledFor, occurredAt).seconds
+        val fireDelaySeconds = Duration.between(canonicalScheduledFor, canonicalOccurredAt).seconds
         val event = fireEventRepository.save(
             DepartureAlarmFireEvent(
                 memberId = memberId,
@@ -158,9 +168,10 @@ class DepartureAlarmFireEventService(
                 desiredGenerationAtReceipt = state.generation,
                 desiredOperationAtReceipt = state.operation,
                 generationRelation = relation,
-                scheduledFor = scheduledFor,
-                sourceTriggerAt = sourceTriggerAt,
-                clientOccurredAt = occurredAt,
+                scheduledFor = canonicalScheduledFor,
+                sourceTriggerAt = canonicalSourceTriggerAt,
+                occurrenceId = canonicalOccurrenceId,
+                clientOccurredAt = canonicalOccurredAt,
                 timingBasis = timingBasis,
                 fireDelaySeconds = fireDelaySeconds,
                 serverRecordedAt = recordedAt,
@@ -216,6 +227,7 @@ class DepartureAlarmFireEventService(
         occurredAt: Instant,
         timingBasis: DepartureAlarmFireTimingBasis,
         sourceTriggerAt: Instant?,
+        occurrenceId: String?,
     ) {
         if (
             existing.alarmId != alarmId ||
@@ -225,7 +237,8 @@ class DepartureAlarmFireEventService(
             existing.scheduledFor != scheduledFor ||
             existing.clientOccurredAt != occurredAt ||
             existing.timingBasis != timingBasis ||
-            existing.sourceTriggerAt != sourceTriggerAt
+            existing.sourceTriggerAt != sourceTriggerAt ||
+            existing.occurrenceId != occurrenceId
         ) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "알람 발화 이벤트 식별자가 충돌합니다.")
         }
@@ -237,6 +250,34 @@ class DepartureAlarmFireEventService(
             .getOrNull()
             ?.takeIf { it == trimmed.lowercase() }
             ?: throw BusinessException(ErrorCode.INVALID_INPUT, "알람 발화 이벤트 식별자가 올바르지 않습니다.")
+    }
+
+    private fun canonicalOccurrenceId(value: String?): String? {
+        if (value == null) return null
+        val canonical = value.trim()
+        if (canonical !in SUPPORTED_OCCURRENCE_IDS || canonical != value) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "출발 알람 occurrenceId가 올바르지 않습니다.")
+        }
+        return canonical
+    }
+
+    private fun currentTriggerMatches(
+        state: com.noLate.schedule.domain.DepartureAlarmSyncState,
+        occurrenceId: String?,
+        sourceTriggerAt: Instant,
+    ): Boolean {
+        if (occurrenceId == null) return state.triggerAt == sourceTriggerAt
+        if (
+            state.alarmPlanSchemaVersion != DEPARTURE_ALARM_PLAN_SCHEMA_VERSION ||
+            state.alarmOccurrencesJson == null
+        ) {
+            return false
+        }
+        val occurrence = runCatching {
+            DepartureAlarmPlanCodec.decode(requireNotNull(state.alarmOccurrencesJson))
+                .occurrence(occurrenceId)
+        }.getOrNull() ?: return false
+        return occurrence.triggerInstant() == sourceTriggerAt
     }
 
     private fun requireValidIdentity(
@@ -314,6 +355,7 @@ class DepartureAlarmFireEventService(
         const val MAX_LATE_FIRE_SECONDS = 24 * 60 * 60L
         const val MAX_FUTURE_SKEW_SECONDS = 5 * 60L
         const val MAX_REPORT_AGE_SECONDS = 30 * 24 * 60 * 60L
+        val SUPPORTED_OCCURRENCE_IDS = setOf("M15", "M10", "M5", "M0")
         val MIN_DATABASE_INSTANT: Instant = Instant.parse("2000-01-01T00:00:00Z")
         val MAX_DATABASE_INSTANT: Instant = Instant.parse("2100-01-01T00:00:00Z")
     }

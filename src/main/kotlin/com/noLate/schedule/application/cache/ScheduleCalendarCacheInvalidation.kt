@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.cache
 
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.application.service.ScheduleShareGrantedEvent
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
@@ -117,30 +118,48 @@ class ScheduleCalendarCacheAudienceResolver(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
 ) {
-    fun resolve(schedule: Schedule): Set<Long> = buildSet {
-        add(schedule.memberId)
+    fun resolve(schedule: Schedule): Set<Long> = resolve(
+        ownerMemberId = schedule.memberId,
+        scheduleId = schedule.id,
+        categoryId = schedule.categoryId,
+        calendarId = schedule.calendarId,
+    )
 
-        schedule.id?.let { scheduleId ->
+    /**
+     * 개인 이동 계획 저장 뒤에는 개인화된 상세 DTO만 남아 있어도 같은 visibility audience를
+     * 계산할 수 있어야 한다. travelPlanParticipants는 해당 조회 경로에서 채워지지 않으므로
+     * DTO의 공통 식별자에서 공유 저장소를 직접 조회한다.
+     */
+    fun resolve(schedule: ScheduleDto): Set<Long> = resolve(
+        ownerMemberId = schedule.ownerMemberId,
+        scheduleId = schedule.id,
+        categoryId = schedule.category.id?.toLongOrNull(),
+        calendarId = schedule.calendarId,
+    )
+
+    private fun resolve(
+        ownerMemberId: Long?,
+        scheduleId: Long?,
+        categoryId: Long?,
+        calendarId: Long?,
+    ): Set<Long> = buildSet {
+        ownerMemberId?.let(::add)
+
+        scheduleId?.let {
             scheduleShareRepository
-                .findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(
-                    scheduleId,
-                    ScheduleShareStatus.ACTIVE,
-                )
+                .findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(it, ScheduleShareStatus.ACTIVE)
                 .forEach { add(it.targetMemberId) }
         }
 
-        schedule.categoryId?.let { categoryId ->
+        categoryId?.let {
             categoryShareRepository
-                .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
-                    categoryId,
-                    ScheduleShareStatus.ACTIVE,
-                )
+                .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(it, ScheduleShareStatus.ACTIVE)
                 .forEach { add(it.targetMemberId) }
         }
 
-        schedule.calendarId?.let { calendarId ->
+        calendarId?.let {
             calendarMemberRepository
-                .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+                .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(it)
                 .forEach { add(it.memberId) }
         }
     }

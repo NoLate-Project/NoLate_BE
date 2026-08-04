@@ -452,6 +452,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         pushConfirmed: Boolean = pushSent,
         pushConfirmedAt: Instant? = null,
         pushUncertain: Boolean = false,
+        nativeAlarmCovered: Boolean = false,
         reminderBoundaryAt: Instant? = null,
         departureReminderStage: ScheduleDepartureReminderStage? = null,
         departureReminderBoundaryAt: Instant? = null,
@@ -485,7 +486,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         retryCount = 0
         failureReason = null
 
-        val notificationHandled = pushConfirmed || pushUncertain
+        val notificationHandled = pushConfirmed || pushUncertain || nativeAlarmCovered
         if (notificationHandled) {
             lastHandledDepartureAt = notifiedDepartureAt
             if (reminderBoundaryAt != null) {

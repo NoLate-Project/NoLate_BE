@@ -18,6 +18,26 @@ class TrafficChangePolicy {
         .ofPattern("HH:mm")
         .withZone(ZoneId.of("Asia/Seoul"))
 
+    /**
+     * Native alarms are scheduled before their boundary and therefore cannot embed a future traffic
+     * delta. Keeping the canonical boundary copy in this policy makes native and visible fallback
+     * wording identical for M15/M10/M5/M0.
+     */
+    fun createCanonicalDepartureReminderMessage(
+        scheduleTitle: String,
+        recommendedDepartureAt: Instant,
+        decision: DepartureReminderDecision,
+        minutesBeforeDeparture: Int,
+    ): SchedulePushMessage = createMessage(
+        scheduleTitle = scheduleTitle,
+        previousTravelMinutes = null,
+        currentTravelMinutes = 1,
+        recommendedDepartureAt = recommendedDepartureAt,
+        decision = decision,
+        alertLeadMinutes = minutesBeforeDeparture.coerceAtLeast(1),
+        reminderMinutesBeforeDeparture = minutesBeforeDeparture,
+    )
+
     fun createMessage(
         scheduleTitle: String,
         previousTravelMinutes: Int?,

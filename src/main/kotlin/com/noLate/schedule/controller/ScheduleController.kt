@@ -171,8 +171,17 @@ class ScheduleController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
         @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+        @RequestHeader(
+            name = "X-NoLate-Notification-Recipient",
+            required = false,
+        ) notificationRecipientMemberId: Long? = null,
     ): ApiResponse<ScheduleDto> {
         val authenticated = requirePrincipal(principal)
+        requireNotificationRecipientFence(
+            authenticated.id,
+            idempotencyKey,
+            notificationRecipientMemberId,
+        )
         val result = scheduleUseCase.markDeparted(
             authenticated.id,
             scheduleId,
@@ -192,8 +201,17 @@ class ScheduleController(
         @AuthenticationPrincipal principal: MemberPrincipal?,
         @PathVariable scheduleId: Long,
         @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+        @RequestHeader(
+            name = "X-NoLate-Notification-Recipient",
+            required = false,
+        ) notificationRecipientMemberId: Long? = null,
     ): ApiResponse<Unit> {
         val authenticated = requirePrincipal(principal)
+        requireNotificationRecipientFence(
+            authenticated.id,
+            idempotencyKey,
+            notificationRecipientMemberId,
+        )
         scheduleUseCase.snoozeDepartureReminder(
             authenticated.id,
             scheduleId,
@@ -202,6 +220,20 @@ class ScheduleController(
                 ?: throw BusinessException(ErrorCode.UNAUTHORIZED),
         )
         return ApiResponse.success(Unit)
+    }
+
+    private fun requireNotificationRecipientFence(
+        authenticatedMemberId: Long,
+        idempotencyKey: String?,
+        notificationRecipientMemberId: Long?,
+    ) {
+        if (
+            (idempotencyKey != null && notificationRecipientMemberId == null) ||
+            (notificationRecipientMemberId != null &&
+                notificationRecipientMemberId != authenticatedMemberId)
+        ) {
+            throw BusinessException(ErrorCode.FORBIDDEN)
+        }
     }
 
     /**

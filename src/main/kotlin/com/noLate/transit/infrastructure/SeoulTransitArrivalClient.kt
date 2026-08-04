@@ -19,6 +19,8 @@ import org.springframework.web.client.RestClient
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.Duration
@@ -48,6 +50,10 @@ class SeoulTransitArrivalClient(
     private val wireMetrics: TransitProviderWireMetrics? = null,
     private val wireRateLimiter: TransitProviderWireRateLimiter = TransitProviderWireRateLimiter(),
 ) {
+    private val normalizedBusApiKey = normalizeDataPortalServiceKey(
+        busApiKey.ifBlank { commonApiKey },
+    )
+
     init {
         validateTransitProviderEndpoint(
             provider = TransitWireProvider.SEOUL_SUBWAY,
@@ -186,9 +192,12 @@ class SeoulTransitArrivalClient(
                 .uri { uriBuilder ->
                     uriBuilder
                         .path("/stationinfo/getStationByUid")
-                        .queryParam("serviceKey", apiKey)
+                        // 공공데이터포털 화면의 Encoding 키도 허용한다. 키를 먼저 decoding
+                        // 형태로 정규화하고 URI variable로 넘겨 '+', '/', '='를 정확히 한 번
+                        // percent-encoding한다.
+                        .queryParam("serviceKey", "{serviceKey}")
                         .queryParam("arsId", arsId)
-                        .build()
+                        .build(apiKey)
                 }
                 .retrieve()
                 .body(String::class.java)
@@ -231,9 +240,9 @@ class SeoulTransitArrivalClient(
                 .uri { uriBuilder ->
                     uriBuilder
                         .path("/stationinfo/getStationByName")
-                        .queryParam("serviceKey", apiKey)
+                        .queryParam("serviceKey", "{serviceKey}")
                         .queryParam("stSrch", stationName)
-                        .build()
+                        .build(apiKey)
                 }
                 .retrieve()
                 .body(String::class.java)
@@ -626,7 +635,7 @@ class SeoulTransitArrivalClient(
 
     private fun subwayKey(): String = subwayApiKey.ifBlank { commonApiKey }
 
-    private fun busKey(): String = busApiKey.ifBlank { commonApiKey }
+    private fun busKey(): String = normalizedBusApiKey
 
     private fun Int.toWaitMinutes(): Int = ceil(this / 60.0).toInt().coerceAtLeast(0)
 
@@ -646,6 +655,13 @@ class SeoulTransitArrivalClient(
             .optionalEnd()
             .toFormatter()
         val SEOUL_ZONE_ID: ZoneId = ZoneId.of("Asia/Seoul")
+
+        fun normalizeDataPortalServiceKey(value: String): String {
+            val trimmed = value.trim()
+            if (!trimmed.contains('%')) return trimmed
+            return runCatching { URLDecoder.decode(trimmed, StandardCharsets.UTF_8) }
+                .getOrDefault(trimmed)
+        }
     }
 }
 

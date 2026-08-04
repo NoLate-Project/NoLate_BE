@@ -413,6 +413,133 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `all-covered alarm boundary advances handling without fabricating visible push success`() {
+        val schedule = schedule(
+            startAt = testNow.plus(60, ChronoUnit.MINUTES),
+            alertMode = ScheduleAlertMode.ALARM,
+        )
+        val recommendedDepartureAt = testNow.plus(15, ChronoUnit.MINUTES)
+        val job = SchedulePushJob.create(
+            memberId = schedule.memberId,
+            scheduleId = requireNotNull(schedule.id),
+            scheduleAt = schedule.startAt,
+            departureAt = recommendedDepartureAt,
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        stubDueJob(job, schedule, travelMinutes = 45)
+        whenever(
+            notificationUseCase.sendToMemberWithNativeAlarmCoverage(
+                any(), any(), any(), any(), any(), any(),
+            )
+        ).thenReturn(
+            NotificationSendResult(
+                requestedCount = 0,
+                nativeAlarmCoveredCount = 2,
+            )
+        )
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMemberWithNativeAlarmCoverage(
+            memberId = eq(schedule.memberId),
+            title = eq("출발 준비하세요"),
+            body = any(),
+            data = check {
+                assertEquals("ADVANCE_NOTICE", it["departureReminderDecision"])
+                assertEquals(testNow.toString(), it["reminderBoundaryAt"])
+                assertEquals("0", it["trafficChangeMinutes"])
+            },
+            inboxDeduplicationKey = any(),
+            nativeAlarmCoverageSelector = check {
+                assertEquals("M15", it.occurrenceId)
+                assertEquals(testNow, it.occurrenceTriggerAt)
+                assertEquals(recommendedDepartureAt, it.recommendedDepartureAt)
+            },
+        )
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+        assertEquals(testNow, job.lastHandledReminderBoundaryAt)
+        assertNull(job.lastReminderBoundaryAt)
+        assertNull(job.lastPushedAt)
+        assertNull(job.lastNotifiedDepartureAt)
+        assertEquals(1, job.checkCount)
+    }
+
+    @Test
+    fun `alarm boundary keeps ETA shift warning visible while measuring native reminder coverage`() {
+        val previousTravelMinutes = 30
+        val currentTravelMinutes = 45
+        val schedule = schedule(
+            startAt = testNow.plus(60, ChronoUnit.MINUTES),
+            alertMode = ScheduleAlertMode.ALARM,
+        )
+        val previousRecommendedDepartureAt =
+            schedule.startAt.minus(previousTravelMinutes.toLong(), ChronoUnit.MINUTES)
+        val currentRecommendedDepartureAt =
+            schedule.startAt.minus(currentTravelMinutes.toLong(), ChronoUnit.MINUTES)
+        val job = SchedulePushJob.create(
+            memberId = schedule.memberId,
+            scheduleId = requireNotNull(schedule.id),
+            scheduleAt = schedule.startAt,
+            departureAt = previousRecommendedDepartureAt,
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        job.startProcessing("previous-worker")
+        job.finishCheck(
+            travelMinutes = previousTravelMinutes,
+            recommendedDepartureAt = previousRecommendedDepartureAt,
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
+            etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
+            now = testNow.minus(1, ChronoUnit.MINUTES),
+        )
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any()))
+            .thenReturn(liveTrafficResult(currentTravelMinutes))
+        whenever(
+            notificationUseCase.sendToMemberWithNativeAlarmCoverage(
+                any(), any(), any(), any(), any(), any(),
+            )
+        ).thenReturn(
+            NotificationSendResult(
+                requestedCount = 1,
+                nativeAlarmCoveredCount = 1,
+                sentCount = 1,
+            )
+        )
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMemberWithNativeAlarmCoverage(
+            memberId = eq(schedule.memberId),
+            title = eq("이동 시간이 늘었어요"),
+            body = check {
+                assertTrue(it.contains("15분 더 걸려요"))
+            },
+            data = check {
+                assertEquals("ADVANCE_NOTICE", it["departureReminderDecision"])
+                assertEquals("15", it["trafficChangeMinutes"])
+                assertEquals("0", it["departureAdvanceMinutes"])
+                assertEquals(currentRecommendedDepartureAt.toString(), it["recommendedDepartureAt"])
+            },
+            inboxDeduplicationKey = any(),
+            nativeAlarmCoverageSelector = check {
+                assertEquals("M15", it.occurrenceId)
+                assertEquals(testNow, it.occurrenceTriggerAt)
+                assertEquals(currentRecommendedDepartureAt, it.recommendedDepartureAt)
+                assertTrue(it.semanticWarningVisible)
+            },
+        )
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
     fun `ODsay 시간표가 계산한 실제 출발시각을 단순 ETA 역산 대신 저장하고 알린다`() {
         val routeJson = """
             {

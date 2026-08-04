@@ -130,12 +130,13 @@ class ProductionSchemaVersionGuard(
             }
         }
 
+        val markerPlaceholders = REQUIRED_SCHEMA_VERSIONS.joinToString(separator = ", ") { "?" }
         val markerCounts = try {
             jdbcTemplate.query(
                 """
                 SELECT version, COUNT(*) AS marker_count
                 FROM application_schema_migrations
-                WHERE version IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                WHERE version IN ($markerPlaceholders)
                 GROUP BY version
                 """.trimIndent(),
                 { resultSet, _ ->
@@ -186,6 +187,10 @@ class ProductionSchemaVersionGuard(
         const val SHARING_SAFETY_SCHEMA_VERSION = "2026-08-01-sharing-safety-v1"
         const val PUSH_DELIVERY_ACK_CAPABILITY_SCHEMA_VERSION =
             "2026-08-01-push-delivery-ack-capability-v1"
+        const val SCHEDULE_ROUTE_OPTIMISTIC_LOCK_SCHEMA_VERSION =
+            "2026-08-04-schedule-route-optimistic-lock-v1"
+        const val DEPARTURE_ALARM_PLAN_V2_SCHEMA_VERSION =
+            "2026-08-04-departure-alarm-plan-v2"
 
         val REQUIRED_SCHEMA_VERSIONS = listOf(
             PUSH_RELIABILITY_SCHEMA_VERSION,
@@ -199,6 +204,8 @@ class ProductionSchemaVersionGuard(
             DEPARTURE_ALARM_SCHEDULE_RECEIPT_SCHEMA_VERSION,
             SHARING_SAFETY_SCHEMA_VERSION,
             PUSH_DELIVERY_ACK_CAPABILITY_SCHEMA_VERSION,
+            SCHEDULE_ROUTE_OPTIMISTIC_LOCK_SCHEMA_VERSION,
+            DEPARTURE_ALARM_PLAN_V2_SCHEMA_VERSION,
         )
     }
 }

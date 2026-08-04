@@ -12,13 +12,16 @@ import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
 import com.sun.net.httpserver.HttpServer
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.net.InetSocketAddress
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class SeoulTransitArrivalClientTest {
     @Test
@@ -239,6 +242,67 @@ class SeoulTransitArrivalClientTest {
             assertEquals(emptyList(), client.getBusArrivals(null, "서울역", "402", 1))
             assertEquals(1, client.getBusArrivals(null, "서울역", "402", 1).size)
             assertEquals(2, stationCalls.get())
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `서울 버스 Encoding 인증키를 decoding 키로 정규화해 정확히 한 번 인코딩한다`() {
+        val stationQuery = AtomicReference<String>()
+        val arrivalQuery = AtomicReference<String>()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/stationinfo/getStationByName") { exchange ->
+                stationQuery.set(exchange.requestURI.rawQuery)
+                val body = """
+                    <ServiceResult>
+                      <msgHeader><headerCd>0</headerCd><headerMsg>OK</headerMsg></msgHeader>
+                      <msgBody><itemList><arsId>02005</arsId></itemList></msgBody>
+                    </ServiceResult>
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }
+            createContext("/stationinfo/getStationByUid") { exchange ->
+                arrivalQuery.set(exchange.requestURI.rawQuery)
+                val body = """
+                    <ServiceResult>
+                      <msgHeader><headerCd>0</headerCd><headerMsg>OK</headerMsg></msgHeader>
+                      <msgBody><itemList>
+                        <rtNm>402</rtNm><stNm>서울역</stNm><arrmsg1>2분 후</arrmsg1><traTime1>120</traTime1>
+                      </itemList></msgBody>
+                    </ServiceResult>
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+                exchange.sendResponseHeaders(200, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            }
+            start()
+        }
+        try {
+            val client = SeoulTransitArrivalClient(
+                commonApiKey = "",
+                subwayApiKey = "",
+                busApiKey = "decoded%2Bkey%2Fwith%3D%3D",
+                subwayBaseUrl = "http://127.0.0.1:${server.address.port}",
+                busBaseUrl = "http://127.0.0.1:${server.address.port}",
+            )
+
+            val arrivals = client.getBusArrivals(
+                arsId = null,
+                stationName = "서울역",
+                routeName = "402",
+                limit = 1,
+            )
+
+            assertEquals(1, arrivals.size)
+            listOf(requireNotNull(stationQuery.get()), requireNotNull(arrivalQuery.get())).forEach { query ->
+                val encodedKey = query.substringAfter("serviceKey=").substringBefore('&')
+                assertTrue(!encodedKey.contains("%25", ignoreCase = true))
+                assertEquals(
+                    "decoded+key/with==",
+                    URLDecoder.decode(encodedKey, StandardCharsets.UTF_8),
+                )
+            }
         } finally {
             server.stop(0)
         }

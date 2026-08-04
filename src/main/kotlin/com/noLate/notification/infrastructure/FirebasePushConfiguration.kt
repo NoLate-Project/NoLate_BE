@@ -16,7 +16,9 @@ import com.google.firebase.messaging.Notification
 import com.noLate.notification.application.InvalidPushTokenException
 import com.noLate.notification.application.ConfirmedPushDeliveryException
 import com.noLate.notification.application.PushClient
+import com.noLate.notification.application.PushPayloadRejectedException
 import com.noLate.notification.application.PushSendResult
+import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.properties.ConfigurationProperties
@@ -25,9 +27,14 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import java.io.FileInputStream
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 
 private const val ANDROID_CHANNEL_ID = "schedule-push"
 private const val SCHEDULE_DEPART_NOW_CATEGORY = "schedule_depart_now"
+private const val ETA_EVENT_EXPIRES_AT_KEY = "etaEventExpiresAt"
+private val MAX_ANDROID_MESSAGE_TTL_MILLIS = Duration.ofDays(28).toMillis()
 /**
  * firebase-admin 9.8.0 `ApiClientUtils.DEFAULT_RETRY_CONFIG` contract.
  *
@@ -94,12 +101,13 @@ class FirebasePushConfiguration {
         FirebaseMessaging.getInstance(firebaseApp)
 
     @Bean
-    fun firebasePushClient(firebaseMessaging: FirebaseMessaging): PushClient =
-        FirebasePushClient(firebaseMessaging)
+    fun firebasePushClient(firebaseMessaging: FirebaseMessaging, clock: Clock): PushClient =
+        FirebasePushClient(firebaseMessaging, clock)
 }
 
 internal class FirebasePushClient(
     private val firebaseMessaging: FirebaseMessaging,
+    private val clock: Clock = Clock.systemUTC(),
 ) : PushClient {
     override fun sendToToken(
         token: String,
@@ -150,22 +158,84 @@ internal class FirebasePushClient(
         }
 
         val scheduleReminderAction = data.isScheduleDepartureReminder()
+        val deliveryControls = createStandardVisibleDeliveryControls(data)
         return Message.builder()
             .setToken(token)
             .setNotification(Notification.builder().setTitle(title).setBody(body).build())
-            .setAndroidConfig(createStandardAndroidConfig())
-            .setApnsConfig(createStandardApnsConfig(title, body, scheduleReminderAction))
+            .setAndroidConfig(createStandardAndroidConfig(deliveryControls))
+            .setApnsConfig(
+                createStandardApnsConfig(
+                    title,
+                    body,
+                    scheduleReminderAction,
+                    deliveryControls,
+                )
+            )
             .putAllData(data.withNotificationActionCategory(scheduleReminderAction))
             .build()
     }
 
-    private fun createStandardAndroidConfig(): AndroidConfig =
+    private fun createStandardVisibleDeliveryControls(
+        data: Map<String, String>,
+    ): StandardVisibleDeliveryControls {
+        val stableIdentifier = data["logicalEventKey"]
+            ?.takeIf(String::isNotBlank)
+            ?.let(OpaquePushIdentifier::fingerprint)
+        val rawExpiresAt = data[ETA_EVENT_EXPIRES_AT_KEY]
+            ?: return StandardVisibleDeliveryControls(stableIdentifier = stableIdentifier)
+        val expiresAt = runCatching { Instant.parse(rawExpiresAt) }
+            .getOrElse {
+                throw PushPayloadRejectedException(
+                    "ETA push expiration is not a valid Instant.",
+                )
+            }
+        val now = Instant.now(clock)
+        if (!expiresAt.isAfter(now)) {
+            throw PushPayloadRejectedException(
+                "ETA push expired before provider dispatch.",
+            )
+        }
+        val androidTtlMillis = runCatching {
+            Duration.between(now, expiresAt).toMillis()
+        }.getOrElse {
+            throw PushPayloadRejectedException(
+                "ETA push expiration exceeds the provider duration range.",
+            )
+        }
+        if (androidTtlMillis <= 0L || androidTtlMillis > MAX_ANDROID_MESSAGE_TTL_MILLIS) {
+            throw PushPayloadRejectedException(
+                "ETA push expiration is outside the provider TTL range.",
+            )
+        }
+        return StandardVisibleDeliveryControls(
+            stableIdentifier = stableIdentifier,
+            expiresAt = expiresAt,
+            androidTtlMillis = androidTtlMillis,
+        )
+    }
+
+    private fun createStandardAndroidConfig(
+        deliveryControls: StandardVisibleDeliveryControls,
+    ): AndroidConfig =
         AndroidConfig.builder()
             .setPriority(AndroidConfig.Priority.HIGH)
+            .apply {
+                deliveryControls.stableIdentifier?.let {
+                    setCollapseKey(it)
+                }
+                deliveryControls.androidTtlMillis?.let {
+                    setTtl(it)
+                }
+            }
             .setNotification(
                 AndroidNotification.builder()
                     .setChannelId(ANDROID_CHANNEL_ID)
                     .setSound("default")
+                    .apply {
+                        deliveryControls.stableIdentifier?.let {
+                            setTag(it)
+                        }
+                    }
                     .build()
             )
             .build()
@@ -179,10 +249,19 @@ internal class FirebasePushClient(
         title: String,
         body: String,
         scheduleReminderAction: Boolean,
+        deliveryControls: StandardVisibleDeliveryControls,
     ): ApnsConfig =
         ApnsConfig.builder()
             .putHeader("apns-push-type", "alert")
             .putHeader("apns-priority", "10")
+            .apply {
+                deliveryControls.stableIdentifier?.let {
+                    putHeader("apns-collapse-id", it)
+                }
+                deliveryControls.expiresAt?.let {
+                    putHeader("apns-expiration", it.epochSecond.toString())
+                }
+            }
             .setAps(
                 Aps.builder()
                     .apply {
@@ -213,6 +292,12 @@ internal class FirebasePushClient(
             )
             .build()
 }
+
+private data class StandardVisibleDeliveryControls(
+    val stableIdentifier: String? = null,
+    val expiresAt: Instant? = null,
+    val androidTtlMillis: Long? = null,
+)
 
 private fun Map<String, String>.isScheduleDepartureReminder(): Boolean =
     this["type"] == "SCHEDULE_DEPARTURE_REMINDER" &&

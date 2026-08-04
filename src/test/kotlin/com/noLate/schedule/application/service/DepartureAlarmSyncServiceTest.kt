@@ -1,11 +1,15 @@
 package com.noLate.schedule.application.service
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.DepartureAlarmSyncOperation
+import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
+import com.noLate.schedule.domain.DepartureAlarmPlanCodec
 import com.noLate.schedule.domain.DepartureAlarmSyncState
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
+import com.noLate.notification.domain.withPushAccountBinding
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -85,6 +89,9 @@ class DepartureAlarmSyncServiceTest {
 
         assertThat(result?.operation).isEqualTo(DepartureAlarmSyncOperation.CANCEL)
         assertThat(result?.generation).isEqualTo(1L)
+        assertThat(result?.validationRevision).isZero()
+        assertThat(state.generation).isEqualTo(1L)
+        assertThat(state.validationRevision).isZero()
         assertThat(state.triggerAt).isNull()
     }
 
@@ -104,6 +111,7 @@ class DepartureAlarmSyncServiceTest {
 
         assertThat(result).isNull()
         assertThat(state.generation).isZero()
+        assertThat(state.validationRevision).isZero()
         assertThat(state.triggerAt).isEqualTo(now.minusSeconds(1))
         verify(repository, never()).saveAndFlush(any<DepartureAlarmSyncState>())
     }
@@ -180,6 +188,59 @@ class DepartureAlarmSyncServiceTest {
     }
 
     @Test
+    fun `stale validation for a distant unchanged plan is reissued as a new generation`() {
+        val departureAt = now.plusSeconds(2 * 24 * 60 * 60L)
+        val state = planState(
+            departureAt = departureAt,
+            validationRequestedAt = now.minusSeconds(13 * 60 * 60L),
+        )
+        whenever(repository.findByMemberIdAndScheduleIdForUpdate(7L, 41L)).thenReturn(state)
+
+        val result = service.synchronizeConfigured(
+            memberId = 7L,
+            scheduleId = 41L,
+            notificationEnabled = true,
+            alertMode = ScheduleAlertMode.ALARM,
+            triggerAt = departureAt,
+            scheduleTitle = "회의",
+        )
+
+        assertThat(result?.generation).isZero()
+        assertThat(result?.validationRevision).isEqualTo(1L)
+        assertThat(state.generation).isZero()
+        assertThat(state.validationRevision).isEqualTo(1L)
+        assertThat(state.validationRequestedAt).isEqualTo(now)
+        verify(repository).saveAndFlush(state)
+        verify(eventPublisher).publishEvent(any<DepartureAlarmSyncStateChangedEvent>())
+    }
+
+    @Test
+    fun `stale validation is not reissued when the next occurrence is inside delivery safety lead`() {
+        val departureAt = now.plusSeconds(20 * 60L)
+        val previousValidation = now.minusSeconds(13 * 60 * 60L)
+        val state = planState(
+            departureAt = departureAt,
+            validationRequestedAt = previousValidation,
+        )
+        whenever(repository.findByMemberIdAndScheduleIdForUpdate(7L, 41L)).thenReturn(state)
+
+        val result = service.synchronizeConfigured(
+            memberId = 7L,
+            scheduleId = 41L,
+            notificationEnabled = true,
+            alertMode = ScheduleAlertMode.ALARM,
+            triggerAt = departureAt,
+            scheduleTitle = "회의",
+        )
+
+        assertThat(result).isNull()
+        assertThat(state.generation).isZero()
+        assertThat(state.validationRequestedAt).isEqualTo(previousValidation)
+        verify(repository, never()).saveAndFlush(state)
+        verify(eventPublisher, never()).publishEvent(any<Any>())
+    }
+
+    @Test
     fun `client command serializes every identifier time and generation as strings`() {
         val state = state(triggerAt = now.plusSeconds(600))
         val command = DepartureAlarmSyncCommand(
@@ -204,11 +265,48 @@ class DepartureAlarmSyncServiceTest {
                 "alarmId" to "schedule:41:member:7",
                 "scheduleId" to "41",
                 "alarmGeneration" to "0",
+                "alarmValidationRevision" to "0",
                 "alarmTriggerAt" to "2026-07-29T03:10:00Z",
                 "alarmTitle" to "회의",
                 "snoozeMinutes" to "5",
             )
         )
+    }
+
+    @Test
+    fun `maximum Korean schedule title keeps the exact provider-bound plan below safety budget`() {
+        val memberId = Long.MAX_VALUE
+        val scheduleId = Long.MAX_VALUE
+        val plan = DepartureAlarmPlanFactory().create(
+            memberId = memberId,
+            scheduleId = scheduleId,
+            recommendedDepartureAt = Instant.parse("2099-12-31T23:59:59.999999999Z"),
+            scheduleTitle = "가".repeat(100),
+        )
+        val command = DepartureAlarmSyncCommand(
+            stateId = Long.MAX_VALUE,
+            memberId = memberId,
+            scheduleId = scheduleId,
+            alarmId = "schedule:$scheduleId:member:$memberId",
+            generation = 9_007_199_254_740_991L,
+            operation = DepartureAlarmSyncOperation.UPSERT,
+            triggerAt = plan.departureOccurrence().triggerInstant(),
+            title = plan.departureOccurrence().title,
+            snoozeMinutes = 60,
+            fingerprint = "f".repeat(64),
+            validationRevision = 9_007_199_254_740_991L,
+            alarmPlanSchemaVersion = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION,
+            alarmOccurrencesJson = DepartureAlarmPlanCodec.encode(plan),
+        )
+        val providerData = command.toOutboxData().withPushAccountBinding(
+            logicalEventKey = "key:" + "f".repeat(64),
+            recipientMemberId = memberId,
+        )
+
+        assertThat(
+            jacksonObjectMapper().writeValueAsBytes(mapOf("data" to providerData)).size
+        ).isLessThanOrEqualTo(3_200)
+        assertThat(plan.occurrences).hasSize(4)
     }
 
     @Test
@@ -244,4 +342,31 @@ class DepartureAlarmSyncServiceTest {
                 set(it, 99L)
             }
         }
+
+    private fun planState(
+        departureAt: Instant,
+        validationRequestedAt: Instant,
+    ): DepartureAlarmSyncState {
+        val plan = DepartureAlarmPlanFactory().create(
+            memberId = 7L,
+            scheduleId = 41L,
+            recommendedDepartureAt = departureAt,
+            scheduleTitle = "회의",
+        )
+        return DepartureAlarmSyncState.createUpsert(
+            memberId = 7L,
+            scheduleId = 41L,
+            triggerAt = plan.departureOccurrence().triggerInstant(),
+            title = plan.departureOccurrence().title,
+            snoozeMinutes = 5,
+            alarmPlanSchemaVersion = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION,
+            alarmOccurrencesJson = DepartureAlarmPlanCodec.encode(plan),
+            validationRequestedAt = validationRequestedAt,
+        ).also {
+            DepartureAlarmSyncState::class.java.getDeclaredField("id").apply {
+                isAccessible = true
+                set(it, 99L)
+            }
+        }
+    }
 }

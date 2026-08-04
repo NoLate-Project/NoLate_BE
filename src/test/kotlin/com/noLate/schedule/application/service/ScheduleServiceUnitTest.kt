@@ -32,6 +32,7 @@ import com.noLate.subscription.application.SubscriptionPolicyService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -291,6 +292,149 @@ class ScheduleServiceUnitTest {
 
         assertEquals(ScheduleAlertMode.ALARM, existing.route?.alertMode)
         assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
+    }
+
+    @Test
+    fun `stale schedule update preserves confirmed coordinates for the same destination`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val existing = scheduleEntity(id = scheduleId, memberId = memberId).apply {
+            route?.destinationName = "강남역"
+            route?.destinationAddress = "서울 강남구 강남대로 지하 396"
+            route?.destinationLat = 37.49812971
+            route?.destinationLng = 127.02868505
+        }
+        val staleUpdate = scheduleDto(title = "좌표 보강 전에 열어 둔 일정").copy(
+            destination = SchedulePlaceDto(
+                name = "강남역[2호선] 2번 출구",
+                address = "서울 강남구 강남대로 지하 396",
+                lat = null,
+                lng = null,
+            ),
+        )
+
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)).thenReturn(existing)
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        val result = scheduleService.updateSchedule(memberId, scheduleId, staleUpdate)
+
+        assertEquals(37.49812971, existing.route?.destinationLat)
+        assertEquals(127.02868505, existing.route?.destinationLng)
+        assertEquals(37.49812971, result.destination?.lat)
+        assertEquals(127.02868505, result.destination?.lng)
+    }
+
+    @Test
+    fun `schedule update does not inherit coordinates when destination changed`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val existing = scheduleEntity(id = scheduleId, memberId = memberId).apply {
+            route?.destinationName = "강남역"
+            route?.destinationAddress = "서울 강남구 강남대로 지하 396"
+            route?.destinationLat = 37.49812971
+            route?.destinationLng = 127.02868505
+        }
+        val changedDestination = scheduleDto().copy(
+            destination = SchedulePlaceDto(name = "역삼역", lat = null, lng = null),
+        )
+
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)).thenReturn(existing)
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        scheduleService.updateSchedule(memberId, scheduleId, changedDestination)
+
+        assertEquals("역삼역", existing.route?.destinationName)
+        assertNull(existing.route?.destinationLat)
+        assertNull(existing.route?.destinationLng)
+    }
+
+    @Test
+    fun `stale schedule update does not preserve coordinates for the same name at another address`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val existing = scheduleEntity(id = scheduleId, memberId = memberId).apply {
+            route?.destinationName = "우리집"
+            route?.destinationAddress = "서울특별시 마포구 월드컵북로 1"
+            route?.destinationLat = 37.566
+            route?.destinationLng = 126.901
+        }
+        val anotherHome = scheduleDto().copy(
+            destination = SchedulePlaceDto(
+                name = "우리집",
+                address = "부산광역시 해운대구 해운대해변로 1",
+                lat = null,
+                lng = null,
+            ),
+        )
+
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)).thenReturn(existing)
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        scheduleService.updateSchedule(memberId, scheduleId, anotherHome)
+
+        assertEquals("우리집", existing.route?.destinationName)
+        assertEquals("부산광역시 해운대구 해운대해변로 1", existing.route?.destinationAddress)
+        assertNull(existing.route?.destinationLat)
+        assertNull(existing.route?.destinationLng)
+    }
+
+    @Test
+    fun `add schedule rejects a partial destination coordinate pair`() {
+        val invalid = scheduleDto().copy(
+            destination = SchedulePlaceDto(name = "강남역", lat = 37.4979, lng = null),
+            notificationEnabled = false,
+        )
+
+        val error = assertThrows<BusinessException> {
+            scheduleService.addSchedule(1L, invalid)
+        }
+
+        assertEquals(com.noLate.global.error.ErrorCode.INVALID_INPUT, error.errorCode)
+        verify(scheduleRepository, never()).save(any<Schedule>())
+    }
+
+    @Test
+    fun `update schedule rejects non finite coordinates without mutating the saved route`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val existing = scheduleEntity(id = scheduleId, memberId = memberId)
+        val invalid = scheduleDto().copy(
+            destination = SchedulePlaceDto(
+                name = "강남역",
+                lat = Double.NaN,
+                lng = 127.0276,
+            ),
+            notificationEnabled = false,
+        )
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)).thenReturn(existing)
+
+        val error = assertThrows<BusinessException> {
+            scheduleService.updateSchedule(memberId, scheduleId, invalid)
+        }
+
+        assertEquals(com.noLate.global.error.ErrorCode.INVALID_INPUT, error.errorCode)
+        assertEquals(37.2, existing.route?.destinationLat)
+        assertEquals(127.2, existing.route?.destinationLng)
+        verify(scheduleRepository, never()).save(existing)
+    }
+
+    @Test
+    fun `update schedule rejects out of range origin coordinates`() {
+        val memberId = 1L
+        val scheduleId = 10L
+        val existing = scheduleEntity(id = scheduleId, memberId = memberId)
+        val invalid = scheduleDto().copy(
+            origin = SchedulePlaceDto(name = "출발지", lat = 91.0, lng = 127.0),
+            notificationEnabled = false,
+        )
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, memberId)).thenReturn(existing)
+
+        val error = assertThrows<BusinessException> {
+            scheduleService.updateSchedule(memberId, scheduleId, invalid)
+        }
+
+        assertEquals(com.noLate.global.error.ErrorCode.INVALID_INPUT, error.errorCode)
+        verify(scheduleRepository, never()).save(existing)
     }
 
     @Test

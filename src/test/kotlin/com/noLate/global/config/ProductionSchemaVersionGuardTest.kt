@@ -74,6 +74,31 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
+    fun `schedule route optimistic lock migration is required before production startup`() {
+        val migration = Files.readString(
+            Path.of("docs/schedule/migrations/2026-08-04-schedule-route-optimistic-lock.sql"),
+        )
+        val ddl = migration.indexOf("ALTER TABLE schedule_routes ADD COLUMN version BIGINT")
+        val postcondition = migration.indexOf("CALL assert_schedule_route_version_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(ddl >= 0)
+        assertTrue(postcondition > ddl)
+        assertTrue(marker > postcondition)
+        assertTrue(
+            migration.contains(
+                ProductionSchemaVersionGuard.SCHEDULE_ROUTE_OPTIMISTIC_LOCK_SCHEMA_VERSION,
+            ),
+        )
+        assertTrue(
+            ProductionSchemaVersionGuard.SCHEDULE_ROUTE_OPTIMISTIC_LOCK_SCHEMA_VERSION in
+                ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS,
+        )
+    }
+
+    @Test
     fun `production refuses automatic Hibernate schema mutation`() {
         val error = assertThrows(IllegalStateException::class.java) {
             guard(markerDatabase(), ddlMode = "update").afterSingletonsInstantiated()
@@ -170,6 +195,23 @@ class ProductionSchemaVersionGuardTest {
     fun `missing one independently deployed marker blocks startup`() {
         val jdbc = markerDatabase()
         val missingMarker = ProductionSchemaVersionGuard.APPLE_TOKEN_LIFECYCLE_SCHEMA_VERSION
+        insertMarkers(
+            jdbc,
+            ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS - missingMarker,
+        )
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            guard(jdbc).afterSingletonsInstantiated()
+        }
+
+        assertTrue(error.message!!.contains(missingMarker))
+    }
+
+    @Test
+    fun `missing schedule route lock marker blocks startup even if all earlier markers exist`() {
+        val jdbc = markerDatabase()
+        val missingMarker =
+            ProductionSchemaVersionGuard.SCHEDULE_ROUTE_OPTIMISTIC_LOCK_SCHEMA_VERSION
         insertMarkers(
             jdbc,
             ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS - missingMarker,

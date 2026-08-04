@@ -75,6 +75,16 @@ class DepartureAlarmScheduleReceipt(
     @Column(name = "device_fingerprint", nullable = false, length = 64)
     val deviceFingerprint: String,
 
+    /**
+     * Receipt 수신 시 서버가 잠근 token ownership snapshot이다. null은 이 계약 도입 전
+     * legacy row이며 native alarm coverage 근거로 사용할 수 없다.
+     */
+    @Column(name = "device_token_id")
+    val deviceTokenId: Long? = null,
+
+    @Column(name = "token_ownership_version")
+    val tokenOwnershipVersion: Long? = null,
+
     @Column(name = "command_receipt_key", nullable = false, length = 64)
     val commandReceiptKey: String,
 
@@ -104,6 +114,12 @@ class DepartureAlarmScheduleReceipt(
 
     @Column(name = "trigger_at")
     val triggerAt: Instant?,
+
+    @Column(name = "occurrence_id", length = 16)
+    val occurrenceId: String? = null,
+
+    @Column(name = "mutation_sequence")
+    val mutationSequence: Long? = null,
 
     @Enumerated(EnumType.STRING)
     @Column(name = "outcome", nullable = false, length = 16)
@@ -138,6 +154,11 @@ class DepartureAlarmScheduleReceipt(
 ) {
     init {
         require(memberId > 0 && scheduleId > 0)
+        require((deviceTokenId == null) == (tokenOwnershipVersion == null))
+        deviceTokenId?.let { require(it > 0) }
+        tokenOwnershipVersion?.let { require(it >= 0) }
+        require((occurrenceId == null) == (mutationSequence == null))
+        mutationSequence?.let { require(it > 0) }
         require(generation in 0..desiredGenerationAtReceipt)
         require(
             (generationRelation == DepartureAlarmGenerationRelation.CURRENT &&
@@ -174,6 +195,7 @@ class DepartureAlarmScheduleReceipt(
         generationRelation = DepartureAlarmGenerationRelation.CURRENT,
         operation = DepartureAlarmSyncOperation.UPSERT,
         triggerAt = Instant.EPOCH,
+        occurrenceId = null,
         outcome = DepartureAlarmScheduleOutcome.SCHEDULED,
         applied = true,
         scheduled = true,

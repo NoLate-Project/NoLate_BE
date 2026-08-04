@@ -8,6 +8,8 @@ import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleTravelMode
+import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
+import com.noLate.schedule.domain.ScheduleTravelPlanStatus
 import com.noLate.schedule.domain.ScheduleTravelPlanUpsertCommand
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
@@ -27,6 +29,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestPropertySource
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
+import jakarta.persistence.EntityManager
 import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -54,10 +57,81 @@ class ScheduleTravelPlanConcurrencyIntegrationTest @Autowired constructor(
     private val scheduleRepository: ScheduleRepository,
     private val shareRepository: ScheduleShareRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
+    private val entityManager: EntityManager,
 ) {
 
     @MockBean
     lateinit var subscriptionPolicyService: SubscriptionPolicyService
+
+    @Test
+    fun `owner destination supplement persists common coordinates and ready plan in one transaction`() {
+        val suffix = System.nanoTime()
+        val owner = memberRepository.saveAndFlush(
+            Member(name = "Owner", password = "Password1!", email = "coordinate-owner-$suffix@example.com")
+        )
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = requireNotNull(owner.id),
+                title = "강남역 이름만 저장된 일정",
+                startAt = Instant.parse("2026-08-05T01:00:00Z"),
+                endAt = Instant.parse("2026-08-05T02:00:00Z"),
+            ).apply {
+                updateCategorySnapshot("1", "개인", "#2979FF")
+                updateRoute(
+                    travelMinutes = null,
+                    departAt = null,
+                    departedAt = null,
+                    travelMode = null,
+                    locationName = "강남역",
+                    originName = null,
+                    originAddress = null,
+                    originLat = null,
+                    originLng = null,
+                    destinationName = "강남역",
+                    destinationAddress = null,
+                    destinationLat = null,
+                    destinationLng = null,
+                    routeJson = null,
+                    notificationEnabled = false,
+                    notificationLeadMinutes = null,
+                    notificationIntervalMinutes = null,
+                )
+            }
+        )
+        val scheduleId = requireNotNull(schedule.id)
+
+        val result = service.upsertMyTravelPlan(
+            memberId = requireNotNull(owner.id),
+            scheduleId = scheduleId,
+            command = command(31).copy(
+                // TMAP `강남역` POI 검색의 실제 첫 결과 형식과 접근 좌표다.
+                destinationName = "강남역[2호선]",
+                destinationAddress = "서울 강남구 강남대로 지하 396",
+                destinationLat = 37.49812971,
+                destinationLng = 127.02868505,
+            ),
+        )
+
+        entityManager.flush()
+        entityManager.clear()
+        val persistedSchedule = scheduleRepository.findById(scheduleId).orElseThrow()
+        val persistedRoute = requireNotNull(persistedSchedule.route)
+        val persistedPlan = requireNotNull(
+            travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(
+                scheduleId,
+                requireNotNull(owner.id),
+            )
+        )
+        assertEquals(ScheduleTravelPlanStatus.READY, result.status)
+        assertEquals("강남역", persistedRoute.destinationName)
+        assertEquals(null, persistedRoute.destinationAddress)
+        assertEquals(37.49812971, persistedRoute.destinationLat)
+        assertEquals(127.02868505, persistedRoute.destinationLng)
+        assertEquals(null, persistedRoute.originName)
+        assertEquals(null, persistedRoute.routeJson)
+        assertEquals(false, persistedRoute.notificationEnabled)
+        assertTrue(ScheduleTravelPlanFingerprint.matches(persistedPlan, persistedSchedule))
+    }
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)

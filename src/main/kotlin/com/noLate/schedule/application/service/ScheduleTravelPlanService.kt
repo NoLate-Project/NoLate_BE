@@ -24,6 +24,8 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import com.noLate.subscription.application.SubscriptionPolicyService
+import jakarta.persistence.EntityManager
+import jakarta.persistence.LockModeType
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -42,6 +44,7 @@ class ScheduleTravelPlanService(
     private val memberRepository: MemberRepository,
     private val subscriptionPolicyService: SubscriptionPolicyService,
     private val objectMapper: ObjectMapper,
+    private val entityManager: EntityManager,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
     private val routeSetupReminderPolicy: RouteSetupReminderPolicy? = null,
     private val clock: Clock = Clock.systemUTC(),
@@ -51,9 +54,11 @@ class ScheduleTravelPlanService(
     /**
      * 현재 로그인 사용자의 계획만 생성하거나 교체한다.
      *
-     * 접근 가능 여부를 먼저 확인한 다음 schedule row를 비관적 잠금한다. 최초 저장 시에는 잠글
-     * plan row가 아직 없기 때문에 이 순서가 필요하다. 잠금 안에서 기존 행을 다시 조회하고
-     * `(schedule_id, member_id)` 유일키까지 적용해 중복 생성과 lost update를 함께 방지한다.
+     * 권한 없는 사용자가 임의 schedule row를 잠그지 못하도록 visibility를 먼저 확인한다.
+     * 최초 저장 시에는 잠글 plan row가 아직 없으므로 그다음 항상 존재하는 schedule row를
+     * 비관적 잠금하고, route까지 current read로 refresh한다. 이 refresh가 선행 visibility
+     * 조회의 MySQL REPEATABLE READ snapshot에 의한 좌표/경로 덮어쓰기를 막는다.
+     * `(schedule_id, member_id)` 유일키는 마지막 방어선으로 유지한다.
      */
     @Transactional
     fun upsertMyTravelPlan(
@@ -64,11 +69,22 @@ class ScheduleTravelPlanService(
         findVisibleSchedule(memberId, scheduleId)
         val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
-        scheduleAccessPolicy?.resolve(memberId, schedule)?.let { access ->
+        refreshLockedSchedule(schedule)
+        val access = scheduleAccessPolicy?.resolve(memberId, schedule)
+        access?.let {
+            if (!access.canView) {
+                throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+            }
             if (!access.travelEnabled) {
                 throw BusinessException(ErrorCode.FORBIDDEN, "이 일정은 이동 기능을 공유하지 않습니다.")
             }
         }
+        supplementCommonDestinationCoordinates(
+            memberId = memberId,
+            schedule = schedule,
+            command = command,
+            canEditCommonDestination = access?.canEdit ?: canViewAllTravelPlans(memberId, schedule),
+        )
 
         return upsertLocked(
             memberId = memberId,
@@ -94,7 +110,7 @@ class ScheduleTravelPlanService(
         if (!hasPersonalRoute(scheduleDto)) {
             // 기존 평탄형 경로를 삭제한 경우 호환 row도 함께 비활성화해야 다음 조회에서
             // 삭제 전 개인 경로가 다시 일정 필드로 투영되지 않는다.
-            travelPlanRepository.findByScheduleIdAndMemberId(scheduleId, memberId)?.softDelete()
+            travelPlanRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)?.softDelete()
             return null
         }
 
@@ -106,6 +122,10 @@ class ScheduleTravelPlanService(
             originAddress = scheduleDto.origin?.address,
             originLat = scheduleDto.origin?.lat,
             originLng = scheduleDto.origin?.lng,
+            destinationName = scheduleDto.destination?.name,
+            destinationAddress = scheduleDto.destination?.address,
+            destinationLat = scheduleDto.destination?.lat,
+            destinationLng = scheduleDto.destination?.lng,
             routeJson = scheduleDto.route?.toString(),
             notificationEnabled = scheduleDto.notificationEnabled == true,
             notificationLeadMinutes = scheduleDto.notificationLeadMinutes,
@@ -417,7 +437,7 @@ class ScheduleTravelPlanService(
     ): ScheduleTravelPlanDto {
         validateCommand(command, schedule, requireCompleteRoute)
         val scheduleId = requireNotNull(schedule.id)
-        val existing = travelPlanRepository.findByScheduleIdAndMemberId(scheduleId, memberId)
+        val existing = travelPlanRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
         val wasNotificationEnabled = existing?.takeUnless { it.deleted }?.notificationEnabled == true
         val normalizedNotification = normalizeNotification(
             memberId = memberId,
@@ -454,10 +474,17 @@ class ScheduleTravelPlanService(
                 throw BusinessException(ErrorCode.INVALID_INPUT, "travelMinutes는 1~1440분이어야 합니다.")
             }
         }
-        if ((command.originLat == null) != (command.originLng == null)) {
-            throw BusinessException(ErrorCode.INVALID_INPUT, "출발지 위도와 경도는 함께 입력해야 합니다.")
-        }
+        ScheduleCoordinateValidator.validateOptional(
+            fieldLabel = "출발지",
+            lat = command.originLat,
+            lng = command.originLng,
+        )
         val destination = schedule.route
+        ScheduleCoordinateValidator.validateOptional(
+            fieldLabel = "공통 도착지",
+            lat = destination?.destinationLat,
+            lng = destination?.destinationLng,
+        )
         if (
             requireCompleteRoute &&
             (
@@ -485,6 +512,125 @@ class ScheduleTravelPlanService(
         }
     }
 
+    /**
+     * 빠른 일정은 공통 목적지 이름만 먼저 저장할 수 있다. 이후 오너 또는 에디터가 실제 경로를
+     * 선택하면 개인 계획 요청에 포함된 동일 목적지 좌표로 비어 있는 공통 좌표만 보강한다.
+     *
+     * 공통 목적지의 이름과 주소는 이 경계에서 절대 변경하지 않는다. 기존 의미와 일치하는
+     * 식별자가 없거나, 권한 없는 참가자가 공유 좌표를 쓰려는 요청은 거부한다. schedule row는
+     * 호출자가 이미 비관적 잠금했으므로 동시에 들어온 보강도 한 좌표 쌍으로 직렬화된다.
+     */
+    private fun supplementCommonDestinationCoordinates(
+        memberId: Long,
+        schedule: Schedule,
+        command: ScheduleTravelPlanUpsertCommand,
+        canEditCommonDestination: Boolean,
+    ) {
+        if (!command.hasDestinationCandidate()) return
+
+        val destination = schedule.route
+            ?: throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                "좌표를 보강할 기존 공통 도착지가 없습니다.",
+            )
+        val candidateCoordinates = command.requireValidDestinationCoordinates()
+        val hasLatitude = destination.destinationLat != null
+        val hasLongitude = destination.destinationLng != null
+        // 이미 확정된 공통 좌표는 절대 덮어쓰지 않는다. 다만 새 클라이언트가 목적지 좌표를
+        // 보냈다면 개인 routeJson/travelMinutes가 전혀 다른 장소 기준으로 섞이지 않도록
+        // provider 표기명이 아니라 실제 좌표 간 거리를 검증한다.
+        if (hasLatitude && hasLongitude) {
+            val distanceMeters = haversineMeters(
+                firstLat = requireNotNull(destination.destinationLat),
+                firstLng = requireNotNull(destination.destinationLng),
+                secondLat = candidateCoordinates.lat,
+                secondLng = candidateCoordinates.lng,
+            )
+            if (!distanceMeters.isFinite() || distanceMeters > DESTINATION_MATCH_RADIUS_METERS) {
+                throw BusinessException(
+                    ErrorCode.INVALID_INPUT,
+                    "선택한 도착지가 일정의 공통 도착지에서 너무 멉니다. 일정을 다시 확인해 주세요.",
+                )
+            }
+            return
+        }
+        if (hasLatitude != hasLongitude) {
+            throw BusinessException(
+                ErrorCode.INVALID_STATE,
+                "공통 도착지 좌표가 부분적으로만 저장되어 있습니다. 일정 편집에서 장소를 다시 저장해 주세요.",
+            )
+        }
+        if (!canEditCommonDestination) {
+            throw BusinessException(
+                ErrorCode.FORBIDDEN,
+                "공통 도착지 좌표를 보강할 권한이 없습니다.",
+            )
+        }
+
+        if (
+            !ScheduleDestinationIdentity.matches(
+                firstName = destination.destinationName,
+                firstAddress = destination.destinationAddress,
+                secondName = command.destinationName,
+                secondAddress = command.destinationAddress,
+            )
+        ) {
+            throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                "선택한 도착지가 일정의 공통 도착지와 일치하지 않습니다.",
+            )
+        }
+
+        val scheduleId = requireNotNull(schedule.id)
+        val hasAnotherActivePlan = travelPlanRepository
+            .findAllActiveForScheduleUpdate(scheduleId)
+            .any { it.memberId != memberId }
+        if (hasAnotherActivePlan) {
+            throw BusinessException(
+                ErrorCode.INVALID_STATE,
+                "다른 참가자의 이동 계획이 있어 공통 도착지를 여기서 보강할 수 없습니다. 일정 편집을 이용해 주세요.",
+            )
+        }
+
+        destination.destinationLat = candidateCoordinates.lat
+        destination.destinationLng = candidateCoordinates.lng
+    }
+
+    private fun ScheduleTravelPlanUpsertCommand.hasDestinationCandidate(): Boolean =
+        destinationName != null || destinationAddress != null ||
+            destinationLat != null || destinationLng != null
+
+    private fun ScheduleTravelPlanUpsertCommand.requireValidDestinationCoordinates(): DestinationCoordinates {
+        val coordinates = ScheduleCoordinateValidator.validateOptional(
+            fieldLabel = "공통 도착지",
+            lat = destinationLat,
+            lng = destinationLng,
+        ) ?: throw BusinessException(
+            ErrorCode.INVALID_INPUT,
+            "공통 도착지 좌표는 유효한 위도와 경도를 함께 입력해야 합니다.",
+        )
+        return DestinationCoordinates(lat = coordinates.lat, lng = coordinates.lng)
+    }
+
+    private fun haversineMeters(
+        firstLat: Double,
+        firstLng: Double,
+        secondLat: Double,
+        secondLng: Double,
+    ): Double {
+        val latitudeDelta = Math.toRadians(secondLat - firstLat)
+        val longitudeDelta = Math.toRadians(secondLng - firstLng)
+        val firstLatitude = Math.toRadians(firstLat)
+        val secondLatitude = Math.toRadians(secondLat)
+        val haversine =
+            kotlin.math.sin(latitudeDelta / 2).let { it * it } +
+                kotlin.math.cos(firstLatitude) * kotlin.math.cos(secondLatitude) *
+                kotlin.math.sin(longitudeDelta / 2).let { it * it }
+        return 2 * EARTH_RADIUS_METERS * kotlin.math.asin(
+            kotlin.math.sqrt(haversine.coerceIn(0.0, 1.0))
+        )
+    }
+
     private fun normalizeNotification(
         memberId: Long,
         command: ScheduleTravelPlanUpsertCommand,
@@ -510,6 +656,18 @@ class ScheduleTravelPlanService(
             consumesNewQuota = !wasNotificationEnabled,
         )
         return NormalizedNotification(leadMinutes, intervalMinutes)
+    }
+
+    /**
+     * `findVisibleSchedule` 같은 선행 consistent read나 상위 transaction의 persistence context에
+     * 오래된 Schedule이 남아 있어도, schedule lock을 획득한 시점의 committed 원본으로
+     * 되돌린다. route는 별도 1:1 테이블이므로 명시적으로 함께 잠그고 refresh한다.
+     */
+    private fun refreshLockedSchedule(schedule: Schedule) {
+        entityManager.refresh(schedule, LockModeType.PESSIMISTIC_WRITE)
+        schedule.route?.let { route ->
+            entityManager.refresh(route, LockModeType.PESSIMISTIC_WRITE)
+        }
     }
 
     private fun findVisibleSchedule(memberId: Long, scheduleId: Long): Schedule {
@@ -663,3 +821,11 @@ private data class NormalizedNotification(
     val leadMinutes: Int?,
     val intervalMinutes: Int?,
 )
+
+private data class DestinationCoordinates(
+    val lat: Double,
+    val lng: Double,
+)
+
+private const val DESTINATION_MATCH_RADIUS_METERS = 500.0
+private const val EARTH_RADIUS_METERS = 6_371_000.0

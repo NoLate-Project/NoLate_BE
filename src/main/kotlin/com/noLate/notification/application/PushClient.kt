@@ -31,5 +31,13 @@ open class ConfirmedPushDeliveryException(
     cause: Throwable? = null,
 ) : RuntimeException(message, cause)
 
+/**
+ * Immutable payload가 provider 계약을 만족하지 않아 외부 호출 전에 거절된 확정 실패다.
+ * provider가 요청을 보지 않았으므로 delivery를 FAILED로 되돌려 stale/catch-up 경로가
+ * 동일 이벤트를 안전하게 정리할 수 있다.
+ */
+class PushPayloadRejectedException(message: String) :
+    ConfirmedPushDeliveryException(message)
+
 class PushProviderUnavailableException :
     ConfirmedPushDeliveryException("푸시 공급자가 설정되지 않았습니다.")

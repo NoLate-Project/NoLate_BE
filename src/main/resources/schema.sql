@@ -236,6 +236,7 @@ CREATE TABLE IF NOT EXISTS sharing_reports (
 
 CREATE TABLE IF NOT EXISTS schedule_routes (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule route primary key',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',
     schedule_id BIGINT NOT NULL COMMENT 'Schedule id',
     travel_minutes INT NULL COMMENT 'Estimated travel minutes',
     depart_at DATETIME(6) NULL COMMENT 'Departure time',
@@ -604,6 +605,10 @@ CREATE TABLE IF NOT EXISTS departure_alarm_sync_state (
     trigger_at DATETIME(6) NULL COMMENT 'Native alarm trigger time for UPSERT',
     title VARCHAR(100) NULL COMMENT 'Native alarm title for UPSERT',
     snooze_minutes INT NULL COMMENT 'Native alarm default snooze minutes for UPSERT',
+    alarm_plan_schema_version VARCHAR(8) NULL COMMENT 'Complete occurrence plan schema; 2 for v2',
+    alarm_occurrences_json LONGTEXT NULL COMMENT 'Canonical M15/M10/M5/M0 occurrence plan JSON',
+    validation_requested_at DATETIME(6) NULL COMMENT 'Latest capability refresh request',
+    validation_revision BIGINT NOT NULL DEFAULT 0 COMMENT 'Same-generation validation command nonce',
     command_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
         COMMENT 'Canonical latest-command SHA-256',
     create_dt DATETIME(6) NULL,
@@ -613,10 +618,19 @@ CREATE TABLE IF NOT EXISTS departure_alarm_sync_state (
     UNIQUE KEY uk_departure_alarm_sync_alarm_id (alarm_id),
     INDEX idx_departure_alarm_sync_member_id (member_id, id),
     INDEX idx_departure_alarm_sync_expiry (operation, trigger_at, id),
+    INDEX idx_departure_alarm_sync_validation
+        (operation, alarm_plan_schema_version, validation_requested_at, trigger_at, id),
     CONSTRAINT chk_departure_alarm_sync_generation
         CHECK (generation BETWEEN 0 AND 9007199254740991),
+    CONSTRAINT chk_departure_alarm_sync_validation_revision
+        CHECK (validation_revision BETWEEN 0 AND 9007199254740991),
     CONSTRAINT chk_departure_alarm_sync_operation
         CHECK (operation IN ('UPSERT', 'CANCEL')),
+    CONSTRAINT chk_departure_alarm_sync_plan CHECK (
+        (alarm_plan_schema_version IS NULL AND alarm_occurrences_json IS NULL) OR
+        (operation = 'UPSERT' AND alarm_plan_schema_version = '2' AND
+            alarm_occurrences_json IS NOT NULL)
+    ),
     CONSTRAINT chk_departure_alarm_sync_shape
         CHECK (
             (
@@ -648,6 +662,7 @@ CREATE TABLE IF NOT EXISTS departure_alarm_fire_events (
     desired_operation_at_receipt VARCHAR(16) NOT NULL
         COMMENT 'Latest UPSERT or CANCEL operation when evidence arrived',
     generation_relation VARCHAR(16) NOT NULL COMMENT 'CURRENT or STALE fire evidence',
+    occurrence_id VARCHAR(16) NULL COMMENT 'M15/M10/M5/M0; null for legacy fire evidence',
     scheduled_for DATETIME(6) NOT NULL COMMENT 'Effective native trigger, including local snooze',
     source_trigger_at DATETIME(6) NULL COMMENT 'Original server trigger when preserved by native OS',
     client_occurred_at DATETIME(6) NOT NULL COMMENT 'Diagnostic device callback time',
@@ -656,8 +671,8 @@ CREATE TABLE IF NOT EXISTS departure_alarm_fire_events (
     server_recorded_at DATETIME(6) NOT NULL COMMENT 'Authoritative server receipt time',
     PRIMARY KEY (id),
     UNIQUE KEY uk_departure_alarm_fire_member_event (member_id, client_event_id),
-    UNIQUE KEY uk_departure_alarm_fire_member_device_trigger
-        (member_id, device_fingerprint, alarm_id, generation, scheduled_for),
+    UNIQUE KEY uk_departure_alarm_fire_member_device_occurrence_trigger
+        (member_id, device_fingerprint, alarm_id, generation, occurrence_id, scheduled_for),
     INDEX idx_departure_alarm_fire_recorded_at (server_recorded_at, id),
     INDEX idx_departure_alarm_fire_member (member_id, id),
     INDEX idx_departure_alarm_fire_schedule (schedule_id, server_recorded_at),
@@ -669,6 +684,8 @@ CREATE TABLE IF NOT EXISTS departure_alarm_fire_events (
         CHECK (desired_operation_at_receipt IN ('UPSERT', 'CANCEL')),
     CONSTRAINT chk_departure_alarm_fire_timing_basis
         CHECK (timing_basis IN ('EXACT_CALLBACK', 'OBSERVED_ALERTING', 'INFERRED_OS_DELIVERY')),
+    CONSTRAINT chk_departure_alarm_fire_occurrence
+        CHECK (occurrence_id IS NULL OR occurrence_id IN ('M15', 'M10', 'M5', 'M0')),
     CONSTRAINT chk_departure_alarm_fire_relation
         CHECK (
             (generation_relation = 'CURRENT' AND generation = desired_generation_at_receipt) OR
@@ -681,6 +698,8 @@ CREATE TABLE IF NOT EXISTS departure_alarm_schedule_receipts (
     member_id BIGINT NOT NULL COMMENT 'Authenticated alarm recipient member id',
     client_receipt_id VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    device_token_id BIGINT NULL COMMENT 'Server-frozen token row id; null only for legacy receipts',
+    token_ownership_version BIGINT NULL COMMENT 'Server-frozen token ownership epoch',
     command_receipt_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     alarm_id VARCHAR(100) NOT NULL,
     schedule_id BIGINT NOT NULL COMMENT 'Deliberately no lifecycle FK',
@@ -690,6 +709,8 @@ CREATE TABLE IF NOT EXISTS departure_alarm_schedule_receipts (
     generation_relation VARCHAR(16) NOT NULL,
     operation VARCHAR(16) NOT NULL,
     trigger_at DATETIME(6) NULL,
+    occurrence_id VARCHAR(16) NULL COMMENT 'M15/M10/M5/M0; null for legacy single-M0 receipt',
+    mutation_sequence BIGINT NULL COMMENT 'Monotonic native apply revision for v2 occurrence',
     outcome VARCHAR(16) NOT NULL,
     applied BOOLEAN NOT NULL,
     scheduled BOOLEAN NOT NULL,
@@ -707,6 +728,9 @@ CREATE TABLE IF NOT EXISTS departure_alarm_schedule_receipts (
         (outcome, trigger_at, platform, delivery_mode, server_recorded_at),
     INDEX idx_departure_alarm_receipt_schedule (schedule_id, server_recorded_at),
     INDEX idx_departure_alarm_receipt_member (member_id, id),
+    INDEX idx_departure_alarm_receipt_coverage
+        (member_id, schedule_id, generation, occurrence_id, trigger_at,
+            device_token_id, token_ownership_version, mutation_sequence),
     CONSTRAINT chk_departure_alarm_receipt_generation
         CHECK (generation BETWEEN 0 AND 9007199254740991),
     CONSTRAINT chk_departure_alarm_receipt_desired_generation
@@ -714,6 +738,14 @@ CREATE TABLE IF NOT EXISTS departure_alarm_schedule_receipts (
     CONSTRAINT chk_departure_alarm_receipt_relation CHECK (
         (generation_relation = 'CURRENT' AND generation = desired_generation_at_receipt) OR
         (generation_relation = 'STALE' AND generation < desired_generation_at_receipt)
+    ),
+    CONSTRAINT chk_departure_alarm_receipt_ownership CHECK (
+        (device_token_id IS NULL AND token_ownership_version IS NULL) OR
+        (device_token_id > 0 AND token_ownership_version >= 0)
+    ),
+    CONSTRAINT chk_departure_alarm_receipt_occurrence CHECK (
+        (occurrence_id IS NULL AND mutation_sequence IS NULL) OR
+        (occurrence_id IN ('M15', 'M10', 'M5', 'M0') AND mutation_sequence > 0)
     ),
     CONSTRAINT chk_departure_alarm_receipt_enums CHECK (
         desired_operation_at_receipt IN ('UPSERT', 'CANCEL') AND
@@ -735,6 +767,44 @@ CREATE TABLE IF NOT EXISTS departure_alarm_schedule_receipts (
             AND NOT (operation = 'CANCEL' AND applied = TRUE))
     )
 ) COMMENT='Authenticated append-only native alarm scheduling denominator';
+
+CREATE TABLE IF NOT EXISTS departure_alarm_presentation_assignments (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    member_id BIGINT NOT NULL,
+    logical_event_key VARCHAR(100) NOT NULL,
+    schedule_id BIGINT NOT NULL,
+    alarm_generation BIGINT NULL,
+    occurrence_id VARCHAR(16) NOT NULL,
+    trigger_at DATETIME(6) NOT NULL,
+    device_token_id BIGINT NOT NULL,
+    token_ownership_version BIGINT NOT NULL,
+    device_fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    platform VARCHAR(20) NOT NULL,
+    presentation_mode VARCHAR(24) NOT NULL,
+    semantic_warning_visible BOOLEAN NOT NULL DEFAULT FALSE
+        COMMENT 'Visible safety/traffic warning is expected in addition to the reminder assignment',
+    assigned_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_departure_alarm_assignment_event_ownership
+        (member_id, logical_event_key, device_token_id, token_ownership_version),
+    INDEX idx_departure_alarm_assignment_occurrence
+        (schedule_id, alarm_generation, occurrence_id, trigger_at, assigned_at),
+    INDEX idx_departure_alarm_assignment_member (member_id, id),
+    INDEX idx_departure_alarm_assignment_measurement
+        (trigger_at, platform, occurrence_id, presentation_mode, semantic_warning_visible, id),
+    CONSTRAINT chk_departure_alarm_assignment_generation
+        CHECK (alarm_generation IS NULL OR alarm_generation BETWEEN 0 AND 9007199254740991),
+    CONSTRAINT chk_departure_alarm_assignment_occurrence
+        CHECK (occurrence_id IN ('M15', 'M10', 'M5', 'M0')),
+    CONSTRAINT chk_departure_alarm_assignment_ownership
+        CHECK (device_token_id > 0 AND token_ownership_version >= 0),
+    CONSTRAINT chk_departure_alarm_assignment_mode
+        CHECK (presentation_mode IN ('NATIVE_ALARM', 'VISIBLE_FALLBACK')),
+    CONSTRAINT chk_departure_alarm_assignment_platform
+        CHECK (platform IN ('ANDROID', 'IOS', 'WEB', 'UNKNOWN')),
+    CONSTRAINT chk_departure_alarm_assignment_semantic_warning
+        CHECK (semantic_warning_visible IN (FALSE, TRUE))
+) COMMENT='Immutable per-device native-alarm versus visible-fallback presentation assignment';
 
 CREATE TABLE IF NOT EXISTS schedule_notification_action_receipts (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Action receipt primary key',
@@ -823,6 +893,8 @@ CREATE TABLE IF NOT EXISTS app_notifications (
         COMMENT 'INBOX_ONLY, OPEN, or immutable FROZEN recipient snapshot',
     manifest_recipient_count INT NOT NULL DEFAULT 0
         COMMENT 'Frozen delivery row count, including zero-device events',
+    native_alarm_covered_recipient_count INT NOT NULL DEFAULT 0
+        COMMENT 'Recipients intentionally served by current native alarm evidence',
     manifest_frozen_at DATETIME(6) NULL COMMENT 'Recipient snapshot linearization time',
     dispatch_status VARCHAR(24) NOT NULL DEFAULT 'NOT_REQUIRED'
         COMMENT 'NOT_REQUIRED, PENDING, PROCESSING, COMPLETED, or FAILED',
@@ -842,7 +914,9 @@ CREATE TABLE IF NOT EXISTS app_notifications (
     INDEX idx_app_notifications_member_read_at (member_id, read_at),
     INDEX idx_app_notifications_calendar_id (calendar_id),
     INDEX idx_app_notifications_dispatch_due (dispatch_status, next_dispatch_at, id),
-    INDEX idx_app_notifications_dispatch_lease (dispatch_status, dispatch_locked_at, id)
+    INDEX idx_app_notifications_dispatch_lease (dispatch_status, dispatch_locked_at, id),
+    CONSTRAINT chk_app_notifications_native_alarm_covered_count
+        CHECK (native_alarm_covered_recipient_count >= 0)
 ) COMMENT='Durable push outbox source with optional user-facing inbox visibility';
 
 -- Existing environments may have created data_json with a smaller text type while the

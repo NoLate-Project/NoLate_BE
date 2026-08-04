@@ -1,5 +1,6 @@
 package com.noLate.schedule.domain
 
+import com.noLate.schedule.application.service.DepartureAlarmPlanFactory
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
@@ -43,7 +44,7 @@ class DepartureAlarmSyncStateTest {
     }
 
     @Test
-    fun `trigger is canonicalized to database microsecond precision before fingerprinting`() {
+    fun `trigger is canonicalized to provider millisecond precision before fingerprinting`() {
         val input = Instant.parse("2026-07-29T03:30:00.123456789Z")
         val state = DepartureAlarmSyncState.createUpsert(
             memberId = 7L,
@@ -54,7 +55,7 @@ class DepartureAlarmSyncStateTest {
         )
 
         assertThat(state.triggerAt)
-            .isEqualTo(Instant.parse("2026-07-29T03:30:00.123456Z"))
+            .isEqualTo(Instant.parse("2026-07-29T03:30:00.123Z"))
         assertThat(state.commandFingerprint).isEqualTo(
             DepartureAlarmSyncFingerprint.calculate(
                 operation = DepartureAlarmSyncOperation.UPSERT,
@@ -89,6 +90,39 @@ class DepartureAlarmSyncStateTest {
         }.isInstanceOf(IllegalStateException::class.java)
         assertThat(state.generation).isEqualTo(MAX_DEPARTURE_ALARM_GENERATION)
         assertThat(state.operation).isEqualTo(DepartureAlarmSyncOperation.CANCEL)
+    }
+
+    @Test
+    fun `same-generation validation revision reaches JavaScript safe max without changing plan generation`() {
+        val departureAt = Instant.parse("2026-07-29T05:00:00Z")
+        val plan = DepartureAlarmPlanFactory().create(
+            memberId = 7L,
+            scheduleId = 41L,
+            recommendedDepartureAt = departureAt,
+            scheduleTitle = "회의",
+        )
+        val state = DepartureAlarmSyncState.createUpsert(
+            memberId = 7L,
+            scheduleId = 41L,
+            triggerAt = departureAt,
+            title = "회의",
+            snoozeMinutes = 5,
+            alarmPlanSchemaVersion = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION,
+            alarmOccurrencesJson = DepartureAlarmPlanCodec.encode(plan),
+            validationRevision = MAX_DEPARTURE_ALARM_VALIDATION_REVISION - 1,
+        )
+
+        assertThat(state.reissueValidation(Instant.parse("2026-07-29T01:00:00.123456Z"))).isTrue()
+        assertThat(state.validationRevision).isEqualTo(MAX_DEPARTURE_ALARM_VALIDATION_REVISION)
+        assertThat(state.validationRequestedAt)
+            .isEqualTo(Instant.parse("2026-07-29T01:00:00.123Z"))
+        assertThat(state.generation).isZero()
+
+        assertThatThrownBy {
+            state.reissueValidation(Instant.parse("2026-07-29T02:00:00Z"))
+        }.isInstanceOf(IllegalStateException::class.java)
+        assertThat(state.validationRevision).isEqualTo(MAX_DEPARTURE_ALARM_VALIDATION_REVISION)
+        assertThat(state.generation).isZero()
     }
 
     private fun setGeneration(state: DepartureAlarmSyncState, generation: Long) {

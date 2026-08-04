@@ -4,6 +4,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.schedule.application.useCase.ScheduleTravelPlanUseCase
+import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.domain.ScheduleTravelPlanStatus
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -67,5 +68,24 @@ class ScheduleTravelPlanSessionFenceControllerTest {
 
         assertEquals(ErrorCode.INVALID_TOKEN, failure.errorCode)
         verify(useCase, never()).upsertMyTravelPlan(any(), any(), any(), any())
+    }
+
+    @Test
+    fun `travel plan request maps optional destination used for common coordinate supplement`() {
+        val request = ScheduleTravelPlanUpsertRequest(
+            destination = SchedulePlaceDto(
+                name = "강남역",
+                address = "서울특별시 강남구 강남대로 지하 396",
+                lat = 37.497,
+                lng = 127.027,
+            ),
+        )
+
+        val command = request.toCommand()
+
+        assertEquals("강남역", command.destinationName)
+        assertEquals("서울특별시 강남구 강남대로 지하 396", command.destinationAddress)
+        assertEquals(37.497, command.destinationLat)
+        assertEquals(127.027, command.destinationLng)
     }
 }

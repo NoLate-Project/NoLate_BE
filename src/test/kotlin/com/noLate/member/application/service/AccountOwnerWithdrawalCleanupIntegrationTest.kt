@@ -12,6 +12,8 @@ import com.noLate.notification.domain.DepartureAlarmDeliveryMode
 import com.noLate.notification.domain.DepartureAlarmScheduleOutcome
 import com.noLate.notification.domain.DepartureAlarmScheduleReceipt
 import com.noLate.notification.domain.DepartureAlarmScheduleSource
+import com.noLate.notification.domain.DepartureAlarmPresentationAssignment
+import com.noLate.notification.domain.DepartureAlarmPresentationMode
 import com.noLate.notification.domain.PushDelivery
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.domain.PushSendHistory
@@ -19,6 +21,7 @@ import com.noLate.notification.domain.PushSendStatus
 import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.DepartureAlarmFireEventRepository
 import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepository
+import com.noLate.notification.infrastructure.DepartureAlarmPresentationAssignmentRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.schedule.application.service.ScheduleAccessPolicy
@@ -130,6 +133,8 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
     private val etaAccuracyObservationRepository: ScheduleEtaAccuracyObservationRepository,
     private val departureAlarmFireEventRepository: DepartureAlarmFireEventRepository,
     private val departureAlarmScheduleReceiptRepository: DepartureAlarmScheduleReceiptRepository,
+    private val departureAlarmPresentationAssignmentRepository:
+        DepartureAlarmPresentationAssignmentRepository,
     private val actionReceiptRepository: ScheduleNotificationActionReceiptRepository,
     private val transactionManager: PlatformTransactionManager,
     private val invalidationRecorder: AccountCleanupInvalidationRecorder,
@@ -269,6 +274,22 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
                 serverRecordedAt = Instant.parse("2026-07-24T00:00:01Z"),
             )
         )
+        departureAlarmPresentationAssignmentRepository.saveAndFlush(
+            DepartureAlarmPresentationAssignment(
+                memberId = participantId,
+                logicalEventKey = source.logicalEventKey,
+                scheduleId = scheduleId,
+                alarmGeneration = 2,
+                occurrenceId = "M0",
+                triggerAt = startAt.minusSeconds(1_800),
+                deviceTokenId = 888L,
+                tokenOwnershipVersion = 1L,
+                deviceFingerprint = "f".repeat(64),
+                platform = PushPlatform.ANDROID,
+                presentationMode = DepartureAlarmPresentationMode.VISIBLE_FALLBACK,
+                assignedAt = Instant.parse("2026-07-24T00:00:02Z"),
+            )
+        )
 
         cleanupService.withdraw(owner)
 
@@ -283,6 +304,10 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
         assertTrue(departureAlarmFireEventRepository.findAll().none { it.scheduleId == scheduleId })
         assertTrue(
             departureAlarmScheduleReceiptRepository.findAll().none { it.scheduleId == scheduleId }
+        )
+        assertTrue(
+            departureAlarmPresentationAssignmentRepository.findAll()
+                .none { it.scheduleId == scheduleId }
         )
         assertTrue(
             historyRepository.findAllByScheduleIdOrderBySentAtDesc(

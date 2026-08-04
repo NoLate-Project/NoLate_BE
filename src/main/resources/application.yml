@@ -213,6 +213,15 @@ schedule:
     departure-alert-lead-minutes: ${SCHEDULE_PUSH_DEPARTURE_ALERT_LEAD_MINUTES:15}
     departure-reminder-interval-minutes: ${SCHEDULE_PUSH_DEPARTURE_REMINDER_INTERVAL_MINUTES:5}
     departure-snooze-minutes: ${SCHEDULE_PUSH_DEPARTURE_SNOOZE_MINUTES:5}
+    # 오래된 native 예약 성공은 권한 회수/OS 정리 여부를 증명하지 못하므로 visible push로 fail-open한다.
+    departure-alarm-coverage-receipt-ttl-hours: ${SCHEDULE_DEPARTURE_ALARM_COVERAGE_RECEIPT_TTL_HOURS:24}
+    # 장기 예약도 TTL 안에 최신 기기 capability receipt를 다시 확보한다.
+    departure-alarm-revalidation-enabled: ${SCHEDULE_DEPARTURE_ALARM_REVALIDATION_ENABLED:true}
+    departure-alarm-revalidation-hours: ${SCHEDULE_DEPARTURE_ALARM_REVALIDATION_HOURS:12}
+    # 갱신 세대의 receipt를 다시 받을 시간이 부족한 임박 알람은 기존 세대를 유지한다.
+    departure-alarm-revalidation-min-lead-minutes: ${SCHEDULE_DEPARTURE_ALARM_REVALIDATION_MIN_LEAD_MINUTES:30}
+    departure-alarm-revalidation-scan-ms: ${SCHEDULE_DEPARTURE_ALARM_REVALIDATION_SCAN_MS:300000}
+    departure-alarm-revalidation-batch-size: ${SCHEDULE_DEPARTURE_ALARM_REVALIDATION_BATCH_SIZE:100}
     # ETA worker와 별개로 이미 예약된 native alarm tombstone을 정리한다.
     departure-alarm-expiry-enabled: ${SCHEDULE_DEPARTURE_ALARM_EXPIRY_ENABLED:true}
   traffic:

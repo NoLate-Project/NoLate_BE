@@ -8,9 +8,11 @@ import com.noLate.schedule.domain.ScheduleRouteSetupReminderStatus
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
 import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
 import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_SCHEMA_VERSION
+import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
 import com.noLate.schedule.domain.DEFAULT_DEPARTURE_ALARM_TITLE
 import com.noLate.schedule.domain.DepartureAlarmSyncOperation
 import com.noLate.schedule.domain.MAX_DEPARTURE_ALARM_GENERATION
+import com.noLate.schedule.domain.MAX_DEPARTURE_ALARM_VALIDATION_REVISION
 import com.noLate.schedule.domain.departureAlarmId
 import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
 import com.noLate.schedule.infrastructure.ScheduleDepartureStatusRepository
@@ -58,9 +60,23 @@ class SchedulePushSourceFreshnessValidator(
         val generation = data["alarmGeneration"]?.toLongOrNull()
             ?.takeIf { it in 0..MAX_DEPARTURE_ALARM_GENERATION }
             ?: return false
+        val rawValidationRevision = data["alarmValidationRevision"]
+        val validationRevision = if (rawValidationRevision == null) {
+            // Rolling-deploy compatibility for frozen schema-v1 rows created before revision.
+            0L
+        } else {
+            rawValidationRevision.toLongOrNull()
+                ?.takeIf { it in 0..MAX_DEPARTURE_ALARM_VALIDATION_REVISION }
+                ?: return false
+        }
         val operation = data["alarmOperation"]
             ?.let { runCatching { DepartureAlarmSyncOperation.valueOf(it) }.getOrNull() }
             ?: return false
+        val expectedDeduplicationKey = if (rawValidationRevision == null) {
+            "departure-alarm-sync:$stateId:g$generation:${operation.name}"
+        } else {
+            "departure-alarm-sync:$stateId:g$generation:v$validationRevision:${operation.name}"
+        }
         val state = departureAlarmSyncStateRepository.findById(stateId).orElse(null)
             ?: return false
 
@@ -72,13 +88,13 @@ class SchedulePushSourceFreshnessValidator(
             data["scheduleId"]?.toLongOrNull() != scheduleId ||
             data["alarmId"] != departureAlarmId(source.memberId, scheduleId) ||
             data["alarmCommandFingerprint"] != state.commandFingerprint ||
-            source.deduplicationKey !=
-                "departure-alarm-sync:$stateId:g$generation:${operation.name}" ||
+            source.deduplicationKey != expectedDeduplicationKey ||
             state.id != stateId ||
             state.memberId != source.memberId ||
             state.scheduleId != scheduleId ||
             state.alarmId != data["alarmId"] ||
             state.generation != generation ||
+            state.validationRevision != validationRevision ||
             state.operation != operation
         ) {
             return false
@@ -90,7 +106,16 @@ class SchedulePushSourceFreshnessValidator(
                     data["alarmTitle"] ==
                     (state.title?.takeIf(String::isNotBlank)
                         ?: DEFAULT_DEPARTURE_ALARM_TITLE) &&
-                    data["snoozeMinutes"]?.toIntOrNull() == state.snoozeMinutes
+                    data["snoozeMinutes"]?.toIntOrNull() == state.snoozeMinutes &&
+                    when {
+                        state.alarmPlanSchemaVersion == null && state.alarmOccurrencesJson == null ->
+                            "alarmPlanSchemaVersion" !in data && "alarmOccurrencesJson" !in data
+
+                        else ->
+                            state.alarmPlanSchemaVersion == DEPARTURE_ALARM_PLAN_SCHEMA_VERSION &&
+                                data["alarmPlanSchemaVersion"] == state.alarmPlanSchemaVersion &&
+                                data["alarmOccurrencesJson"] == state.alarmOccurrencesJson
+                    }
 
             DepartureAlarmSyncOperation.CANCEL ->
                 state.triggerAt == null &&
@@ -98,7 +123,10 @@ class SchedulePushSourceFreshnessValidator(
                     state.snoozeMinutes == null &&
                     "alarmTriggerAt" !in data &&
                     "alarmTitle" !in data &&
-                    "snoozeMinutes" !in data
+                    "snoozeMinutes" !in data &&
+                    data["alarmPlanSchemaVersion"] in
+                        setOf(null, DEPARTURE_ALARM_PLAN_SCHEMA_VERSION) &&
+                    "alarmOccurrencesJson" !in data
         }
     }
 

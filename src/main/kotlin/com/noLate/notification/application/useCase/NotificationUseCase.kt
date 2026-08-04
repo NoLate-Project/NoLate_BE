@@ -8,6 +8,7 @@ import com.noLate.global.observability.recordSafely
 import com.noLate.notification.application.service.AppNotificationService
 import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.service.AuthenticatedPushSessionFence
+import com.noLate.notification.application.service.DepartureAlarmReminderCoverageSelector
 import com.noLate.notification.application.service.NotificationTokenService
 import com.noLate.notification.application.service.PersistedPushDispatchFenceFactory
 import com.noLate.notification.application.service.PreparedPushEvent
@@ -77,6 +78,23 @@ class NotificationUseCase(
             sendEphemeral(memberId, title, body, data)
         }
 
+    fun sendToMemberWithNativeAlarmCoverage(
+        memberId: Long,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+        inboxDeduplicationKey: String,
+        nativeAlarmCoverageSelector: DepartureAlarmReminderCoverageSelector,
+    ): NotificationSendResult = prepareAndDispatch(
+        memberId = memberId,
+        title = title,
+        body = body,
+        data = data,
+        inboxDeduplicationKey = inboxDeduplicationKey,
+        dispatchFence = null,
+        nativeAlarmCoverageSelector = nativeAlarmCoverageSelector,
+    )
+
     /**
      * Public access-authenticated test send.
      *
@@ -129,6 +147,24 @@ class NotificationUseCase(
         )
     }
 
+    fun sendToMemberFencedWithNativeAlarmCoverage(
+        memberId: Long,
+        title: String,
+        body: String,
+        data: Map<String, String>,
+        inboxDeduplicationKey: String,
+        dispatchFence: PushDispatchFence,
+        nativeAlarmCoverageSelector: DepartureAlarmReminderCoverageSelector,
+    ): NotificationSendResult = prepareAndDispatch(
+        memberId = memberId,
+        title = title,
+        body = body,
+        data = data,
+        inboxDeduplicationKey = inboxDeduplicationKey,
+        dispatchFence = dispatchFence,
+        nativeAlarmCoverageSelector = nativeAlarmCoverageSelector,
+    )
+
     /**
      * Durable share/departure drainer entry point. The payload and recipients are loaded from the
      * frozen outbox; caller-supplied live data is intentionally impossible.
@@ -165,6 +201,7 @@ class NotificationUseCase(
         inboxDeduplicationKey: String?,
         dispatchFence: PushDispatchFence?,
         sessionFence: AuthenticatedPushSessionFence? = null,
+        nativeAlarmCoverageSelector: DepartureAlarmReminderCoverageSelector? = null,
     ): NotificationSendResult {
         val prepared = pushEventOutboxService.prepare(
             memberId = memberId,
@@ -175,6 +212,7 @@ class NotificationUseCase(
             persistInInbox = true,
             fence = dispatchFence,
             sessionFence = sessionFence,
+            nativeAlarmCoverageSelector = nativeAlarmCoverageSelector,
         )
         if (!prepared.recipientActive) {
             return NotificationSendResult(recipientInactive = true)
@@ -201,10 +239,13 @@ class NotificationUseCase(
         }
 
         if (prepared.emptyManifest) {
-            recordNoToken(memberId, snapshot)
+            if (!prepared.nativeAlarmCovered) {
+                recordNoToken(memberId, snapshot)
+            }
             return NotificationSendResult(
                 requestedCount = 0,
-                noDeviceEventCount = 1,
+                nativeAlarmCoveredCount = prepared.nativeAlarmCoveredRecipientCount,
+                noDeviceEventCount = if (prepared.nativeAlarmCovered) 0 else 1,
                 eventSnapshot = snapshot,
                 inboxDeduplicated = !prepared.inboxCreated,
             )
@@ -212,6 +253,7 @@ class NotificationUseCase(
 
         var result = NotificationSendResult(
             requestedCount = prepared.manifestRecipientCount,
+            nativeAlarmCoveredCount = prepared.nativeAlarmCoveredRecipientCount,
             eventSnapshot = snapshot,
             inboxDeduplicated = !prepared.inboxCreated,
         )
@@ -665,6 +707,8 @@ data class NotificationSendResult(
     val supersededCount: Int = 0,
     /** manifest가 0건으로 동결되어 이후 등록 기기로 확장하지 않는 event 수 */
     val noDeviceEventCount: Int = 0,
+    /** Current native alarm evidence covered the ordinary reminder for these recipients. */
+    val nativeAlarmCoveredCount: Int = 0,
     val fenceRejected: Boolean = false,
     /** withdrawal이 먼저 linearize되어 source/history/provider 작업을 만들지 않은 terminal no-op */
     val recipientInactive: Boolean = false,
@@ -676,7 +720,8 @@ data class NotificationSendResult(
     val durablyHandledCount: Int
         get() =
             sentCount + alreadyDeliveredCount + ambiguousCount + deduplicatedCount +
-                invalidTokenCount + exhaustedCount + supersededCount + noDeviceEventCount
+                invalidTokenCount + exhaustedCount + supersededCount + noDeviceEventCount +
+                nativeAlarmCoveredCount
 
     val confirmedSuccessCount: Int
         get() = sentCount + alreadyDeliveredCount
@@ -702,6 +747,7 @@ data class NotificationSendResult(
             deduplicatedCount = deduplicatedCount + other.deduplicatedCount,
             supersededCount = supersededCount + other.supersededCount,
             noDeviceEventCount = noDeviceEventCount + other.noDeviceEventCount,
+            nativeAlarmCoveredCount = nativeAlarmCoveredCount + other.nativeAlarmCoveredCount,
             fenceRejected = fenceRejected || other.fenceRejected,
             recipientInactive = recipientInactive || other.recipientInactive,
             alreadyDeliveredAt = listOfNotNull(alreadyDeliveredAt, other.alreadyDeliveredAt).maxOrNull(),

@@ -39,6 +39,8 @@ and verify the reviewed migrations in order, then start the new binary:
 4. `docs/schedule/migrations/2026-08-01-departure-alarm-fire-evidence.sql`
 5. `docs/schedule/migrations/2026-08-01-departure-alarm-schedule-receipts.sql`
 6. `docs/schedule/migrations/2026-08-01-push-delivery-ack-capability.sql`
+7. `docs/schedule/migrations/2026-08-04-schedule-route-optimistic-lock.sql`
+8. `docs/schedule/migrations/2026-08-04-departure-alarm-plan-v2.sql`
 
 Production startup requires exactly one marker for each migration. A missing predecessor, partial
 table, failed postcondition, or attempted reapplication fails closed for operator inspection.
@@ -221,23 +223,367 @@ SELECT
 FROM aged_success;
 ```
 
-Measure alarm scheduling only against provider-success deliveries whose frozen payload is the
-alarm-control payload. Mixing ordinary pushes into this denominator would inflate the result.
+Plan-v2 alarm scheduling and fallback must **not** use
+`push_deliveries.alarm_scheduled_at` as its reliability denominator. That aggregate ACK belongs to
+the legacy single-M0 command and cannot identify M15/M10/M5/M0, token ownership, a later failed
+mutation, or a snapshot-origin schedule. The outbox now freezes one
+`departure_alarm_presentation_assignments` row for every active token at each eligible boundary.
+`NATIVE_ALARM` means a fresh, strong, latest-sequence schedule receipt covered the ordinary
+reminder; `VISIBLE_FALLBACK` means the immutable visible manifest retained that reminder.
+`semantic_warning_visible` independently records whether a safety/traffic warning also had to stay
+visible.
+
+Use the assignment as the expected-channel denominator and join it to occurrence-level fire
+evidence or the exact frozen visible delivery. This reports authenticated presentation evidence,
+not FCM provider acceptance. For native alarms the append-only fire rows expose physical alarm
+count; for visible fallback the frozen delivery exposes only first-seen presentation evidence.
+Keep modes separate as well as publishing the combined result.
 
 ```sql
+WITH aged_assignment AS (
+    SELECT *
+    FROM departure_alarm_presentation_assignments
+    WHERE trigger_at >= :from_utc
+      AND trigger_at < :to_utc
+      AND assigned_at < CAST(:as_of_utc AS DATETIME(6))
+      AND trigger_at < CAST(:as_of_utc AS DATETIME(6)) - INTERVAL 10 MINUTE
+), observed AS (
+    SELECT
+        a.*,
+        CASE WHEN a.presentation_mode = 'NATIVE_ALARM' THEN 1 ELSE 0 END
+            AS expected_native_count,
+        CASE
+            WHEN a.presentation_mode = 'VISIBLE_FALLBACK'
+              OR a.semantic_warning_visible = TRUE THEN 1
+            ELSE 0
+        END AS expected_visible_count,
+        (
+            SELECT COUNT(*)
+            FROM departure_alarm_fire_events f
+            WHERE f.member_id = a.member_id
+              AND f.schedule_id = a.schedule_id
+              AND f.occurrence_id = a.occurrence_id
+              AND f.device_fingerprint = a.device_fingerprint
+              AND f.source_trigger_at = a.trigger_at
+              AND f.scheduled_for = f.source_trigger_at
+              AND f.server_recorded_at < CAST(:as_of_utc AS DATETIME(6))
+        ) AS native_count,
+        (
+            SELECT COUNT(*)
+            FROM departure_alarm_fire_events f
+            WHERE f.member_id = a.member_id
+              AND f.schedule_id = a.schedule_id
+              AND f.generation = a.alarm_generation
+              AND f.occurrence_id = a.occurrence_id
+              AND f.device_fingerprint = a.device_fingerprint
+              AND f.source_trigger_at = a.trigger_at
+              AND f.scheduled_for = f.source_trigger_at
+              AND f.server_recorded_at < CAST(:as_of_utc AS DATETIME(6))
+        ) AS assigned_generation_native_count,
+        (
+            SELECT COUNT(*)
+            FROM departure_alarm_fire_events f
+            WHERE f.member_id = a.member_id
+              AND f.schedule_id = a.schedule_id
+              AND f.generation <> a.alarm_generation
+              AND f.occurrence_id = a.occurrence_id
+              AND f.device_fingerprint = a.device_fingerprint
+              AND f.source_trigger_at = a.trigger_at
+              AND f.scheduled_for = f.source_trigger_at
+              AND f.server_recorded_at < CAST(:as_of_utc AS DATETIME(6))
+        ) AS stale_generation_native_count,
+        (
+            SELECT COUNT(*)
+            FROM push_deliveries d
+            WHERE d.member_id = a.member_id
+              AND d.event_key = a.logical_event_key
+              AND d.device_token_id = a.device_token_id
+              AND d.token_ownership_version = a.token_ownership_version
+              AND d.client_presented_at IS NOT NULL
+              AND d.client_presented_at < CAST(:as_of_utc AS DATETIME(6))
+        ) AS visible_count
+    FROM aged_assignment a
+)
 SELECT
-    COUNT(*) AS alarm_provider_success_deliveries,
-    SUM(alarm_scheduled_at IS NOT NULL) AS alarm_scheduled_deliveries,
-    ROUND(100.0 * SUM(alarm_scheduled_at IS NOT NULL) / NULLIF(COUNT(*), 0), 2)
-        AS alarm_scheduled_percent
-FROM push_deliveries
-WHERE status = 'SUCCESS'
-  AND payload_type = 'DEPARTURE_ALARM_SYNC'
-  AND delivery_ack_capability_version = 1
-  AND delivered_at >= :from_utc
-  AND delivered_at < :to_utc
-  AND delivered_at < UTC_TIMESTAMP(6) - INTERVAL 10 MINUTE;
+    'ALL' AS cohort,
+    COUNT(*) AS assignment_count,
+    SUM(native_count = expected_native_count AND visible_count = expected_visible_count)
+        AS expected_channel_evidence_observed,
+    SUM(native_count + visible_count < expected_native_count + expected_visible_count)
+        AS missing_observed,
+    SUM(native_count + visible_count > expected_native_count + expected_visible_count)
+        AS observable_native_or_cross_channel_duplicate,
+    SUM(
+        native_count + visible_count = expected_native_count + expected_visible_count
+        AND (native_count <> expected_native_count OR visible_count <> expected_visible_count)
+    ) AS wrong_channel_observed,
+    SUM(assigned_generation_native_count) AS assigned_generation_native_count,
+    SUM(stale_generation_native_count) AS stale_generation_native_count,
+    ROUND(
+        100.0 * SUM(
+            native_count = expected_native_count AND visible_count = expected_visible_count
+        ) / NULLIF(COUNT(*), 0),
+        2
+    ) AS expected_channel_evidence_percent
+FROM observed
+UNION ALL
+SELECT
+    CONCAT('PLATFORM:', platform) AS cohort,
+    COUNT(*) AS assignment_count,
+    SUM(native_count = expected_native_count AND visible_count = expected_visible_count)
+        AS expected_channel_evidence_observed,
+    SUM(native_count + visible_count < expected_native_count + expected_visible_count)
+        AS missing_observed,
+    SUM(native_count + visible_count > expected_native_count + expected_visible_count)
+        AS observable_native_or_cross_channel_duplicate,
+    SUM(
+        native_count + visible_count = expected_native_count + expected_visible_count
+        AND (native_count <> expected_native_count OR visible_count <> expected_visible_count)
+    ) AS wrong_channel_observed,
+    SUM(assigned_generation_native_count) AS assigned_generation_native_count,
+    SUM(stale_generation_native_count) AS stale_generation_native_count,
+    ROUND(
+        100.0 * SUM(
+            native_count = expected_native_count AND visible_count = expected_visible_count
+        ) / NULLIF(COUNT(*), 0),
+        2
+    ) AS expected_channel_evidence_percent
+FROM observed
+GROUP BY platform
+UNION ALL
+SELECT
+    CONCAT(platform, ':', occurrence_id) AS cohort,
+    COUNT(*) AS assignment_count,
+    SUM(native_count = expected_native_count AND visible_count = expected_visible_count)
+        AS expected_channel_evidence_observed,
+    SUM(native_count + visible_count < expected_native_count + expected_visible_count)
+        AS missing_observed,
+    SUM(native_count + visible_count > expected_native_count + expected_visible_count)
+        AS observable_native_or_cross_channel_duplicate,
+    SUM(
+        native_count + visible_count = expected_native_count + expected_visible_count
+        AND (native_count <> expected_native_count OR visible_count <> expected_visible_count)
+    ) AS wrong_channel_observed,
+    SUM(assigned_generation_native_count) AS assigned_generation_native_count,
+    SUM(stale_generation_native_count) AS stale_generation_native_count,
+    ROUND(
+        100.0 * SUM(
+            native_count = expected_native_count AND visible_count = expected_visible_count
+        ) / NULLIF(COUNT(*), 0),
+        2
+    ) AS expected_channel_evidence_percent
+FROM observed
+GROUP BY platform, occurrence_id
+UNION ALL
+SELECT
+    CONCAT(
+        platform, ':', occurrence_id, ':', presentation_mode,
+        ':semantic-warning=', IF(semantic_warning_visible, 'true', 'false')
+    ) AS cohort,
+    COUNT(*) AS assignment_count,
+    SUM(native_count = expected_native_count AND visible_count = expected_visible_count)
+        AS expected_channel_evidence_observed,
+    SUM(native_count + visible_count < expected_native_count + expected_visible_count)
+        AS missing_observed,
+    SUM(native_count + visible_count > expected_native_count + expected_visible_count)
+        AS observable_native_or_cross_channel_duplicate,
+    SUM(
+        native_count + visible_count = expected_native_count + expected_visible_count
+        AND (native_count <> expected_native_count OR visible_count <> expected_visible_count)
+    ) AS wrong_channel_observed,
+    SUM(assigned_generation_native_count) AS assigned_generation_native_count,
+    SUM(stale_generation_native_count) AS stale_generation_native_count,
+    ROUND(
+        100.0 * SUM(
+            native_count = expected_native_count AND visible_count = expected_visible_count
+        ) / NULLIF(COUNT(*), 0),
+        2
+    ) AS expected_channel_evidence_percent
+FROM observed
+GROUP BY platform, occurrence_id, presentation_mode, semantic_warning_visible
+ORDER BY cohort;
 ```
+
+`visible_count` cannot measure physical visible-notification duplicates. The database has one
+`push_deliveries` row for the frozen event/device ownership and `client_presented_at` records the
+first authenticated presentation acknowledgement on that row. Two OS-visible renders of the same
+logical event still produce `visible_count = 1`. Consequently,
+`expected_channel_evidence_percent` detects missing channel evidence, physical native duplicates,
+and observable native-plus-visible cross-channel duplicates, but it is **not** a visible-only
+duplicate rate.
+
+For this release, foreground-local visible-fallback duplicate prevention is a client invariant,
+not a measured delivery result; it does not cover an FCM notification payload that the OS presents
+directly while the app is backgrounded. After verifying the current account, the client scopes a
+canonical claim to `(recipient account, logicalEventKey)`;
+only a legacy message without `logicalEventKey` uses its
+provider message ID as the logical identifier. It hashes that canonical
+key with SHA-256 to derive a stable Expo notification identifier. The durable protocol is
+`PENDING` -> OS schedule ->
+`COMMITTED`; an explicit scheduling failure rolls the `PENDING` claim back. Claims are pruned after
+seven days and capped at 256 records. A mismatched or unverified account fails closed. If durable
+storage fails only after account verification, presentation fails open to avoid silently losing
+the alert.
+
+These controls reduce duplicates but cannot guarantee exactly-once presentation. Two crash windows
+remain. First, a claim-before-schedule crash leaves `PENDING` and can delay or miss the notification
+until a later delivery reclaims its stale lease; that recovery re-requests the same stable OS
+identifier. Second, an OS-accepted-before-`COMMITTED` crash leaves `PENDING` even though the OS
+accepted the request; stale-lease recovery can make a bounded re-request with the same identifier.
+The stable identifier mitigates repeat scheduling, but iOS may still re-alert. The verified-account
+storage fail-open path can also duplicate. Keep the focused client state-machine and crash-window
+tests as a release blocker. Until an append-only claim-attempt/presentation journal is uploaded,
+the actual visible-only duplicate rate is `unmeasured`; do not infer it from this SQL or from a
+passing 90% expected-channel evidence score.
+
+The all-generation `native_count` is deliberately a count, not `EXISTS`. A visible fallback can
+coincide with a still-live alarm from an older generation, and current plus stale native alarms can
+both fire. Collapsing either case to a boolean would incorrectly report success. An initial alarm
+has `scheduled_for = source_trigger_at`; this excludes a user-requested snooze from the initial
+presentation count. Publish snoozes separately.
+
+`semantic_warning_visible = TRUE` means traffic degradation, an earlier departure, transfer
+failure, catch-up information, or an impossible-on-time warning had to remain visible even though
+the ordinary boundary reminder was covered by a native alarm. Such a `NATIVE_ALARM` assignment
+therefore expects one native presentation **and** one visible warning; it is not classified as an
+accidental duplicate. A `VISIBLE_FALLBACK` expects no native presentation and one visible
+presentation. The release result requires the expected count in each channel, so one native plus
+one native cannot substitute for the expected native-plus-visible pair.
+
+The assignment freezes the token platform at the same lock boundary, so Android and iOS scores
+cannot mask one another through a later token update or a combined average.
+
+Treat any `UNKNOWN` platform row in a post-v2 cohort as a measurement defect; do not redistribute
+it into Android or iOS after the fact.
+
+Use one immutable `:as_of_utc` for the assignment-age cutoff and every server-recorded observation
+cutoff. Re-running the same `:from_utc`, `:to_utc`, and `:as_of_utc` then cannot improve merely
+because a late fire journal or visible-presentation acknowledgement arrived after report close.
+Account and schedule privacy cleanup can legitimately remove raw assignments and evidence later,
+so persist the first report's numerator, denominator, slices, and query revision in an append-only
+operational snapshot; `:as_of_utc` freezes late observations, not later privacy deletion.
+
+The canonical result uses the exact assigned trigger. During a live ETA plan change, an older
+generation can retain the same occurrence at a different nearby trigger, which an exact join
+cannot attribute safely. Run this orphan diagnostic beside every report (20 minutes matches the
+maximum supported reminder horizon here). It excludes a fire that has its own exact immutable
+assignment, so two valid old/new plan assignments do not mark one another stale. Any remaining
+row makes the canonical percentage incomplete until the fire is attributed or reconciled:
+
+```sql
+WITH aged_assignment AS (
+    SELECT *
+    FROM departure_alarm_presentation_assignments
+    WHERE trigger_at >= :from_utc
+      AND trigger_at < :to_utc
+      AND assigned_at < CAST(:as_of_utc AS DATETIME(6))
+      AND trigger_at < CAST(:as_of_utc AS DATETIME(6)) - INTERVAL 10 MINUTE
+)
+SELECT
+    a.platform,
+    a.occurrence_id,
+    a.presentation_mode,
+    a.semantic_warning_visible,
+    COUNT(*) AS orphan_nearby_mismatched_trigger_native_count
+FROM aged_assignment a
+JOIN departure_alarm_fire_events f
+  ON f.member_id = a.member_id
+ AND f.schedule_id = a.schedule_id
+ AND f.occurrence_id = a.occurrence_id
+ AND f.device_fingerprint = a.device_fingerprint
+ AND f.scheduled_for = f.source_trigger_at
+ AND f.server_recorded_at < CAST(:as_of_utc AS DATETIME(6))
+ AND (a.alarm_generation IS NULL OR f.generation <> a.alarm_generation)
+ AND f.source_trigger_at <> a.trigger_at
+ AND f.source_trigger_at BETWEEN
+        a.trigger_at - INTERVAL 20 MINUTE AND a.trigger_at + INTERVAL 20 MINUTE
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM departure_alarm_presentation_assignments matched
+    WHERE matched.member_id = f.member_id
+      AND matched.schedule_id = f.schedule_id
+      AND matched.alarm_generation = f.generation
+      AND matched.occurrence_id = f.occurrence_id
+      AND matched.device_fingerprint = f.device_fingerprint
+      AND matched.trigger_at = f.source_trigger_at
+      AND matched.assigned_at < CAST(:as_of_utc AS DATETIME(6))
+)
+GROUP BY a.platform, a.occurrence_id, a.presentation_mode, a.semantic_warning_visible
+ORDER BY a.platform, a.occurrence_id, a.presentation_mode, a.semantic_warning_visible;
+```
+
+Assignment rows exist only after an eligible worker boundary reaches the outbox transaction. A
+missed worker boundary would otherwise disappear from the denominator and inflate reliability.
+Run the following short-window auditor at least once per minute while the v2 state still exists.
+It expands the current plan and current active ownerships, then checks that the boundary produced
+an immutable assignment. Because token ownership and desired state are mutable, retain the query
+result externally; this is an operational coverage check, not a permanent historical denominator.
+
+```sql
+WITH live_expected AS (
+    SELECT
+        s.member_id,
+        s.schedule_id,
+        s.generation,
+        jt.occurrence_id,
+        CAST(REPLACE(REPLACE(jt.trigger_at, 'T', ' '), 'Z', '') AS DATETIME(6)) AS trigger_at,
+        t.id AS device_token_id,
+        t.ownership_version AS token_ownership_version
+    FROM departure_alarm_sync_state s
+    JOIN JSON_TABLE(
+        s.alarm_occurrences_json,
+        '$[*]' COLUMNS (
+            occurrence_id VARCHAR(16) PATH '$.occurrenceId',
+            trigger_at VARCHAR(40) PATH '$.triggerAt'
+        )
+    ) jt
+    JOIN push_device_token t
+      ON t.member_id = s.member_id
+     AND t.retirement_requested = FALSE
+    WHERE s.operation = 'UPSERT'
+      AND s.alarm_plan_schema_version = '2'
+), due AS (
+    SELECT *
+    FROM live_expected
+    WHERE trigger_at >= UTC_TIMESTAMP(6) - INTERVAL 8 MINUTE
+      AND trigger_at < UTC_TIMESTAMP(6) - INTERVAL 2 MINUTE
+)
+SELECT
+    COUNT(*) AS expected_boundary_ownerships,
+    SUM(EXISTS (
+        SELECT 1
+        FROM departure_alarm_presentation_assignments a
+        WHERE a.member_id = due.member_id
+          AND a.schedule_id = due.schedule_id
+          AND a.alarm_generation = due.generation
+          AND a.occurrence_id = due.occurrence_id
+          AND a.trigger_at = due.trigger_at
+          AND a.device_token_id = due.device_token_id
+          AND a.token_ownership_version = due.token_ownership_version
+    )) AS assigned_boundary_ownerships,
+    ROUND(
+        100.0 * SUM(EXISTS (
+            SELECT 1
+            FROM departure_alarm_presentation_assignments a
+            WHERE a.member_id = due.member_id
+              AND a.schedule_id = due.schedule_id
+              AND a.alarm_generation = due.generation
+              AND a.occurrence_id = due.occurrence_id
+              AND a.trigger_at = due.trigger_at
+              AND a.device_token_id = due.device_token_id
+              AND a.token_ownership_version = due.token_ownership_version
+        )) / NULLIF(COUNT(*), 0),
+        2
+    ) AS boundary_assignment_coverage_percent
+FROM due;
+```
+
+Do not publish the expected-channel evidence percentage when this auditor is below 99%, when the due-job
+gauge is nonzero for more than two consecutive samples, when the auditor has no expected rows, or
+when the nearby mismatched-trigger diagnostic is nonzero and unresolved. A
+future immutable occurrence-expectation table is required before this coverage can be recomputed
+historically; `schedule_push_job` keeps only mutable last-boundary fields and is not a valid
+historical denominator.
 
 Android records the exact alarm `BroadcastReceiver` callback before foreground-service startup;
 iOS time-sensitive delivery is reconciled from the OS delivered-notification list into a bounded
@@ -252,131 +598,150 @@ When a persisted one-shot AlarmKit alarm is absent from the daemon store only af
 Apple's persistence contract permits it to be recorded as `INFERRED_OS_DELIVERY`. Both iOS bases
 count as execution coverage, but neither enters the exact-delay histogram.
 
-Use an expected-trigger cohort, not provider delivery time alone, when calculating a push-origin
-alarm fire rate. The frozen alarm command is in the matching app-notification payload. Validate the
-ISO-to-`DATETIME(6)` conversion against production payload samples before adopting this query as a
-dashboard source.
-
-```sql
-WITH pushed_alarm AS (
-    SELECT
-        d.id,
-        d.alarm_scheduled_at,
-        d.alarm_fired_at,
-        CAST(
-            REPLACE(REPLACE(
-                JSON_UNQUOTE(JSON_EXTRACT(n.data_json, '$.alarmTriggerAt')),
-                'T', ' '
-            ), 'Z', '')
-            AS DATETIME(6)
-        ) AS expected_trigger_at
-    FROM push_deliveries d
-    JOIN app_notifications n
-      ON n.member_id = d.member_id
-     AND n.logical_event_key = d.event_key
-    WHERE d.status = 'SUCCESS'
-      AND d.payload_type = 'DEPARTURE_ALARM_SYNC'
-      AND d.delivered_at >= :from_utc
-      AND d.delivered_at < :to_utc
-      AND JSON_UNQUOTE(JSON_EXTRACT(n.data_json, '$.alarmOperation')) = 'UPSERT'
-), aged_scheduled AS (
-    SELECT *
-    FROM pushed_alarm
-    WHERE alarm_scheduled_at IS NOT NULL
-      AND expected_trigger_at < UTC_TIMESTAMP(6) - INTERVAL 10 MINUTE
-)
-SELECT
-    COUNT(*) AS expected_push_origin_fires,
-    SUM(alarm_fired_at IS NOT NULL) AS observed_push_origin_fires,
-    ROUND(100.0 * SUM(alarm_fired_at IS NOT NULL) / NULLIF(COUNT(*), 0), 2)
-        AS observed_fire_percent
-FROM aged_scheduled;
-```
-
 Snapshot and push command applications are persisted as device-bound receipts. This makes the aged
 scheduled cohort an explicit denominator. Deduplicate replays by the server-generated command
 receipt key and report delivery mode separately. Android exact callbacks, iOS observed alerting,
 and iOS inferred one-shot delivery must remain separate timing-basis cohorts.
 
+Coverage accepts a receipt only while both its client occurrence time and authoritative server
+receipt time are within the configured 24-hour TTL. The server requests revalidation every 12
+hours by increasing `alarmValidationRevision` without changing the desired `alarmGeneration` or
+plan. Losing that control push therefore does not immediately invalidate an otherwise fresh
+receipt; when the receipt finally ages out, the boundary fails open to a visible fallback. A fresh
+higher `mutation_sequence` receipt renews coverage, while a fresh failure makes that ownership
+visible immediately. Revalidation is skipped when the next occurrence is within the 30-minute
+delivery safety lead.
+
+Permission revocation and OS alarm removal have no synchronous server signal. It is impossible to
+guarantee both zero missed alerts and zero duplicates in that uncertainty window: fail-open
+fallback avoids a silent miss, while an old native alarm that the OS retained can still create a
+duplicate. The any-generation assignment query above measures the native and cross-channel portion
+of this tradeoff instead of hiding it; visible-only duplicates remain unmeasured.
+
 ```sql
-WITH scheduled AS (
-    SELECT
-        member_id,
-        device_fingerprint,
-        alarm_id,
-        generation,
-        trigger_at,
-        platform,
-        delivery_mode,
-        MIN(source) AS receipt_source
-    FROM departure_alarm_schedule_receipts
-    WHERE outcome = 'SCHEDULED'
-      AND server_recorded_at >= :from_utc
-      AND server_recorded_at < :to_utc
-    GROUP BY
-        member_id, device_fingerprint, alarm_id, generation, trigger_at,
-        platform, delivery_mode
-), aged AS (
+WITH aged_native_assignment AS (
     SELECT *
-    FROM scheduled
-    WHERE trigger_at < UTC_TIMESTAMP(6) - INTERVAL 10 MINUTE
+    FROM departure_alarm_presentation_assignments
+    WHERE presentation_mode = 'NATIVE_ALARM'
+      AND trigger_at >= :from_utc
+      AND trigger_at < :to_utc
+      AND assigned_at < CAST(:as_of_utc AS DATETIME(6))
+      AND trigger_at < CAST(:as_of_utc AS DATETIME(6)) - INTERVAL 10 MINUTE
+), receipt_at_assignment AS (
+    SELECT
+        a.*,
+        r.outcome AS receipt_outcome,
+        r.platform AS receipt_platform,
+        r.delivery_mode,
+        r.source AS receipt_source,
+        ROW_NUMBER() OVER (
+            PARTITION BY a.id
+            ORDER BY
+                r.mutation_sequence DESC,
+                CASE WHEN r.outcome = 'SCHEDULED' THEN 1 ELSE 0 END ASC,
+                r.client_occurred_at DESC,
+                r.server_recorded_at DESC,
+                r.id DESC
+        ) AS receipt_rank
+    FROM aged_native_assignment a
+    LEFT JOIN departure_alarm_schedule_receipts r
+      ON r.member_id = a.member_id
+     AND r.schedule_id = a.schedule_id
+     AND r.generation = a.alarm_generation
+     AND r.occurrence_id = a.occurrence_id
+     AND r.trigger_at = a.trigger_at
+     AND r.device_token_id = a.device_token_id
+     AND r.token_ownership_version = a.token_ownership_version
+     AND r.device_fingerprint = a.device_fingerprint
+     AND r.mutation_sequence IS NOT NULL
+     AND r.server_recorded_at <= a.assigned_at
+), cohort AS (
+    SELECT *
+    FROM receipt_at_assignment
+    WHERE receipt_rank = 1
 )
 SELECT
-    m.platform,
-    m.delivery_mode,
-    m.receipt_source,
+    m.platform AS assigned_platform,
+    COALESCE(m.receipt_platform, 'MISSING') AS receipt_platform,
+    COALESCE(m.delivery_mode, 'UNKNOWN') AS delivery_mode,
+    COALESCE(m.receipt_source, 'MISSING') AS receipt_source,
+    m.occurrence_id,
     COUNT(*) AS expected_fires,
+    SUM(m.receipt_outcome = 'SCHEDULED') AS frozen_schedule_receipt_invariant,
     SUM(EXISTS (
         SELECT 1
         FROM departure_alarm_fire_events f
         WHERE f.member_id = m.member_id
           AND f.device_fingerprint = m.device_fingerprint
-          AND f.alarm_id = m.alarm_id
-          AND f.generation = m.generation
-          AND (f.source_trigger_at = m.trigger_at OR f.scheduled_for = m.trigger_at)
+          AND f.schedule_id = m.schedule_id
+          AND f.generation = m.alarm_generation
+          AND f.occurrence_id = m.occurrence_id
+          AND f.source_trigger_at = m.trigger_at
+          AND f.scheduled_for = f.source_trigger_at
+          AND f.server_recorded_at < :as_of_utc
     )) AS observed_fires,
     SUM(EXISTS (
         SELECT 1
         FROM departure_alarm_fire_events f
         WHERE f.member_id = m.member_id
           AND f.device_fingerprint = m.device_fingerprint
-          AND f.alarm_id = m.alarm_id
-          AND f.generation = m.generation
+          AND f.schedule_id = m.schedule_id
+          AND f.generation = m.alarm_generation
+          AND f.occurrence_id = m.occurrence_id
           AND f.timing_basis = 'EXACT_CALLBACK'
-          AND (f.source_trigger_at = m.trigger_at OR f.scheduled_for = m.trigger_at)
+          AND f.source_trigger_at = m.trigger_at
+          AND f.scheduled_for = f.source_trigger_at
+          AND f.server_recorded_at < :as_of_utc
     )) AS exact_callback_fires,
     SUM(EXISTS (
         SELECT 1
         FROM departure_alarm_fire_events f
         WHERE f.member_id = m.member_id
           AND f.device_fingerprint = m.device_fingerprint
-          AND f.alarm_id = m.alarm_id
-          AND f.generation = m.generation
+          AND f.schedule_id = m.schedule_id
+          AND f.generation = m.alarm_generation
+          AND f.occurrence_id = m.occurrence_id
           AND f.timing_basis = 'OBSERVED_ALERTING'
-          AND (f.source_trigger_at = m.trigger_at OR f.scheduled_for = m.trigger_at)
+          AND f.source_trigger_at = m.trigger_at
+          AND f.scheduled_for = f.source_trigger_at
+          AND f.server_recorded_at < :as_of_utc
     )) AS observed_alerting_fires,
     SUM(EXISTS (
         SELECT 1
         FROM departure_alarm_fire_events f
         WHERE f.member_id = m.member_id
           AND f.device_fingerprint = m.device_fingerprint
-          AND f.alarm_id = m.alarm_id
-          AND f.generation = m.generation
+          AND f.schedule_id = m.schedule_id
+          AND f.generation = m.alarm_generation
+          AND f.occurrence_id = m.occurrence_id
           AND f.timing_basis = 'INFERRED_OS_DELIVERY'
-          AND (f.source_trigger_at = m.trigger_at OR f.scheduled_for = m.trigger_at)
+          AND f.source_trigger_at = m.trigger_at
+          AND f.scheduled_for = f.source_trigger_at
+          AND f.server_recorded_at < :as_of_utc
     )) AS inferred_os_delivery_fires,
     ROUND(100.0 * SUM(EXISTS (
         SELECT 1
         FROM departure_alarm_fire_events f
         WHERE f.member_id = m.member_id
           AND f.device_fingerprint = m.device_fingerprint
-          AND f.alarm_id = m.alarm_id
-          AND f.generation = m.generation
-          AND (f.source_trigger_at = m.trigger_at OR f.scheduled_for = m.trigger_at)
+          AND f.schedule_id = m.schedule_id
+          AND f.generation = m.alarm_generation
+          AND f.occurrence_id = m.occurrence_id
+          AND f.source_trigger_at = m.trigger_at
+          AND f.scheduled_for = f.source_trigger_at
+          AND f.server_recorded_at < :as_of_utc
     )) / NULLIF(COUNT(*), 0), 2) AS observed_fire_percent
-FROM aged m
-GROUP BY m.platform, m.delivery_mode, m.receipt_source;
+FROM cohort m
+GROUP BY
+    m.platform, m.receipt_platform, m.delivery_mode, m.receipt_source, m.occurrence_id;
 ```
+
+This is a diagnostic within the canonical frozen `NATIVE_ALARM` assignment denominator, not a
+second reliability denominator. Receipt ranking is evaluated as of `assigned_at`, before later
+capability changes, so the report window is defined by `trigger_at` and cannot omit an earlier
+valid receipt or admit a later stale success. The highest mutation sequence wins for each exact
+assignment and a non-scheduled result wins a same-sequence tie. The schedule-receipt invariant must
+equal `expected_fires`; a difference is an assignment transaction defect, not a missing fire.
 
 Treat `IOS_ALARM_KIT` as measured execution coverage when either `observed_alerting_fires` or
 `inferred_os_delivery_fires` exists. Its exact timing remains unmeasured; only Android
@@ -653,9 +1018,27 @@ when a user upgraded between the two transitions.
 
 Initial review targets may be proposed as `client_received >= 97%` of aged, ACK-capability-v1
 provider successes,
-`alarm_scheduled >= 98%` of aged alarm-control provider successes,
-`alarm_fired >= 98%` of aged push-origin alarms confirmed scheduled by the client, and, for each
-sufficiently sampled ETA slice, `MAE <= 300 seconds`, `P90 absolute error <= 600 seconds`, and
+`boundary_assignment_coverage >= 99%` in the live boundary auditor,
+and `expected_channel_evidence_percent >= 90%` for the aged per-ownership assignment cohort. This
+requires the assigned native/visible evidence channels for ordinary reminders and the expected
+native-plus-visible channels for rows whose semantic warning flag is true. It does not assert a
+measured visible-only duplicate rate. Publish the combined score only with at least 500
+assignments, and publish every platform, platform/occurrence, and
+platform/occurrence/presentation-mode/semantic-warning slice only with at least 100; otherwise
+label that slice `insufficient sample`. The combined cohort and every sufficiently sampled slice
+must each be at least 90%; Android success cannot offset an iOS failure, and strong M15 results
+cannot hide an M0 or fallback defect. Require M15/M10/M5/M0 platform/occurrence slices explicitly
+once each reaches 100 assignments. A slice below 100 assignments is `insufficient sample` and
+follows the separately approved staged rollout policy; it must not be silently merged into another
+slice and called passing. Any missing boundary audit, an assignment-coverage result below 99%, a
+persistently overdue job, or an unresolved nearby mismatched-trigger fire makes the
+expected-channel evidence score `unmeasured`, even if its sampled percentage is high. Missing,
+observable native/cross-channel duplicate, and wrong-channel counts remain separate release
+blockers and must always accompany the score. The foreground-local client durable-claim prevention
+tests are a separate release invariant; without append-only claim telemetry, report the
+visible-only duplicate rate as `unmeasured`. For each sufficiently sampled ETA slice,
+`MAE <= 300 seconds`,
+`P90 absolute error <= 600 seconds`, and
 `false-safe <= 5%` of predicted-on-time samples. These are candidate
 targets requiring product/operations approval, **not observed production results**. Until the
 queries above have run on a qualifying field cohort, report observed push delivery and ETA

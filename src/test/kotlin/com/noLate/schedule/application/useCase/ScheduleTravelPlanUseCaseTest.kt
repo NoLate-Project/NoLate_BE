@@ -3,6 +3,7 @@ package com.noLate.schedule.application.useCase
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheAudienceResolver
 import com.noLate.schedule.application.service.SchedulePushJobService
 import com.noLate.schedule.application.service.ScheduleService
 import com.noLate.schedule.application.service.ScheduleTravelPlanService
@@ -31,6 +32,7 @@ class ScheduleTravelPlanUseCaseTest {
     @Mock lateinit var scheduleService: ScheduleService
     @Mock lateinit var pushJobService: SchedulePushJobService
     @Mock lateinit var eventPublisher: ApplicationEventPublisher
+    @Mock lateinit var cacheAudienceResolver: ScheduleCalendarCacheAudienceResolver
 
     private lateinit var useCase: ScheduleTravelPlanUseCase
 
@@ -41,6 +43,7 @@ class ScheduleTravelPlanUseCaseTest {
             scheduleService,
             pushJobService,
             eventPublisher,
+            cacheAudienceResolver,
         )
     }
 
@@ -51,6 +54,7 @@ class ScheduleTravelPlanUseCaseTest {
         val schedule = schedule()
         whenever(travelPlanService.upsertMyTravelPlan(2L, 10L, command)).thenReturn(plan)
         whenever(scheduleService.getScheduleDetail(2L, 10L)).thenReturn(schedule)
+        whenever(cacheAudienceResolver.resolve(schedule)).thenReturn(setOf(1L, 2L, 3L, 4L))
 
         useCase.upsertMyTravelPlan(2L, 10L, command, 6L)
 
@@ -58,7 +62,7 @@ class ScheduleTravelPlanUseCaseTest {
         verify(pushJobService).registerFromTravelPlanDto(2L, schedule, plan)
         verify(pushJobService, never()).cancelByScheduleIdAndMemberId(10L, 2L)
         verify(eventPublisher).publishEvent(check<ScheduleCalendarCacheInvalidationEvent> {
-            assertEquals(setOf(2L), it.memberIds)
+            assertEquals(setOf(1L, 2L, 3L, 4L), it.memberIds)
             assertEquals("travel-plan-updated", it.reason)
         })
     }
@@ -68,7 +72,9 @@ class ScheduleTravelPlanUseCaseTest {
         val command = ScheduleTravelPlanUpsertCommand(notificationEnabled = false)
         val plan = plan(notificationEnabled = false)
         whenever(travelPlanService.upsertMyTravelPlan(2L, 10L, command)).thenReturn(plan)
-        whenever(scheduleService.getScheduleDetail(2L, 10L)).thenReturn(schedule())
+        val schedule = schedule()
+        whenever(scheduleService.getScheduleDetail(2L, 10L)).thenReturn(schedule)
+        whenever(cacheAudienceResolver.resolve(schedule)).thenReturn(setOf(1L, 2L, 3L))
 
         useCase.upsertMyTravelPlan(2L, 10L, command, 6L)
 
