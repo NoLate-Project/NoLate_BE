@@ -73,4 +73,33 @@ class DepartureAlarmReliabilityRunbookContractTest {
             "exact_assignment_percent",
         )
     }
+
+    @Test
+    fun `background provider replacement and expiration remain bounded but not exactly once`() {
+        assertThat(runbook).contains(
+            "bypasses that",
+            "foreground-local claim entirely",
+            "hashes `logicalEventKey` with SHA-256",
+            "opaque, stable, 64-ASCII-character provider replacement identifier",
+            "`AndroidNotification.tag`",
+            "`apns-collapse-id`",
+            "ignores a custom Android collapse key",
+            "do not treat either",
+            "`AndroidConfig.collapseKey`",
+            "containing `etaEventExpiresAt`",
+            "with a nonblank `logicalEventKey`",
+            "strictly in the future",
+            "millisecond duration to Android TTL",
+            "absolute epoch seconds to",
+            "`apns-expiration`",
+            "confirmed local",
+            "rejection before Firebase is",
+            "called. Because the provider never saw that attempt",
+            "return safely to `FAILED`",
+            "produce catch-up data instead of sending it late",
+            "play sound or vibration again",
+            "background visible-only duplicate",
+            "rate `unmeasured`",
+        )
+    }
 }

@@ -436,6 +436,29 @@ tests as a release blocker. Until an append-only claim-attempt/presentation jour
 the actual visible-only duplicate rate is `unmeasured`; do not infer it from this SQL or from a
 passing 90% expected-channel evidence score.
 
+An OS-presented standard FCM notification received while the app is backgrounded bypasses that
+foreground-local claim entirely. For this path, the server hashes `logicalEventKey` with SHA-256
+into an opaque, stable, 64-ASCII-character provider replacement identifier. It sets
+`AndroidNotification.tag` and the APNs `apns-collapse-id` header to that value. The Android
+notification tag is the essential device-visible replacement key. Notification messages are
+already collapsible in FCM, which ignores a custom Android collapse key for this message type;
+do not treat either `AndroidConfig.collapseKey` or a data field named `collapse_key` as this guarantee.
+
+Every standard visible ETA payload containing `etaEventExpiresAt` must cross the provider boundary
+with a nonblank `logicalEventKey` and a parseable `Instant` that is still strictly in the future.
+The server maps its remaining millisecond duration to Android TTL and its absolute epoch seconds to
+`apns-expiration`. A missing logical identity and malformed, expired, sub-millisecond, or
+provider-range-invalid expiration fail closed as a confirmed local rejection before Firebase is
+called. Because the provider never saw that attempt, the delivery may return safely to `FAILED`;
+the authoritative schedule expiry fence and next ETA evaluation then close the stale immutable
+event and produce catch-up data instead of sending it late.
+
+Provider replacement is still not an exactly-once guarantee. Android can replace the drawer entry
+under the same tag yet play sound or vibration again for a repeated delivery or update, and neither
+platform can retract an alert already presented before a later collapse. Keep the focused provider
+replacement/expiration tests as a release blocker and keep the background visible-only duplicate
+rate `unmeasured` without physical presentation-attempt telemetry.
+
 The all-generation `native_count` is deliberately a count, not `EXISTS`. A visible fallback can
 coincide with a still-live alarm from an older generation, and current plus stale native alarms can
 both fire. Collapsing either case to a boolean would incorrectly report success. An initial alarm
@@ -1035,8 +1058,9 @@ persistently overdue job, or an unresolved nearby mismatched-trigger fire makes 
 expected-channel evidence score `unmeasured`, even if its sampled percentage is high. Missing,
 observable native/cross-channel duplicate, and wrong-channel counts remain separate release
 blockers and must always accompany the score. The foreground-local client durable-claim prevention
-tests are a separate release invariant; without append-only claim telemetry, report the
-visible-only duplicate rate as `unmeasured`. For each sufficiently sampled ETA slice,
+tests and the background provider replacement/expiration tests are separate release invariants;
+without append-only claim telemetry, report the visible-only duplicate rate as `unmeasured`. For
+each sufficiently sampled ETA slice,
 `MAE <= 300 seconds`,
 `P90 absolute error <= 600 seconds`, and
 `false-safe <= 5%` of predicted-on-time samples. These are candidate
