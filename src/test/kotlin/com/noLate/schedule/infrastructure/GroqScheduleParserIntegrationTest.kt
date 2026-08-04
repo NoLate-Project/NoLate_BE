@@ -50,7 +50,7 @@ class GroqScheduleParserIntegrationTest {
         assertEquals("2026-05-30", result.date)
         assertEquals("20:30", result.time)
         assertEquals("강남", result.destination?.name)
-        assertEquals("강남 20:30", result.title)
+        assertEquals("20:30 강남", result.title)
         assertEquals(ScheduleParseSource.AI_ASSISTED, result.parseSource)
         assertTrue(result.aiAttempted)
         assertNotNull(result.notes)

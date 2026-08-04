@@ -7,6 +7,7 @@ import com.noLate.schedule.domain.ScheduleParseDto
 import com.noLate.schedule.domain.ScheduleParseInputType
 import com.noLate.schedule.domain.SchedulePlaceDto
 import org.springframework.stereotype.Service
+import java.time.Clock
 import java.time.DateTimeException
 import java.time.Duration
 import java.time.LocalDate
@@ -22,7 +23,9 @@ import java.time.ZoneId
  * AI 보완 또는 사용자 확인 여부를 결정할 수 있게 한다.
  */
 @Service
-class ScheduleTextParserService {
+class ScheduleTextParserService(
+    private val clock: Clock = Clock.systemUTC(),
+) {
     private val seoulZone = ZoneId.of("Asia/Seoul")
 
     // 전화번호나 생년월일을 일정 날짜로 오인하지 않도록 정규식 후보에 문맥 가중치를 적용한다.
@@ -42,9 +45,9 @@ class ScheduleTextParserService {
     private val dayOnlyPattern = Regex("""(?:^|\D)(\d{1,2})\s*일(?!\d|\s*(?:후|전))""")
     // `7시 8시`처럼 시간이 연속될 때 두 번째 8을 첫 시간의 분으로 먹지 않도록 `분`을 필수로 둔다.
     private val koreanTimePattern =
-        Regex("""(새벽|아침|오전|낮|점심|오후|저녁|밤)?\s*(\d{1,2})\s*시(?:\s*((?:반(?![가-힣A-Za-z0-9]))|\d{1,2}\s*분))?""")
+        Regex("""(새벽|아침|오전|낮|점심|오후|저녁|밤)?\s*(\d{1,2})\s*시(?!간)(?:\s*((?:반(?![가-힣A-Za-z0-9]))|\d{1,2}\s*분))?""")
     private val koreanWordTimePattern =
-        Regex("""(새벽|아침|오전|낮|점심|오후|저녁|밤)?\s*(?<![가-힣A-Za-z0-9])(열두|열한|열|아홉|여덟|일곱|여섯|다섯|네|넷|사|세|셋|삼|두|둘|이|한|하나|일|오|육|칠|팔|구)\s*시(?:\s*(반|삼십|이십|십|사십|오십)\s*분?)?""")
+        Regex("""(새벽|아침|오전|낮|점심|오후|저녁|밤)?\s*(?<![가-힣A-Za-z0-9])(열두|열한|열|아홉|여덟|일곱|여섯|다섯|네|넷|사|세|셋|삼|두|둘|이|한|하나|일|오|육|칠|팔|구)\s*시(?!간)(?:\s*(반|삼십|이십|십|사십|오십)\s*분?)?""")
     private val colonTimePattern =
         Regex("""(?:^|[^\d])(오전|오후|저녁|밤|낮|새벽|아침)?\s*([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?!\d)""")
     private val explicitTimeRangePattern = Regex(
@@ -68,6 +71,8 @@ class ScheduleTextParserService {
     private val relativeWeekdayPattern =
         Regex("""(?:(이번|다음)\s*주?\s*)?([일월화수목금토])(?:요일|욜)""")
     private val relativeDatePattern = Regex("""오늘|내일|낼|모레|글피""")
+    private val relativeOffsetPattern =
+        Regex("""(?<![\p{L}\p{N}])(\d{1,4}|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(시간|분)\s*(?:뒤|후)(?:에)?""")
     private val correctionMarkerPattern = Regex("""(?:아니(?:고)?|말고)""")
     private val routePurposeTokens = setOf(
         "회의",
@@ -317,17 +322,21 @@ class ScheduleTextParserService {
         }
         // 구조가 강한 전용 축약형을 먼저 적용하고, 없으면 일반 라벨과 문맥 규칙으로 내려간다.
         val dotAssignmentFields = chooseDotAssignmentFields(lines)
+        val relativeStart = chooseRelativeStart(lines)
         val selectedDate = dotAssignmentFields?.date
+            ?: relativeStart?.let { SelectedDate(it.dateTime.toLocalDate(), it.lineIndex) }
             ?: chooseDate(lines, baseDate, warnings)
             ?: chooseRelativeDate(lines, baseDate)
             ?: chooseDayOfMonth(lines, baseDate, warnings)
             ?: chooseRelativeWeekday(lines, baseDate)
-        val selectedTime = dotAssignmentFields?.time ?: chooseTime(
-            lines = lines,
-            preferredLineIndex = selectedDate?.lineIndex,
-            inputType = inputType,
-            warnings = warnings,
-        )
+        val selectedTime = dotAssignmentFields?.time
+            ?: relativeStart?.let { SelectedTime(it.dateTime.toLocalTime()) }
+            ?: chooseTime(
+                lines = lines,
+                preferredLineIndex = selectedDate?.lineIndex,
+                inputType = inputType,
+                warnings = warnings,
+            )
         val compactFields = chooseCompactFields(lines)
         // OCR로 들어오는 손글씨 메모는 "수요일 7시 강남역 -> 판교 네이버"처럼
         // 라벨 없이 시간과 이동 방향만 적힌 경우가 많다. 기존 라벨 기반 추출보다
@@ -337,6 +346,7 @@ class ScheduleTextParserService {
             ?: compactFields?.customerName
             ?: dotAssignmentFields?.customerName
         val eventType = chooseEventType(lines)
+        val explicitTitle = chooseExplicitTitle(lines)
         val origin = chooseOrigin(lines)
             ?: routeExpressionFields?.originName?.let { SchedulePlaceDto(name = it) }
         val destination = chooseDestination(lines)
@@ -344,7 +354,7 @@ class ScheduleTextParserService {
             ?: dotAssignmentFields?.destinationName?.let { SchedulePlaceDto(name = it) }
             ?: routeExpressionFields?.destinationName?.let { SchedulePlaceDto(name = it) }
             ?: chooseNaturalDestination(lines, inputType)
-        val title = if (prefersVoiceCompanionTitle) {
+        val title = explicitTitle ?: if (prefersVoiceCompanionTitle) {
             chooseVoiceTitle(lines, destination, inputType)
         } else {
             null
@@ -586,7 +596,7 @@ class ScheduleTextParserService {
             "열" to "10",
         )
         val koreanHourPattern = Regex(
-            """(열두|열한|일곱|여덟|다섯|여섯|아홉|하나|둘|셋|넷|한|두|세|네|열)\s*시""",
+            """(열두|열한|일곱|여덟|다섯|여섯|아홉|하나|둘|셋|넷|한|두|세|네|열)\s*시(?!간)""",
         )
         normalized = koreanHourPattern.replace(normalized) { match ->
             "${koreanHours.getValue(match.groupValues[1])}시"
@@ -608,7 +618,7 @@ class ScheduleTextParserService {
                 Regex("""(\d{1,2}\s*월\s*\d{1,2}\s*일)(?=(?:오전|오후|저녁|밤|낮|새벽|아침)?\d{1,2}\s*(?:시|:))"""),
                 "$1 ",
             )
-            .replace(Regex("""(\d{1,2}\s*시(?:\s*\d{1,2}\s*분)?)(?=[가-힣])"""), "$1 ")
+            .replace(Regex("""(\d{1,2}\s*시(?:\s*\d{1,2}\s*분)?)(?=[가-힣])(?!간)"""), "$1 ")
             // `석촌호수에서진욱이랑...`처럼 장소 조사와 동행인이 붙어도 조사 뒤를 경계로 만든다.
             .replace(
                 Regex("""(에서|으로|로)(?=[가-힣A-Za-z0-9]{1,12}(?:이랑|랑|와|과))"""),
@@ -706,7 +716,7 @@ class ScheduleTextParserService {
      * 연도가 없는 입력의 기준 날짜를 검증한다. 미입력 시 서비스 기준 시간대의 오늘을 쓴다.
      */
     private fun parseReferenceDate(referenceDate: String?): LocalDate {
-        if (referenceDate.isNullOrBlank()) return LocalDate.now(seoulZone)
+        if (referenceDate.isNullOrBlank()) return LocalDate.now(clock.withZone(seoulZone))
         return runCatching { LocalDate.parse(referenceDate.trim()) }
             .getOrElse {
                 throw BusinessException(ErrorCode.INVALID_INPUT, "referenceDate must be ISO date.")
@@ -820,7 +830,9 @@ class ScheduleTextParserService {
      * 읽힌 모든 시간을 수집한다. 동일한 시간이 두 형식으로 중복 인식돼도 Set으로 한 번만 센다.
      */
     private fun collectOcrTimeValues(lines: List<String>): Set<LocalTime> = buildSet {
-        lines.forEach { line ->
+        lines.forEach { sourceLine ->
+            // `1시간 뒤`의 `1시`는 시각 후보가 아니라 현재 시각 기준 간격이다.
+            val line = sourceLine.replace(relativeOffsetPattern, " ")
             koreanTimePattern.findAll(line).forEach { match ->
                 parseTime(
                     meridiem = match.groupValues[1].ifBlank { null },
@@ -891,6 +903,33 @@ class ScheduleTextParserService {
                 else -> 3L
             }
             return SelectedDate(referenceDate.plusDays(daysToAdd), lineIndex)
+        }
+        return null
+    }
+
+    /** `1시간 뒤`, `30분 후에`처럼 현재 시각 기준으로 확정 가능한 상대 일시를 계산한다. */
+    private fun chooseRelativeStart(lines: List<String>): SelectedRelativeStart? {
+        lines.forEachIndexed { lineIndex, line ->
+            val match = relativeOffsetPattern.find(line) ?: return@forEachIndexed
+            val amount = match.groupValues[1].toIntOrNull()
+                ?: parseKoreanNumber(match.groupValues[1])
+                ?: return@forEachIndexed
+            val unit = match.groupValues[2]
+            val isValid = when (unit) {
+                "시간" -> amount in 1..168
+                else -> amount in 1..10_080
+            }
+            if (!isValid) return@forEachIndexed
+
+            val now = LocalDateTime.now(clock.withZone(seoulZone))
+                .withSecond(0)
+                .withNano(0)
+            val dateTime = if (unit == "시간") {
+                now.plusHours(amount.toLong())
+            } else {
+                now.plusMinutes(amount.toLong())
+            }
+            return SelectedRelativeStart(dateTime = dateTime, lineIndex = lineIndex)
         }
         return null
     }
@@ -1219,11 +1258,21 @@ class ScheduleTextParserService {
         cleanValue(
             extractLabeledValue(
                 lines,
-                listOf("촬영종류", "일정명", "행사명", "서비스명"),
+                listOf("촬영종류", "서비스명"),
             ),
         )
 
-    // 기본 제목은 장소와 시간이지만, 빠른 자연어 입력은 `술약속` 같은 일정 목적도 보존한다.
+    /** `제목`, `일정명`, `행사명`으로 명시된 값은 자동 생성 제목보다 우선한다. */
+    private fun chooseExplicitTitle(lines: List<String>): String? =
+        cleanValue(
+            extractLabeledValue(
+                lines,
+                listOf("일정 제목", "제목", "일정명", "행사명"),
+            ),
+        )
+
+    // 명시 제목이 없으면 일정 시각(도착 목표 시각)과 장소 순서로 기본 제목을 만든다.
+    // 자연어에서 `회의`, `술약속`처럼 제목 역할을 하는 목적어가 있으면 장소와 함께 보존한다.
     private fun buildTitle(
         destination: SchedulePlaceDto?,
         selectedTime: SelectedTime?,
@@ -1239,7 +1288,7 @@ class ScheduleTextParserService {
         val time = selectedTime?.time?.let {
             "${it.hour.toString().padStart(2, '0')}:${it.minute.toString().padStart(2, '0')}"
         }
-        return listOfNotNull(place, time).joinToString(" ").takeIf { it.isNotBlank() }
+        return listOfNotNull(time, place).joinToString(" ").takeIf { it.isNotBlank() }
     }
 
     // 사람 이름, 업체, 작가 배정 같은 운영 정보는 모두 메모 필드로 모은다.
@@ -1356,7 +1405,8 @@ class ScheduleTextParserService {
     }
 
     private fun hasDateOrTimeContext(line: String): Boolean =
-        koreanTimePattern.containsMatchIn(line) ||
+        relativeOffsetPattern.containsMatchIn(line) ||
+            koreanTimePattern.containsMatchIn(line) ||
             colonTimePattern.containsMatchIn(line) ||
             fullDatePattern.containsMatchIn(line) ||
             compactDatePattern.containsMatchIn(line) ||
@@ -1403,6 +1453,7 @@ class ScheduleTextParserService {
             koreanDatePattern,
             shortDatePattern,
             weekdayTokenPattern,
+            relativeOffsetPattern,
             koreanTimePattern,
             colonTimePattern,
         )
@@ -1663,6 +1714,7 @@ class ScheduleTextParserService {
             .replace(relativeDatePattern, " ")
             .replace(weekdayTokenPattern, " ")
             .replace(Regex("""(?:이번\s*달|다음\s*달)"""), " ")
+            .replace(relativeOffsetPattern, " ")
             .replace(koreanTimePattern, " ")
             .replace(colonTimePattern, " ")
             // `점심`, `저녁`은 시간대이면서 일정 목적일 수 있어 여기서 지우지 않는다.
@@ -1835,7 +1887,7 @@ class ScheduleTextParserService {
     /**
      * 음성 입력의 제목 후보를 만든다.
      *
-     * 기존 텍스트/예약 양식은 "장소 + 시간" 제목을 유지한다. 반면 음성은 사용자가
+     * 제목이 없는 텍스트/예약 양식은 "도착시간 + 장소" 기본 제목을 사용한다. 반면 음성은 사용자가
      * "민수랑 미팅", "팀 회의"처럼 제목에 가까운 말을 자연스럽게 남기기 때문에
      * 날짜/시간/장소/명령어를 제거한 잔여 문구를 제목으로 우선 사용한다.
      */
@@ -1866,6 +1918,7 @@ class ScheduleTextParserService {
         line
             .replace(Regex("""(오늘|내일|모레|글피)"""), " ")
             .replace(Regex("""(?:(이번|다음)\s*주\s*)?[일월화수목금토]요일?"""), " ")
+            .replace(relativeOffsetPattern, " ")
             .replace(koreanTimePattern, " ")
             .replace(koreanWordTimePattern, " ")
             .replace(colonTimePattern, " ")
@@ -2010,6 +2063,11 @@ class ScheduleTextParserService {
         val time: LocalTime,
         val inferredEvening: Boolean = false,
         val ambiguousMeridiem: Boolean = false,
+    )
+
+    private data class SelectedRelativeStart(
+        val dateTime: LocalDateTime,
+        val lineIndex: Int,
     )
 
     private data class ParsedTime(

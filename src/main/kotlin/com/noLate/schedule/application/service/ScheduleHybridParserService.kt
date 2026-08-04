@@ -182,10 +182,15 @@ class ScheduleHybridParserService(
         recognitionConfidence: Double?,
         ai: ScheduleAiParseResult? = null,
     ): ScheduleParseDto {
-        val isMedia = inputType == ScheduleParseInputType.IMAGE_OCR ||
-            inputType == ScheduleParseInputType.VOICE_TRANSCRIPT
         val normalizedRecognition = normalizeRecognitionConfidence(recognitionConfidence)
-        val recognitionCeiling = if (isMedia) normalizedRecognition ?: UNKNOWN_MEDIA_CONFIDENCE else 1.0
+        val recognitionCeiling = when {
+            normalizedRecognition != null -> normalizedRecognition
+            // 사진은 사용자가 OCR 문장을 직접 듣고 확인하는 단계가 없으므로 점수 미제공도 보수적으로 본다.
+            inputType == ScheduleParseInputType.IMAGE_OCR -> UNKNOWN_MEDIA_CONFIDENCE
+            // 음성 문장은 녹음 직후 화면에서 확인·수정된 텍스트다. STT가 점수를 제공하지 않았다는
+            // 이유만으로 결정적 날짜·시간·장소 파싱까지 0~70%로 낮추지 않는다.
+            else -> 1.0
+        }
 
         fun score(
             value: String?,
@@ -235,7 +240,9 @@ class ScheduleHybridParserService(
                 destinationPenalty,
             ),
         )
-        val confidenceRequiresReview = needsReview || (isMedia && normalizedRecognition == null)
+        val confidenceRequiresReview = needsReview || (
+            inputType == ScheduleParseInputType.IMAGE_OCR && normalizedRecognition == null
+        )
         var overall = fields.date * DATE_CONFIDENCE_WEIGHT +
             fields.time * TIME_CONFIDENCE_WEIGHT +
             fields.destination * DESTINATION_CONFIDENCE_WEIGHT
@@ -256,8 +263,8 @@ class ScheduleHybridParserService(
             else -> ScheduleParseConfidenceLevel.MEDIUM
         }
         val reasons = buildList {
-            if (isMedia && normalizedRecognition == null) {
-                add("사진·음성 인식 신뢰도를 측정할 수 없어 원문 확인이 필요합니다.")
+            if (inputType == ScheduleParseInputType.IMAGE_OCR && normalizedRecognition == null) {
+                add("사진 인식 신뢰도를 측정할 수 없어 원문 확인이 필요합니다.")
             }
             addAll(warnings)
             missingFields.forEach { field ->
@@ -430,7 +437,8 @@ class ScheduleHybridParserService(
 
     private fun normalizeRecognitionConfidence(value: Double?): Double? =
         value
-            ?.takeIf { it.isFinite() }
+            // Apple/Android 음성 API의 0 또는 음수는 실제 정확도 0%가 아니라 점수 미제공 값이다.
+            ?.takeIf { it.isFinite() && it > 0.0 }
             ?.coerceIn(0.0, 1.0)
 
     private data class VoiceTranscriptResolution(
@@ -573,7 +581,11 @@ class ScheduleHybridParserService(
             rule.notes?.takeIf { it.isNotBlank() },
             summary?.let { "일정 내용: $it" },
         ).distinct().joinToString("\n").takeIf { it.isNotBlank() }
-        val title = buildTitle(destination, time)
+        val ruleDefaultTitle = buildTitle(rule.destination, rule.time)
+        val explicitRuleTitle = rule.title
+            ?.trim()
+            ?.takeIf { it.isNotBlank() && it != ruleDefaultTitle }
+        val title = explicitRuleTitle ?: buildTitle(destination, time)
         val dateTime = toDateTime(date, time)
         val resolvedEnd = ruleParser.resolveScheduleEnd(
             sourceText = sourceText,
@@ -686,7 +698,7 @@ class ScheduleHybridParserService(
     }
 
     private fun buildTitle(destination: SchedulePlaceDto?, time: String?): String? =
-        listOfNotNull(destination?.name ?: destination?.address, time)
+        listOfNotNull(time, destination?.name ?: destination?.address)
             .joinToString(" ")
             .takeIf { it.isNotBlank() }
 
