@@ -33,8 +33,23 @@ import java.time.Instant
 
 private const val ANDROID_CHANNEL_ID = "schedule-push"
 private const val SCHEDULE_DEPART_NOW_CATEGORY = "schedule_depart_now"
+private const val SCHEDULE_DEPARTURE_REMINDER_PAYLOAD_TYPE = "SCHEDULE_DEPARTURE_REMINDER"
 private const val ETA_EVENT_EXPIRES_AT_KEY = "etaEventExpiresAt"
+private const val NOLATE_NOTIFICATION_TITLE_KEY = "nolateNotificationTitle"
+private const val NOLATE_NOTIFICATION_BODY_KEY = "nolateNotificationBody"
+private const val NOLATE_NOTIFICATION_TAG_KEY = "nolateNotificationTag"
+private const val MAX_NOLATE_NOTIFICATION_TITLE_LENGTH = 100
+private const val MAX_NOLATE_NOTIFICATION_BODY_LENGTH = 500
+private const val MAX_SCHEDULE_IDENTIFIER_LENGTH = 200
+private const val MAX_RECIPIENT_IDENTIFIER_LENGTH = 16
+private const val MAX_SAFE_JS_INTEGER = 9_007_199_254_740_991L
 private val MAX_ANDROID_MESSAGE_TTL_MILLIS = Duration.ofDays(28).toMillis()
+private val ACTIONABLE_LOGICAL_EVENT_KEY_PATTERN = Regex(
+    "^(?:key:[0-9a-f]{64}|" +
+        "event:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-" +
+        "[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$"
+)
+private val ASCII_CONTROL_PATTERN = Regex("[\\u0000-\\u001f\\u007f]")
 /**
  * firebase-admin 9.8.0 `ApiClientUtils.DEFAULT_RETRY_CONFIG` contract.
  *
@@ -157,10 +172,22 @@ internal class FirebasePushClient(
                 .build()
         }
 
-        val scheduleReminderAction = data.isScheduleDepartureReminder()
+        val scheduleReminderAction = data["type"] == SCHEDULE_DEPARTURE_REMINDER_PAYLOAD_TYPE
         val deliveryControls = createStandardVisibleDeliveryControls(data)
+        val canonicalData = if (scheduleReminderAction) {
+            createScheduleReminderData(
+                title = title,
+                body = body,
+                data = data,
+                deliveryControls = deliveryControls,
+            )
+        } else {
+            data
+        }.withNotificationActionCategory(scheduleReminderAction)
         return Message.builder()
             .setToken(token)
+            // Keep notification fields for legacy Android clients. New clients intercept only the
+            // departure-reminder intent before Firebase auto-display and render the action UI.
             .setNotification(Notification.builder().setTitle(title).setBody(body).build())
             .setAndroidConfig(createStandardAndroidConfig(deliveryControls))
             .setApnsConfig(
@@ -171,8 +198,87 @@ internal class FirebasePushClient(
                     deliveryControls,
                 )
             )
-            .putAllData(data.withNotificationActionCategory(scheduleReminderAction))
+            .putAllData(canonicalData)
             .build()
+    }
+
+    private fun createScheduleReminderData(
+        title: String,
+        body: String,
+        data: Map<String, String>,
+        deliveryControls: StandardVisibleDeliveryControls,
+    ): Map<String, String> {
+        if (
+            data["scheduleId"]?.let {
+                it.length <= MAX_SCHEDULE_IDENTIFIER_LENGTH &&
+                    it.matches(POSITIVE_IDENTIFIER_PATTERN)
+            } != true
+        ) {
+            throw PushPayloadRejectedException(
+                "Schedule departure reminder has no valid schedule identity.",
+            )
+        }
+        if (
+            data["recipientMemberId"]?.let {
+                it.length <= MAX_RECIPIENT_IDENTIFIER_LENGTH &&
+                    it.matches(POSITIVE_IDENTIFIER_PATTERN) &&
+                    it.toLongOrNull()?.let { memberId ->
+                        memberId in 1..MAX_SAFE_JS_INTEGER
+                    } == true
+            } != true
+        ) {
+            throw PushPayloadRejectedException(
+                "Schedule departure reminder has no valid recipient identity.",
+            )
+        }
+        if (
+            data["logicalEventKey"]?.matches(ACTIONABLE_LOGICAL_EVENT_KEY_PATTERN) != true ||
+            deliveryControls.stableIdentifier == null
+        ) {
+            throw PushPayloadRejectedException(
+                "Schedule departure reminder has no stable logical event identity.",
+            )
+        }
+        if (
+            deliveryControls.expiresAt == null ||
+            deliveryControls.androidTtlMillis == null
+        ) {
+            throw PushPayloadRejectedException(
+                "Schedule departure reminder has no provider expiration.",
+            )
+        }
+        val notificationTitle = canonicalNotificationText(
+            value = title,
+            field = "title",
+            maxLength = MAX_NOLATE_NOTIFICATION_TITLE_LENGTH,
+        )
+        val notificationBody = canonicalNotificationText(
+            value = body,
+            field = "body",
+            maxLength = MAX_NOLATE_NOTIFICATION_BODY_LENGTH,
+        )
+        return data + mapOf(
+            NOLATE_NOTIFICATION_TITLE_KEY to notificationTitle,
+            NOLATE_NOTIFICATION_BODY_KEY to notificationBody,
+            NOLATE_NOTIFICATION_TAG_KEY to deliveryControls.stableIdentifier,
+        )
+    }
+
+    private fun canonicalNotificationText(
+        value: String,
+        field: String,
+        maxLength: Int,
+    ): String {
+        if (
+            value != value.trim() ||
+            value.length !in 1..maxLength ||
+            ASCII_CONTROL_PATTERN.containsMatchIn(value)
+        ) {
+            throw PushPayloadRejectedException(
+                "Schedule departure reminder $field is outside the native display contract.",
+            )
+        }
+        return value
     }
 
     private fun createStandardVisibleDeliveryControls(
@@ -301,9 +407,7 @@ private data class StandardVisibleDeliveryControls(
     val androidTtlMillis: Long? = null,
 )
 
-private fun Map<String, String>.isScheduleDepartureReminder(): Boolean =
-    this["type"] == "SCHEDULE_DEPARTURE_REMINDER" &&
-        this["scheduleId"]?.matches(Regex("[1-9]\\d*")) == true
+private val POSITIVE_IDENTIFIER_PATTERN = Regex("[1-9]\\d*")
 
 private fun Map<String, String>.withNotificationActionCategory(
     scheduleReminderAction: Boolean,
