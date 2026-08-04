@@ -16,6 +16,9 @@ import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepos
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.schedule.domain.DepartureAlarmSyncOperation
 import com.noLate.schedule.domain.DepartureAlarmSyncState
+import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
+import com.noLate.schedule.domain.DepartureAlarmPlanCodec
+import com.noLate.schedule.application.service.DepartureAlarmPlanFactory
 import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import org.junit.jupiter.api.Test
@@ -118,6 +121,66 @@ class DepartureAlarmScheduleReceiptServiceTest {
     }
 
     @Test
+    fun `v2 occurrence receipt freezes exact ownership sequence and millisecond trigger`() {
+        activeScope()
+        val plan = DepartureAlarmPlanFactory().create(
+            memberId = MEMBER_ID,
+            scheduleId = SCHEDULE_ID,
+            recommendedDepartureAt = TRIGGER_AT.plusNanos(999_999),
+            scheduleTitle = "출발",
+        )
+        val occurrence = plan.occurrence("M15")!!
+        val state = DepartureAlarmSyncState.createUpsert(
+            memberId = MEMBER_ID,
+            scheduleId = SCHEDULE_ID,
+            triggerAt = plan.departureOccurrence().triggerInstant(),
+            title = plan.departureOccurrence().title,
+            snoozeMinutes = 5,
+            alarmPlanSchemaVersion = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION,
+            alarmOccurrencesJson = DepartureAlarmPlanCodec.encode(plan),
+        )
+        whenever(syncStateRepository.findByMemberIdAndScheduleIdForUpdate(MEMBER_ID, SCHEDULE_ID))
+            .thenReturn(state)
+        whenever(receiptRepository.findByMemberIdAndClientReceiptId(MEMBER_ID, RECEIPT_ID))
+            .thenReturn(null)
+        whenever(receiptRepository.save(any<DepartureAlarmScheduleReceipt>()))
+            .thenAnswer { it.arguments.single() as DepartureAlarmScheduleReceipt }
+
+        val result = service().record(
+            memberId = MEMBER_ID,
+            receiptId = RECEIPT_ID,
+            alarmId = ALARM_ID,
+            scheduleId = SCHEDULE_ID,
+            generation = 0,
+            recipientMemberId = MEMBER_ID,
+            operation = DepartureAlarmSyncOperation.UPSERT,
+            triggerAt = occurrence.triggerInstant().plusNanos(999_999),
+            outcome = DepartureAlarmScheduleOutcome.SCHEDULED,
+            applied = true,
+            scheduled = true,
+            platform = PushPlatform.ANDROID,
+            deliveryMode = DepartureAlarmDeliveryMode.ANDROID_EXACT,
+            source = DepartureAlarmScheduleSource.PUSH,
+            reason = null,
+            occurredAt = OCCURRED_AT.plusNanos(999_999),
+            deviceId = DEVICE_ID,
+            occurrenceId = "M15",
+            mutationSequence = 7,
+        )
+
+        assertTrue(result.recorded)
+        val saved = argumentCaptor<DepartureAlarmScheduleReceipt>().also {
+            verify(receiptRepository).save(it.capture())
+        }.firstValue
+        assertEquals(71L, saved.deviceTokenId)
+        assertEquals(0L, saved.tokenOwnershipVersion)
+        assertEquals("M15", saved.occurrenceId)
+        assertEquals(7L, saved.mutationSequence)
+        assertEquals(occurrence.triggerInstant(), saved.triggerAt)
+        assertEquals(OCCURRED_AT, saved.clientOccurredAt)
+    }
+
+    @Test
     fun `native failure is retained with a bounded reason but impossible outcome shapes fail`() {
         activeScope()
         whenever(receiptRepository.findByMemberIdAndClientReceiptId(MEMBER_ID, RECEIPT_ID))
@@ -182,6 +245,7 @@ class DepartureAlarmScheduleReceiptServiceTest {
         ).thenReturn(
             listOf(
                 NotificationDeviceToken(
+                    id = 71L,
                     memberId = MEMBER_ID,
                     deviceId = DEVICE_ID,
                     platform = PushPlatform.IOS,
@@ -228,6 +292,7 @@ class DepartureAlarmScheduleReceiptServiceTest {
         ).thenReturn(
             listOf(
                 NotificationDeviceToken(
+                    id = 71L,
                     memberId = MEMBER_ID,
                     deviceId = DEVICE_ID,
                     platform = PushPlatform.ANDROID,
@@ -288,6 +353,8 @@ class DepartureAlarmScheduleReceiptServiceTest {
         memberId = MEMBER_ID,
         clientReceiptId = RECEIPT_ID,
         deviceFingerprint = DEVICE_FINGERPRINT,
+        deviceTokenId = 71L,
+        tokenOwnershipVersion = 0,
         commandReceiptKey = "a".repeat(64),
         alarmId = ALARM_ID,
         scheduleId = SCHEDULE_ID,

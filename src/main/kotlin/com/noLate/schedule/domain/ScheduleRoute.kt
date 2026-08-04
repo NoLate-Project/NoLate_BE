@@ -12,6 +12,7 @@ import jakarta.persistence.JoinColumn
 import jakarta.persistence.Lob
 import jakarta.persistence.OneToOne
 import jakarta.persistence.Table
+import jakarta.persistence.Version
 import org.hibernate.annotations.Comment
 import java.time.Instant
 
@@ -30,6 +31,12 @@ class ScheduleRoute(
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Comment("일정 경로 PK")
     var id: Long? = null,
+
+    /** 동시 경로 수정 충돌을 감지하는 낙관적 락 버전 */
+    @Version
+    @Column(nullable = false)
+    @Comment("동시 경로 수정 충돌 감지용 낙관적 락 버전")
+    var version: Long = 0L,
 
     /** 연결된 일정 */
     @OneToOne(fetch = FetchType.LAZY)

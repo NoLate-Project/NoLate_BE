@@ -14,6 +14,9 @@ import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.DepartureAlarmSyncState
+import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
+import com.noLate.schedule.domain.DepartureAlarmPlanCodec
+import com.noLate.schedule.application.service.DepartureAlarmPlanFactory
 import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
@@ -53,11 +56,12 @@ class DepartureAlarmFireEventServiceTest {
         whenever(fireEventRepository.findByMemberIdAndClientEventId(MEMBER_ID, EVENT_ID))
             .thenReturn(null)
         whenever(
-            fireEventRepository.findByMemberIdAndDeviceFingerprintAndAlarmIdAndGenerationAndScheduledFor(
+            fireEventRepository.findDuplicatePhysicalOccurrence(
                 MEMBER_ID,
                 DEVICE_FINGERPRINT,
                 ALARM_ID,
                 0,
+                null,
                 SCHEDULED_FOR,
             )
         ).thenReturn(null)
@@ -71,9 +75,9 @@ class DepartureAlarmFireEventServiceTest {
             scheduleId = SCHEDULE_ID,
             generation = 0,
             recipientMemberId = MEMBER_ID,
-            scheduledFor = SCHEDULED_FOR,
-            sourceTriggerAt = SOURCE_TRIGGER_AT,
-            occurredAt = SCHEDULED_FOR.plusSeconds(17),
+            scheduledFor = SCHEDULED_FOR.plusNanos(999_999),
+            sourceTriggerAt = SOURCE_TRIGGER_AT.plusNanos(999_999),
+            occurredAt = SCHEDULED_FOR.plusSeconds(17).plusNanos(999_999),
             deviceId = DEVICE_ID,
         )
 
@@ -84,7 +88,9 @@ class DepartureAlarmFireEventServiceTest {
             verify(fireEventRepository).save(it.capture())
         }.firstValue
         assertEquals(DEVICE_FINGERPRINT, saved.deviceFingerprint)
+        assertEquals(SCHEDULED_FOR, saved.scheduledFor)
         assertEquals(SOURCE_TRIGGER_AT, saved.sourceTriggerAt)
+        assertEquals(SCHEDULED_FOR.plusSeconds(17), saved.clientOccurredAt)
         assertEquals(NOW, saved.serverRecordedAt)
         assertEquals(
             1.0,
@@ -119,11 +125,12 @@ class DepartureAlarmFireEventServiceTest {
         whenever(fireEventRepository.findByMemberIdAndClientEventId(MEMBER_ID, EVENT_ID))
             .thenReturn(null)
         whenever(
-            fireEventRepository.findByMemberIdAndDeviceFingerprintAndAlarmIdAndGenerationAndScheduledFor(
+            fireEventRepository.findDuplicatePhysicalOccurrence(
                 MEMBER_ID,
                 DEVICE_FINGERPRINT,
                 ALARM_ID,
                 0,
+                null,
                 SCHEDULED_FOR,
             )
         ).thenReturn(null)
@@ -171,11 +178,12 @@ class DepartureAlarmFireEventServiceTest {
         whenever(fireEventRepository.findByMemberIdAndClientEventId(MEMBER_ID, EVENT_ID))
             .thenReturn(null)
         whenever(
-            fireEventRepository.findByMemberIdAndDeviceFingerprintAndAlarmIdAndGenerationAndScheduledFor(
+            fireEventRepository.findDuplicatePhysicalOccurrence(
                 MEMBER_ID,
                 DEVICE_FINGERPRINT,
                 ALARM_ID,
                 0,
+                null,
                 SCHEDULED_FOR,
             )
         ).thenReturn(null)
@@ -267,6 +275,70 @@ class DepartureAlarmFireEventServiceTest {
     }
 
     @Test
+    fun `snoozed M15 and independent M10 at the same instant remain distinct physical fires`() {
+        activeMember()
+        val state = planState()
+        val m15 = DepartureAlarmPlanCodec.decode(requireNotNull(state.alarmOccurrencesJson))
+            .occurrence("M15")!!
+        val m10 = DepartureAlarmPlanCodec.decode(requireNotNull(state.alarmOccurrencesJson))
+            .occurrence("M10")!!
+        val sharedScheduledFor = m10.triggerInstant()
+        val secondEventId = "550e8400-e29b-41d4-a716-446655440001"
+        val saved = mutableListOf<DepartureAlarmFireEvent>()
+        whenever(syncStateRepository.findByMemberIdAndScheduleIdForUpdate(MEMBER_ID, SCHEDULE_ID))
+            .thenReturn(state)
+        whenever(fireEventRepository.findByMemberIdAndClientEventId(MEMBER_ID, EVENT_ID))
+            .thenReturn(null)
+        whenever(fireEventRepository.findByMemberIdAndClientEventId(MEMBER_ID, secondEventId))
+            .thenReturn(null)
+        whenever(
+            fireEventRepository.findDuplicatePhysicalOccurrence(
+                MEMBER_ID, DEVICE_FINGERPRINT, ALARM_ID, 0, "M15", sharedScheduledFor,
+            )
+        ).thenReturn(null)
+        whenever(
+            fireEventRepository.findDuplicatePhysicalOccurrence(
+                MEMBER_ID, DEVICE_FINGERPRINT, ALARM_ID, 0, "M10", sharedScheduledFor,
+            )
+        ).thenReturn(null)
+        whenever(fireEventRepository.save(any<DepartureAlarmFireEvent>())).thenAnswer {
+            (it.arguments.single() as DepartureAlarmFireEvent).also(saved::add)
+        }
+        val service = service()
+
+        val snoozedM15 = service.record(
+            memberId = MEMBER_ID,
+            eventId = EVENT_ID,
+            alarmId = ALARM_ID,
+            scheduleId = SCHEDULE_ID,
+            generation = 0,
+            recipientMemberId = MEMBER_ID,
+            scheduledFor = sharedScheduledFor,
+            sourceTriggerAt = m15.triggerInstant(),
+            occurredAt = sharedScheduledFor,
+            deviceId = DEVICE_ID,
+            occurrenceId = "M15",
+        )
+        val originalM10 = service.record(
+            memberId = MEMBER_ID,
+            eventId = secondEventId,
+            alarmId = ALARM_ID,
+            scheduleId = SCHEDULE_ID,
+            generation = 0,
+            recipientMemberId = MEMBER_ID,
+            scheduledFor = sharedScheduledFor,
+            sourceTriggerAt = m10.triggerInstant(),
+            occurredAt = sharedScheduledFor,
+            deviceId = DEVICE_ID,
+            occurrenceId = "M10",
+        )
+
+        assertTrue(snoozedM15.recorded)
+        assertTrue(originalM10.recorded)
+        assertEquals(setOf("M15", "M10"), saved.map { it.occurrenceId }.toSet())
+    }
+
+    @Test
     fun `an older generation that actually fired is preserved as stale evidence`() {
         activeMember()
         val current = state().apply {
@@ -281,11 +353,12 @@ class DepartureAlarmFireEventServiceTest {
         whenever(fireEventRepository.findByMemberIdAndClientEventId(MEMBER_ID, EVENT_ID))
             .thenReturn(null)
         whenever(
-            fireEventRepository.findByMemberIdAndDeviceFingerprintAndAlarmIdAndGenerationAndScheduledFor(
+            fireEventRepository.findDuplicatePhysicalOccurrence(
                 MEMBER_ID,
                 DEVICE_FINGERPRINT,
                 ALARM_ID,
                 0,
+                null,
                 SCHEDULED_FOR,
             )
         ).thenReturn(null)
@@ -570,6 +643,24 @@ class DepartureAlarmFireEventServiceTest {
         title = "출발",
         snoozeMinutes = 5,
     )
+
+    private fun planState(): DepartureAlarmSyncState {
+        val plan = DepartureAlarmPlanFactory().create(
+            memberId = MEMBER_ID,
+            scheduleId = SCHEDULE_ID,
+            recommendedDepartureAt = SOURCE_TRIGGER_AT,
+            scheduleTitle = "출발",
+        )
+        return DepartureAlarmSyncState.createUpsert(
+            memberId = MEMBER_ID,
+            scheduleId = SCHEDULE_ID,
+            triggerAt = plan.departureOccurrence().triggerInstant(),
+            title = plan.departureOccurrence().title,
+            snoozeMinutes = 5,
+            alarmPlanSchemaVersion = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION,
+            alarmOccurrencesJson = DepartureAlarmPlanCodec.encode(plan),
+        )
+    }
 
     private fun existingEvent() = DepartureAlarmFireEvent(
         id = 1,

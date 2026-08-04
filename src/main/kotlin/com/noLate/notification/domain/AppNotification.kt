@@ -128,6 +128,10 @@ class AppNotification(
     @Column(name = "manifest_recipient_count", nullable = false)
     var manifestRecipientCount: Int = 0,
 
+    /** Native alarms covering the ordinary reminder; semantic warnings may still be visible. */
+    @Column(name = "native_alarm_covered_recipient_count", nullable = false)
+    var nativeAlarmCoveredRecipientCount: Int = 0,
+
     @Column(name = "manifest_frozen_at")
     var manifestFrozenAt: Instant? = null,
 
@@ -171,12 +175,18 @@ class AppNotification(
         return true
     }
 
-    fun freezeManifest(recipientCount: Int, at: Instant) {
+    fun freezeManifest(
+        recipientCount: Int,
+        at: Instant,
+        nativeAlarmCoveredRecipientCount: Int = 0,
+    ) {
         check(manifestState == PushManifestState.OPEN) {
             "Frozen or inbox-only push manifests cannot be changed."
         }
         require(recipientCount >= 0)
+        require(nativeAlarmCoveredRecipientCount >= 0)
         manifestRecipientCount = recipientCount
+        this.nativeAlarmCoveredRecipientCount = nativeAlarmCoveredRecipientCount
         manifestFrozenAt = at
         manifestState = PushManifestState.FROZEN
     }

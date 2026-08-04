@@ -12,6 +12,7 @@ import com.noLate.member.infrastructure.MemberSettingRepository
 import com.noLate.notification.application.service.NotificationTokenRetirementService
 import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.DepartureAlarmFireEventRepository
+import com.noLate.notification.infrastructure.DepartureAlarmPresentationAssignmentRepository
 import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
@@ -88,6 +89,8 @@ class AccountCleanupService(
     private val etaAccuracyObservationRepository: ScheduleEtaAccuracyObservationRepository,
     private val departureAlarmFireEventRepository: DepartureAlarmFireEventRepository,
     private val departureAlarmScheduleReceiptRepository: DepartureAlarmScheduleReceiptRepository,
+    private val departureAlarmPresentationAssignmentRepository:
+        DepartureAlarmPresentationAssignmentRepository? = null,
     private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
     private val sharingMemberBlockRepository: SharingMemberBlockRepository? = null,
     private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
@@ -190,6 +193,8 @@ class AccountCleanupService(
             etaAccuracyObservationRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             departureAlarmFireEventRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             departureAlarmScheduleReceiptRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
+            departureAlarmPresentationAssignmentRepository
+                ?.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             departureStatusRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             routeSetupReminderRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             travelPlanRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
@@ -238,6 +243,7 @@ class AccountCleanupService(
         etaAccuracyObservationRepository.deleteAllByMemberId(memberId)
         departureAlarmFireEventRepository.deleteAllByMemberId(memberId)
         departureAlarmScheduleReceiptRepository.deleteAllByMemberId(memberId)
+        departureAlarmPresentationAssignmentRepository?.deleteAllByMemberId(memberId)
         departureStatusRepository.deleteAllByMemberId(memberId)
         travelPlanRepository.deleteAllByMemberId(memberId)
         departureAlarmSyncStateRepository.deleteAllByMemberId(memberId)

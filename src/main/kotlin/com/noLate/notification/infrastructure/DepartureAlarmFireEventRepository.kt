@@ -11,12 +11,27 @@ interface DepartureAlarmFireEventRepository : JpaRepository<DepartureAlarmFireEv
         clientEventId: String,
     ): DepartureAlarmFireEvent?
 
-    fun findByMemberIdAndDeviceFingerprintAndAlarmIdAndGenerationAndScheduledFor(
-        memberId: Long,
-        deviceFingerprint: String,
-        alarmId: String,
-        generation: Long,
-        scheduledFor: java.time.Instant,
+    @Query(
+        """
+        select event from DepartureAlarmFireEvent event
+        where event.memberId = :memberId
+          and event.deviceFingerprint = :deviceFingerprint
+          and event.alarmId = :alarmId
+          and event.generation = :generation
+          and (
+            (:occurrenceId is null and event.occurrenceId is null) or
+            event.occurrenceId = :occurrenceId
+          )
+          and event.scheduledFor = :scheduledFor
+        """
+    )
+    fun findDuplicatePhysicalOccurrence(
+        @Param("memberId") memberId: Long,
+        @Param("deviceFingerprint") deviceFingerprint: String,
+        @Param("alarmId") alarmId: String,
+        @Param("generation") generation: Long,
+        @Param("occurrenceId") occurrenceId: String?,
+        @Param("scheduledFor") scheduledFor: java.time.Instant,
     ): DepartureAlarmFireEvent?
 
     fun deleteAllByMemberId(memberId: Long)

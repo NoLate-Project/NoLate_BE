@@ -6,6 +6,7 @@ import com.noLate.global.observability.EtaWorkerMetricEvent
 import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.global.observability.recordSafely
 import com.noLate.notification.application.service.PushDispatchFence
+import com.noLate.notification.application.service.DepartureAlarmReminderCoverageSelector
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.SelectedRouteMetadata
@@ -364,22 +365,67 @@ class SchedulePushJobWorker(
                 val onTimeArrivalPossible = predictedArrivalAt?.let {
                     !it.isAfter(schedule.startAt)
                 }
-                val liveMessage = trafficChangePolicy.createMessage(
-                    scheduleTitle = schedule.title,
-                    previousTravelMinutes = comparableLiveTravelMinutes,
-                    currentTravelMinutes = travelMinutes,
-                    recommendedDepartureAt = recommendedDepartureAt,
+                val alarmOccurrence = alarmReminderOccurrence(
+                    alertMode = route.alertMode,
                     decision = reminderDecision,
-                    alertLeadMinutes = departureAlertLeadMinutes,
-                    reminderMinutesBeforeDeparture = reminderMinutesBeforeDeparture(
-                        reminderBoundaryAt = reminderBoundaryAt,
-                        recommendedDepartureAt = recommendedDepartureAt,
-                    ),
-                    departureAdvanceMinutes = departureAdvanceMinutes,
-                    onTimeArrivalPossible = onTimeArrivalPossible,
-                    predictedArrivalAt = predictedArrivalAt,
-                    transferFailureReason = transferFailureReason,
+                    reminderBoundaryAt = reminderBoundaryAt,
+                    recommendedDepartureAt = recommendedDepartureAt,
                 )
+                val semanticWarningVisible =
+                    trafficChangeMinutes > 0 ||
+                        departureAdvanceMinutes > 0 ||
+                        semanticCatchUpDue ||
+                        transferFailureReason != null ||
+                        onTimeArrivalPossible == false
+                val nativeAlarmCoverageEligible =
+                    alarmOccurrence != null &&
+                        !dispatchCheckedAt.isAfter(
+                            alarmOccurrence.triggerAt.plusSeconds(
+                                NATIVE_ALARM_REPLACEMENT_LATE_GRACE_SECONDS,
+                            )
+                        )
+                val useNativeAlarmReplacement =
+                    nativeAlarmCoverageEligible && !semanticWarningVisible
+                val liveMessage = if (useNativeAlarmReplacement) {
+                    val occurrence = requireNotNull(alarmOccurrence)
+                    trafficChangePolicy.createCanonicalDepartureReminderMessage(
+                        scheduleTitle = schedule.title,
+                        recommendedDepartureAt = recommendedDepartureAt,
+                        decision = reminderDecision,
+                        minutesBeforeDeparture = occurrence.minutesBeforeDeparture,
+                    )
+                } else {
+                    trafficChangePolicy.createMessage(
+                        scheduleTitle = schedule.title,
+                        previousTravelMinutes = comparableLiveTravelMinutes,
+                        currentTravelMinutes = travelMinutes,
+                        recommendedDepartureAt = recommendedDepartureAt,
+                        decision = reminderDecision,
+                        alertLeadMinutes = departureAlertLeadMinutes,
+                        reminderMinutesBeforeDeparture = reminderMinutesBeforeDeparture(
+                            reminderBoundaryAt = reminderBoundaryAt,
+                            recommendedDepartureAt = recommendedDepartureAt,
+                        ),
+                        departureAdvanceMinutes = departureAdvanceMinutes,
+                        onTimeArrivalPossible = onTimeArrivalPossible,
+                        predictedArrivalAt = predictedArrivalAt,
+                        transferFailureReason = transferFailureReason,
+                    )
+                }
+                val nativeAlarmCoverageSelector = alarmOccurrence
+                    ?.takeIf { nativeAlarmCoverageEligible }
+                    ?.let { occurrence ->
+                        DepartureAlarmReminderCoverageSelector(
+                            memberId = job.memberId,
+                            scheduleId = job.scheduleId,
+                            recommendedDepartureAt = recommendedDepartureAt,
+                            occurrenceId = occurrence.occurrenceId,
+                            occurrenceTriggerAt = occurrence.triggerAt,
+                            // The native alarm replaces only the ordinary reminder. Safety and
+                            // traffic-change information remains visible on every active device.
+                            semanticWarningVisible = semanticWarningVisible,
+                        )
+                    }
                 val liveData = mapOf(
                     "type" to pushPayloadType(reminderDecision, showDepartureActions),
                     "scheduleId" to job.scheduleId.toString(),
@@ -422,25 +468,48 @@ class SchedulePushJobWorker(
                         expectedScheduleId = job.scheduleId,
                     )
                 }
-                val sendResult = if (dispatchFence == null) {
-                    notificationUseCase.sendToMember(
-                        memberId = job.memberId,
-                        title = persistedEvent?.title ?: liveMessage.title,
-                        body = persistedEvent?.body ?: liveMessage.body,
-                        data = persistedEvent?.data ?: liveData,
-                        inboxDeduplicationKey = deduplicationKey,
-                    )
-                } else {
-                    notificationUseCase.sendToMemberFenced(
-                        memberId = job.memberId,
-                        title = persistedEvent?.title ?: liveMessage.title,
-                        body = persistedEvent?.body ?: liveMessage.body,
-                        data = persistedEvent?.data ?: liveData,
-                        // push 실패 재시도 중에는 checkCount가 증가하지 않는다. 같은 회차는 한 알림으로
-                        // 합치되, 다음 ETA 확인 회차는 별도 알림이 되도록 job과 checkCount를 함께 사용한다.
-                        inboxDeduplicationKey = deduplicationKey,
-                        dispatchFence = dispatchFence,
-                    )
+                val eventTitle = persistedEvent?.title ?: liveMessage.title
+                val eventBody = persistedEvent?.body ?: liveMessage.body
+                val eventData = persistedEvent?.data ?: liveData
+                val sendResult = when {
+                    dispatchFence == null && nativeAlarmCoverageSelector == null ->
+                        notificationUseCase.sendToMember(
+                            memberId = job.memberId,
+                            title = eventTitle,
+                            body = eventBody,
+                            data = eventData,
+                            inboxDeduplicationKey = deduplicationKey,
+                        )
+                    dispatchFence == null ->
+                        notificationUseCase.sendToMemberWithNativeAlarmCoverage(
+                            memberId = job.memberId,
+                            title = eventTitle,
+                            body = eventBody,
+                            data = eventData,
+                            inboxDeduplicationKey = deduplicationKey,
+                            nativeAlarmCoverageSelector = requireNotNull(nativeAlarmCoverageSelector),
+                        )
+                    nativeAlarmCoverageSelector == null ->
+                        notificationUseCase.sendToMemberFenced(
+                            memberId = job.memberId,
+                            title = eventTitle,
+                            body = eventBody,
+                            data = eventData,
+                            // push 실패 재시도 중에는 checkCount가 증가하지 않는다. 같은 회차는 한 알림으로
+                            // 합치되, 다음 ETA 확인 회차는 별도 알림이 되도록 job과 checkCount를 함께 사용한다.
+                            inboxDeduplicationKey = deduplicationKey,
+                            dispatchFence = dispatchFence,
+                        )
+                    else ->
+                        notificationUseCase.sendToMemberFencedWithNativeAlarmCoverage(
+                            memberId = job.memberId,
+                            title = eventTitle,
+                            body = eventBody,
+                            data = eventData,
+                            inboxDeduplicationKey = deduplicationKey,
+                            dispatchFence = dispatchFence,
+                            nativeAlarmCoverageSelector = nativeAlarmCoverageSelector,
+                        )
                 }
                 val eventSnapshot = sendResult.eventSnapshot ?: persistedEvent
                 val eventDecision = eventSnapshot?.data
@@ -470,6 +539,7 @@ class SchedulePushJobWorker(
                     )
                     SchedulePushOutcome(
                         notificationHandled = sendResult.durablyHandledCount > 0,
+                        nativeAlarmCovered = sendResult.nativeAlarmCoveredCount > 0,
                         confirmedSuccess = sendResult.confirmedSuccessCount > 0,
                         uncertain = sendResult.ambiguousCount > 0,
                         confirmedAt = when {
@@ -484,12 +554,13 @@ class SchedulePushJobWorker(
                     )
                 } else {
                     log.info(
-                        "Schedule push handled. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, attempted={}, sent={}, alreadyDelivered={}, ambiguous={}, deduplicated={}, failed={}, retryableFailed={}",
+                        "Schedule push handled. jobId={}, scheduleId={}, decision={}, travelMinutes={}, requested={}, nativeAlarmCovered={}, attempted={}, sent={}, alreadyDelivered={}, ambiguous={}, deduplicated={}, failed={}, retryableFailed={}",
                         job.id,
                         job.scheduleId,
                         reminderDecision,
                         travelMinutes,
                         sendResult.requestedCount,
+                        sendResult.nativeAlarmCoveredCount,
                         sendResult.attemptedCount,
                         sendResult.sentCount,
                         sendResult.alreadyDeliveredCount,
@@ -559,6 +630,7 @@ class SchedulePushJobWorker(
                     }
                     SchedulePushOutcome(
                         notificationHandled = true,
+                        nativeAlarmCovered = sendResult.nativeAlarmCoveredCount > 0,
                         confirmedSuccess = sendResult.confirmedSuccessCount > 0,
                         uncertain = sendResult.ambiguousCount > 0,
                         confirmedAt = when {
@@ -613,6 +685,7 @@ class SchedulePushJobWorker(
                 pushConfirmed = pushOutcome.confirmedSuccess,
                 pushConfirmedAt = pushOutcome.confirmedAt,
                 pushUncertain = pushOutcome.uncertain,
+                nativeAlarmCovered = pushOutcome.nativeAlarmCovered,
                 notifiedDepartureAt = pushOutcome.notifiedDepartureAt.takeIf {
                     pushOutcome.notificationHandled &&
                         pushOutcome.decision != DepartureReminderDecision.NONE
@@ -905,6 +978,40 @@ class SchedulePushJobWorker(
             ?.coerceAtLeast(0)
             ?: departureAlertLeadMinutes
 
+    private fun alarmReminderOccurrence(
+        alertMode: ScheduleAlertMode,
+        decision: DepartureReminderDecision,
+        reminderBoundaryAt: Instant?,
+        recommendedDepartureAt: Instant,
+    ): AlarmReminderOccurrence? {
+        if (alertMode != ScheduleAlertMode.ALARM) return null
+        val canonicalDepartureAt = recommendedDepartureAt.truncatedTo(ChronoUnit.MILLIS)
+        if (decision == DepartureReminderDecision.DEPART_NOW) {
+            return AlarmReminderOccurrence(
+                occurrenceId = "M0",
+                triggerAt = canonicalDepartureAt,
+                minutesBeforeDeparture = 0,
+            )
+        }
+        if (decision != DepartureReminderDecision.ADVANCE_NOTICE) return null
+        val canonicalBoundary = reminderBoundaryAt?.truncatedTo(ChronoUnit.MILLIS) ?: return null
+        val minutesBeforeDeparture = Duration.between(
+            canonicalBoundary,
+            canonicalDepartureAt,
+        ).toMinutes().toInt()
+        val occurrenceId = when (minutesBeforeDeparture) {
+            15 -> "M15"
+            10 -> "M10"
+            5 -> "M5"
+            else -> return null
+        }
+        return AlarmReminderOccurrence(
+            occurrenceId = occurrenceId,
+            triggerAt = canonicalBoundary,
+            minutesBeforeDeparture = minutesBeforeDeparture,
+        )
+    }
+
     /**
      * 토큰 미등록과 공급자 발송 실패를 구분해 운영 로그와 작업 실패 사유에 남긴다.
      */
@@ -952,6 +1059,7 @@ class SchedulePushJobWorker(
 private const val MIN_ETA_EVENT_TTL_SECONDS = 30L
 private const val MAX_ETA_EVENT_TTL_SECONDS = 300L
 private const val DEFAULT_ETA_EVENT_TTL_SECONDS = 120L
+private const val NATIVE_ALARM_REPLACEMENT_LATE_GRACE_SECONDS = 120L
 private val ETA_PUSH_SEMANTIC_KEYS = setOf(
     "type",
     "travelMinutes",
@@ -984,6 +1092,7 @@ private data class PushRouteSource(
 
 private data class SchedulePushOutcome(
     val notificationHandled: Boolean = false,
+    val nativeAlarmCovered: Boolean = false,
     val confirmedSuccess: Boolean = false,
     val uncertain: Boolean = false,
     val confirmedAt: Instant? = null,
@@ -991,4 +1100,10 @@ private data class SchedulePushOutcome(
     val notifiedDepartureAt: Instant = Instant.EPOCH,
     val reminderBoundaryAt: Instant? = null,
     val catchUpRequired: Boolean = false,
+)
+
+private data class AlarmReminderOccurrence(
+    val occurrenceId: String,
+    val triggerAt: Instant,
+    val minutesBeforeDeparture: Int,
 )

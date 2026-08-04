@@ -42,6 +42,7 @@ class DepartureAlarmFireEventController(
                 timingBasis = request.timingBasis,
                 sourceTriggerAt = request.sourceTriggerAt,
                 deviceId = request.deviceId,
+                occurrenceId = request.occurrenceId,
             )
         )
     }
@@ -58,4 +59,6 @@ data class DepartureAlarmFireEventRequest(
     val timingBasis: DepartureAlarmFireTimingBasis,
     val sourceTriggerAt: Instant? = null,
     val deviceId: String,
+    /** null is retained for a legacy single-M0 fire event. */
+    val occurrenceId: String? = null,
 )

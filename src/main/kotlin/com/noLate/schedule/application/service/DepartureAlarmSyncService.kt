@@ -1,11 +1,15 @@
 package com.noLate.schedule.application.service
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.application.service.findActiveNotificationRecipientForUpdate
 import com.noLate.notification.application.service.PushEventOutboxService
+import com.noLate.notification.domain.withPushAccountBinding
 import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
 import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_SCHEMA_VERSION
+import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
 import com.noLate.schedule.domain.DEFAULT_DEPARTURE_ALARM_TITLE
+import com.noLate.schedule.domain.DepartureAlarmPlanCodec
 import com.noLate.schedule.domain.DepartureAlarmSyncOperation
 import com.noLate.schedule.domain.DepartureAlarmSyncState
 import com.noLate.schedule.domain.ScheduleAlertMode
@@ -44,6 +48,9 @@ data class DepartureAlarmSyncCommand(
     val title: String?,
     val snoozeMinutes: Int?,
     val fingerprint: String,
+    val validationRevision: Long = 0,
+    val alarmPlanSchemaVersion: String? = null,
+    val alarmOccurrencesJson: String? = null,
 ) {
     fun toClientData(): Map<String, String> {
         val common = linkedMapOf(
@@ -54,13 +61,34 @@ data class DepartureAlarmSyncCommand(
             "alarmId" to alarmId,
             "scheduleId" to scheduleId.toString(),
             "alarmGeneration" to generation.toString(),
+            "alarmValidationRevision" to validationRevision.toString(),
         )
+        if (operation == DepartureAlarmSyncOperation.CANCEL) {
+            common["alarmPlanSchemaVersion"] = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
+        }
         if (operation == DepartureAlarmSyncOperation.UPSERT) {
             common["alarmTriggerAt"] = requireNotNull(triggerAt).toString()
             common["alarmTitle"] = title?.takeIf(String::isNotBlank)
                 ?: DEFAULT_DEPARTURE_ALARM_TITLE
             common["snoozeMinutes"] = requireNotNull(snoozeMinutes).toString()
+            if (alarmPlanSchemaVersion != null || alarmOccurrencesJson != null) {
+                check(alarmPlanSchemaVersion == DEPARTURE_ALARM_PLAN_SCHEMA_VERSION)
+                common["alarmPlanSchemaVersion"] = alarmPlanSchemaVersion
+                common["alarmOccurrencesJson"] = requireNotNull(alarmOccurrencesJson)
+            }
         }
+        val providerBoundData = (common + mapOf(
+            "alarmSyncStateId" to stateId.toString(),
+            "alarmCommandFingerprint" to fingerprint,
+        )).withPushAccountBinding(
+            logicalEventKey = MAX_LENGTH_DETERMINISTIC_LOGICAL_EVENT_KEY,
+            recipientMemberId = memberId,
+        )
+        require(
+            DEPARTURE_ALARM_PAYLOAD_MAPPER.writeValueAsBytes(
+                mapOf("data" to providerBoundData)
+            ).size <= MAX_DEPARTURE_ALARM_PROVIDER_JSON_BYTES
+        ) { "출발 알람 client data가 FCM 안전 크기를 초과했습니다." }
         return common
     }
 
@@ -83,7 +111,20 @@ class DepartureAlarmSyncService(
     private val clock: Clock,
     @Value("\${schedule.push.departure-snooze-minutes:5}")
     private val snoozeMinutes: Int = 5,
+    private val alarmPlanFactory: DepartureAlarmPlanFactory = DepartureAlarmPlanFactory(),
+    @Value("\${schedule.push.departure-alarm-revalidation-hours:12}")
+    private val revalidationHours: Long = 12,
+    @Value("\${schedule.push.departure-alarm-coverage-receipt-ttl-hours:24}")
+    private val coverageReceiptTtlHours: Long = 24,
+    @Value("\${schedule.push.departure-alarm-revalidation-min-lead-minutes:30}")
+    private val revalidationMinLeadMinutes: Long = 30,
 ) {
+    init {
+        require(revalidationHours >= 1 && revalidationHours * 2 <= coverageReceiptTtlHours) {
+            "Departure alarm revalidation must run at least twice within the coverage receipt TTL."
+        }
+        require(revalidationMinLeadMinutes >= 15)
+    }
     /**
      * 명시적으로 저장된 알림 설정을 기기 알람 desired state로 투영한다.
      *
@@ -155,7 +196,7 @@ class DepartureAlarmSyncService(
                     resumeCanceledAfterTransitTransferFailure
                 ) {
                     transition(existing) {
-                        it.upsert(recommendedDepartureAt, scheduleTitle, snoozeMinutes)
+                        applyPlanUpsert(it, recommendedDepartureAt, scheduleTitle)
                     }
                 } else {
                     null
@@ -165,7 +206,7 @@ class DepartureAlarmSyncService(
                 return null
             }
             return transition(existing) {
-                it.upsert(recommendedDepartureAt, scheduleTitle, snoozeMinutes)
+                applyPlanUpsert(it, recommendedDepartureAt, scheduleTitle)
             }
         }
 
@@ -285,20 +326,62 @@ class DepartureAlarmSyncService(
         val existing = repository.findByMemberIdAndScheduleIdForUpdate(memberId, scheduleId)
         if (existing != null) {
             return transition(existing) {
-                it.upsert(triggerAt, scheduleTitle, snoozeMinutes)
+                applyPlanUpsert(it, triggerAt, scheduleTitle)
             }
         }
+
+        val now = Instant.now(clock)
+        val plan = alarmPlanFactory.create(memberId, scheduleId, triggerAt, scheduleTitle)
+        val occurrencesJson = DepartureAlarmPlanCodec.encode(plan)
+        val departureOccurrence = plan.departureOccurrence()
 
         val created = repository.saveAndFlush(
             DepartureAlarmSyncState.createUpsert(
                 memberId = memberId,
                 scheduleId = scheduleId,
-                triggerAt = triggerAt,
-                title = scheduleTitle,
+                triggerAt = departureOccurrence.triggerInstant(),
+                title = departureOccurrence.title,
                 snoozeMinutes = snoozeMinutes,
+                alarmPlanSchemaVersion = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION,
+                alarmOccurrencesJson = occurrencesJson,
+                validationRequestedAt = now,
             )
         )
         return publish(created)
+    }
+
+    private fun applyPlanUpsert(
+        state: DepartureAlarmSyncState,
+        triggerAt: Instant,
+        scheduleTitle: String?,
+    ): Boolean {
+        val plan = alarmPlanFactory.create(
+            memberId = state.memberId,
+            scheduleId = state.scheduleId,
+            recommendedDepartureAt = triggerAt,
+            scheduleTitle = scheduleTitle,
+        )
+        val changed = state.upsert(
+            triggerAt = plan.departureOccurrence().triggerInstant(),
+            title = plan.departureOccurrence().title,
+            snoozeMinutes = snoozeMinutes,
+            alarmPlanSchemaVersion = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION,
+            alarmOccurrencesJson = DepartureAlarmPlanCodec.encode(plan),
+        )
+        val now = Instant.now(clock)
+        if (changed) {
+            state.recordValidationRequested(now)
+            return true
+        }
+        val refreshCutoff = now.minus(revalidationHours, ChronoUnit.HOURS)
+        return if (
+            state.validationRequestedAt?.isAfter(refreshCutoff) != true &&
+            hasRevalidationDeliveryLead(state, now, revalidationMinLeadMinutes)
+        ) {
+            state.reissueValidation(now)
+        } else {
+            false
+        }
     }
 
     private fun transition(
@@ -328,6 +411,9 @@ class DepartureAlarmSyncService(
             title = state.title,
             snoozeMinutes = state.snoozeMinutes,
             fingerprint = state.commandFingerprint,
+            validationRevision = state.validationRevision,
+            alarmPlanSchemaVersion = state.alarmPlanSchemaVersion,
+            alarmOccurrencesJson = state.alarmOccurrencesJson,
         )
 }
 
@@ -346,7 +432,7 @@ class DepartureAlarmSyncOutboxListener(
             data = command.toOutboxData(),
             deduplicationKey =
                 "departure-alarm-sync:${command.stateId}:g${command.generation}:" +
-                    command.operation.name,
+                    "v${command.validationRevision}:${command.operation.name}",
         )
     }
 }
@@ -411,8 +497,115 @@ class DepartureAlarmSyncExpiryWriter(
                     title = state.title,
                     snoozeMinutes = state.snoozeMinutes,
                     fingerprint = state.commandFingerprint,
+                    validationRevision = state.validationRevision,
+                    alarmPlanSchemaVersion = state.alarmPlanSchemaVersion,
+                    alarmOccurrencesJson = state.alarmOccurrencesJson,
                 )
             )
         )
     }
 }
+
+/** Periodically asks clients to re-validate long-lived native alarms before coverage evidence ages. */
+@Component
+class DepartureAlarmSyncRevalidationScheduler(
+    private val repository: DepartureAlarmSyncStateRepository,
+    private val writer: DepartureAlarmSyncRevalidationWriter,
+    @Value("\${schedule.push.departure-alarm-revalidation-enabled:true}")
+    private val enabled: Boolean = true,
+    @Value("\${schedule.push.departure-alarm-revalidation-hours:12}")
+    private val revalidationHours: Long = 12,
+    @Value("\${schedule.push.departure-alarm-revalidation-batch-size:100}")
+    private val batchSize: Int = 100,
+    private val clock: Clock,
+) {
+    init {
+        require(revalidationHours >= 1)
+    }
+
+    @Scheduled(
+        fixedDelayString =
+            "\${schedule.push.departure-alarm-revalidation-scan-ms:300000}"
+    )
+    fun refreshDuePlans() {
+        if (!enabled) return
+        val now = Instant.now(clock)
+        val cutoff = now.minus(revalidationHours, ChronoUnit.HOURS)
+        repository.findValidationRefreshCandidateIds(
+            operation = DepartureAlarmSyncOperation.UPSERT,
+            planSchemaVersion = DEPARTURE_ALARM_PLAN_SCHEMA_VERSION,
+            now = now,
+            cutoff = cutoff,
+            pageable = PageRequest.of(0, batchSize.coerceIn(1, 500)),
+        ).forEach { stateId -> writer.revalidate(stateId, now, cutoff) }
+    }
+}
+
+@Service
+class DepartureAlarmSyncRevalidationWriter(
+    private val repository: DepartureAlarmSyncStateRepository,
+    private val memberRepository: MemberRepository,
+    private val eventPublisher: ApplicationEventPublisher,
+    @Value("\${schedule.push.departure-alarm-revalidation-min-lead-minutes:30}")
+    private val revalidationMinLeadMinutes: Long = 30,
+) {
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun revalidate(stateId: Long, now: Instant, cutoff: Instant) {
+        val candidate = repository.findById(stateId).orElse(null) ?: return
+        if (memberRepository.findActiveNotificationRecipientForUpdate(candidate.memberId) == null) {
+            return
+        }
+        val state = repository.findByIdForUpdate(stateId) ?: return
+        if (
+            state.operation != DepartureAlarmSyncOperation.UPSERT ||
+            state.alarmPlanSchemaVersion != DEPARTURE_ALARM_PLAN_SCHEMA_VERSION ||
+            state.alarmOccurrencesJson == null ||
+            state.triggerAt?.isAfter(now) != true ||
+            state.validationRequestedAt?.isAfter(cutoff) == true ||
+            !hasRevalidationDeliveryLead(state, now, revalidationMinLeadMinutes)
+        ) {
+            return
+        }
+        state.reissueValidation(now)
+        repository.saveAndFlush(state)
+        eventPublisher.publishEvent(
+            DepartureAlarmSyncStateChangedEvent(
+                DepartureAlarmSyncCommand(
+                    stateId = requireNotNull(state.id),
+                    memberId = state.memberId,
+                    scheduleId = state.scheduleId,
+                    alarmId = state.alarmId,
+                    generation = state.generation,
+                    operation = state.operation,
+                    triggerAt = state.triggerAt,
+                    title = state.title,
+                    snoozeMinutes = state.snoozeMinutes,
+                    fingerprint = state.commandFingerprint,
+                    validationRevision = state.validationRevision,
+                    alarmPlanSchemaVersion = state.alarmPlanSchemaVersion,
+                    alarmOccurrencesJson = state.alarmOccurrencesJson,
+                )
+            )
+        )
+    }
+}
+
+private fun hasRevalidationDeliveryLead(
+    state: DepartureAlarmSyncState,
+    now: Instant,
+    minimumLeadMinutes: Long,
+): Boolean {
+    val encodedPlan = state.alarmOccurrencesJson ?: return false
+    val nextOccurrenceAt = runCatching {
+        DepartureAlarmPlanCodec.decode(encodedPlan).occurrences
+            .map { it.triggerInstant() }
+            .filter { it.isAfter(now) }
+            .minOrNull()
+    }.getOrNull() ?: return false
+    return nextOccurrenceAt.isAfter(now.plus(minimumLeadMinutes, ChronoUnit.MINUTES))
+}
+
+private const val MAX_DEPARTURE_ALARM_PROVIDER_JSON_BYTES = 3_200
+private const val MAX_LENGTH_DETERMINISTIC_LOGICAL_EVENT_KEY =
+    "key:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+private val DEPARTURE_ALARM_PAYLOAD_MAPPER = jacksonObjectMapper()

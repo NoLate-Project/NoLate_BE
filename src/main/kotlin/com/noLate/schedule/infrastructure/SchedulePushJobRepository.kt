@@ -155,7 +155,15 @@ interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
         where job.status = 'ACTIVE'
           and schedule_row.deleted = false
           and schedule_row.start_at > :now
-          and alarm_state.id is null
+          and (
+            alarm_state.id is null or (
+              alarm_state.operation = 'UPSERT' and (
+                alarm_state.alarm_plan_schema_version is null or
+                alarm_state.alarm_plan_schema_version <> '2' or
+                alarm_state.alarm_occurrences_json is null
+              )
+            )
+          )
         order by job.member_id asc, job.schedule_id asc
         """,
         nativeQuery = true,

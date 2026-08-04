@@ -17,6 +17,11 @@ interface DepartureAlarmSyncStateRepository :
 
     fun findAllByScheduleIdOrderByMemberIdAsc(scheduleId: Long): List<DepartureAlarmSyncState>
 
+    fun findByMemberIdAndScheduleId(
+        memberId: Long,
+        scheduleId: Long,
+    ): DepartureAlarmSyncState?
+
     fun deleteAllByMemberId(memberId: Long)
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -43,6 +48,29 @@ interface DepartureAlarmSyncStateRepository :
     fun findExpiredUpsertIds(
         @Param("operation") operation: DepartureAlarmSyncOperation,
         @Param("triggerAt") triggerAt: Instant,
+        pageable: Pageable,
+    ): List<Long>
+
+    @Query(
+        """
+        select state.id from DepartureAlarmSyncState state
+        where state.operation = :operation
+          and state.alarmPlanSchemaVersion = :planSchemaVersion
+          and state.triggerAt > :now
+          and (state.validationRequestedAt is null or state.validationRequestedAt <= :cutoff)
+          and exists (
+            select member.id from Member member
+            where member.id = state.memberId
+              and member.deleted = false
+          )
+        order by state.validationRequestedAt asc, state.id asc
+        """
+    )
+    fun findValidationRefreshCandidateIds(
+        @Param("operation") operation: DepartureAlarmSyncOperation,
+        @Param("planSchemaVersion") planSchemaVersion: String,
+        @Param("now") now: Instant,
+        @Param("cutoff") cutoff: Instant,
         pageable: Pageable,
     ): List<Long>
 

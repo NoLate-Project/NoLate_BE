@@ -42,12 +42,13 @@ enum class DepartureAlarmFireTimingBasis {
             columnNames = ["member_id", "client_event_id"],
         ),
         UniqueConstraint(
-            name = "uk_departure_alarm_fire_member_device_trigger",
+            name = "uk_departure_alarm_fire_member_device_occurrence_trigger",
             columnNames = [
                 "member_id",
                 "device_fingerprint",
                 "alarm_id",
                 "generation",
+                "occurrence_id",
                 "scheduled_for",
             ],
         ),
@@ -109,6 +110,9 @@ class DepartureAlarmFireEvent(
     @Column(name = "source_trigger_at")
     val sourceTriggerAt: Instant? = null,
 
+    @Column(name = "occurrence_id", length = 16)
+    val occurrenceId: String? = null,
+
     /** Diagnostic client time. It is never treated as an authentication or ordering fence. */
     @Column(name = "client_occurred_at", nullable = false)
     val clientOccurredAt: Instant,
@@ -137,6 +141,7 @@ class DepartureAlarmFireEvent(
         desiredOperationAtReceipt = DepartureAlarmSyncOperation.CANCEL,
         generationRelation = DepartureAlarmGenerationRelation.CURRENT,
         scheduledFor = Instant.EPOCH,
+        occurrenceId = null,
         clientOccurredAt = Instant.EPOCH,
         timingBasis = DepartureAlarmFireTimingBasis.EXACT_CALLBACK,
         fireDelaySeconds = 0,

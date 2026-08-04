@@ -131,6 +131,7 @@ class ScheduleService(
             existingCalendarId = null,
         )
         val routeNormalizedDto = normalizeRouteSetupDto(authorizedDto, existingSchedule = null)
+        validateScheduleCoordinates(routeNormalizedDto)
         val normalizedDto = normalizeNotificationDto(
             memberId = memberId,
             scheduleDto = routeNormalizedDto,
@@ -164,11 +165,16 @@ class ScheduleService(
             scheduleDto = withAuthorizedCategory(memberId, scheduleDto, existingSchedule),
             existingCalendarId = existingSchedule.calendarId,
         )
+        val destinationSafeDto = preserveConfirmedDestinationCoordinates(
+            scheduleDto = authorizedDto,
+            existingSchedule = existingSchedule,
+        )
 
         val routeNormalizedDto = normalizeRouteSetupDto(
-            authorizedDto.copy(id = scheduleId),
+            destinationSafeDto.copy(id = scheduleId),
             existingSchedule,
         )
+        validateScheduleCoordinates(routeNormalizedDto)
         val normalizedDto = normalizeNotificationDto(
             memberId = memberId,
             scheduleDto = routeNormalizedDto,
@@ -795,6 +801,52 @@ class ScheduleService(
             else -> existingSchedule?.routeSetupRequired ?: false
         },
     )
+
+    /**
+     * 이름만 있던 공통 도착지는 개인 경로 저장 시 서버에서 좌표가 보강될 수 있다.
+     * 보강 전 일정을 열어 둔 클라이언트가 이후 제목 등을 수정하면 도착지 이름은 같지만
+     * 좌표는 null인 요청을 보내게 된다. 이 경우에만 현재 서버 좌표를 병합해 나중에 도착한
+     * 정상 일정 수정이 확정된 좌표를 지우지 못하게 한다. 다른 장소로 바꾼 요청이나 좌표를
+     * 명시한 요청은 그대로 적용한다.
+     */
+    private fun preserveConfirmedDestinationCoordinates(
+        scheduleDto: ScheduleDto,
+        existingSchedule: Schedule,
+    ): ScheduleDto {
+        val requested = scheduleDto.destination ?: return scheduleDto
+        if (requested.lat != null || requested.lng != null) return scheduleDto
+
+        val current = existingSchedule.route ?: return scheduleDto
+        val currentLat = current.destinationLat ?: return scheduleDto
+        val currentLng = current.destinationLng ?: return scheduleDto
+        if (
+            !ScheduleDestinationIdentity.matches(
+                firstName = current.destinationName,
+                firstAddress = current.destinationAddress,
+                secondName = requested.name,
+                secondAddress = requested.address,
+            )
+        ) {
+            return scheduleDto
+        }
+
+        return scheduleDto.copy(
+            destination = requested.copy(lat = currentLat, lng = currentLng),
+        )
+    }
+
+    private fun validateScheduleCoordinates(scheduleDto: ScheduleDto) {
+        ScheduleCoordinateValidator.validateOptional(
+            fieldLabel = "출발지",
+            lat = scheduleDto.origin?.lat,
+            lng = scheduleDto.origin?.lng,
+        )
+        ScheduleCoordinateValidator.validateOptional(
+            fieldLabel = "도착지",
+            lat = scheduleDto.destination?.lat,
+            lng = scheduleDto.destination?.lng,
+        )
+    }
 
     /**
      * 알림 관련 값들을 정책 기준으로 보정하고 검증한다.
