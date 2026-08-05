@@ -38,7 +38,7 @@ class TransitRouteService(
             return it.response.deepCopy()
         }
         if (providers.isEmpty()) {
-            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "대중교통 경로 공급자가 설정되지 않았습니다.")
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "대중교통 경로를 지금 사용할 수 없어요.")
         }
 
         val evaluations = providers.mapIndexed { index, provider ->

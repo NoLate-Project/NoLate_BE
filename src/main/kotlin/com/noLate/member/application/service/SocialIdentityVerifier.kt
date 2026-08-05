@@ -59,7 +59,7 @@ class SocialIdentityVerifier(
         nonce: String? = null,
     ): VerifiedSocialIdentity {
         val token = providerToken?.trim()?.takeIf(String::isNotBlank)
-            ?: throw BusinessException(ErrorCode.INVALID_CREDENTIALS, "SNS 인증 토큰이 필요합니다.")
+            ?: throw BusinessException(ErrorCode.INVALID_CREDENTIALS, "간편 로그인 정보를 확인하지 못했어요. 다시 시도해 주세요.")
 
         return try {
             when (loginType) {
@@ -68,14 +68,14 @@ class SocialIdentityVerifier(
                 LoginType.APPLE -> verifyApple(token, nonce)
                 LoginType.COMMON, LoginType.GOOGLE -> throw BusinessException(
                     ErrorCode.INVALID_INPUT,
-                    "지원하지 않는 SNS 로그인 유형입니다.",
+                    "선택한 간편 로그인을 사용할 수 없어요.",
                 )
             }
         } catch (exception: BusinessException) {
             throw exception
         } catch (_: Exception) {
             // 공급자 오류 세부 정보와 토큰을 응답/로그로 노출하지 않는다.
-            throw BusinessException(ErrorCode.INVALID_CREDENTIALS, "SNS 인증 정보를 확인할 수 없습니다.")
+            throw BusinessException(ErrorCode.INVALID_CREDENTIALS, "간편 로그인을 확인하지 못했어요. 다시 시도해 주세요.")
         }
     }
 
@@ -132,7 +132,7 @@ class SocialIdentityVerifier(
 
     private fun verifyApple(identityToken: String, nonce: String?): VerifiedSocialIdentity {
         if (allowedAppleAudiences.isEmpty()) {
-            throw BusinessException(ErrorCode.INVALID_STATE, "Apple 로그인 서버 설정이 완료되지 않았습니다.")
+            throw BusinessException(ErrorCode.INVALID_STATE, "Apple 로그인을 지금 사용할 수 없어요. 잠시 후 다시 시도해 주세요.")
         }
         val claims = appleProcessor.process(identityToken, null)
         if (claims.issuer != APPLE_ISSUER) invalidSocialProof()
@@ -151,7 +151,7 @@ class SocialIdentityVerifier(
     }
 
     private fun invalidSocialProof(): Nothing =
-        throw BusinessException(ErrorCode.INVALID_CREDENTIALS, "유효하지 않은 SNS 인증 정보입니다.")
+        throw BusinessException(ErrorCode.INVALID_CREDENTIALS, "간편 로그인 정보를 확인하지 못했어요. 다시 시도해 주세요.")
 
     private companion object {
         const val APPLE_ISSUER = "https://appleid.apple.com"

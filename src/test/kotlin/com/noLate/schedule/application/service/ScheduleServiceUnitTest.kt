@@ -220,6 +220,43 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
+    fun `legacy calendar import is claimed when the new request omits old system memo lines`() {
+        val memberId = 1L
+        val existing = scheduleEntity(id = 22L, memberId = memberId).apply {
+            notes = """
+                외부 메모
+
+                Apple 캘린더에서 가져온 일정
+
+                원본 캘린더: 개인
+            """.trimIndent()
+        }
+        val request = scheduleDto().copy(notes = "외부 메모")
+        val source = ScheduleImportSource(
+            provider = ScheduleImportProvider.APPLE_DEVICE,
+            calendarId = "calendar-1",
+            eventId = "event-1",
+            occurrenceStartAt = request.startAt,
+        )
+        whenever(
+            scheduleRepository.findAllByMemberIdAndTitleAndStartAtAndEndAtAndDeletedFalseOrderByIdAsc(
+                memberId,
+                existing.title,
+                existing.startAt,
+                existing.endAt,
+            )
+        ).thenReturn(listOf(existing))
+        whenever(scheduleRepository.save(existing)).thenReturn(existing)
+
+        val result = scheduleService.importSchedule(memberId, request, source)
+
+        assertEquals(false, result.created)
+        assertEquals(existing.id, result.schedule.id)
+        assertEquals(64, existing.externalSourceKey?.length)
+        verify(scheduleRepository, times(1)).save(existing)
+    }
+
+    @Test
     fun `viewer cannot forge a shared category snapshot when creating a schedule`() {
         val categoryRepository = org.mockito.kotlin.mock<ScheduleCategoryRepository>()
         val shareRepository = org.mockito.kotlin.mock<ScheduleCategoryShareRepository>()

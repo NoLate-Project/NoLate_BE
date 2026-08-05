@@ -23,14 +23,14 @@ class MemberValidator(
      */
     fun validateCommonSignUp(dto: MemberDto) {
         if (dto.loginType != LoginType.COMMON) {
-            throw BusinessException(ErrorCode.INVALID_INPUT, "회원가입은 COMMON 타입만 지원합니다.")
+            throw BusinessException(ErrorCode.INVALID_INPUT, "일반 회원가입 정보를 확인해 주세요.")
         }
 
         val email = normalizeEmail(dto.email)
-            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "COMMON 회원가입에는 email이 필요합니다.")
+            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "이메일을 입력해 주세요.")
         dto.email = email
         val password = dto.password
-            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "COMMON 회원가입에는 password가 필요합니다.")
+            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "비밀번호를 입력해 주세요.")
         validatePassword(password)
         validateName(dto.name)
 
@@ -50,10 +50,10 @@ class MemberValidator(
      */
     fun validateAndGetMemberForCommonLogin(dto: MemberDto): MemberDto {
         val email = normalizeEmail(dto.email)
-            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "COMMON 로그인에는 email이 필요합니다.")
+            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "이메일을 입력해 주세요.")
         dto.email = email
         val rawPassword = dto.password
-            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "COMMON 로그인에는 password가 필요합니다.")
+            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "비밀번호를 입력해 주세요.")
 
         val found = memberService.findByEmailAndLoginType(email, LoginType.COMMON)
             ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND, "존재하지 않는 회원이거나 로그인 방식이 다릅니다.")

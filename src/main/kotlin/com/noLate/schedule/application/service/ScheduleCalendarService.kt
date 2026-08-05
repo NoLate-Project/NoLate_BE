@@ -271,7 +271,7 @@ class ScheduleCalendarService(
             ?.takeIf { !it.deleted && it.status == ScheduleCalendarMemberStatus.ACTIVE }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_MEMBER_NOT_FOUND)
         if (membership.role == ScheduleCalendarRole.OWNER && role != null && role != ScheduleCalendarRole.OWNER) {
-            throw BusinessException(ErrorCode.INVALID_STATE, "소유권 이전 API로 먼저 새 소유자를 지정해야 합니다.")
+            throw BusinessException(ErrorCode.INVALID_STATE, "먼저 캘린더의 새 소유자를 지정해 주세요.")
         }
         role?.let {
             validateGrantableRole(it)
