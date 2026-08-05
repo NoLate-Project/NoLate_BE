@@ -697,7 +697,7 @@ class ScheduleService(
         val categories = categoryRepository ?: return scheduleDto
         val shares = categoryShareRepository ?: return scheduleDto
         val categoryId = scheduleDto.category.id?.toLongOrNull()
-            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "유효한 category.id가 필요합니다.")
+            ?: throw BusinessException(ErrorCode.INVALID_INPUT, "일정을 저장할 카테고리를 선택해 주세요.")
         val existingSnapshot = existingSchedule?.categorySnapshot
         val existingCategoryId = existingSchedule?.categoryId
             ?: existingSnapshot?.categoryId?.toLongOrNull()
@@ -986,8 +986,8 @@ class ScheduleService(
         scheduleDto: ScheduleDto,
         source: ScheduleImportSource,
     ): Schedule? {
-        val normalizedNotes = scheduleDto.notes?.takeIf { it.isNotBlank() } ?: return null
-        if (!hasLegacyImportMarker(normalizedNotes, source.provider)) return null
+        val requestedUserNotes = extractLegacyImportUserNotes(scheduleDto.notes, source.provider)
+            ?: scheduleDto.notes?.trim().orEmpty()
 
         val startAt = parseInstant(scheduleDto.startAt, "startAt")
         val hasEndTime = scheduleDto.hasEndTime ?: (scheduleDto.endAt != null)
@@ -1005,19 +1005,34 @@ class ScheduleService(
                 endAt = endAt,
             )
             .firstOrNull { candidate ->
-                candidate.externalSourceKey == null && candidate.notes == normalizedNotes
+                candidate.externalSourceKey == null &&
+                    extractLegacyImportUserNotes(candidate.notes, source.provider) == requestedUserNotes
             }
     }
 
-    private fun hasLegacyImportMarker(notes: String, provider: ScheduleImportProvider): Boolean {
+    /**
+     * 예전 앱이 사용자 메모 뒤에 붙이던 가져오기 출처 문구를 분리한다.
+     * 새 앱은 출처를 외부 원본 키로만 저장하므로 메모에 시스템 문구를 추가하지 않는다.
+     */
+    private fun extractLegacyImportUserNotes(
+        notes: String?,
+        provider: ScheduleImportProvider,
+    ): String? {
+        val normalizedNotes = notes?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val sourceLine = when (provider) {
             ScheduleImportProvider.APPLE_DEVICE -> "Apple 캘린더에서 가져온 일정"
             ScheduleImportProvider.ANDROID_DEVICE -> "Android 캘린더에서 가져온 일정"
             ScheduleImportProvider.GOOGLE -> "Google Calendar에서 가져온 일정"
         }
-        val lines = notes.lineSequence().map(String::trim).filter(String::isNotBlank).toList()
+        val marker = "$sourceLine\n\n원본 캘린더: "
+        val markerIndex = normalizedNotes.lastIndexOf(marker)
+        if (markerIndex < 0) return null
+        if (markerIndex > 0 && !normalizedNotes.substring(0, markerIndex).endsWith("\n\n")) return null
 
-        return sourceLine in lines && lines.any { line -> line.startsWith("원본 캘린더: ") }
+        val calendarTitle = normalizedNotes.substring(markerIndex + marker.length).trim()
+        if (calendarTitle.isEmpty() || calendarTitle.contains('\n')) return null
+
+        return normalizedNotes.substring(0, markerIndex).trim()
     }
 
     private fun requireSourceText(value: String?, fieldName: String): String {

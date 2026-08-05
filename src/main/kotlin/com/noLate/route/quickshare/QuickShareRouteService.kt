@@ -14,16 +14,16 @@ class QuickShareRouteService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "장소 검색어는 1~120자여야 합니다.")
         }
         val provider = providers.firstOrNull()
-            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "장소 검색 공급자가 설정되지 않았습니다.")
+            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "장소 검색을 지금 사용할 수 없어요.")
         return provider.searchPlaces(normalized)
     }
 
     fun getRouteOptions(request: QuickShareRouteRequest): List<QuickShareRouteOption> {
         val provider = providers.firstOrNull()
-            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "경로 공급자가 설정되지 않았습니다.")
+            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "경로 찾기를 지금 사용할 수 없어요.")
         val options = provider.getRouteOptions(request.validated())
         if (options.isEmpty()) {
-            throw ResponseStatusException(HttpStatus.BAD_GATEWAY, "사용 가능한 경로 후보를 찾지 못했습니다.")
+            throw ResponseStatusException(HttpStatus.BAD_GATEWAY, "이동 경로를 찾지 못했어요.")
         }
         return options.take(3)
     }
