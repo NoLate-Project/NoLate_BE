@@ -40,7 +40,7 @@ jobs:
         run: ./gradlew --no-daemon clean quickScheduleReliabilityTest
       - name: Enforce sharing MySQL E2E gate
         run: ./gradlew --no-daemon test --tests com.noLate.schedule.application.service.SharedCalendarMySqlConcurrencyIntegrationTest
-      - run: ./gradlew --no-daemon test bootWar
+      - run: ./gradlew --no-daemon test bootWar -PtestMaxHeapSize=2048m
       - name: Verify WAR contains no credential files
         run: |
           WAR_FILE="$(find build/libs -name '*.war' ! -name '*plain*' | head -n 1)"
