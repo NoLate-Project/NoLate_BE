@@ -106,6 +106,48 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `revoked calendar invitation cannot create a membership`() {
+        val owner = member("calendar-revoke-owner")
+        val target = member("calendar-revoke-target")
+        val ownerId = requireNotNull(owner.id)
+        val targetId = requireNotNull(target.id)
+        val calendar = calendarService.createCalendar(
+            ownerMemberId = ownerId,
+            title = "폐기할 링크 캘린더",
+            color = "#2F80FF",
+            defaultContentMode = ScheduleShareContentMode.SCHEDULE_ONLY,
+            presentedSessionGeneration = owner.sessionGeneration,
+        )
+        val invitation = shareService.createCalendarInvitation(
+            ownerMemberId = ownerId,
+            calendarId = calendar.id,
+            permission = ScheduleSharePermission.VIEWER,
+            ttlHours = 24,
+            maxAcceptCount = 10,
+            presentedSessionGeneration = owner.sessionGeneration,
+        )
+        shareService.revokeInvitation(
+            ownerMemberId = ownerId,
+            resourceType = ScheduleShareResourceType.CALENDAR,
+            resourceId = calendar.id,
+            invitationId = invitation.id.toLong(),
+            presentedSessionGeneration = owner.sessionGeneration,
+        )
+
+        val error = assertThrows(BusinessException::class.java) {
+            shareService.acceptInvitation(
+                currentMemberId = targetId,
+                token = invitation.token,
+                presentedSessionGeneration = target.sessionGeneration,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_STATE, error.errorCode)
+        assertEquals(ScheduleShareInvitationStatus.REVOKED, invitationRepository.findAll().single().status)
+        assertEquals(null, calendarMemberRepository.findByCalendarIdAndMemberId(calendar.id, targetId))
+    }
+
+    @Test
     fun `ownership transfer revokes links issued by the previous owner`() {
         val owner = member("calendar-transfer-owner")
         val nextOwner = member("calendar-transfer-next-owner")

@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param
 interface ScheduleCategoryRepository : JpaRepository<ScheduleCategory, Long> {
     fun findAllByMemberId(memberId: Long): List<ScheduleCategory>
     fun findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId: Long): List<ScheduleCategory>
+    fun findByMemberIdAndCalendarIdIsNullAndDeletedFalseOrderBySortOrderAscIdAsc(memberId: Long): List<ScheduleCategory>
 
     fun findByIdAndMemberIdAndDeletedFalse(id: Long, memberId: Long): ScheduleCategory?
 
@@ -20,6 +21,17 @@ interface ScheduleCategoryRepository : JpaRepository<ScheduleCategory, Long> {
         where c.deleted = false
           and (
             c.member_id = :memberId
+            or exists (
+              select 1
+              from schedule_calendar_members scm
+              join schedule_calendars cal on cal.id = scm.calendar_id
+              where scm.calendar_id = c.calendar_id
+                and scm.member_id = :memberId
+                and scm.status = 'ACTIVE'
+                and scm.deleted = false
+                and cal.status = 'ACTIVE'
+                and cal.deleted = false
+            )
             or exists (
               select 1
               from schedule_category_shares scs
@@ -55,9 +67,21 @@ interface ScheduleCategoryRepository : JpaRepository<ScheduleCategory, Long> {
         select coalesce(max(c.sort_order), -1)
         from schedule_categories c
         where c.member_id = :memberId
+          and c.calendar_id is null
           and c.deleted = false
         """,
         nativeQuery = true,
     )
     fun findMaxSortOrder(@Param("memberId") memberId: Long): Int
+
+    @Query(
+        value = """
+        select coalesce(max(c.sort_order), -1)
+        from schedule_categories c
+        where c.calendar_id = :calendarId
+          and c.deleted = false
+        """,
+        nativeQuery = true,
+    )
+    fun findMaxSortOrderByCalendarId(@Param("calendarId") calendarId: Long): Int
 }

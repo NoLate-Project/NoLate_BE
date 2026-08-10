@@ -6,8 +6,13 @@ import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategorySettingDto
+import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
+import com.noLate.schedule.domain.ScheduleCalendarRole
+import com.noLate.schedule.domain.ScheduleCalendarStatus
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleSharePermission
@@ -30,6 +35,8 @@ class ScheduleCategoryService(
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
     private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
     private val sharingBlockPolicy: SharingBlockPolicy? = null,
+    private val calendarRepository: ScheduleCalendarRepository? = null,
+    private val calendarMemberRepository: ScheduleCalendarMemberRepository? = null,
 ) {
     private val defaultCategories = listOf(
         DefaultScheduleCategory("업무", "#f44336", "briefcase-outline"),
@@ -63,12 +70,36 @@ class ScheduleCategoryService(
             // 공유 row는 재활성화 가능한 dormant 상태로 남겨 두되, off 동안에는 그 grant를
             // 조회 조건에 사용하지 않아 다른 회원의 카테고리 UGC가 응답에 섞이지 않게 한다.
             categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId)
+                .filter { it.calendarId == null }
         }
+        val calendarIds = visibleCategories.mapNotNull { it.calendarId }.distinct()
+        val activeCalendars = calendarRepository
+            ?.findAllById(calendarIds)
+            ?.filter { !it.deleted && it.status == ScheduleCalendarStatus.ACTIVE }
+            ?.associateBy { requireNotNull(it.id) }
+            .orEmpty()
+        val calendarRoles = calendarMemberRepository
+            ?.findAllByCalendarIdInAndStatusAndDeletedFalseOrderByCalendarIdAscIdAsc(calendarIds)
+            ?.filter { it.memberId == memberId }
+            ?.associate { it.calendarId to it.role }
+            .orEmpty()
         val blockedOwnerIds = sharingBlockPolicy
-            ?.blockedCounterpartIds(memberId, visibleCategories.map { it.memberId })
+            ?.blockedCounterpartIds(
+                memberId,
+                visibleCategories.map { category ->
+                    category.calendarId?.let(activeCalendars::get)?.ownerMemberId ?: category.memberId
+                },
+            )
             .orEmpty()
         val allowedCategories = visibleCategories.filter {
-            it.memberId == memberId || it.memberId !in blockedOwnerIds
+            val calendarId = it.calendarId
+            if (calendarId != null && calendarRepository != null && calendarMemberRepository != null) {
+                val calendar = activeCalendars[calendarId]
+                calendar != null && calendarRoles[calendarId] != null &&
+                    (calendar.ownerMemberId == memberId || calendar.ownerMemberId !in blockedOwnerIds)
+            } else {
+                it.memberId == memberId || it.memberId !in blockedOwnerIds
+            }
         }
         val hasReceivedCategory = allowedCategories.any { it.memberId != memberId }
         val permissionByCategoryId = if (hasReceivedCategory) {
@@ -85,13 +116,16 @@ class ScheduleCategoryService(
 
         return allowedCategories
             .map { category ->
-                val shared = category.memberId != memberId
+                val calendarRole = category.calendarId?.let(calendarRoles::get)
+                val shared = category.calendarId != null || category.memberId != memberId
                 category.toDto().copy(
                     shared = shared,
                     // The visibility query proves access. If a legacy service
                     // instance has no share repository, fall back to the least
                     // privileged label rather than falsely claiming edit access.
-                    sharePermission = if (shared) {
+                    sharePermission = if (calendarRole != null) {
+                        calendarRole.toCategoryPermission()
+                    } else if (shared) {
                         category.id?.let(permissionByCategoryId::get)
                             ?: ScheduleSharePermission.VIEWER
                     } else {
@@ -109,17 +143,23 @@ class ScheduleCategoryService(
         iconKey: String?,
         sortOrder: Int?,
         presentedSessionGeneration: Long,
+        calendarId: Long? = null,
     ): ScheduleCategorySettingDto {
         lockMutationMembers(memberId, presentedSessionGeneration)
+        val calendarRole = calendarId?.let { requireWritableCalendar(memberId, it) }
         val entity = ScheduleCategory(
             memberId = memberId,
+            calendarId = calendarId,
             title = normalizeRequiredText(title, "title", maxLength = 80),
-            color = normalizeOptionalText(color, maxLength = 32) ?: defaultCategoryColor(memberId),
+            color = normalizeOptionalText(color, maxLength = 32) ?: defaultCategoryColor(memberId, calendarId),
             iconKey = normalizeOptionalText(iconKey, maxLength = 40),
-            sortOrder = sortOrder ?: nextCategorySortOrder(memberId),
+            sortOrder = sortOrder ?: nextCategorySortOrder(memberId, calendarId),
         )
 
-        return categoryRepository.save(entity).toDto()
+        return categoryRepository.save(entity).toDto().copy(
+            shared = calendarId != null,
+            sharePermission = calendarRole?.toCategoryPermission(),
+        )
     }
 
     @Transactional
@@ -133,7 +173,7 @@ class ScheduleCategoryService(
         presentedSessionGeneration: Long,
     ): ScheduleCategorySettingDto {
         lockMutationMembers(memberId, presentedSessionGeneration)
-        val entity = findCategory(memberId, categoryId)
+        val entity = findCategoryForMutation(memberId, categoryId)
         entity.update(
             title = title?.let { normalizeRequiredText(it, "title", maxLength = 80) } ?: entity.title,
             color = normalizeOptionalText(color, maxLength = 32) ?: entity.color,
@@ -141,7 +181,13 @@ class ScheduleCategoryService(
             sortOrder = sortOrder ?: entity.sortOrder,
         )
 
-        return categoryRepository.save(entity).toDto()
+        return categoryRepository.save(entity).toDto().copy(
+            shared = entity.calendarId != null,
+            sharePermission = entity.calendarId
+                ?.let { calendarMemberRepository?.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(it, memberId) }
+                ?.role
+                ?.toCategoryPermission(),
+        )
     }
 
     @Transactional
@@ -150,6 +196,21 @@ class ScheduleCategoryService(
         categoryId: Long,
         presentedSessionGeneration: Long,
     ) {
+        val existingCategory = categoryRepository.findById(categoryId).orElse(null)
+            ?.takeUnless { it.deleted }
+        if (existingCategory?.calendarId != null) {
+            lockMutationMembers(memberId, presentedSessionGeneration)
+            val calendarId = requireNotNull(existingCategory.calendarId)
+            requireWritableCalendar(memberId, calendarId)
+            existingCategory.softDelete()
+            categoryRepository.save(existingCategory)
+            val affectedMemberIds = calendarMemberRepository
+                ?.findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+                ?.map { it.memberId }
+                .orEmpty()
+            publishCategoryInvalidation(affectedMemberIds, "calendar-category-deleted")
+            return
+        }
         categoryDeleteCoordinator?.let {
             it.delete(memberId, categoryId, presentedSessionGeneration)
             return
@@ -204,7 +265,7 @@ class ScheduleCategoryService(
     ): List<ScheduleCategorySettingDto> {
         lockMutationMembers(memberId, presentedSessionGeneration)
         items.forEach { item ->
-            val entity = findCategory(memberId, item.id)
+            val entity = findCategoryForMutation(memberId, item.id)
             entity.sortOrder = item.sortOrder
             categoryRepository.save(entity)
         }
@@ -236,6 +297,7 @@ class ScheduleCategoryService(
 
     private fun ensureDefaultCategories(memberId: Long) {
         val existing = categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId)
+            .filter { it.calendarId == null }
         if (existing.isNotEmpty()) return
 
         defaultCategories.forEachIndexed { index, category ->
@@ -251,18 +313,59 @@ class ScheduleCategoryService(
         }
     }
 
-    private fun findCategory(memberId: Long, categoryId: Long): ScheduleCategory {
-        return categoryRepository.findByIdAndMemberIdAndDeletedFalse(categoryId, memberId)
+    private fun findCategoryForMutation(memberId: Long, categoryId: Long): ScheduleCategory {
+        val category = categoryRepository.findByIdAndMemberIdAndDeletedFalse(categoryId, memberId)
+            ?: categoryRepository.findById(categoryId).orElse(null)?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+        val calendarId = category.calendarId
+        if (calendarId == null) {
+            if (category.memberId != memberId) {
+                throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+            }
+        } else {
+            requireWritableCalendar(memberId, calendarId)
+        }
+        return category
     }
 
-    private fun nextCategorySortOrder(memberId: Long): Int {
-        return categoryRepository.findMaxSortOrder(memberId) + 1
+    private fun requireWritableCalendar(memberId: Long, calendarId: Long): ScheduleCalendarRole {
+        sharingAvailabilityPolicy.requireEnabled()
+        val calendar = calendarRepository?.findActiveForUpdate(calendarId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
+        if (calendar.deleted || calendar.status != ScheduleCalendarStatus.ACTIVE) {
+            throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
+        }
+        val membership = calendarMemberRepository
+            ?.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                calendarId,
+                memberId,
+                ScheduleCalendarMemberStatus.ACTIVE,
+            )
+            ?: throw BusinessException(ErrorCode.FORBIDDEN, "공유 캘린더 멤버가 아닙니다.")
+        if (membership.role !in setOf(ScheduleCalendarRole.OWNER, ScheduleCalendarRole.EDITOR)) {
+            throw BusinessException(ErrorCode.FORBIDDEN, "공유 캘린더 카테고리를 편집할 권한이 없습니다.")
+        }
+        return membership.role
     }
 
-    private fun defaultCategoryColor(memberId: Long): String {
-        val index = nextCategorySortOrder(memberId).coerceAtLeast(0)
+    private fun nextCategorySortOrder(memberId: Long, calendarId: Long?): Int {
+        return if (calendarId == null) {
+            categoryRepository.findMaxSortOrder(memberId) + 1
+        } else {
+            categoryRepository.findMaxSortOrderByCalendarId(calendarId) + 1
+        }
+    }
+
+    private fun defaultCategoryColor(memberId: Long, calendarId: Long?): String {
+        val index = nextCategorySortOrder(memberId, calendarId).coerceAtLeast(0)
         return colorPalette[index % colorPalette.size]
+    }
+
+    private fun publishCategoryInvalidation(memberIds: Collection<Long>, reason: String) {
+        if (memberIds.isEmpty()) return
+        eventPublisher.publishEvent(
+            ScheduleCalendarCacheInvalidationEvent(memberIds = memberIds.toSet(), reason = reason)
+        )
     }
 
     private fun normalizeRequiredText(value: String?, field: String, maxLength: Int): String {
@@ -286,6 +389,12 @@ class ScheduleCategoryService(
         }
         return normalized
     }
+}
+
+private fun ScheduleCalendarRole.toCategoryPermission(): ScheduleSharePermission = when (this) {
+    ScheduleCalendarRole.OWNER -> ScheduleSharePermission.OWNER
+    ScheduleCalendarRole.EDITOR -> ScheduleSharePermission.EDITOR
+    ScheduleCalendarRole.VIEWER -> ScheduleSharePermission.VIEWER
 }
 
 /**

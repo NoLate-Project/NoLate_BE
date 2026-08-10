@@ -52,6 +52,7 @@ class ScheduleCategoryController(
             color = request.color,
             iconKey = request.iconKey,
             sortOrder = request.sortOrder,
+            calendarId = request.calendarId,
             presentedSessionGeneration = requireCategorySessionGeneration(authenticated),
         )
         return ApiResponse.success(result)
@@ -114,6 +115,7 @@ data class CreateScheduleCategoryRequest(
     val color: String? = null,
     val iconKey: String? = null,
     val sortOrder: Int? = null,
+    val calendarId: Long? = null,
 )
 
 data class UpdateScheduleCategoryRequest(

@@ -199,6 +199,43 @@ class ScheduleShareInvitationServiceUnitTest {
     }
 
     @Test
+    fun `acceptInvitation rejects revoked invitation before creating a share`() {
+        val invitation = ScheduleShareInvitation(
+            id = 70L,
+            resourceType = ScheduleShareResourceType.SCHEDULE,
+            resourceId = 10L,
+            ownerMemberId = 1L,
+            permission = ScheduleSharePermission.VIEWER,
+            tokenHash = ShareInvitationTokenHasher.hash("plain-token"),
+            status = ScheduleShareInvitationStatus.REVOKED,
+            expiresAt = Instant.parse("2026-07-12T00:00:00Z"),
+            maxAcceptCount = 1,
+        )
+        whenever(invitationRepository.findByTokenHashAndDeletedFalse(invitation.tokenHash))
+            .thenReturn(invitation)
+        whenever(invitationRepository.findByTokenHashForUpdate(invitation.tokenHash))
+            .thenReturn(invitation)
+        whenever(invitationAcceptanceRepository.findByInvitationIdAndMemberId(70L, 2L))
+            .thenReturn(null)
+        whenever(memberRepository.findByIdForUpdate(2L))
+            .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
+
+        val error = assertThrows<BusinessException> {
+            service.acceptInvitation(
+                currentMemberId = 2L,
+                token = "plain-token",
+                presentedSessionGeneration = 0L,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_STATE, error.errorCode)
+        assertEquals(ScheduleShareInvitationStatus.REVOKED, invitation.status)
+        verify(scheduleRepository, never()).findOwnedScheduleDetail(any(), any())
+        verify(scheduleShareRepository, never()).saveAndFlush(any())
+        verify(invitationAcceptanceRepository, never()).saveAndFlush(any())
+    }
+
+    @Test
     fun `repeated acceptance by the same member returns the active grant without consuming the link again`() {
         val invitation = ScheduleShareInvitation(
             id = 70L,

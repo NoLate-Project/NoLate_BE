@@ -3,6 +3,7 @@ package com.noLate.schedule.application.service
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
+import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleCategoryDto
@@ -21,6 +22,7 @@ import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCalendarMember
+import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheService
@@ -475,10 +477,11 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
-    fun `shared editor can update while keeping owner's existing category snapshot`() {
+    fun `shared editor can update content while keeping calendar and owner's existing category snapshot`() {
         val editorId = 2L
         val scheduleId = 10L
         val existing = scheduleEntity(id = scheduleId, memberId = 99L, title = "Old schedule").apply {
+            calendarId = 30L
             route?.alertMode = ScheduleAlertMode.ALARM
         }
         val accessPolicy = mock<ScheduleAccessPolicy>()
@@ -510,6 +513,7 @@ class ScheduleServiceUnitTest {
             editorId,
             scheduleId,
             scheduleDto(title = "Editor update").copy(
+                calendarId = 30L,
                 alertMode = ScheduleAlertMode.STANDARD,
             ),
         )
@@ -519,6 +523,50 @@ class ScheduleServiceUnitTest {
         assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
         verify(categoryRepository, never()).findById(any())
         verify(categoryShareRepository, never()).findByCategoryIdAndTargetMemberId(any(), any())
+    }
+
+    @Test
+    fun `shared editor cannot move or detach another member's schedule`() {
+        val editorId = 2L
+        val scheduleId = 10L
+        val sourceCalendarId = 9L
+        val existing = scheduleEntity(id = scheduleId, memberId = 99L).apply {
+            calendarId = sourceCalendarId
+        }
+        val accessPolicy = mock<ScheduleAccessPolicy>()
+        val securedService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            scheduleAccessPolicy = accessPolicy,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+        )
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)).thenReturn(existing)
+        whenever(accessPolicy.resolve(editorId, existing)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = true,
+                travelEnabled = true,
+                canViewAllTravelPlans = true,
+                effectivePermission = ScheduleSharePermission.EDITOR,
+            ),
+        )
+
+        listOf<Long?>(3L, null).forEach { targetCalendarId ->
+            val failure = assertThrows<BusinessException> {
+                securedService.updateSchedule(
+                    editorId,
+                    scheduleId,
+                    scheduleDto().copy(calendarId = targetCalendarId),
+                )
+            }
+
+            assertEquals(ErrorCode.FORBIDDEN, failure.errorCode)
+            assertEquals(sourceCalendarId, existing.calendarId)
+        }
+        verify(scheduleRepository, never()).save(existing)
     }
 
     @Test
@@ -541,7 +589,7 @@ class ScheduleServiceUnitTest {
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
             ),
         )
-        val existing = scheduleEntity(id = scheduleId, memberId = 99L).apply {
+        val existing = scheduleEntity(id = scheduleId, memberId = memberId).apply {
             calendarId = sourceCalendarId
         }
         val targetCalendar = ScheduleCalendar(
@@ -588,6 +636,63 @@ class ScheduleServiceUnitTest {
 
         verify(calendarRepository).findAllForUpdate(listOf(targetCalendarId, sourceCalendarId))
         assertEquals(targetCalendarId, existing.calendarId)
+    }
+
+    @Test
+    fun `shared calendar schedule rejects a category from another calendar scope`() {
+        val memberId = 1L
+        val calendarId = 30L
+        val categoryRepository = mock<ScheduleCategoryRepository>()
+        val categoryShares = mock<ScheduleCategoryShareRepository>()
+        val calendars = mock<ScheduleCalendarRepository>()
+        val calendarMembers = mock<ScheduleCalendarMemberRepository>()
+        val securedService = ScheduleService(
+            scheduleRepository = scheduleRepository,
+            objectMapper = objectMapper,
+            subscriptionPolicyService = subscriptionPolicyService,
+            categoryRepository = categoryRepository,
+            categoryShareRepository = categoryShares,
+            calendarRepository = calendars,
+            calendarMemberRepository = calendarMembers,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+        )
+        whenever(calendars.findAllForUpdate(listOf(calendarId))).thenReturn(
+            listOf(ScheduleCalendar(id = calendarId, ownerMemberId = memberId, title = "가족")),
+        )
+        whenever(
+            calendarMembers.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                calendarId,
+                memberId,
+                ScheduleCalendarMemberStatus.ACTIVE,
+            )
+        ).thenReturn(
+            ScheduleCalendarMember(
+                id = 31L,
+                calendarId = calendarId,
+                memberId = memberId,
+                role = ScheduleCalendarRole.OWNER,
+            ),
+        )
+        whenever(categoryRepository.findById(1L)).thenReturn(
+            Optional.of(
+                ScheduleCategory(
+                    id = 1L,
+                    memberId = memberId,
+                    calendarId = null,
+                    title = "개인",
+                    color = "#2F80FF",
+                ),
+            ),
+        )
+
+        val failure = assertThrows<BusinessException> {
+            securedService.addSchedule(memberId, scheduleDto().copy(calendarId = calendarId))
+        }
+
+        assertEquals(ErrorCode.INVALID_INPUT, failure.errorCode)
+        verify(scheduleRepository, never()).save(any<Schedule>())
     }
 
     @Test
