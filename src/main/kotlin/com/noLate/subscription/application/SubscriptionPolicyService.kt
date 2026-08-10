@@ -16,6 +16,7 @@ class SubscriptionPolicyService(
     private val memberRepository: MemberRepository,
     private val scheduleRepository: ScheduleRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository? = null,
+    private val advertisingProperties: AdvertisingProperties,
 ) {
     private val seoulZone = ZoneId.of("Asia/Seoul")
 
@@ -23,6 +24,7 @@ class SubscriptionPolicyService(
         val plan = getPlan(memberId)
         return SubscriptionPolicyDto(
             plan = plan,
+            adsEnabled = advertisingProperties.enabled && plan == SubscriptionPlan.FREE,
             maxSmartSchedulesPerMonth = plan.maxSmartSchedulesPerMonth,
             usedSmartSchedulesThisMonth = countMonthlySmartSchedules(memberId),
             maxNotificationLeadMinutes = plan.maxNotificationLeadMinutes,

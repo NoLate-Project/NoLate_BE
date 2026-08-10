@@ -72,21 +72,25 @@ class FirebaseDepartureAlarmPayloadTest {
     }
 
     @Test
-    fun `standard push keeps visible notification sound and alert payload`() {
+    fun `general visible push keeps top level and Android notification payloads`() {
+        val logicalEventKey = "event:general-visible-41"
         val message = client.createFirebaseMessage(
             token = "token",
-            title = "출발 안내",
-            body = "지금 출발하세요",
+            title = "공유 안내",
+            body = "새 일정이 공유되었습니다.",
             data = mapOf(
-                "type" to "SCHEDULE_DEPARTURE_REMINDER",
+                "type" to "SCHEDULE_SHARE_RECEIVED",
                 "scheduleId" to "41",
-                "logicalEventKey" to "event:visible-reminder-41",
+                "logicalEventKey" to logicalEventKey,
             ),
         )
 
         assertThat(field<Any?>(message, "notification")).isNotNull()
         val android = field<Any>(message, "androidConfig")
-        assertThat(field<Any?>(android, "notification")).isNotNull()
+        val androidNotification = field<Any>(android, "notification")
+        assertThat(field<String>(androidNotification, "tag"))
+            .matches("[0-9a-f]{64}")
+            .doesNotContain(logicalEventKey)
         assertThat(field<Any?>(android, "ttl")).isNull()
         val apns = field<Any>(message, "apnsConfig")
         val headers = field<Map<String, String>>(apns, "headers")
@@ -103,11 +107,62 @@ class FirebaseDepartureAlarmPayloadTest {
     }
 
     @Test
-    fun `standard visible retries use the same opaque provider replacement identifier`() {
-        val rawEventKey = "event:raw-logical-identity-must-not-leak"
-        val first = standardVisibleMessage(rawEventKey)
-        val retry = standardVisibleMessage(rawEventKey)
-        val distinct = standardVisibleMessage("event:another-logical-identity")
+    fun `Android departure reminder keeps legacy auto-display and adds native action data`() {
+        val expiresAt = now.plusSeconds(120).plusMillis(500)
+        val message = scheduleReminderMessage(
+            logicalEventKey = "event:00000000-0000-4000-8000-000000000041",
+            expiresAt = expiresAt,
+        )
+
+        assertThat(field<Any?>(message, "notification")).isNotNull()
+        val android = field<Any>(message, "androidConfig")
+        assertThat(field<String>(android, "priority")).isEqualTo("high")
+        val androidNotification = field<Any>(android, "notification")
+        assertThat(field<Any?>(android, "collapseKey")).isNull()
+        assertThat(field<String>(android, "ttl")).isEqualTo("120.500000000s")
+
+        val data = field<Map<String, String>>(message, "data")
+        assertThat(data).containsAllEntriesOf(
+            mapOf(
+                "type" to "SCHEDULE_DEPARTURE_REMINDER",
+                "scheduleId" to "41",
+                "recipientMemberId" to "7",
+                "logicalEventKey" to "event:00000000-0000-4000-8000-000000000041",
+                "etaEventExpiresAt" to expiresAt.toString(),
+                "nolateNotificationTitle" to "출발 안내",
+                "nolateNotificationBody" to "지금 출발하세요",
+                "categoryId" to "schedule_depart_now",
+                "categoryIdentifier" to "schedule_depart_now",
+            )
+        )
+        assertThat(data["nolateNotificationTag"]).matches("[0-9a-f]{64}")
+        assertThat(field<String>(androidNotification, "tag"))
+            .isEqualTo(data.getValue("nolateNotificationTag"))
+        assertThat(field<String>(androidNotification, "channelId")).isEqualTo("schedule-push")
+        assertThat(field<String>(androidNotification, "sound")).isEqualTo("default")
+
+        val apns = field<Any>(message, "apnsConfig")
+        val headers = field<Map<String, String>>(apns, "headers")
+        assertThat(headers).containsAllEntriesOf(
+            mapOf(
+                "apns-push-type" to "alert",
+                "apns-priority" to "10",
+                "apns-collapse-id" to data.getValue("nolateNotificationTag"),
+                "apns-expiration" to expiresAt.epochSecond.toString(),
+            )
+        )
+        @Suppress("UNCHECKED_CAST")
+        val aps = field<Map<String, Any>>(apns, "payload")["aps"] as Map<String, Any?>
+        assertThat(aps).containsKeys("alert", "sound")
+        assertThat(aps["category"]).isEqualTo("schedule_depart_now")
+    }
+
+    @Test
+    fun `departure reminder retries use the same opaque native and APNs replacement identifier`() {
+        val rawEventKey = "key:${"a".repeat(64)}"
+        val first = scheduleReminderMessage(rawEventKey)
+        val retry = scheduleReminderMessage(rawEventKey)
+        val distinct = scheduleReminderMessage("key:${"b".repeat(64)}")
 
         val firstIdentifier = replacementIdentifier(first)
         assertThat(firstIdentifier).isEqualTo(replacementIdentifier(retry))
@@ -124,8 +179,8 @@ class FirebaseDepartureAlarmPayloadTest {
     @Test
     fun `ETA visible expiration maps exactly to Android TTL and APNs epoch seconds`() {
         val expiresAt = now.plusSeconds(120).plusMillis(500)
-        val message = standardVisibleMessage(
-            logicalEventKey = "event:eta-expiration-41",
+        val message = scheduleReminderMessage(
+            logicalEventKey = "event:00000000-0000-4000-8000-000000000042",
             expiresAt = expiresAt,
         )
 
@@ -139,41 +194,59 @@ class FirebaseDepartureAlarmPayloadTest {
     }
 
     @Test
-    fun `expired or malformed ETA visible payload fails before the provider call`() {
+    fun `invalid Android reminder contract fails before the provider call`() {
         val messaging = mock<FirebaseMessaging>()
         val rejectingClient = FirebasePushClient(
             messaging,
             Clock.fixed(now, ZoneOffset.UTC),
         )
 
-        val rejectedPayloads = listOf(
-            mapOf(
-                "logicalEventKey" to "event:expired-eta-41",
-                "etaEventExpiresAt" to now.minusMillis(1).toString(),
-            ),
-            mapOf(
-                "logicalEventKey" to "event:boundary-eta-41",
-                "etaEventExpiresAt" to now.toString(),
-            ),
-            mapOf(
-                "logicalEventKey" to "event:malformed-eta-41",
-                "etaEventExpiresAt" to "not-an-instant",
-            ),
-            mapOf(
-                "etaEventExpiresAt" to now.plusSeconds(120).toString(),
-            ),
-            mapOf(
-                "logicalEventKey" to " ",
-                "etaEventExpiresAt" to now.plusSeconds(120).toString(),
-            ),
+        val canonicalData = scheduleReminderData(
+            logicalEventKey = "event:00000000-0000-4000-8000-000000000043",
+            expiresAt = now.plusSeconds(120),
         )
-        rejectedPayloads.forEach { rejectedData ->
+        val rejectedInputs = listOf(
+            RejectedReminderInput(
+                data = canonicalData + ("etaEventExpiresAt" to now.minusMillis(1).toString()),
+            ),
+            RejectedReminderInput(
+                data = canonicalData + ("etaEventExpiresAt" to now.toString()),
+            ),
+            RejectedReminderInput(
+                data = canonicalData + ("etaEventExpiresAt" to "not-an-instant"),
+            ),
+            RejectedReminderInput(data = canonicalData - "etaEventExpiresAt"),
+            RejectedReminderInput(data = canonicalData - "logicalEventKey"),
+            RejectedReminderInput(data = canonicalData + ("logicalEventKey" to " ")),
+            RejectedReminderInput(
+                data = canonicalData + ("logicalEventKey" to "event:non-canonical-41"),
+            ),
+            RejectedReminderInput(
+                data = canonicalData + ("logicalEventKey" to "key:${"A".repeat(64)}"),
+            ),
+            RejectedReminderInput(data = canonicalData - "scheduleId"),
+            RejectedReminderInput(data = canonicalData + ("scheduleId" to "0")),
+            RejectedReminderInput(data = canonicalData + ("scheduleId" to "1".repeat(201))),
+            RejectedReminderInput(data = canonicalData - "recipientMemberId"),
+            RejectedReminderInput(data = canonicalData + ("recipientMemberId" to "0")),
+            RejectedReminderInput(
+                data = canonicalData + ("recipientMemberId" to "9007199254740992"),
+            ),
+            RejectedReminderInput(data = canonicalData, title = " "),
+            RejectedReminderInput(data = canonicalData, title = " 출발 안내"),
+            RejectedReminderInput(data = canonicalData, title = "출발\n안내"),
+            RejectedReminderInput(data = canonicalData, title = "t".repeat(101)),
+            RejectedReminderInput(data = canonicalData, body = " "),
+            RejectedReminderInput(data = canonicalData, body = "안내\u007f본문"),
+            RejectedReminderInput(data = canonicalData, body = "b".repeat(501)),
+        )
+        rejectedInputs.forEach { input ->
             assertThatThrownBy {
                 rejectingClient.sendToToken(
                     token = "token",
-                    title = "출발 안내",
-                    body = "지금 출발하세요",
-                    data = mapOf("type" to "SCHEDULE_DEPARTURE_REMINDER") + rejectedData,
+                    title = input.title,
+                    body = input.body,
+                    data = input.data,
                 )
             }.isExactlyInstanceOf(PushPayloadRejectedException::class.java)
         }
@@ -181,30 +254,44 @@ class FirebaseDepartureAlarmPayloadTest {
         verifyNoInteractions(messaging)
     }
 
-    private fun standardVisibleMessage(
+    private fun scheduleReminderMessage(
         logicalEventKey: String,
-        expiresAt: Instant? = null,
+        expiresAt: Instant = now.plusSeconds(120),
     ): Message = client.createFirebaseMessage(
         token = "token",
         title = "출발 안내",
         body = "지금 출발하세요",
-        data = buildMap {
-            put("type", "SCHEDULE_DEPARTURE_REMINDER")
-            put("scheduleId", "41")
-            put("logicalEventKey", logicalEventKey)
-            expiresAt?.let { put("etaEventExpiresAt", it.toString()) }
-        },
+        data = scheduleReminderData(logicalEventKey, expiresAt),
+    )
+
+    private fun scheduleReminderData(
+        logicalEventKey: String,
+        expiresAt: Instant,
+    ): Map<String, String> = mapOf(
+        "type" to "SCHEDULE_DEPARTURE_REMINDER",
+        "scheduleId" to "41",
+        "recipientMemberId" to "7",
+        "logicalEventKey" to logicalEventKey,
+        "etaEventExpiresAt" to expiresAt.toString(),
     )
 
     private fun replacementIdentifier(message: Message): String {
+        val nativeTag = field<Map<String, String>>(message, "data")
+            .getValue("nolateNotificationTag")
         val android = field<Any>(message, "androidConfig")
-        val notification = field<Any>(android, "notification")
-        val androidTag = field<String>(notification, "tag")
+        val androidTag = field<String>(field(android, "notification"), "tag")
+        assertThat(androidTag).isEqualTo(nativeTag)
         val apns = field<Any>(message, "apnsConfig")
         val apnsCollapseId = field<Map<String, String>>(apns, "headers")["apns-collapse-id"]
-        assertThat(apnsCollapseId).isEqualTo(androidTag)
-        return androidTag
+        assertThat(apnsCollapseId).isEqualTo(nativeTag)
+        return nativeTag
     }
+
+    private data class RejectedReminderInput(
+        val data: Map<String, String>,
+        val title: String = "출발 안내",
+        val body: String = "지금 출발하세요",
+    )
 
     @Suppress("UNCHECKED_CAST")
     private fun <T> field(target: Any, name: String): T =

@@ -235,9 +235,10 @@ visible.
 
 Use the assignment as the expected-channel denominator and join it to occurrence-level fire
 evidence or the exact frozen visible delivery. This reports authenticated presentation evidence,
-not FCM provider acceptance. For native alarms the append-only fire rows expose physical alarm
-count; for visible fallback the frozen delivery exposes only first-seen presentation evidence.
-Keep modes separate as well as publishing the combined result.
+not FCM provider acceptance. For native alarms, the server sees one deduplicated row per reported
+fire identity and separates direct callback/alerting evidence from OS-delivery inference. For
+visible fallback, the frozen delivery exposes only first-seen presentation evidence. Keep modes
+separate as well as publishing the combined result.
 
 ```sql
 WITH aged_assignment AS (
@@ -268,6 +269,31 @@ WITH aged_assignment AS (
               AND f.scheduled_for = f.source_trigger_at
               AND f.server_recorded_at < CAST(:as_of_utc AS DATETIME(6))
         ) AS native_count,
+        (
+            SELECT COUNT(*)
+            FROM departure_alarm_fire_events f
+            WHERE f.member_id = a.member_id
+              AND f.schedule_id = a.schedule_id
+              AND f.occurrence_id = a.occurrence_id
+              AND f.device_fingerprint = a.device_fingerprint
+              AND f.source_trigger_at = a.trigger_at
+              AND f.scheduled_for = f.source_trigger_at
+              AND f.generation = a.alarm_generation
+              AND f.timing_basis IN ('EXACT_CALLBACK', 'OBSERVED_ALERTING')
+              AND f.server_recorded_at < CAST(:as_of_utc AS DATETIME(6))
+        ) AS direct_native_count,
+        (
+            SELECT COUNT(*)
+            FROM departure_alarm_fire_events f
+            WHERE f.member_id = a.member_id
+              AND f.schedule_id = a.schedule_id
+              AND f.occurrence_id = a.occurrence_id
+              AND f.device_fingerprint = a.device_fingerprint
+              AND f.source_trigger_at = a.trigger_at
+              AND f.scheduled_for = f.source_trigger_at
+              AND f.timing_basis = 'INFERRED_OS_DELIVERY'
+              AND f.server_recorded_at < CAST(:as_of_utc AS DATETIME(6))
+        ) AS inferred_native_count,
         (
             SELECT COUNT(*)
             FROM departure_alarm_fire_events f
@@ -307,21 +333,28 @@ WITH aged_assignment AS (
 SELECT
     'ALL' AS cohort,
     COUNT(*) AS assignment_count,
-    SUM(native_count = expected_native_count AND visible_count = expected_visible_count)
+    SUM(direct_native_count = expected_native_count AND visible_count = expected_visible_count)
         AS expected_channel_evidence_observed,
-    SUM(native_count + visible_count < expected_native_count + expected_visible_count)
+    SUM(direct_native_count + visible_count < expected_native_count + expected_visible_count)
         AS missing_observed,
     SUM(native_count + visible_count > expected_native_count + expected_visible_count)
-        AS observable_native_or_cross_channel_duplicate,
+        AS observable_distinct_native_identity_or_cross_channel_duplicate,
     SUM(
-        native_count + visible_count = expected_native_count + expected_visible_count
-        AND (native_count <> expected_native_count OR visible_count <> expected_visible_count)
+        direct_native_count + visible_count = expected_native_count + expected_visible_count
+        AND (
+            direct_native_count <> expected_native_count
+            OR visible_count <> expected_visible_count
+        )
     ) AS wrong_channel_observed,
+    SUM(native_count) AS deduplicated_native_identity_count,
+    SUM(direct_native_count) AS direct_native_evidence_count,
+    SUM(inferred_native_count) AS inferred_native_identity_count,
     SUM(assigned_generation_native_count) AS assigned_generation_native_count,
     SUM(stale_generation_native_count) AS stale_generation_native_count,
     ROUND(
         100.0 * SUM(
-            native_count = expected_native_count AND visible_count = expected_visible_count
+            direct_native_count = expected_native_count
+            AND visible_count = expected_visible_count
         ) / NULLIF(COUNT(*), 0),
         2
     ) AS expected_channel_evidence_percent
@@ -330,21 +363,28 @@ UNION ALL
 SELECT
     CONCAT('PLATFORM:', platform) AS cohort,
     COUNT(*) AS assignment_count,
-    SUM(native_count = expected_native_count AND visible_count = expected_visible_count)
+    SUM(direct_native_count = expected_native_count AND visible_count = expected_visible_count)
         AS expected_channel_evidence_observed,
-    SUM(native_count + visible_count < expected_native_count + expected_visible_count)
+    SUM(direct_native_count + visible_count < expected_native_count + expected_visible_count)
         AS missing_observed,
     SUM(native_count + visible_count > expected_native_count + expected_visible_count)
-        AS observable_native_or_cross_channel_duplicate,
+        AS observable_distinct_native_identity_or_cross_channel_duplicate,
     SUM(
-        native_count + visible_count = expected_native_count + expected_visible_count
-        AND (native_count <> expected_native_count OR visible_count <> expected_visible_count)
+        direct_native_count + visible_count = expected_native_count + expected_visible_count
+        AND (
+            direct_native_count <> expected_native_count
+            OR visible_count <> expected_visible_count
+        )
     ) AS wrong_channel_observed,
+    SUM(native_count) AS deduplicated_native_identity_count,
+    SUM(direct_native_count) AS direct_native_evidence_count,
+    SUM(inferred_native_count) AS inferred_native_identity_count,
     SUM(assigned_generation_native_count) AS assigned_generation_native_count,
     SUM(stale_generation_native_count) AS stale_generation_native_count,
     ROUND(
         100.0 * SUM(
-            native_count = expected_native_count AND visible_count = expected_visible_count
+            direct_native_count = expected_native_count
+            AND visible_count = expected_visible_count
         ) / NULLIF(COUNT(*), 0),
         2
     ) AS expected_channel_evidence_percent
@@ -354,21 +394,28 @@ UNION ALL
 SELECT
     CONCAT(platform, ':', occurrence_id) AS cohort,
     COUNT(*) AS assignment_count,
-    SUM(native_count = expected_native_count AND visible_count = expected_visible_count)
+    SUM(direct_native_count = expected_native_count AND visible_count = expected_visible_count)
         AS expected_channel_evidence_observed,
-    SUM(native_count + visible_count < expected_native_count + expected_visible_count)
+    SUM(direct_native_count + visible_count < expected_native_count + expected_visible_count)
         AS missing_observed,
     SUM(native_count + visible_count > expected_native_count + expected_visible_count)
-        AS observable_native_or_cross_channel_duplicate,
+        AS observable_distinct_native_identity_or_cross_channel_duplicate,
     SUM(
-        native_count + visible_count = expected_native_count + expected_visible_count
-        AND (native_count <> expected_native_count OR visible_count <> expected_visible_count)
+        direct_native_count + visible_count = expected_native_count + expected_visible_count
+        AND (
+            direct_native_count <> expected_native_count
+            OR visible_count <> expected_visible_count
+        )
     ) AS wrong_channel_observed,
+    SUM(native_count) AS deduplicated_native_identity_count,
+    SUM(direct_native_count) AS direct_native_evidence_count,
+    SUM(inferred_native_count) AS inferred_native_identity_count,
     SUM(assigned_generation_native_count) AS assigned_generation_native_count,
     SUM(stale_generation_native_count) AS stale_generation_native_count,
     ROUND(
         100.0 * SUM(
-            native_count = expected_native_count AND visible_count = expected_visible_count
+            direct_native_count = expected_native_count
+            AND visible_count = expected_visible_count
         ) / NULLIF(COUNT(*), 0),
         2
     ) AS expected_channel_evidence_percent
@@ -381,21 +428,28 @@ SELECT
         ':semantic-warning=', IF(semantic_warning_visible, 'true', 'false')
     ) AS cohort,
     COUNT(*) AS assignment_count,
-    SUM(native_count = expected_native_count AND visible_count = expected_visible_count)
+    SUM(direct_native_count = expected_native_count AND visible_count = expected_visible_count)
         AS expected_channel_evidence_observed,
-    SUM(native_count + visible_count < expected_native_count + expected_visible_count)
+    SUM(direct_native_count + visible_count < expected_native_count + expected_visible_count)
         AS missing_observed,
     SUM(native_count + visible_count > expected_native_count + expected_visible_count)
-        AS observable_native_or_cross_channel_duplicate,
+        AS observable_distinct_native_identity_or_cross_channel_duplicate,
     SUM(
-        native_count + visible_count = expected_native_count + expected_visible_count
-        AND (native_count <> expected_native_count OR visible_count <> expected_visible_count)
+        direct_native_count + visible_count = expected_native_count + expected_visible_count
+        AND (
+            direct_native_count <> expected_native_count
+            OR visible_count <> expected_visible_count
+        )
     ) AS wrong_channel_observed,
+    SUM(native_count) AS deduplicated_native_identity_count,
+    SUM(direct_native_count) AS direct_native_evidence_count,
+    SUM(inferred_native_count) AS inferred_native_identity_count,
     SUM(assigned_generation_native_count) AS assigned_generation_native_count,
     SUM(stale_generation_native_count) AS stale_generation_native_count,
     ROUND(
         100.0 * SUM(
-            native_count = expected_native_count AND visible_count = expected_visible_count
+            direct_native_count = expected_native_count
+            AND visible_count = expected_visible_count
         ) / NULLIF(COUNT(*), 0),
         2
     ) AS expected_channel_evidence_percent
@@ -404,18 +458,40 @@ GROUP BY platform, occurrence_id, presentation_mode, semantic_warning_visible
 ORDER BY cohort;
 ```
 
+`native_count` is not a physical callback count. Android and iOS merge repeated journal entries
+with the same `(alarmId, generation, scheduledFor)` before upload, and the server enforces one row
+per member/device/alarm/generation/occurrence/scheduled time. The count can expose two distinct
+identities, such as a current-generation and stale-generation alarm at the same source trigger,
+but it cannot expose a repeated physical fire of one identity. The same-identity physical native
+duplicate rate is `unmeasured` until the client uploads append-only pre-deduplication fire-attempt
+telemetry.
+
+`direct_native_count` admits only `EXACT_CALLBACK` and `OBSERVED_ALERTING` from the assignment's
+exact `alarm_generation`. An `INFERRED_OS_DELIVERY` row remains in `native_count` and the inference
+diagnostic, but it does not satisfy the 90% expected-channel evidence gate because daemon-store
+absence is not an observed alert. A stale-generation-only exact callback therefore yields
+`native_count = 1`, `direct_native_count = 0`, `inferred_native_count = 0`, and
+`stale_generation_native_count = 1`; it remains `missing_observed`, cannot satisfy the current
+assignment, and is not mislabeled as inferred delivery. `inferred_native_count` explicitly counts
+only rows whose timing basis is `INFERRED_OS_DELIVERY`; it is not computed by subtracting the
+assigned-generation direct count from the all-generation identity count. Distinct
+inferred/current/stale identities still contribute to the separate observable
+distinct-native-identity or cross-channel duplicate blocker.
+
 `visible_count` cannot measure physical visible-notification duplicates. The database has one
 `push_deliveries` row for the frozen event/device ownership and `client_presented_at` records the
 first authenticated presentation acknowledgement on that row. Two OS-visible renders of the same
 logical event still produce `visible_count = 1`. Consequently,
-`expected_channel_evidence_percent` detects missing channel evidence, physical native duplicates,
-and observable native-plus-visible cross-channel duplicates, but it is **not** a visible-only
-duplicate rate.
+`expected_channel_evidence_percent` requires expected native-channel evidence to be directly
+observed and reports surplus distinct native identities or cross-channel evidence separately, but
+it is neither a same-identity native nor a visible-only physical duplicate rate.
 
-For this release, foreground-local visible-fallback duplicate prevention is a client invariant,
-not a measured delivery result; it does not cover an FCM notification payload that the OS presents
-directly while the app is backgrounded. After verifying the current account, the client scopes a
-canonical claim to `(recipient account, logicalEventKey)`;
+For this release, ordinary Android/iOS foreground-local visible-fallback duplicate prevention is a
+client invariant, not a measured delivery result. This JavaScript/Expo path excludes the canonical
+Android `SCHEDULE_DEPARTURE_REMINDER` shared-native path described below, and it does not cover an
+FCM notification payload that the OS presents directly while the app is backgrounded. After
+verifying the current account, the ordinary foreground client scopes a canonical claim to
+`(recipient account, logicalEventKey)`;
 only a legacy message without `logicalEventKey` uses its
 provider message ID as the logical identifier. It hashes that canonical
 key with SHA-256 to derive a stable Expo notification identifier. The durable protocol is
@@ -436,33 +512,72 @@ tests as a release blocker. Until an append-only claim-attempt/presentation jour
 the actual visible-only duplicate rate is `unmeasured`; do not infer it from this SQL or from a
 passing 90% expected-channel evidence score.
 
-An OS-presented standard FCM notification received while the app is backgrounded bypasses that
-foreground-local claim entirely. For this path, the server hashes `logicalEventKey` with SHA-256
-into an opaque, stable, 64-ASCII-character provider replacement identifier. It sets
-`AndroidNotification.tag` and the APNs `apns-collapse-id` header to that value. The Android
-notification tag is the essential device-visible replacement key. Notification messages are
-already collapsible in FCM, which ignores a custom Android collapse key for this message type;
-do not treat either `AndroidConfig.collapseKey` or a data field named `collapse_key` as this guarantee.
+An OS-presented ordinary FCM notification received while the app is backgrounded bypasses that
+foreground-local claim entirely. All standard visible payloads, including
+`SCHEDULE_DEPARTURE_REMINDER`, retain their top-level FCM `Notification` and
+`AndroidNotification` for legacy-client auto-display compatibility. The server hashes
+`logicalEventKey` with SHA-256 into an opaque, stable, 64-ASCII-character provider replacement
+identifier and uses it as
+`AndroidNotification.tag`; APNs uses the same value as `apns-collapse-id`. Notification messages
+are already collapsible in FCM, which ignores a custom Android collapse key for this message type;
+do not treat either `AndroidConfig.collapseKey` or a data field named `collapse_key` as this
+guarantee.
+
+`SCHEDULE_DEPARTURE_REMINDER` additionally carries the version-compatible Android action contract.
+Its canonical data must contain `type`, `scheduleId`, `recipientMemberId`, `logicalEventKey`, and
+`etaEventExpiresAt`, plus `nolateNotificationTitle`, `nolateNotificationBody`, and
+`nolateNotificationTag`. The server requires already-trimmed display text with no ASCII control
+characters, a 1..100-character title, a 1..500-character body, bounded positive numeric schedule
+and recipient identifiers, and an actionable logical key in exactly one of these forms:
+`key:` followed by 64 lowercase hexadecimal characters, or `event:` followed by a canonical UUID.
+The lowercase 64-ASCII-character transport tag must equal SHA-256 of that logical event key.
+Missing or invalid fields fail closed before Firebase is called.
+
+The new Android `FirebaseMessagingService` overrides the notification-intent handling boundary for
+this one canonical type before Firebase's base auto-display path. After verifying the current
+recipient, expiry, logical identity, display fields, and transport tag, it routes background and
+quit-state delivery through the native presentation coordinator. The foreground JavaScript handler
+recognizes the same canonical reminder and calls the native `presentDepartureReminder` bridge
+instead of the ordinary JavaScript/Expo durable-claim presenter. Both entries use the same
+process-wide lifecycle lock, native durable claim store, and `NotificationCompat` presenter for the
+notification and depart-now action.
+
+That shared presenter derives the device-visible replacement tag as
+`nolate-visible-SHA256("logical\0recipientMemberId\0logicalEventKey")`; it does not use
+`nolateNotificationTag` directly as the local notification tag. This recipient-bound derivation
+is paired with notification id `0` in every app state. A narrow foreground/background transition
+therefore converges on the same stable `(recipient-bound tag, notification id=0)` OS row and the
+same native claim rather than scheduling through two independent presenters. Ordinary Android and
+iOS foreground visible fallbacks continue to use the JavaScript/Expo durable-claim path above. A
+legacy Android client without this handler continues to show the retained FCM notification
+automatically, so deploying the server first does not create a background/quit notification gap.
+The same reminder keeps its iOS APNs alert,
+`schedule_depart_now` category, `apns-collapse-id`, and `apns-expiration`. Other normal visible
+pushes and `DEPARTURE_ALARM_SYNC` remain unchanged.
 
 Every standard visible ETA payload containing `etaEventExpiresAt` must cross the provider boundary
 with a nonblank `logicalEventKey` and a parseable `Instant` that is still strictly in the future.
 The server maps its remaining millisecond duration to Android TTL and its absolute epoch seconds to
 `apns-expiration`. A missing logical identity and malformed, expired, sub-millisecond, or
 provider-range-invalid expiration fail closed as a confirmed local rejection before Firebase is
-called. Because the provider never saw that attempt, the delivery may return safely to `FAILED`;
-the authoritative schedule expiry fence and next ETA evaluation then close the stale immutable
-event and produce catch-up data instead of sending it late.
+called. The stricter reminder-only identity and display-field checks above use the same rejection
+path. Because the provider never saw that attempt, the delivery may return safely to `FAILED`; the
+authoritative schedule expiry fence and next ETA evaluation then close the stale immutable event
+and produce catch-up data instead of sending it late.
 
-Provider replacement is still not an exactly-once guarantee. Android can replace the drawer entry
-under the same tag yet play sound or vibration again for a repeated delivery or update, and neither
-platform can retract an alert already presented before a later collapse. Keep the focused provider
-replacement/expiration tests as a release blocker and keep the background visible-only duplicate
-rate `unmeasured` without physical presentation-attempt telemetry.
+Provider or client-side replacement is still not an exactly-once guarantee. Android can update the
+drawer entry under the same provider tag or recipient-bound `NotificationCompat` tag yet play sound
+or vibration again for a repeated delivery, and neither platform can retract an alert already
+presented before a later collapse. Keep the focused provider-payload, Android interception/renderer,
+replacement, and expiration tests as release blockers and keep the background visible-only
+duplicate rate `unmeasured` without physical presentation-attempt telemetry.
 
-The all-generation `native_count` is deliberately a count, not `EXISTS`. A visible fallback can
-coincide with a still-live alarm from an older generation, and current plus stale native alarms can
-both fire. Collapsing either case to a boolean would incorrectly report success. An initial alarm
-has `scheduled_for = source_trigger_at`; this excludes a user-requested snooze from the initial
+The all-generation `native_count` is deliberately a count of deduplicated identities, not
+`EXISTS`. A visible fallback can coincide with a reported alarm identity from an older generation,
+and current plus stale native identities can both survive deduplication. Collapsing those rows to a
+boolean would hide the observable distinct-identity surplus. It still says nothing about repeated
+physical execution of one identity. An initial alarm has
+`scheduled_for = source_trigger_at`; this excludes a user-requested snooze from the initial
 presentation count. Publish snoozes separately.
 
 `semantic_warning_visible = TRUE` means traffic degradation, an earlier departure, transfer
@@ -619,7 +734,9 @@ fingerprinted before persistence, while client execution time and authoritative 
 time remain separate. AlarmKit's `.alerting` reconciliation is stored as `OBSERVED_ALERTING`.
 When a persisted one-shot AlarmKit alarm is absent from the daemon store only after its trigger,
 Apple's persistence contract permits it to be recorded as `INFERRED_OS_DELIVERY`. Both iOS bases
-count as execution coverage, but neither enters the exact-delay histogram.
+count in the separate execution-coverage diagnostic, but inference does not satisfy the strict 90%
+expected-channel evidence gate. Only `OBSERVED_ALERTING` is direct iOS presentation evidence, and
+neither iOS basis enters the exact-delay histogram.
 
 Snapshot and push command applications are persisted as device-bound receipts. This makes the aged
 scheduled cohort an explicit denominator. Deduplicate replays by the server-generated command
@@ -1043,10 +1160,12 @@ Initial review targets may be proposed as `client_received >= 97%` of aged, ACK-
 provider successes,
 `boundary_assignment_coverage >= 99%` in the live boundary auditor,
 and `expected_channel_evidence_percent >= 90%` for the aged per-ownership assignment cohort. This
-requires the assigned native/visible evidence channels for ordinary reminders and the expected
-native-plus-visible channels for rows whose semantic warning flag is true. It does not assert a
-measured visible-only duplicate rate. Publish the combined score only with at least 500
-assignments, and publish every platform, platform/occurrence, and
+requires `EXACT_CALLBACK` or `OBSERVED_ALERTING` for an assigned native channel, first-seen
+presentation evidence for an assigned visible channel, and both expected channels for rows whose
+semantic warning flag is true. `INFERRED_OS_DELIVERY` is diagnostic execution coverage and never a
+passing native observation. The score asserts neither a same-identity native nor a visible-only
+physical duplicate rate. Publish the combined score only with at least 500 assignments, and
+publish every platform, platform/occurrence, and
 platform/occurrence/presentation-mode/semantic-warning slice only with at least 100; otherwise
 label that slice `insufficient sample`. The combined cohort and every sufficiently sampled slice
 must each be at least 90%; Android success cannot offset an iOS failure, and strong M15 results
@@ -1056,11 +1175,14 @@ follows the separately approved staged rollout policy; it must not be silently m
 slice and called passing. Any missing boundary audit, an assignment-coverage result below 99%, a
 persistently overdue job, or an unresolved nearby mismatched-trigger fire makes the
 expected-channel evidence score `unmeasured`, even if its sampled percentage is high. Missing,
-observable native/cross-channel duplicate, and wrong-channel counts remain separate release
-blockers and must always accompany the score. The foreground-local client durable-claim prevention
-tests and the background provider replacement/expiration tests are separate release invariants;
-without append-only claim telemetry, report the visible-only duplicate rate as `unmeasured`. For
-each sufficiently sampled ETA slice,
+observable distinct-native-identity/cross-channel duplicate, and wrong-channel counts remain
+separate release blockers. Inferred-native counts must accompany the score but cannot repair a
+missing direct observation. The ordinary foreground JavaScript/Expo durable-claim prevention tests
+and the canonical Android shared-native app-state claim/interception/renderer replacement and
+expiration tests are separate release invariants. Without
+append-only pre-deduplication native-fire and physical visible presentation-attempt telemetry,
+report both same-identity native and visible-only duplicate rates as `unmeasured`. For each
+sufficiently sampled ETA slice,
 `MAE <= 300 seconds`,
 `P90 absolute error <= 600 seconds`, and
 `false-safe <= 5%` of predicted-on-time samples. These are candidate

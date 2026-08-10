@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS schedule_category_snapshots (
 CREATE TABLE IF NOT EXISTS schedule_categories (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule category primary key',
     member_id BIGINT NOT NULL COMMENT 'Owner member id',
+    calendar_id BIGINT NULL COMMENT 'Owning shared calendar id; NULL for personal categories',
     title VARCHAR(80) NOT NULL COMMENT 'User-defined category title',
     color VARCHAR(32) NOT NULL DEFAULT '#5A96FF' COMMENT 'Category display color',
     icon_key VARCHAR(40) NULL COMMENT 'UI icon key',
@@ -99,7 +100,10 @@ CREATE TABLE IF NOT EXISTS schedule_categories (
     create_dt DATETIME(6) NULL,
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
-    INDEX idx_schedule_categories_member_deleted_sort (member_id, deleted, sort_order)
+    INDEX idx_schedule_categories_member_deleted_sort (member_id, deleted, sort_order),
+    INDEX idx_schedule_categories_calendar_deleted_sort (calendar_id, deleted, sort_order),
+    CONSTRAINT fk_schedule_categories_calendar
+        FOREIGN KEY (calendar_id) REFERENCES schedule_calendars (id)
 ) COMMENT='User-defined schedule categories';
 
 CREATE TABLE IF NOT EXISTS schedule_shares (
@@ -593,6 +597,34 @@ CREATE TABLE IF NOT EXISTS quick_schedule_parse_telemetry (
         (destination_confidence IS NULL OR destination_confidence BETWEEN 0 AND 1)
     )
 ) COMMENT='Content-free 90-day quick schedule confidence calibration telemetry';
+
+CREATE TABLE IF NOT EXISTS navigation_performance_events (
+    event_id VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Client-generated UUID for idempotent batch retry',
+    member_id BIGINT NOT NULL COMMENT 'Owner used for authorization and account cleanup',
+    from_route VARCHAR(80) NOT NULL COMMENT 'Identifier-free normalized source route template',
+    to_route VARCHAR(80) NOT NULL COMMENT 'Identifier-free normalized destination route template',
+    navigation_action VARCHAR(30) NOT NULL COMMENT 'Bounded React Navigation action',
+    route_ready_ms INT NOT NULL COMMENT 'Dispatch to destination route render in milliseconds',
+    total_ms INT NOT NULL COMMENT 'Dispatch to transition completion in milliseconds',
+    completion_kind VARCHAR(24) NOT NULL COMMENT 'TRANSITION, FRAME, or NEXT_NAVIGATION',
+    client_platform VARCHAR(16) NOT NULL COMMENT 'IOS, ANDROID, or WEB',
+    app_version VARCHAR(32) NULL,
+    build_version VARCHAR(32) NULL,
+    occurred_at DATETIME(6) NOT NULL COMMENT 'Client-observed navigation start',
+    received_at DATETIME(6) NOT NULL COMMENT 'Server batch receipt time',
+    expires_at DATETIME(6) NOT NULL COMMENT 'Automatic 90-day retention boundary',
+    PRIMARY KEY (event_id),
+    INDEX idx_nav_perf_screen (to_route, occurred_at),
+    INDEX idx_nav_perf_slow (total_ms, occurred_at),
+    INDEX idx_nav_perf_member_expiry (member_id, expires_at),
+    CONSTRAINT chk_nav_perf_route_ready CHECK (route_ready_ms BETWEEN 0 AND 120000),
+    CONSTRAINT chk_nav_perf_total CHECK (total_ms BETWEEN route_ready_ms AND 120000),
+    CONSTRAINT chk_nav_perf_completion CHECK (
+        completion_kind IN ('TRANSITION', 'FRAME', 'NEXT_NAVIGATION')
+    ),
+    CONSTRAINT chk_nav_perf_platform CHECK (client_platform IN ('IOS', 'ANDROID', 'WEB'))
+) COMMENT='Identifier-free 90-day authenticated screen navigation performance telemetry';
 
 CREATE TABLE IF NOT EXISTS departure_alarm_sync_state (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Departure alarm desired-state primary key',

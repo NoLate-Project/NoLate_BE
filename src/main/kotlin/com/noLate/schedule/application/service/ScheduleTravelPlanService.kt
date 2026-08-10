@@ -471,7 +471,7 @@ class ScheduleTravelPlanService(
     ) {
         command.travelMinutes?.let {
             if (it !in 1..1_440) {
-                throw BusinessException(ErrorCode.INVALID_INPUT, "travelMinutes는 1~1440분이어야 합니다.")
+                throw BusinessException(ErrorCode.INVALID_INPUT, "이동 시간은 1분 이상 24시간 이하로 입력해 주세요.")
             }
         }
         ScheduleCoordinateValidator.validateOptional(
@@ -800,7 +800,7 @@ class ScheduleTravelPlanService(
         if (routeJson.isNullOrBlank()) return null
         return runCatching { objectMapper.readTree(routeJson).toString() }
             .getOrElse {
-                throw BusinessException(ErrorCode.INVALID_INPUT, "route는 올바른 JSON이어야 합니다.")
+                throw BusinessException(ErrorCode.INVALID_INPUT, "저장할 경로 정보를 확인하지 못했어요. 경로를 다시 선택해 주세요.")
             }
     }
 

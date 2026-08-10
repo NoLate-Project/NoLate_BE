@@ -26,16 +26,33 @@ class SubscriptionPolicyServiceUnitTest {
 
     @Test
     fun `free policy exposes monthly and notification limits`() {
-        val service = serviceFor(SubscriptionPlan.FREE)
+        val service = serviceFor(SubscriptionPlan.FREE, adsEnabled = true)
         whenever(scheduleRepository.countMonthlySmartSchedules(any(), any(), any())).thenReturn(2)
 
         val policy = service.getPolicy(1L)
 
         assertEquals(SubscriptionPlan.FREE, policy.plan)
+        assertEquals(true, policy.adsEnabled)
         assertEquals(5, policy.maxSmartSchedulesPerMonth)
         assertEquals(2, policy.usedSmartSchedulesThisMonth)
         assertEquals(60, policy.maxNotificationLeadMinutes)
         assertEquals(30, policy.minNotificationIntervalMinutes)
+    }
+
+    @Test
+    fun `global switch keeps ads disabled for free members`() {
+        val service = serviceFor(SubscriptionPlan.FREE, adsEnabled = false)
+        whenever(scheduleRepository.countMonthlySmartSchedules(any(), any(), any())).thenReturn(0)
+
+        assertEquals(false, service.getPolicy(1L).adsEnabled)
+    }
+
+    @Test
+    fun `premium members remain ad free when global switch is enabled`() {
+        val service = serviceFor(SubscriptionPlan.PREMIUM, adsEnabled = true)
+        whenever(scheduleRepository.countMonthlySmartSchedules(any(), any(), any())).thenReturn(0)
+
+        assertEquals(false, service.getPolicy(1L).adsEnabled)
     }
 
     @Test
@@ -83,10 +100,20 @@ class SubscriptionPolicyServiceUnitTest {
         }
     }
 
-    private fun serviceFor(plan: SubscriptionPlan): SubscriptionPolicyService {
+    private fun serviceFor(
+        plan: SubscriptionPlan,
+        adsEnabled: Boolean = false,
+    ): SubscriptionPolicyService {
         whenever(memberRepository.findById(1L)).thenReturn(
             Optional.of(Member(id = 1L, subscriptionPlan = plan))
         )
-        return SubscriptionPolicyService(memberRepository, scheduleRepository)
+        val advertisingProperties = AdvertisingProperties().apply {
+            enabled = adsEnabled
+        }
+        return SubscriptionPolicyService(
+            memberRepository,
+            scheduleRepository,
+            advertisingProperties = advertisingProperties,
+        )
     }
 }

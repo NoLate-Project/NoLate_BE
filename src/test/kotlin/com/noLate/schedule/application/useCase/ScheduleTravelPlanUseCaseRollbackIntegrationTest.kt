@@ -180,6 +180,7 @@ class ScheduleTravelPlanUseCaseRollbackIntegrationTest @Autowired constructor(
 
     private fun freePolicy() = SubscriptionPolicyDto(
         plan = SubscriptionPlan.FREE,
+        adsEnabled = false,
         maxSmartSchedulesPerMonth = SubscriptionPlan.FREE.maxSmartSchedulesPerMonth,
         usedSmartSchedulesThisMonth = 0,
         maxNotificationLeadMinutes = SubscriptionPlan.FREE.maxNotificationLeadMinutes,

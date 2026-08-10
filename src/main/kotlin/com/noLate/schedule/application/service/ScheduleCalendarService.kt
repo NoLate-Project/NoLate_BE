@@ -12,12 +12,14 @@ import com.noLate.schedule.domain.ScheduleCalendarMemberDto
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCalendarStatus
+import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleShareInvitation
 import com.noLate.schedule.domain.ScheduleShareInvitationStatus
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.sharing.application.SharingBlockPolicy
 import com.noLate.sharing.application.SharingMutationRateLimiter
@@ -39,6 +41,7 @@ class ScheduleCalendarService(
     private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
     private val sharingBlockPolicy: SharingBlockPolicy? = null,
     private val sharingMutationRateLimiter: SharingMutationRateLimiter? = null,
+    private val categoryRepository: ScheduleCategoryRepository? = null,
 ) {
 
     @Transactional
@@ -70,6 +73,15 @@ class ScheduleCalendarService(
                 calendarId = calendarId,
                 memberId = ownerMemberId,
                 role = ScheduleCalendarRole.OWNER,
+            )
+        )
+        categoryRepository?.saveAndFlush(
+            ScheduleCategory(
+                memberId = ownerMemberId,
+                calendarId = calendarId,
+                title = "일정",
+                color = calendar.color,
+                sortOrder = 0,
             )
         )
         return calendar.toDto(ownerMembership, memberCount = 1)
@@ -271,7 +283,7 @@ class ScheduleCalendarService(
             ?.takeIf { !it.deleted && it.status == ScheduleCalendarMemberStatus.ACTIVE }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_MEMBER_NOT_FOUND)
         if (membership.role == ScheduleCalendarRole.OWNER && role != null && role != ScheduleCalendarRole.OWNER) {
-            throw BusinessException(ErrorCode.INVALID_STATE, "소유권 이전 API로 먼저 새 소유자를 지정해야 합니다.")
+            throw BusinessException(ErrorCode.INVALID_STATE, "먼저 캘린더의 새 소유자를 지정해 주세요.")
         }
         role?.let {
             validateGrantableRole(it)

@@ -5,6 +5,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.application.service.SocialIdentityVerifier
 import com.noLate.member.application.service.VerifiedSocialIdentity
 import com.noLate.member.domain.member.LoginType
+import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
@@ -282,6 +283,8 @@ class AppleTokenLifecycleService(
     private val socialIdentityVerifier: SocialIdentityVerifier,
 ) : AppleTokenLifecycle {
 
+    private val log = LoggerFactory.getLogger(javaClass)
+
     override fun exchangeAndCapture(
         identity: VerifiedSocialIdentity,
         authorizationCode: String?,
@@ -307,6 +310,11 @@ class AppleTokenLifecycleService(
         val response = try {
             oauthClient.exchangeAuthorizationCode(code)
         } catch (failure: AppleProviderCallException) {
+            log.warn(
+                "Apple authorization code exchange failed. reason={}, retryable={}",
+                failure.safeCode,
+                failure.retryable,
+            )
             if (failure.providerError == AppleProviderError.INVALID_GRANT) {
                 throw BusinessException(ErrorCode.INVALID_CREDENTIALS, "유효하지 않은 Apple 인증 정보입니다.")
             }

@@ -119,6 +119,12 @@ observability:
     push-delivery-cohort-window-days: ${OBSERVABILITY_PUSH_DELIVERY_COHORT_WINDOW_DAYS:14}
     push-delivery-cohort-grace-minutes: ${OBSERVABILITY_PUSH_DELIVERY_COHORT_GRACE_MINUTES:10}
 
+monetization:
+  ads:
+    # 출시 무료 기간과 장애 대응을 위한 전역 kill switch다. 명시적으로 켠 경우에만
+    # FREE 회원의 구독 정책 응답에 adsEnabled=true가 노출된다.
+    enabled: ${MONETIZATION_ADS_ENABLED:false}
+
 jwt:
   secret-key: ${JWT_SECRET_KEY}
   #expiration: ${JWT_EXPIRATION}
