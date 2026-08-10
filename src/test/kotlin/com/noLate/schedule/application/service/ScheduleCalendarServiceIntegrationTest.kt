@@ -10,9 +10,11 @@ import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleShareContentMode
+import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -40,6 +42,7 @@ import java.time.Instant
 @DataJpaTest
 @Import(
     ScheduleCalendarService::class,
+    ScheduleCategoryService::class,
     ScheduleTravelAccessCleanupService::class,
     ScheduleAccessPolicy::class,
     ScheduleSharingAvailabilityPolicy::class,
@@ -48,9 +51,11 @@ import java.time.Instant
 @TestPropertySource(properties = ["schedule.sharing.enabled=true"])
 class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
     private val service: ScheduleCalendarService,
+    private val categoryService: ScheduleCategoryService,
     private val memberRepository: MemberRepository,
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val categoryRepository: ScheduleCategoryRepository,
     private val scheduleRepository: ScheduleRepository,
     private val pushJobRepository: SchedulePushJobRepository,
     private val mutationFenceObserver: BlockingScheduleCalendarMutationFenceObserver,
@@ -79,6 +84,56 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
         assertEquals(requireNotNull(owner.id), memberships.single().memberId)
         assertEquals(ScheduleCalendarRole.OWNER, memberships.single().role)
         assertEquals(ScheduleCalendarRole.OWNER, result.myRole)
+        val categories = categoryRepository.findVisibleCategories(requireNotNull(owner.id))
+            .filter { it.calendarId == result.id }
+        assertEquals(1, categories.size)
+        assertEquals("일정", categories.single().title)
+        assertEquals(result.id, categories.single().calendarId)
+    }
+
+    @Test
+    fun `calendar categories are visible to members but viewer cannot create one`() {
+        val owner = member("category-owner")
+        val viewer = member("category-viewer")
+        val calendar = createCalendar(owner)
+        service.addMember(
+            ownerMemberId = requireNotNull(owner.id),
+            calendarId = calendar.id,
+            targetEmail = viewer.email,
+            targetAppId = null,
+            role = ScheduleCalendarRole.VIEWER,
+            authenticatedActorMemberId = requireNotNull(owner.id),
+            presentedSessionGeneration = owner.sessionGeneration,
+        )
+
+        val created = categoryService.createCategory(
+            memberId = requireNotNull(owner.id),
+            title = "가족",
+            color = "#34C759",
+            iconKey = null,
+            sortOrder = null,
+            presentedSessionGeneration = owner.sessionGeneration,
+            calendarId = calendar.id,
+        )
+        val visibleToViewer = categoryService.getCategories(
+            requireNotNull(viewer.id),
+            viewer.sessionGeneration,
+        )
+
+        assertEquals(calendar.id, created.calendarId)
+        assertEquals(ScheduleSharePermission.VIEWER, visibleToViewer.first { it.id == created.id }.sharePermission)
+        val failure = assertThrows(BusinessException::class.java) {
+            categoryService.createCategory(
+                memberId = requireNotNull(viewer.id),
+                title = "금지",
+                color = null,
+                iconKey = null,
+                sortOrder = null,
+                presentedSessionGeneration = viewer.sessionGeneration,
+                calendarId = calendar.id,
+            )
+        }
+        assertEquals(ErrorCode.FORBIDDEN, failure.errorCode)
     }
 
     @Test

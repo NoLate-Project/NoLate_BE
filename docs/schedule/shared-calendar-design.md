@@ -2,7 +2,7 @@
 
 Status: Implemented in feature branches; staging migration pending
 
-Last updated: 2026-07-23 KST
+Last updated: 2026-08-10 KST
 
 ## 1. Context
 
@@ -14,7 +14,7 @@ revoke access without the user performing an explicit sharing action.
 The shared-calendar design separates these concerns:
 
 - A calendar owns membership and access.
-- A category remains a color and classification label.
+- A category remains a color and classification label owned by either the personal calendar or one shared calendar.
 - A schedule belongs to at most one shared calendar.
 - A member's origin, route, notification settings, and departure state remain member-owned data.
 
@@ -55,7 +55,15 @@ their own `ScheduleTravelPlan` and exposes member travel status according to rol
 - Has `NORMAL` or `ROUTE` type.
 - May have `calendar_id`; `null` means it is not in a shared calendar.
 - May override the calendar's default content mode.
-- Keeps its category independently from its calendar.
+- Uses a category from the same calendar scope. A personal schedule uses a personal category;
+  a shared-calendar schedule uses a category owned by that calendar.
+
+### ScheduleCategory
+
+- `calendar_id = null` means a personal-calendar category.
+- A non-null `calendar_id` makes the category visible to active calendar members.
+- `OWNER` and `EDITOR` may create, edit, reorder, and delete calendar categories; `VIEWER` is read-only.
+- `member_id` remains the creator/audit field and is not the access boundary for a calendar category.
 
 ### ScheduleShare
 
@@ -192,6 +200,8 @@ Migration is additive and reversible.
 6. Dual-read category shares and calendar membership during the FE rollout.
 7. Stop creating category shares after the FE cutover.
 8. Remove the legacy path only after production verification.
+9. Add `schedule_categories.calendar_id`, promote legacy shared categories to their generated
+   calendars, and create one default `일정` category for every active calendar that has none.
 
 Existing category shares use `SCHEDULE_AND_TRAVEL` during backfill to preserve current behavior.
 
@@ -219,7 +229,10 @@ GET    /api/schedule-calendars/{calendarId}/invitations
 Existing schedule share endpoints add `contentMode`. Existing invitation acceptance remains the
 single token endpoint and dispatches by resource type.
 
-The additive production migration is `docs/schedule/migrations/2026-07-23-shared-calendars.sql`.
+The additive production migrations are:
+
+- `docs/schedule/migrations/2026-07-23-shared-calendars.sql`
+- `docs/schedule/migrations/2026-08-10-calendar-scoped-categories.sql`
 
 ## 10. Non-goals
 

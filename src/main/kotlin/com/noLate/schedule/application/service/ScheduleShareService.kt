@@ -1177,8 +1177,14 @@ class ScheduleShareService(
 
     private fun validateInvitationAcceptable(invitation: ScheduleShareInvitation) {
         val now = Instant.now(clock)
-        if (invitation.effectiveStatus(now) == ScheduleShareInvitationStatus.EXPIRED) {
-            throw BusinessException(ErrorCode.INVALID_STATE, "초대 링크가 만료되었습니다.")
+        when (invitation.effectiveStatus(now)) {
+            ScheduleShareInvitationStatus.PENDING -> Unit
+            ScheduleShareInvitationStatus.EXPIRED ->
+                throw BusinessException(ErrorCode.INVALID_STATE, "초대 링크가 만료되었습니다.")
+            ScheduleShareInvitationStatus.REVOKED ->
+                throw BusinessException(ErrorCode.INVALID_STATE, "폐기된 초대 링크입니다.")
+            ScheduleShareInvitationStatus.ACCEPTED ->
+                throw BusinessException(ErrorCode.INVALID_STATE, "이미 수락이 완료된 초대 링크입니다.")
         }
         if (invitation.acceptedCount >= invitation.maxAcceptCount) {
             throw BusinessException(ErrorCode.INVALID_STATE, "초대 링크 수락 가능 횟수를 초과했습니다.")
