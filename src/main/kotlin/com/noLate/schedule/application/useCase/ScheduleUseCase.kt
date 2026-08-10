@@ -379,7 +379,11 @@ class ScheduleUseCase(
             departureMemberFence,
         )
         scheduleTravelPlanService?.disableNotification(memberId, scheduleId)
-        schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, memberId)
+        schedulePushJobService.cancelByScheduleIdAndMemberId(
+            scheduleId,
+            memberId,
+            liveActivityEndReason = "DEPARTED",
+        )
 
         val updated = if (detail.ownerMemberId == memberId) {
             scheduleService.markDeparted(memberId, scheduleId)

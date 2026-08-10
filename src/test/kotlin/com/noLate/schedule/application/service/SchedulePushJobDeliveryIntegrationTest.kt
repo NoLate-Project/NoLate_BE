@@ -276,6 +276,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
 
         val afterImmutableRetry = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
         assertEquals(retryAt.plusSeconds(1), afterImmutableRetry.nextCheckAt)
+        assertTrue(afterImmutableRetry.semanticCatchUpPending)
         assertEquals(1, worker.runDueJobs(retryAt.plusSeconds(1)))
 
         val stableCalls = pushClient.calls("stable-snapshot-token")
@@ -303,6 +304,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         assertEquals(false, completedEvent.lastEtaStale)
         assertEquals(25, completedEvent.lastLiveTravelMinutes)
         assertEquals(now, completedEvent.lastLiveFetchedAt)
+        assertTrue(!completedEvent.semanticCatchUpPending)
     }
 
     @Test

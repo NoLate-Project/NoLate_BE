@@ -190,7 +190,11 @@ class ScheduleNotificationActionIdempotencyWriter(
             departureMemberFence,
         )
         travelPlanService?.disableNotification(memberId, scheduleId)
-        pushJobService.cancelByScheduleIdAndMemberId(scheduleId, memberId)
+        pushJobService.cancelByScheduleIdAndMemberId(
+            scheduleId,
+            memberId,
+            liveActivityEndReason = "DEPARTED",
+        )
         val updated = if (detail.ownerMemberId == memberId) {
             scheduleService.markDeparted(memberId, scheduleId)
         } else {

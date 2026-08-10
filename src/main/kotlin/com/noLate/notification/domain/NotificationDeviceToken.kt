@@ -119,6 +119,56 @@ class NotificationDeviceToken(
         }
     }
 
+    /**
+     * Replaces an FCM credential that the provider has confirmed as invalid while preserving the
+     * canonical same-device row. The ownership version is the route epoch: every delivery frozen
+     * against the retired credential is fenced from completing against this replacement.
+     *
+     * This deliberately cannot transfer accounts or devices and cannot steal a provider lease.
+     * Callers must first lock the member, its Live Activity tombstones, and this token row.
+     */
+    fun replaceRetiredSameDeviceOwnershipEpoch(
+        memberId: Long,
+        deviceId: String?,
+        platform: PushPlatform,
+        token: String,
+        tokenFingerprint: String,
+        deviceFingerprint: String,
+        deliveryAckCapabilityVersion: Int? = null,
+        allowUnchangedTokenAfterEndReservation: Boolean = false,
+    ): Boolean {
+        if (
+            !retirementRequested ||
+            dispatchLeaseId != null ||
+            dispatchLeaseUntil != null ||
+            this.memberId != memberId ||
+            this.deviceFingerprint != deviceFingerprint ||
+            this.platform != PushPlatform.IOS ||
+            platform != PushPlatform.IOS ||
+            (this.tokenFingerprint == tokenFingerprint &&
+                !allowUnchangedTokenAfterEndReservation)
+        ) return false
+
+        val previousOwnershipVersion = ownershipVersion
+        replaceOwnership(
+            memberId = memberId,
+            deviceId = deviceId,
+            platform = platform,
+            token = token,
+            tokenFingerprint = tokenFingerprint,
+            deviceFingerprint = deviceFingerprint,
+            deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
+        )
+        // Re-login can legitimately return the same FCM token. The caller may opt into a fresh
+        // epoch only after atomically proving and releasing the deterministic logout END
+        // reservation; provider-invalid unreserved credentials can never use this path.
+        if (ownershipVersion == previousOwnershipVersion) {
+            ownershipVersion = Math.addExact(ownershipVersion, 1)
+        }
+        retirementRequested = false
+        return true
+    }
+
     fun hasActiveDispatchLease(now: Instant): Boolean =
         dispatchLeaseId != null && dispatchLeaseUntil?.isAfter(now) == true
 
@@ -129,6 +179,32 @@ class NotificationDeviceToken(
     ): Boolean {
         if (retirementRequested || hasActiveDispatchLease(now)) return false
         dispatchLeaseId = leaseId
+        dispatchLeaseUntil = leaseUntil
+        return true
+    }
+
+    /**
+     * Logout first reserves the frozen FCM route for a durable ActivityKit END, then marks the
+     * token retired. Only the matching END outbox row may exchange that reservation for a real
+     * provider lease; ordinary pushes remain forbidden after retirement.
+     */
+    fun acquireReservedRetirementDispatchLease(
+        reservationId: String,
+        leaseId: String,
+        leaseUntil: Instant,
+    ): Boolean {
+        if (!retirementRequested || dispatchLeaseId != reservationId) return false
+        dispatchLeaseId = leaseId
+        dispatchLeaseUntil = leaseUntil
+        return true
+    }
+
+    fun restoreRetirementDispatchReservation(
+        reservationId: String,
+        leaseUntil: Instant,
+    ): Boolean {
+        if (!retirementRequested || dispatchLeaseId != null) return false
+        dispatchLeaseId = reservationId
         dispatchLeaseUntil = leaseUntil
         return true
     }

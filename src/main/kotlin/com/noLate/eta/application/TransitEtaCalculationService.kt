@@ -11,8 +11,14 @@ import com.noLate.eta.application.transit.TransitTransferEvaluation
 import com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator
 import com.noLate.eta.application.transit.TransitTransferStatus
 import com.noLate.eta.domain.SelectedTransitRoute
+import com.noLate.eta.domain.TransitJourney
+import com.noLate.eta.domain.TransitJourneyLeg
 import com.noLate.eta.domain.TransitJourneySearchRequest
+import com.noLate.eta.domain.TransitLegMode
 import com.noLate.eta.infrastructure.routejson.SelectedTransitRouteDecoder
+import com.noLate.schedule.application.EffectiveTransitRoute
+import com.noLate.schedule.application.EffectiveTransitRouteSegment
+import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
 import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
@@ -30,8 +36,8 @@ import java.time.Instant
  * 대중교통 ETA의 단일 진입점.
  *
  * ODsay에서 선택한 전체 시간표 경로를 같은 공급자로 다시 찾고, 조회 시야 안에서는 첫 승차
- * 실시간 도착정보를 겹친다. ODsay 실패 시 TMAP으로 경로를 바꾸지 않고 저장 경로의 첫 승차
- * 보정만 사용하는 것이 사용자 선택 보존 정책이다.
+ * 실시간 도착정보를 겹친다. 선택 경로의 다음 차량까지 안전하지 않을 때만 같은 ODsay 응답의
+ * 검증된 대체 여정을 사용하며, ODsay 실패를 TMAP 경로로 바꾸지는 않는다.
  */
 @Service
 class TransitEtaCalculationService(
@@ -57,21 +63,20 @@ class TransitEtaCalculationService(
                 resolveOdsayJourney(provider, selected, request)
             }
             val resolution = refreshed.getOrNull()
-            val projected = resolution?.bestFeasibleLive ?: resolution?.projected
+            val projected = resolution?.projected
             if (projected != null) {
-                // 한 번이라도 실제 차량이 마감 이후 도착한다고 확인한 뒤 arrival provider가
-                // 일시적으로 비어 버린 시간표 후보를 정상 결과로 승격하지 않는다.
-                val bestLateLive = resolution?.bestLateLive
-                if (projected.projection.overlayResolution.overlay == null && bestLateLive != null) {
-                    return onTimeUnavailableResult(bestLateLive, request)
-                }
                 return refreshedResult(projected, request)
             }
             resolution?.bestLateLive?.let {
                 return onTimeUnavailableResult(it, request)
             }
-            resolution?.bestLate?.let {
-                return onTimeUnavailableResult(it, request)
+            resolution?.bestDegraded?.let {
+                return degradedTimetableResult(
+                    projected = it,
+                    request = request,
+                    reason = it.projection.overlayResolution.failureReason
+                        ?: TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE,
+                )
             }
             resolution?.bestTransferUnknown?.let {
                 return transferDiagnosticResult(
@@ -114,12 +119,17 @@ class TransitEtaCalculationService(
             evaluatedAt,
             request.plannedDepartureAt ?: evaluatedAt,
         )
-        var bestLate: ProjectedTransitJourney<TransitCandidateProjection>? = null
-        var bestLateLive: ProjectedTransitJourney<TransitCandidateProjection>? = null
-        var bestFeasibleLive: ProjectedTransitJourney<TransitCandidateProjection>? = null
-        var bestMissedTransfer: ProjectedTransitJourney<TransitCandidateProjection>? = null
-        var bestTransferUnknown: ProjectedTransitJourney<TransitCandidateProjection>? = null
-        val projected = safeDepartureResolver.resolveProjectedCandidates(
+        var bestSelectedActionable: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestAlternativeActionable: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestSelectedLateLive: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestAlternativeLateLive: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestSelectedDegraded: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestAlternativeDegraded: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestSelectedMissed: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestAlternativeMissed: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestSelectedUnknown: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        var bestAlternativeUnknown: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        safeDepartureResolver.resolveProjectedCandidates(
             provider = provider,
             request = TransitJourneySearchRequest(
                 originLat = request.originLat,
@@ -132,59 +142,134 @@ class TransitEtaCalculationService(
             targetArrivalAt = request.targetArrivalAt,
             evaluatedAt = evaluatedAt,
         ) { candidates ->
-            val selectedJourney = journeyMatcher.findSelected(selected, candidates)
-            val selectedProjection = selectedJourney?.let {
-                projectJourney(
-                    journey = it,
-                    routeProvenance = TransitRouteProvenance.SELECTED_ROUTE_PRESERVED,
+            val selectedJourneys = journeyMatcher.findSelectedCandidates(selected, candidates)
+            val selectedProjections = selectedJourneys.mapNotNull { journey ->
+                runCatching {
+                    projectJourney(
+                        journey = journey,
+                        routeProvenance = TransitRouteProvenance.SELECTED_ROUTE_PRESERVED,
+                        request = request,
+                    )
+                }.getOrNull()
+            }
+            selectedProjections.forEach { candidate ->
+                candidate.recordResolutionEvidence(
                     request = request,
+                    onLateLive = {
+                        bestSelectedLateLive = earlierArrival(bestSelectedLateLive, it)
+                    },
+                    onDegraded = {
+                        bestSelectedDegraded = earlierArrival(bestSelectedDegraded, it)
+                    },
+                    onMissed = { bestSelectedMissed = earlierArrival(bestSelectedMissed, it) },
+                    onUnknown = { bestSelectedUnknown = earlierArrival(bestSelectedUnknown, it) },
                 )
             }
-            selectedProjection?.recordTransferDiagnostic(
-                onMissed = { bestMissedTransfer = earlierArrival(bestMissedTransfer, it) },
-                onUnknown = { bestTransferUnknown = earlierArrival(bestTransferUnknown, it) },
-            )
 
-            // 시간표가 불완전한 선택 경로는 임의 대체로 바꾸지 않고 낮은 신뢰도로 보존한다.
-            if (selectedProjection?.projection?.transfer?.status == TransitTransferStatus.UNKNOWN) {
-                return@resolveProjectedCandidates selectedProjection
+            // 응답의 동일 signature 차량을 모두 확인한다. 마감이 없으면 다음 차량, 마감이
+            // 있으면 정시 도착 가능한 가장 늦은 차량을 다른 경로보다 항상 우선한다.
+            selectedProjections.nextActionableSelected(request)?.let {
+                bestSelectedActionable = preferableActionable(
+                    current = bestSelectedActionable,
+                    candidate = it,
+                    targetArrivalAt = request.targetArrivalAt,
+                )
+                return@resolveProjectedCandidates it
             }
 
-            // 다른 itinerary의 승하차 상세를 앱에 전달하는 계약이 없으므로 선택 경로만
-            // 계산한다. 대체 후보를 진단 명목으로 projection해도 arrival provider 호출과
-            // 회로/timeout budget만 소비하므로 이 경로에서는 아예 평가하지 않는다.
-            val candidate = selectedProjection ?: return@resolveProjectedCandidates null
-
-            val overlayResolution = candidate.projection.overlayResolution
-            if (
-                candidate.eligible &&
-                request.targetArrivalAt?.let(candidate.predictedArrivalAt::isAfter) == true
-            ) {
-                bestLate = earlierArrival(bestLate, candidate)
-                if (overlayResolution.overlay != null) {
-                    bestLateLive = earlierArrival(bestLateLive, candidate)
+            val selectedSet = selectedJourneys.toSet()
+            val alternativeProjections = candidates
+                .asSequence()
+                .filter { it !in selectedSet }
+                .filter { it.provider.equals(selected.provider, ignoreCase = true) }
+                .filter { it.rideLegs.isNotEmpty() }
+                .filter { !it.departureAt.isBefore(evaluatedAt) }
+                .sortedWith(
+                    compareBy<TransitJourney> { it.arrivalAt }
+                        .thenBy { it.departureAt }
+                )
+                .take(MAX_ALTERNATIVE_CANDIDATES_PER_RESPONSE)
+                .mapNotNull { journey ->
+                    runCatching {
+                        projectJourney(
+                            journey = journey,
+                            routeProvenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+                            request = request,
+                        )
+                    }.getOrNull()
                 }
-            } else if (
-                request.targetArrivalAt != null &&
-                overlayResolution.overlay != null &&
-                candidate.eligible
-            ) {
-                bestFeasibleLive = laterDeparture(bestFeasibleLive, candidate)
+                .toList()
+            alternativeProjections.forEach { candidate ->
+                candidate.recordResolutionEvidence(
+                    request = request,
+                    onLateLive = {
+                        bestAlternativeLateLive = earlierArrival(bestAlternativeLateLive, it)
+                    },
+                    onDegraded = {
+                        bestAlternativeDegraded = earlierArrival(bestAlternativeDegraded, it)
+                    },
+                    onMissed = {
+                        bestAlternativeMissed = earlierArrival(bestAlternativeMissed, it)
+                    },
+                    onUnknown = {
+                        bestAlternativeUnknown = earlierArrival(bestAlternativeUnknown, it)
+                    },
+                )
             }
-            candidate
+            val actionableAlternative = alternativeProjections.bestActionableAlternative(request)
+            actionableAlternative?.let {
+                bestAlternativeActionable = preferableActionable(
+                    current = bestAlternativeActionable,
+                    candidate = it,
+                    targetArrivalAt = request.targetArrivalAt,
+                )
+            }
+
+            // 안전 후보가 없으면 resolver가 같은 3회 예산 안에서 더 이른 검색점을 찾도록
+            // 가장 유용한 실패 증거 하나만 반환한다. 최종 경고는 예산 소진 뒤 accumulator로
+            // 결정하므로 첫 MISSED/UNKNOWN에서 즉시 종료하지 않는다.
+            selectedProjections.searchSteeringCandidate(request)
+                ?: alternativeProjections
+                    .filterNot { it.isActionable(request) }
+                    .searchSteeringCandidate(request)
+                // 대체 경로가 먼저 안전해도 남은 조회에서 선택 경로가 회복될 수 있다.
+                // resolver의 전역 feasible에는 넣지 않고 검색점 계산 증거로만 사용한다.
+                ?: actionableAlternative?.copy(
+                    eligible = false,
+                    searchAdjustmentSeconds = -ALTERNATIVE_RECOVERY_PROBE_SECONDS,
+                )
         }
+        val hasSelectedDiagnosticEvidence = bestSelectedLateLive != null ||
+            bestSelectedDegraded != null ||
+            bestSelectedMissed != null ||
+            bestSelectedUnknown != null
         return OdsayJourneyResolution(
-            projected = projected,
-            bestLate = bestLate,
-            bestLateLive = bestLateLive,
-            bestFeasibleLive = bestFeasibleLive,
-            bestMissedTransfer = bestMissedTransfer,
-            bestTransferUnknown = bestTransferUnknown,
+            projected = bestSelectedActionable ?: bestAlternativeActionable,
+            bestLateLive = if (hasSelectedDiagnosticEvidence) {
+                bestSelectedLateLive
+            } else {
+                bestAlternativeLateLive
+            },
+            bestDegraded = if (hasSelectedDiagnosticEvidence) {
+                bestSelectedDegraded
+            } else {
+                bestAlternativeDegraded
+            },
+            bestMissedTransfer = if (hasSelectedDiagnosticEvidence) {
+                bestSelectedMissed
+            } else {
+                bestAlternativeMissed
+            },
+            bestTransferUnknown = if (hasSelectedDiagnosticEvidence) {
+                bestSelectedUnknown
+            } else {
+                bestAlternativeUnknown
+            },
         )
     }
 
     private fun projectJourney(
-        journey: com.noLate.eta.domain.TransitJourney,
+        journey: TransitJourney,
         routeProvenance: TransitRouteProvenance,
         request: TrafficRequest,
     ): ProjectedTransitJourney<TransitCandidateProjection> {
@@ -205,10 +290,23 @@ class TransitEtaCalculationService(
                 overlayResolution = overlayResolution,
                 transfer = transfer,
                 routeProvenance = routeProvenance,
+                effectiveTransitRoute = journey.toEffectiveTransitRoute(
+                    predictedArrivalAt = transfer.predictedArrivalAt,
+                    totalMinutes = transfer.travelMinutes,
+                    firstBoardingWaitMinutes = overlayResolution.overlay
+                        ?.firstBoardingWaitMinutes,
+                ),
             ),
-            eligible = transfer.eligible,
-            searchAdjustmentSeconds = transfer.searchEarlierBySeconds
-                ?.let { -maxOf(it, 60L) },
+            eligible = transfer.eligible &&
+                !journey.departureAt.isBefore(request.evaluatedAt) &&
+                overlayResolution.overlay != null,
+            searchAdjustmentSeconds = when {
+                transfer.searchEarlierBySeconds != null ->
+                    -maxOf(transfer.searchEarlierBySeconds, 60L)
+                transfer.status != TransitTransferStatus.FEASIBLE ->
+                    -UNKNOWN_TRANSFER_PROBE_SECONDS
+                else -> null
+            },
         )
     }
 
@@ -255,6 +353,9 @@ class TransitEtaCalculationService(
             predictedArrivalAt = predictedArrivalAt,
             transitRouteProvenance = projected.projection.routeProvenance,
             transitTimingBasis = transfer.timingBasis.toTrafficTimingBasis(),
+            firstBoardingWaitMinutes = overlay?.firstBoardingWaitMinutes
+                ?: journey.legs.firstOrNull { it.isRide }?.waitingMinutes,
+            effectiveTransitRoute = projected.projection.effectiveTransitRoute,
         )
     }
 
@@ -305,6 +406,7 @@ class TransitEtaCalculationService(
             stale = false,
             recommendedDepartureAt = departureAt,
             predictedArrivalAt = overlay.predictedArrivalAt,
+            firstBoardingWaitMinutes = overlay.firstBoardingWaitMinutes,
         )
     }
 
@@ -329,6 +431,8 @@ class TransitEtaCalculationService(
             request = request,
             routeProvenance = projected.projection.routeProvenance,
             timingBasis = projected.projection.transfer.timingBasis.toTrafficTimingBasis(),
+            firstBoardingWaitMinutes = overlay.firstBoardingWaitMinutes,
+            effectiveTransitRoute = projected.projection.effectiveTransitRoute,
         )
     }
 
@@ -346,6 +450,8 @@ class TransitEtaCalculationService(
         predictedArrivalAt = projected.predictedArrivalAt,
         transitRouteProvenance = projected.projection.routeProvenance,
         transitTimingBasis = projected.projection.transfer.timingBasis.toTrafficTimingBasis(),
+        firstBoardingWaitMinutes = projected.journey.legs.firstOrNull { it.isRide }?.waitingMinutes,
+        effectiveTransitRoute = projected.projection.effectiveTransitRoute,
     )
 
     private fun onTimeUnavailableResult(
@@ -355,6 +461,8 @@ class TransitEtaCalculationService(
         request: TrafficRequest,
         routeProvenance: TransitRouteProvenance? = null,
         timingBasis: TransitTimingBasis? = null,
+        firstBoardingWaitMinutes: Int? = null,
+        effectiveTransitRoute: EffectiveTransitRoute? = null,
     ): TrafficResult {
         val travelMinutes = EtaTravelTimePolicy.normalizeMinutes(
             Duration.between(request.evaluatedAt, predictedArrivalAt).toMillis() / MILLIS_PER_MINUTE,
@@ -371,6 +479,8 @@ class TransitEtaCalculationService(
             predictedArrivalAt = predictedArrivalAt,
             transitRouteProvenance = routeProvenance,
             transitTimingBasis = timingBasis,
+            firstBoardingWaitMinutes = firstBoardingWaitMinutes,
+            effectiveTransitRoute = effectiveTransitRoute,
         )
     }
 
@@ -386,7 +496,157 @@ class TransitEtaCalculationService(
             predictedArrivalAt = null,
             transitRouteProvenance = projected.projection.routeProvenance,
             transitTimingBasis = projected.projection.transfer.timingBasis.toTrafficTimingBasis(),
+            firstBoardingWaitMinutes = projected.projection.overlayResolution.overlay
+                ?.firstBoardingWaitMinutes
+                ?: projected.journey.legs.firstOrNull { it.isRide }?.waitingMinutes,
+            effectiveTransitRoute = projected.projection.effectiveTransitRoute,
         )
+    }
+
+    private fun List<ProjectedTransitJourney<TransitCandidateProjection>>.nextActionableSelected(
+        request: TrafficRequest,
+    ): ProjectedTransitJourney<TransitCandidateProjection>? {
+        val actionable = filter { it.isActionable(request) }
+        return if (request.targetArrivalAt == null) {
+            actionable.minWithOrNull(
+                compareBy<ProjectedTransitJourney<TransitCandidateProjection>> {
+                    it.journey.departureAt
+                }.thenBy { it.predictedArrivalAt }
+            )
+        } else {
+            actionable.maxWithOrNull(
+                compareBy<ProjectedTransitJourney<TransitCandidateProjection>> {
+                    it.journey.departureAt
+                }.thenByDescending { it.predictedArrivalAt }
+            )
+        }
+    }
+
+    private fun List<ProjectedTransitJourney<TransitCandidateProjection>>.bestActionableAlternative(
+        request: TrafficRequest,
+    ): ProjectedTransitJourney<TransitCandidateProjection>? {
+        val actionable = filter { it.isActionable(request) }
+        return if (request.targetArrivalAt == null) {
+            actionable.minWithOrNull(
+                compareBy<ProjectedTransitJourney<TransitCandidateProjection>> {
+                    it.predictedArrivalAt
+                }.thenBy { it.journey.departureAt }
+            )
+        } else {
+            actionable.maxWithOrNull(
+                compareBy<ProjectedTransitJourney<TransitCandidateProjection>> {
+                    it.journey.departureAt
+                }.thenByDescending { it.predictedArrivalAt }
+            )
+        }
+    }
+
+    private fun <T> preferableActionable(
+        current: ProjectedTransitJourney<T>?,
+        candidate: ProjectedTransitJourney<T>,
+        targetArrivalAt: Instant?,
+    ): ProjectedTransitJourney<T> = when {
+        current == null -> candidate
+        targetArrivalAt == null -> listOf(current, candidate).minWith(
+            compareBy<ProjectedTransitJourney<T>> { it.journey.departureAt }
+                .thenBy { it.predictedArrivalAt }
+        )
+        else -> listOf(current, candidate).maxWith(
+            compareBy<ProjectedTransitJourney<T>> { it.journey.departureAt }
+                .thenByDescending { it.predictedArrivalAt }
+        )
+    }
+
+    private fun ProjectedTransitJourney<TransitCandidateProjection>.isActionable(
+        request: TrafficRequest,
+    ): Boolean =
+        eligible &&
+            !journey.departureAt.isBefore(request.evaluatedAt) &&
+            request.targetArrivalAt?.let(predictedArrivalAt::isAfter) != true
+
+    private fun ProjectedTransitJourney<TransitCandidateProjection>.recordResolutionEvidence(
+        request: TrafficRequest,
+        onLateLive: (ProjectedTransitJourney<TransitCandidateProjection>) -> Unit,
+        onDegraded: (ProjectedTransitJourney<TransitCandidateProjection>) -> Unit,
+        onMissed: (ProjectedTransitJourney<TransitCandidateProjection>) -> Unit,
+        onUnknown: (ProjectedTransitJourney<TransitCandidateProjection>) -> Unit,
+    ) {
+        recordTransferDiagnostic(onMissed = onMissed, onUnknown = onUnknown)
+        if (
+            projection.transfer.status != TransitTransferStatus.FEASIBLE ||
+            journey.departureAt.isBefore(request.evaluatedAt)
+        ) {
+            return
+        }
+        if (projection.overlayResolution.overlay == null) {
+            onDegraded(this)
+        } else if (request.targetArrivalAt?.let(predictedArrivalAt::isAfter) == true) {
+            onLateLive(this)
+        }
+    }
+
+    /**
+     * 다음 검색점을 정하기 위한 실패 후보다. LIVE이지만 늦은 여정을 먼저 사용하고, 그 다음
+     * 환승 실패 보정값, 마지막으로 실시간 도착정보가 없는 시간표를 사용한다.
+     */
+    private fun List<ProjectedTransitJourney<TransitCandidateProjection>>.searchSteeringCandidate(
+        request: TrafficRequest,
+    ): ProjectedTransitJourney<TransitCandidateProjection>? {
+        val current = filter { !it.journey.departureAt.isBefore(request.evaluatedAt) }
+        return current
+            .filter {
+                it.projection.overlayResolution.overlay != null &&
+                    it.projection.transfer.status == TransitTransferStatus.FEASIBLE
+            }
+            .minByOrNull(ProjectedTransitJourney<TransitCandidateProjection>::predictedArrivalAt)
+            ?: current
+                .filter { it.projection.transfer.status != TransitTransferStatus.FEASIBLE }
+                .minWithOrNull(
+                    compareBy<ProjectedTransitJourney<TransitCandidateProjection>> {
+                        it.searchAdjustmentSeconds ?: 0L
+                    }.thenBy { it.predictedArrivalAt }
+                )
+            ?: current
+                .filter { it.projection.overlayResolution.overlay == null }
+                .minByOrNull(ProjectedTransitJourney<TransitCandidateProjection>::predictedArrivalAt)
+    }
+
+    private fun TransitJourney.toEffectiveTransitRoute(
+        predictedArrivalAt: Instant,
+        totalMinutes: Int,
+        firstBoardingWaitMinutes: Int?,
+    ): EffectiveTransitRoute {
+        val firstRideIndex = legs.indexOfFirst(TransitJourneyLeg::isRide)
+        return EffectiveTransitRoute(
+            provider = provider,
+            identity = stableRouteIdentity(),
+            departureAt = departureAt,
+            arrivalAt = predictedArrivalAt,
+            totalMinutes = totalMinutes,
+            segments = legs.mapIndexed { index, leg ->
+                EffectiveTransitRouteSegment(
+                    sequence = index,
+                    kind = leg.mode.toEffectiveKind(),
+                    durationMinutes = leg.durationMinutes,
+                    waitingMinutes = if (index == firstRideIndex) {
+                        firstBoardingWaitMinutes ?: leg.waitingMinutes
+                    } else {
+                        leg.waitingMinutes
+                    },
+                    lineName = leg.line?.name,
+                    fromName = leg.from?.name,
+                    toName = leg.to?.name,
+                    directionName = leg.directionName,
+                )
+            },
+        )
+    }
+
+    private fun TransitLegMode.toEffectiveKind(): EffectiveTransitRouteSegmentKind = when (this) {
+        TransitLegMode.WALK -> EffectiveTransitRouteSegmentKind.WALK
+        TransitLegMode.BUS -> EffectiveTransitRouteSegmentKind.BUS
+        TransitLegMode.SUBWAY -> EffectiveTransitRouteSegmentKind.SUBWAY
+        TransitLegMode.ETC -> EffectiveTransitRouteSegmentKind.ETC
     }
 
     private fun <T> earlierArrival(
@@ -397,16 +657,6 @@ class TransitEtaCalculationService(
             .minWith(
                 compareBy<ProjectedTransitJourney<T>> { it.predictedArrivalAt }
                     .thenBy { it.journey.departureAt }
-            )
-
-    private fun <T> laterDeparture(
-        current: ProjectedTransitJourney<T>?,
-        candidate: ProjectedTransitJourney<T>,
-    ): ProjectedTransitJourney<T> =
-        listOfNotNull(current, candidate)
-            .maxWith(
-                compareBy<ProjectedTransitJourney<T>> { it.journey.departureAt }
-                    .thenByDescending { it.predictedArrivalAt }
             )
 
     private fun ProjectedTransitJourney<TransitCandidateProjection>.recordTransferDiagnostic(
@@ -443,14 +693,16 @@ class TransitEtaCalculationService(
     private companion object {
         const val ODSAY_PROVIDER_ID = "odsay"
         const val MILLIS_PER_MINUTE = 60_000.0
+        const val MAX_ALTERNATIVE_CANDIDATES_PER_RESPONSE = 3
+        const val UNKNOWN_TRANSFER_PROBE_SECONDS = 5L * 60L
+        const val ALTERNATIVE_RECOVERY_PROBE_SECONDS = 5L * 60L
     }
 }
 
 private data class OdsayJourneyResolution(
     val projected: ProjectedTransitJourney<TransitCandidateProjection>?,
-    val bestLate: ProjectedTransitJourney<TransitCandidateProjection>?,
     val bestLateLive: ProjectedTransitJourney<TransitCandidateProjection>?,
-    val bestFeasibleLive: ProjectedTransitJourney<TransitCandidateProjection>?,
+    val bestDegraded: ProjectedTransitJourney<TransitCandidateProjection>?,
     val bestMissedTransfer: ProjectedTransitJourney<TransitCandidateProjection>?,
     val bestTransferUnknown: ProjectedTransitJourney<TransitCandidateProjection>?,
 )
@@ -459,4 +711,5 @@ private data class TransitCandidateProjection(
     val overlayResolution: TransitRealtimeOverlayResolution,
     val transfer: TransitTransferEvaluation,
     val routeProvenance: TransitRouteProvenance,
+    val effectiveTransitRoute: EffectiveTransitRoute,
 )

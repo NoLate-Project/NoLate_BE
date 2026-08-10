@@ -662,7 +662,11 @@ class ScheduleUseCaseUnitTest {
             departureMemberFence,
         )
         verify(scheduleService).markDeparted(memberId, scheduleId)
-        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, memberId)
+        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(
+            scheduleId,
+            memberId,
+            "DEPARTED",
+        )
         verify(schedulePushJobService, never()).registerFromScheduleDto(eq(memberId), org.mockito.kotlin.any())
         assertEquals(false, result.notificationEnabled)
     }
@@ -716,7 +720,11 @@ class ScheduleUseCaseUnitTest {
             departureMemberFence,
         )
         verify(scheduleService, never()).markDeparted(sharedMemberId, scheduleId)
-        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(scheduleId, sharedMemberId)
+        verify(schedulePushJobService).cancelByScheduleIdAndMemberId(
+            scheduleId,
+            sharedMemberId,
+            "DEPARTED",
+        )
         verify(schedulePushJobService, never()).cancelByScheduleId(scheduleId)
         assertEquals("2026-06-01T00:00:00Z", result.myDepartedAt)
     }

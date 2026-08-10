@@ -10,6 +10,7 @@ import com.noLate.eta.domain.TransitLine
 import com.noLate.eta.domain.TransitRideSignature
 import com.noLate.eta.domain.TransitStop
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -32,6 +33,13 @@ class SafeDepartureResolverTest {
         ),
         legacyBoardingPlan = null,
     )
+
+    @Test
+    fun `ODsay 전체 탐색 예산은 세 회를 넘길 수 없다`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            SafeDepartureResolver(matcher, maxSearches = 4, toleranceSeconds = 0)
+        }
+    }
 
     @Test
     fun `시간표 불연속으로 단순 역산 후보가 늦으면 조회한 후보 중 가장 늦게 출발하는 feasible 여정을 고른다`() {
@@ -122,7 +130,7 @@ class SafeDepartureResolverTest {
     }
 
     @Test
-    fun `평가 시각에 초가 있으면 첫 검색과 음수 보정 검색 모두 다음 분보다 과거로 내려가지 않는다`() {
+    fun `음수 probe가 평가 시각에 막혀도 양방향 슬롯으로 세 번 예산을 소진하며 과거로 내려가지 않는다`() {
         val evaluatedAt = Instant.parse("2026-07-29T08:00:30Z")
         val firstValidMinute = Instant.parse("2026-07-29T08:01:00Z")
         val searchedDepartures = mutableListOf<Instant>()
@@ -154,7 +162,93 @@ class SafeDepartureResolverTest {
             )
         }
 
-        assertEquals(listOf(firstValidMinute), searchedDepartures)
+        assertEquals(
+            listOf(
+                firstValidMinute,
+                firstValidMinute.plus(5, ChronoUnit.MINUTES),
+                firstValidMinute.plus(3, ChronoUnit.MINUTES),
+            ),
+            searchedDepartures,
+        )
+    }
+
+    @Test
+    fun `현재 시각 첫 UNKNOWN이 음수 경계에 막히면 5분 뒤 동일 signature 안전 차량을 찾는다`() {
+        val eight = Instant.parse("2026-07-29T08:00:00Z")
+        val eightFive = eight.plus(5, ChronoUnit.MINUTES)
+        val searchedDepartures = mutableListOf<Instant>()
+        val provider = RecordingJourneyProvider { search ->
+            searchedDepartures += search.departureAt
+            listOf(
+                journey(
+                    request = search,
+                    departureAt = search.departureAt,
+                    arrivalAt = search.departureAt.plus(40, ChronoUnit.MINUTES),
+                )
+            )
+        }
+        val resolver = SafeDepartureResolver(matcher, maxSearches = 3, toleranceSeconds = 0)
+
+        val result = resolver.resolveProjectedCandidates(
+            provider = provider,
+            request = request(eight),
+            targetArrivalAt = null,
+            evaluatedAt = eight,
+        ) { candidates ->
+            val candidate = candidates.single()
+            ProjectedTransitJourney(
+                journey = candidate,
+                predictedArrivalAt = candidate.arrivalAt,
+                projection = Unit,
+                eligible = candidate.departureAt == eightFive,
+                searchAdjustmentSeconds = -60,
+            )
+        }
+
+        assertEquals(listOf(eight, eightFive), searchedDepartures)
+        assertEquals(eightFive, result?.journey?.departureAt)
+    }
+
+    @Test
+    fun `도착 마감이 없어도 중간 빈 응답 뒤 남은 예산으로 다음 안전 차량을 찾는다`() {
+        val eight = Instant.parse("2026-07-29T08:00:00Z")
+        val eightFive = eight.plus(5, ChronoUnit.MINUTES)
+        val eightTen = eight.plus(10, ChronoUnit.MINUTES)
+        val searchedDepartures = mutableListOf<Instant>()
+        val provider = RecordingJourneyProvider { search ->
+            searchedDepartures += search.departureAt
+            when (search.departureAt) {
+                eightFive -> emptyList()
+                else -> listOf(
+                    journey(
+                        request = search,
+                        departureAt = search.departureAt,
+                        arrivalAt = search.departureAt.plus(40, ChronoUnit.MINUTES),
+                    )
+                )
+            }
+        }
+        val resolver = SafeDepartureResolver(matcher, maxSearches = 3, toleranceSeconds = 0)
+
+        val result = resolver.resolveProjectedCandidates(
+            provider = provider,
+            request = request(eight),
+            targetArrivalAt = null,
+            evaluatedAt = eight,
+        ) { candidates ->
+            candidates.singleOrNull()?.let { candidate ->
+                ProjectedTransitJourney(
+                    journey = candidate,
+                    predictedArrivalAt = candidate.arrivalAt,
+                    projection = Unit,
+                    eligible = candidate.departureAt == eightTen,
+                    searchAdjustmentSeconds = -60,
+                )
+            }
+        }
+
+        assertEquals(listOf(eight, eightFive, eightTen), searchedDepartures)
+        assertEquals(eightTen, result?.journey?.departureAt)
     }
 
     @Test

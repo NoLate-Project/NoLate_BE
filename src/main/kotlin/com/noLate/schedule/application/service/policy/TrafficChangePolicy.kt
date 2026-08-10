@@ -50,6 +50,9 @@ class TrafficChangePolicy {
         onTimeArrivalPossible: Boolean? = null,
         predictedArrivalAt: Instant? = null,
         transferFailureReason: String? = null,
+        routeTransitioned: Boolean = false,
+        usingAlternativeRoute: Boolean = false,
+        effectiveRouteSummary: String? = null,
     ): SchedulePushMessage {
         val titleText = scheduleTitle.trim().ifBlank { "일정" }
         val departureText = timeFormatter.format(recommendedDepartureAt)
@@ -80,6 +83,33 @@ class TrafficChangePolicy {
             return SchedulePushMessage(
                 title = "정시 도착이 어려워요",
                 body = "'$titleText'에 제시간 도착하기 어려워요. ${prediction}아직 출발 전이면 지금 출발하세요.",
+                trafficChangeMinutes = delta,
+            )
+        }
+
+        if (routeTransitioned) {
+            val routeText = effectiveRouteSummary
+                ?.takeIf(String::isNotBlank)
+                ?.let { " '$it'" }
+                .orEmpty()
+            val actionText = if (decision.departNowAction) {
+                " 지금 출발하고 앱에서 새 경로를 확인해 주세요."
+            } else {
+                " 앱에서 새 경로를 확인해 주세요."
+            }
+            return SchedulePushMessage(
+                title = if (usingAlternativeRoute) {
+                    "대중교통 경로가 바뀌었어요"
+                } else {
+                    "선택한 대중교통 경로로 돌아왔어요"
+                },
+                body = if (usingAlternativeRoute) {
+                    "현재 탈 수 있고 '$titleText'에 맞출 수 있는$routeText 경로로 다시 계산했어요. " +
+                        "권장 출발 $departureText.$actionText"
+                } else {
+                    "'$titleText'의 선택 경로를 다시 이용할 수 있어요. " +
+                        "권장 출발 $departureText.$actionText"
+                },
                 trafficChangeMinutes = delta,
             )
         }

@@ -9,6 +9,9 @@ import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
+import com.noLate.notification.liveactivity.domain.LiveActivityDelivery
+import com.noLate.notification.liveactivity.domain.LiveActivityDeliveryOperation
+import com.noLate.notification.liveactivity.infrastructure.LiveActivityDeliveryRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -50,7 +53,9 @@ import java.util.concurrent.TimeUnit
 class NotificationTokenLogoutFenceIntegrationTest @Autowired constructor(
     private val tokenService: NotificationTokenService,
     private val sessionFenceService: MemberSessionFenceService,
+    private val retirementService: NotificationTokenRetirementService,
     private val tokenRepository: NotificationDeviceTokenRepository,
+    private val liveActivityDeliveryRepository: LiveActivityDeliveryRepository,
     private val memberRepository: MemberRepository,
     private val observer: BlockingNotificationTokenRegistrationObserver,
 ) {
@@ -61,8 +66,59 @@ class NotificationTokenLogoutFenceIntegrationTest @Autowired constructor(
     @BeforeEach
     fun clean() {
         observer.reset()
+        liveActivityDeliveryRepository.deleteAll()
         tokenRepository.deleteAll()
         memberRepository.deleteAll()
+    }
+
+    @Test
+    fun `expired logout reservation is retained while an END delivery is outstanding`() {
+        val memberId = createMember("live-end-reservation@example.com")
+        tokenService.registerToken(
+            memberId = memberId,
+            deviceId = "live-end-device",
+            platform = PushPlatform.IOS,
+            token = "live-end-fcm",
+            accessTokenIssuedAt = logoutAt,
+            accessTokenSessionGeneration = 0,
+        )
+        val token = tokenRepository.findAllByMemberId(memberId).single().apply {
+            retirementRequested = true
+            dispatchLeaseId = "la-end:expired-reservation"
+            dispatchLeaseUntil = logoutAt.minusSeconds(1)
+        }
+        tokenRepository.saveAndFlush(token)
+        val delivery = liveActivityDeliveryRepository.saveAndFlush(
+            LiveActivityDelivery(
+                eventKey = "la:retirement:test",
+                liveActivityId = 1,
+                memberId = memberId,
+                scheduleId = 41,
+                pushDeviceTokenId = requireNotNull(token.id),
+                fcmTokenFingerprint = token.tokenFingerprint,
+                fcmOwnershipVersion = token.ownershipVersion,
+                deviceFingerprint = requireNotNull(token.deviceFingerprint),
+                activityToken = "a".repeat(64),
+                activityTokenFingerprint = "b".repeat(64),
+                targetActivityId = "activity-41",
+                operation = LiveActivityDeliveryOperation.END,
+                revision = 2,
+                sourceNotificationGeneration = 3,
+                apnsTimestamp = logoutAt.epochSecond,
+                activityType = "NoLateDepartureAttributes",
+                contentStateJson = "{}",
+                dismissalAt = logoutAt,
+                expirationAt = logoutAt.plusSeconds(3_600),
+                availableAt = logoutAt,
+            )
+        )
+
+        retirementService.reapExpiredRetirements()
+        assertTrue(tokenRepository.findById(requireNotNull(token.id)).isPresent)
+
+        liveActivityDeliveryRepository.delete(delivery)
+        retirementService.reapExpiredRetirements()
+        assertTrue(tokenRepository.findById(requireNotNull(token.id)).isEmpty)
     }
 
     @Test

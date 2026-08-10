@@ -12,12 +12,24 @@ PushJob snapshot은 다음 조건을 모두 만족할 때만 현재 상태로 �
 - `job.scheduleAt`이 현재 일정 시작 시각과 같고, 저장된 ETA route fingerprint가 현재 회원의
   경로 fingerprint와 같다.
 - 공유 참가자 계획의 schedule fingerprint가 현재 일정 시각·목적지와 일치한다.
+- 마지막 ETA 평가가 기록한 `lastEtaRefreshDueAt`이 존재하고 현재 시각이
+  `lastEtaRefreshDueAt + schedule.traffic.departure-status-snapshot-grace-minutes`를 넘지
+  않는다. 기본 grace는 5분이며 경계 시각까지는 허용하고, 그 직후부터 저장 경로 ETA로
+  fail-closed한다. migration 전 null 값은 현재 snapshot으로 승격하지 않는다.
+  `nextCheckAt`은 정상 주기 외에도 푸시 재시도와 PROCESSING timeout 복구가 덮어쓰는 실행
+  예약이므로 ETA 신선도의 증거로 사용하지 않는다. `lastEtaRefreshDueAt`은 정상 ETA 평가가
+  계산한 실제 다음 경계(설정 간격보다 이른 reminder 경계 포함)만 기록한다. push 재시도,
+  timeout 복구, snooze는 이를 연장하지 않으므로 미래로 재예약해도 만료 snapshot은 부활하지
+  않는다. 저장된 경계가 평가 시각보다 이르거나 설정 가능한 10~60분 조회 주기를 넘으면 손상
+  row로 보고 역시 거부한다.
 - 이동 시간이 제품 상한 이내이며 `source`, `stale`, `lastCheckedAt`, 추천 출발 시각이
   완전하고 서로 일관된다.
 - `LIVE_PROVIDER`이면 `stale=false`, `liveFetchedAt`과 `lastLiveTravelMinutes`가 존재하고,
   현재 ETA와 마지막 live ETA가 같다.
-- `TIMETABLE_PROVIDER`이면 방금 조회한 시간표의 provider 취득 시각이 있고 `stale=false`다.
-  실제 추천 출발시각은 `일정시각 - 이동시간`보다 이를 수 있다.
+- `TIMETABLE_PROVIDER`이면 방금 조회한 시간표의 provider 취득 시각이 있다. 첫 승차 실시간
+  도착정보까지 검증되지 않은 대중교통 결과는 `stale=true` 진단으로 남아 알람과 출발
+  countdown을 바꾸지 않는다. 실제 추천 출발시각은 정상 채택된 결과에서만
+  `일정시각 - 이동시간`보다 이를 수 있다.
 - 정상 provider snapshot의 `predictedArrivalAt`은 일정 시작 시각을 넘지 않는다. 동일 경로의
   조회 가능한 차량을 모두 확인해도 정시 도착이 불가능한 경우에만
   `TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE`, `stale=true`, `confidence=LOW` 조합으로 늦은
@@ -31,9 +43,9 @@ fallback을 만들며, 현재 경로도 유효하지 않으면 ETA를 null로 �
 
 - `LIVE_PROVIDER`: worker의 마지막 평가에서 provider가 실제 응답했다. `liveFetchedAt`이 있고
   `stale=false`다.
-- `TIMETABLE_PROVIDER`: ODsay에서 선택한 동일 여정을 방금 다시 조회했지만 첫 승차 실시간
-  도착정보는 적용하지 못한 결과다. `stale=false`, 신뢰도는 `MEDIUM`이며 공개
-  `liveFetchedAt`과 live 비교 이력은 만들지 않는다.
+- `TIMETABLE_PROVIDER`: ODsay에서 여정을 방금 다시 조회했지만 첫 승차 실시간 도착정보는
+  적용하지 못한 결과다. 현재 대중교통 안전 정책에서는 `stale=true`, 신뢰도 `LOW` 진단이며
+  공개 `liveFetchedAt`과 live 비교 이력은 만들지 않는다.
 - `SELECTED_ROUTE`: 사용자가 선택해 저장한 경로의 ETA snapshot이다. 새 live 취득 시각을
   만들지 않고 `stale=true`다.
 - `SAVED_FALLBACK`: 선택 경로 ETA가 없어 일정/개인 계획에 저장된 시간을 사용했다.
@@ -46,6 +58,8 @@ PushJob snapshot이 있으면 `evaluatedAt`은 worker의 `lastCheckedAt`이다. 
 보장한다. PushJob 평가가 없으면 API가 저장 경로 fallback을 평가한 시각이다. `liveFetchedAt`은
 provider가 실제로 응답한 시각이며 fallback 평가에서도 이전 성공 시각이 있으면 이를 유지하고,
 한 번도 성공하지 않았다면 null이다.
+`etaRefreshDueAt`은 이 평가의 불변 freshness 경계이며, 실행 scheduler의 현재
+`nextCheckAt`과 별도 필드로 응답한다.
 `lastTrafficChangeMinutes`와 `lastChangedAt`은 비교 가능한 `LIVE_PROVIDER → LIVE_PROVIDER`
 평가에서만 갱신되고, 조회나 fallback 전환은 교통 변화 이력을 만들지 않는다.
 
@@ -64,6 +78,14 @@ live로 교체한다. 일정 또는 route fingerprint가 바뀌거나 job이 취
 `false`다. 이 진단의 푸시는 “늦지 않으려면”이라는 문구를 사용하지 않고 현재 확인된 가장
 빠른 예상 도착시각과 정시 도착이 어렵다는 사실을 함께 안내한다.
 
+정상 대중교통 snapshot에는 `transitRouteProvenance`, `transitTimingBasis`,
+`firstBoardingWaitMinutes`, `effectiveTransitRoute`가 함께 온다. `routeChanged=true`는 현재
+채택한 여정이 저장한 선택 경로가 아니라 검증된 ODsay 대체 여정이라는 뜻이다. 이는 직전
+조회와 달라졌다는 일회성 이벤트가 아니므로 대체 여정이 유지되는 동안 계속 `true`다. 서버는
+별도의 경로 전환 비교로 중복 푸시를 막는다. `effectiveTransitRoute`는 실제 ETA에 사용한
+승하차 순서와 시각을 표시하기 위한 것이며 좌표 geometry를 포함하지 않는다. 따라서 앱 지도는
+저장 경로임을 명시하고, 현재 추천 여정은 별도 요약으로 보여 준다.
+
 ## 동일 경로 갱신 제약
 
 - `BIKE`는 provider 미지원으로 명시적 fallback한다.
@@ -81,8 +103,8 @@ live로 교체한다. 일정 또는 route fingerprint가 바뀌거나 job이 취
 - 전체 시간은 새 ODsay 여정을 기준으로 하고 첫 승차 구간만 현재 정류장 도착정보로 교체한다.
   첫 차량의 지연은 다음 환승까지 전파하며 `이전 차량 도착 + 환승 도보 + 60초 버퍼`가 다음
   시간표 출발보다 늦으면 해당 여정을 제외한다. 미래 환승 정류장의 현재 도착정보는 사용하지
-  않는다. 실시간 도착정보까지 적용되면
-  `LIVE_PROVIDER`, 시간표만 유효하면 `TIMETABLE_PROVIDER`다.
+  않는다. 실시간 도착정보까지 검증되면 `LIVE_PROVIDER`로 정상 채택한다. 시간표만 유효한
+  `TIMETABLE_PROVIDER` 결과는 진단으로 보존하지만 알람을 이동시키지 않는다.
 - ODsay가 비활성화되거나 동일 경로를 찾지 못하면 TMAP 대중교통으로 바꾸지 않고 선택 경로
   snapshot으로 fallback한다.
 

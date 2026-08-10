@@ -9,6 +9,7 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Index
+import jakarta.persistence.Lob
 import jakarta.persistence.Table
 import jakarta.persistence.UniqueConstraint
 import jakarta.persistence.Version
@@ -97,6 +98,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     lateinit var nextCheckAt: Instant
         protected set
 
+    @Column(name = "semantic_catch_up_pending", nullable = false)
+    @Comment("immutable 푸시 완료 뒤 최신 ETA 의미를 새 회차로 보정해야 하는지 여부")
+    var semanticCatchUpPending: Boolean = false
+        protected set
+
     @Column(name = "last_travel_minutes")
     @Comment("마지막 조회 이동 시간")
     var lastTravelMinutes: Int? = null
@@ -130,6 +136,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     @Column(name = "last_checked_at")
     @Comment("마지막 교통상황 체크 실행 시간")
     var lastCheckedAt: Instant? = null
+        protected set
+
+    @Column(name = "last_eta_refresh_due_at")
+    @Comment("마지막 ETA 평가가 약속한 실제 다음 ETA 갱신 시각; 실행 재시도 예약과 분리")
+    var lastEtaRefreshDueAt: Instant? = null
         protected set
 
     @Column(name = "last_live_fetched_at")
@@ -183,6 +194,12 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     @Column(name = "last_eta_route_fingerprint", length = 64)
     @Comment("마지막 ETA snapshot을 계산한 회원 경로 지문")
     var lastEtaRouteFingerprint: String? = null
+        protected set
+
+    @Lob
+    @Column(name = "last_effective_transit_route_json", columnDefinition = "LONGTEXT")
+    @Comment("마지막 ETA가 채택한 대중교통 경로와 계산 근거 JSON")
+    var lastEffectiveTransitRouteJson: String? = null
         protected set
 
     @Column(name = "last_traffic_change_minutes")
@@ -296,6 +313,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
      */
     fun complete() {
         status = SchedulePushJobStatus.COMPLETED
+        semanticCatchUpPending = false
         clearLock()
     }
 
@@ -305,7 +323,10 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     fun cancel() {
         status = SchedulePushJobStatus.CANCELED
         clearLiveComparatorChain()
+        semanticCatchUpPending = false
+        lastEtaRefreshDueAt = null
         lastEtaRouteFingerprint = null
+        lastEffectiveTransitRouteJson = null
         lastPredictedArrivalAt = null
         lastEtaProviderFetchedAt = null
         lastEtaAlgorithmVersion = null
@@ -317,6 +338,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
      */
     fun fail(reason: String) {
         status = SchedulePushJobStatus.FAILED
+        semanticCatchUpPending = false
         failureReason = reason
         retryCount += 1
         clearLock()
@@ -426,6 +448,8 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         predictedArrivalAt: Instant?,
         etaTravelMode: ScheduleTravelMode?,
         etaRouteFingerprint: String?,
+        etaRefreshDueAt: Instant?,
+        effectiveTransitRouteJson: String? = null,
         liveComparatorMaxAgeMinutes: Long = DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES,
         now: Instant = Instant.now(),
     ) {
@@ -439,9 +463,11 @@ class SchedulePushJob protected constructor() : BaseEntity() {
             predictedArrivalAt = predictedArrivalAt,
             etaTravelMode = etaTravelMode,
             etaRouteFingerprint = etaRouteFingerprint,
+            effectiveTransitRouteJson = effectiveTransitRouteJson,
             liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
             now = now,
         )
+        lastEtaRefreshDueAt = etaRefreshDueAt
     }
 
     fun finishCheck(
@@ -457,6 +483,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         departureReminderStage: ScheduleDepartureReminderStage? = null,
         departureReminderBoundaryAt: Instant? = null,
         clearSnooze: Boolean = false,
+        semanticCatchUpPending: Boolean = false,
         nextCheckAt: Instant?,
         completeAfterCheck: Boolean,
         etaSource: TrafficSource = TrafficSource.SAVED_FALLBACK,
@@ -466,6 +493,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         predictedArrivalAt: Instant? = null,
         etaTravelMode: ScheduleTravelMode? = null,
         etaRouteFingerprint: String? = null,
+        effectiveTransitRouteJson: String? = null,
         liveComparatorMaxAgeMinutes: Long = DEFAULT_LIVE_COMPARATOR_MAX_AGE_MINUTES,
         now: Instant = Instant.now()
     ) {
@@ -479,12 +507,89 @@ class SchedulePushJob protected constructor() : BaseEntity() {
             predictedArrivalAt = predictedArrivalAt,
             etaTravelMode = etaTravelMode,
             etaRouteFingerprint = etaRouteFingerprint,
+            effectiveTransitRouteJson = effectiveTransitRouteJson,
             liveComparatorMaxAgeMinutes = liveComparatorMaxAgeMinutes,
             now = now,
         )
+        // 정상 회차에서 계산한 실제 다음 ETA 경계만 freshness를 연장한다. 이후 push retry나
+        // lease recovery가 nextCheckAt을 바꾸더라도 이 값은 그대로 남는다.
+        lastEtaRefreshDueAt = nextCheckAt.takeUnless { completeAfterCheck }
+        finishCheckState(
+            pushConfirmed = pushConfirmed,
+            pushConfirmedAt = pushConfirmedAt,
+            pushUncertain = pushUncertain,
+            nativeAlarmCovered = nativeAlarmCovered,
+            notifiedDepartureAt = notifiedDepartureAt,
+            reminderBoundaryAt = reminderBoundaryAt,
+            departureReminderStage = departureReminderStage,
+            departureReminderBoundaryAt = departureReminderBoundaryAt,
+            clearSnooze = clearSnooze,
+            semanticCatchUpPending = semanticCatchUpPending,
+            nextCheckAt = nextCheckAt,
+            completeAfterCheck = completeAfterCheck,
+            now = now,
+        )
+    }
+
+    /**
+     * Closes an immutable notification check without applying a newer ETA evaluation.
+     *
+     * Push outbox persistence is independent from the source job transition. During a retry the
+     * frozen event is authoritative, so a newly fetched ETA must wait for the next check instead of
+     * replacing the API/alarm/Live Activity state while the old event is being dispatched.
+     */
+    fun finishCheckPreservingEta(
+        pushSent: Boolean,
+        notifiedDepartureAt: Instant?,
+        pushConfirmed: Boolean = pushSent,
+        pushConfirmedAt: Instant? = null,
+        pushUncertain: Boolean = false,
+        nativeAlarmCovered: Boolean = false,
+        reminderBoundaryAt: Instant? = null,
+        departureReminderStage: ScheduleDepartureReminderStage? = null,
+        departureReminderBoundaryAt: Instant? = null,
+        clearSnooze: Boolean = false,
+        semanticCatchUpPending: Boolean = false,
+        nextCheckAt: Instant?,
+        completeAfterCheck: Boolean,
+        now: Instant = Instant.now(),
+    ) {
+        finishCheckState(
+            pushConfirmed = pushConfirmed,
+            pushConfirmedAt = pushConfirmedAt,
+            pushUncertain = pushUncertain,
+            nativeAlarmCovered = nativeAlarmCovered,
+            notifiedDepartureAt = notifiedDepartureAt,
+            reminderBoundaryAt = reminderBoundaryAt,
+            departureReminderStage = departureReminderStage,
+            departureReminderBoundaryAt = departureReminderBoundaryAt,
+            clearSnooze = clearSnooze,
+            semanticCatchUpPending = semanticCatchUpPending,
+            nextCheckAt = nextCheckAt,
+            completeAfterCheck = completeAfterCheck,
+            now = now,
+        )
+    }
+
+    private fun finishCheckState(
+        pushConfirmed: Boolean,
+        pushConfirmedAt: Instant?,
+        pushUncertain: Boolean,
+        nativeAlarmCovered: Boolean,
+        notifiedDepartureAt: Instant?,
+        reminderBoundaryAt: Instant?,
+        departureReminderStage: ScheduleDepartureReminderStage?,
+        departureReminderBoundaryAt: Instant?,
+        clearSnooze: Boolean,
+        semanticCatchUpPending: Boolean,
+        nextCheckAt: Instant?,
+        completeAfterCheck: Boolean,
+        now: Instant,
+    ) {
         checkCount += 1
         retryCount = 0
         failureReason = null
+        this.semanticCatchUpPending = semanticCatchUpPending && !completeAfterCheck
 
         val notificationHandled = pushConfirmed || pushUncertain || nativeAlarmCovered
         if (notificationHandled) {
@@ -561,6 +666,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         predictedArrivalAt: Instant?,
         etaTravelMode: ScheduleTravelMode?,
         etaRouteFingerprint: String?,
+        effectiveTransitRouteJson: String?,
         liveComparatorMaxAgeMinutes: Long,
         now: Instant,
     ) {
@@ -617,6 +723,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
             ?.takeIf { etaSource in PROVIDER_ETA_SOURCES }
         lastEtaAlgorithmVersion = EtaAlgorithmVersion.infer(etaSource, etaTravelMode)
         lastEtaRouteFingerprint = etaRouteFingerprint
+        lastEffectiveTransitRouteJson = effectiveTransitRouteJson
     }
 
     /**
@@ -658,6 +765,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.notificationInputFingerprint = notificationInputFingerprint
         this.nextCheckAt = monitorStartAt
         this.status = SchedulePushJobStatus.ACTIVE
+        this.semanticCatchUpPending = false
         this.lastTravelMinutes = null
         this.lastRecommendedDepartureAt = null
         this.lastNotifiedDepartureAt = null
@@ -665,6 +773,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.lastHandledDepartureAt = null
         this.lastHandledReminderBoundaryAt = null
         this.lastCheckedAt = null
+        this.lastEtaRefreshDueAt = null
         this.lastLiveFetchedAt = null
         this.lastLiveTravelMinutes = null
         this.lastEtaSource = null
@@ -675,6 +784,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         this.lastEtaProviderFetchedAt = null
         this.lastEtaAlgorithmVersion = null
         this.lastEtaRouteFingerprint = null
+        this.lastEffectiveTransitRouteJson = null
         this.lastTrafficChangeMinutes = null
         this.lastChangedAt = null
         this.lastPushedAt = null
@@ -710,6 +820,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
         checkCount = 0
         this.nextCheckAt = nextCheckAt
         this.snoozedUntil = nextCheckAt
+        semanticCatchUpPending = false
         failureReason = null
         retryCount = 0
         clearLock()

@@ -7,6 +7,7 @@ import com.noLate.member.domain.member.LoginType
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.application.service.NotificationTokenRetirementService
+import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -15,6 +16,7 @@ import kotlin.test.assertNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
@@ -109,6 +111,30 @@ class MemberSessionFenceServiceUnitTest {
     }
 
     @Test
+    fun `logout durably prepares ActivityKit END before FCM ownership retirement`() {
+        val liveActivityService = mock<ScheduleLiveActivityService>()
+        val serviceWithLiveActivity = MemberSessionFenceService(
+            memberRepository = memberRepository,
+            refreshTokenService = refreshTokenService,
+            tokenRetirementService = tokenRetirementService,
+            clock = Clock.fixed(revokedAt, ZoneOffset.UTC),
+            scheduleLiveActivityService = liveActivityService,
+        )
+        val member = member(sessionGeneration = 1)
+        whenever(memberRepository.findByIdForUpdate(41L)).thenReturn(member)
+        whenever(
+            refreshTokenService.isPresentedTokenCurrentForUpdate(41L, "refresh-session-a")
+        ).thenReturn(true)
+
+        serviceWithLiveActivity.compareAndLogout(41L, 1L, "refresh-session-a")
+
+        inOrder(liveActivityService, tokenRetirementService) {
+            verify(liveActivityService).prepareEndAllForMemberBeforeTokenRetirement(41L, "LOGOUT")
+            verify(tokenRetirementService).retireAllByMember(41L)
+        }
+    }
+
+    @Test
     fun `rotated or missing raw refresh token cannot revoke the current same-generation session`() {
         val member = member(sessionGeneration = 1)
         whenever(memberRepository.findByIdForUpdate(41L)).thenReturn(member)
@@ -134,10 +160,18 @@ class MemberSessionFenceServiceUnitTest {
 
     @Test
     fun `withdrawal fence advances generation and revokes refresh without deleting device ownership early`() {
+        val liveActivityService = mock<ScheduleLiveActivityService>()
+        val serviceWithLiveActivity = MemberSessionFenceService(
+            memberRepository = memberRepository,
+            refreshTokenService = refreshTokenService,
+            tokenRetirementService = tokenRetirementService,
+            clock = Clock.fixed(revokedAt, ZoneOffset.UTC),
+            scheduleLiveActivityService = liveActivityService,
+        )
         val member = member(sessionGeneration = 2)
         whenever(memberRepository.findByIdForUpdate(41L)).thenReturn(member)
 
-        service.invalidateSessionForWithdrawal(
+        serviceWithLiveActivity.invalidateSessionForWithdrawal(
             memberId = 41L,
             presentedSessionGeneration = 2L,
         )
@@ -145,6 +179,10 @@ class MemberSessionFenceServiceUnitTest {
         assertEquals(3L, member.sessionGeneration)
         assertEquals(revokedAt, member.tokensValidAfter)
         verify(refreshTokenService).deleteAllByMemberId(41L)
+        verify(liveActivityService).prepareEndAllForMemberBeforeTokenRetirement(
+            41L,
+            "ACCOUNT_WITHDRAWAL",
+        )
         verifyNoInteractions(tokenRetirementService)
     }
 

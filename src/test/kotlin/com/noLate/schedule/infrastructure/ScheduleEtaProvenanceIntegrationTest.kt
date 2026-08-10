@@ -1,6 +1,7 @@
 package com.noLate.schedule.infrastructure
 
 import com.noLate.schedule.domain.SchedulePushJob
+import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.TrafficSource
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -25,6 +26,45 @@ class ScheduleEtaProvenanceIntegrationTest @Autowired constructor(
     private val repository: SchedulePushJobRepository,
     private val entityManager: TestEntityManager,
 ) {
+    @Test
+    fun `effective transit route snapshot persists as long text with the ETA transition`() {
+        val scheduleAt = Instant.parse("2026-08-10T05:00:00Z")
+        val checkedAt = scheduleAt.minus(90, ChronoUnit.MINUTES)
+        val snapshotJson = "{\"payload\":\"${"x".repeat(5_000)}\"}"
+        val job = SchedulePushJob.create(
+            memberId = 9L,
+            scheduleId = 90L,
+            scheduleAt = scheduleAt,
+            departureAt = scheduleAt.minus(45, ChronoUnit.MINUTES),
+            monitorStartAt = checkedAt,
+            intervalMinutes = 20,
+        )
+        job.startProcessing("effective-route-worker")
+        job.finishCheck(
+            travelMinutes = 45,
+            recommendedDepartureAt = scheduleAt.minus(45, ChronoUnit.MINUTES),
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = checkedAt.plus(20, ChronoUnit.MINUTES),
+            completeAfterCheck = false,
+            etaSource = TrafficSource.TIMETABLE_PROVIDER,
+            liveFetchedAt = checkedAt,
+            etaStale = false,
+            etaTravelMode = ScheduleTravelMode.TRANSIT,
+            etaRouteFingerprint = "route-effective-v1",
+            effectiveTransitRouteJson = snapshotJson,
+            now = checkedAt,
+        )
+
+        repository.saveAndFlush(job)
+        entityManager.clear()
+
+        val stored = requireNotNull(repository.findByScheduleIdAndMemberId(90L, 9L))
+        assertEquals(snapshotJson, stored.lastEffectiveTransitRouteJson)
+        assertEquals(checkedAt.plus(20, ChronoUnit.MINUTES), stored.lastEtaRefreshDueAt)
+        assertEquals(TrafficSource.TIMETABLE_PROVIDER, stored.lastEtaSource)
+    }
+
     @Test
     fun `ODsay 시간표 provenance는 저장하되 live 비교 baseline을 만들지 않는다`() {
         val scheduleAt = Instant.parse("2026-07-29T05:00:00Z")

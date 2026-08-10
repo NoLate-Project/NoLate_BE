@@ -165,4 +165,61 @@ class TrafficChangePolicyTest {
         assertTrue(message.body.contains("기기 알람 상태"))
         assertTrue(message.body.contains("경로를 다시 확인"))
     }
+
+    @Test
+    fun `verified alternative route is announced even when total ETA is unchanged`() {
+        val message = policy.createMessage(
+            scheduleTitle = "회의",
+            previousTravelMinutes = 40,
+            currentTravelMinutes = 40,
+            recommendedDepartureAt = recommendedDepartureAt,
+            decision = DepartureReminderDecision.NONE,
+            alertLeadMinutes = alertLeadMinutes,
+            routeTransitioned = true,
+            usingAlternativeRoute = true,
+            effectiveRouteSummary = "341 → 2호선",
+        )
+
+        assertEquals("대중교통 경로가 바뀌었어요", message.title)
+        assertTrue(message.body.contains("현재 탈 수 있고"))
+        assertTrue(message.body.contains("341 → 2호선"))
+        assertTrue(message.body.contains("권장 출발 $expectedDepartureText"))
+        assertTrue(message.body.contains("새 경로를 확인"))
+    }
+
+    @Test
+    fun `transfer warning remains higher priority than route change copy`() {
+        val message = policy.createMessage(
+            scheduleTitle = "회의",
+            previousTravelMinutes = 40,
+            currentTravelMinutes = 40,
+            recommendedDepartureAt = recommendedDepartureAt,
+            decision = DepartureReminderDecision.NONE,
+            alertLeadMinutes = alertLeadMinutes,
+            transferFailureReason = TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN,
+            routeTransitioned = true,
+            usingAlternativeRoute = true,
+            effectiveRouteSummary = "341 → 2호선",
+        )
+
+        assertEquals("환승 가능 여부를 확인할 수 없어요", message.title)
+        assertTrue(!message.body.contains("현재 탈 수 있고"))
+    }
+
+    @Test
+    fun `returning from an alternative announces the saved selected route`() {
+        val message = policy.createMessage(
+            scheduleTitle = "회의",
+            previousTravelMinutes = 40,
+            currentTravelMinutes = 40,
+            recommendedDepartureAt = recommendedDepartureAt,
+            decision = DepartureReminderDecision.NONE,
+            alertLeadMinutes = alertLeadMinutes,
+            routeTransitioned = true,
+            usingAlternativeRoute = false,
+        )
+
+        assertEquals("선택한 대중교통 경로로 돌아왔어요", message.title)
+        assertTrue(message.body.contains("선택 경로를 다시 이용할 수 있어요"))
+    }
 }

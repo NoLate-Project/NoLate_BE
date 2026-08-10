@@ -16,6 +16,8 @@ import com.noLate.notification.infrastructure.DepartureAlarmPresentationAssignme
 import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
+import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
+import com.noLate.notification.liveactivity.infrastructure.ScheduleLiveActivityRepository
 import com.noLate.performance.application.NavigationPerformanceService
 import com.noLate.routehistory.infrastructure.RecentRoutePlaceRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
@@ -96,6 +98,8 @@ class AccountCleanupService(
     private val sharingMemberBlockRepository: SharingMemberBlockRepository? = null,
     private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
     private val navigationPerformanceService: NavigationPerformanceService? = null,
+    private val scheduleLiveActivityRepository: ScheduleLiveActivityRepository? = null,
+    private val liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher? = null,
 ) {
     /**
      * Owner withdrawal and participant mutation share one member-row order. The first scan is only
@@ -189,6 +193,12 @@ class AccountCleanupService(
         // that a restarted worker redrives.
         if (fence.ownedScheduleIds.isNotEmpty()) {
             fence.ownedScheduleIds.sorted().forEach {
+                // Persisted in this cleanup transaction before schedule-bound ETA/job sources are
+                // deleted. Recovery therefore ends every participant card after a process stop.
+                liveActivityLifecyclePublisher?.endSchedule(
+                    it,
+                    "SCHEDULE_OWNER_WITHDRAWAL",
+                )
                 departureAlarmSyncService?.cancelAllForSchedule(it)
             }
             notificationActionReceiptRepository.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
@@ -241,6 +251,9 @@ class AccountCleanupService(
         appNotificationRepository.deleteAllByMemberId(memberId)
         pushDeliveryRepository.deleteAllByMemberId(memberId)
         pushHistoryRepository.deleteAllByMemberId(memberId)
+        // Withdrawal queued ActivityKit END before this cleanup transaction. Keep its minimal
+        // state/outbox and reserved FCM route until provider completion; the bounded terminal
+        // cleanup worker removes them afterwards. Deleting here would strand a lock-screen card.
         notificationActionReceiptRepository.deleteAllByMemberId(memberId)
         etaAccuracyObservationRepository.deleteAllByMemberId(memberId)
         departureAlarmFireEventRepository.deleteAllByMemberId(memberId)
@@ -420,6 +433,10 @@ class AccountCleanupService(
                 .forEach(affectedMemberIds::add)
             departureAlarmScheduleReceiptRepository.findDistinctMemberIdsByScheduleIdIn(scheduleIds)
                 .forEach(affectedMemberIds::add)
+            scheduleIds.forEach { scheduleId ->
+                scheduleLiveActivityRepository?.findMemberIdsByScheduleId(scheduleId)
+                    ?.forEach(affectedMemberIds::add)
+            }
             scheduleIds.forEach { scheduleId ->
                 departureAlarmSyncStateRepository
                     .findAllByScheduleIdOrderByMemberIdAsc(scheduleId)

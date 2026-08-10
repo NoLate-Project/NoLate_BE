@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.EtaTravelTimePolicy
+import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
 import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.sanitizeTrafficFailureReason
@@ -36,12 +37,22 @@ class ScheduleDepartureEtaService(
     private val objectMapper: ObjectMapper,
     @Value("\${schedule.traffic.max-travel-minutes:1440}")
     private val maxTravelMinutes: Int = EtaTravelTimePolicy.DEFAULT_MAX_TRAVEL_MINUTES,
+    @Value("\${schedule.traffic.departure-status-snapshot-grace-minutes:5}")
+    private val departureStatusSnapshotGraceMinutes: Long =
+        DEFAULT_DEPARTURE_STATUS_SNAPSHOT_GRACE_MINUTES,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val serviceZone = ZoneId.of("Asia/Seoul")
 
     init {
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
+        require(
+            departureStatusSnapshotGraceMinutes in
+                0..MAX_DEPARTURE_STATUS_SNAPSHOT_GRACE_MINUTES
+        ) {
+            "departure status snapshot grace minutes must be between 0 and " +
+                MAX_DEPARTURE_STATUS_SNAPSHOT_GRACE_MINUTES
+        }
     }
 
     @Transactional(readOnly = true)
@@ -138,9 +149,26 @@ class ScheduleDepartureEtaService(
         if (lastEtaRouteFingerprint == null || lastEtaRouteFingerprint != route.fingerprint) {
             return false
         }
+        val evaluatedAt = lastCheckedAt ?: return false
+        val etaRefreshDueAt = lastEtaRefreshDueAt ?: return false
+        if (etaRefreshDueAt.isBefore(evaluatedAt)) return false
+        val evaluationCadenceMinutes = intervalMinutes.takeIf {
+            it in MIN_SNAPSHOT_EVALUATION_CADENCE_MINUTES..MAX_SNAPSHOT_EVALUATION_CADENCE_MINUTES &&
+                it % SNAPSHOT_EVALUATION_CADENCE_STEP_MINUTES == 0
+        } ?: return false
+        val latestValidEtaRefreshDueAt = runCatching {
+            evaluatedAt.plus(evaluationCadenceMinutes.toLong(), ChronoUnit.MINUTES)
+        }.getOrNull() ?: return false
+        if (etaRefreshDueAt.isAfter(latestValidEtaRefreshDueAt)) return false
+        // nextCheckAt은 push retry와 PROCESSING timeout 복구에도 쓰인다. 실제 ETA 평가가 저장한
+        // 불변 갱신 경계만 freshness 근거로 사용해야 실행 재예약이 snapshot을 되살릴 수 없다.
+        val snapshotDeadline = runCatching {
+            etaRefreshDueAt.plus(departureStatusSnapshotGraceMinutes, ChronoUnit.MINUTES)
+        }.getOrNull() ?: return false
+        if (Instant.now(clock).isAfter(snapshotDeadline)) return false
         val travelMinutes = lastTravelMinutes
         if (!EtaTravelTimePolicy.isValid(travelMinutes, maxTravelMinutes)) return false
-        if (lastCheckedAt == null || lastRecommendedDepartureAt == null) return false
+        if (lastRecommendedDepartureAt == null) return false
         val recommendedDepartureAt = requireNotNull(lastRecommendedDepartureAt)
         if (recommendedDepartureAt.isAfter(schedule.startAt)) return false
         val source = lastEtaSource ?: return false
@@ -158,7 +186,7 @@ class ScheduleDepartureEtaService(
         ) return false
         val livePairComplete = (lastLiveTravelMinutes == null) == (lastLiveFetchedAt == null)
         if (!livePairComplete) return false
-        if (lastLiveFetchedAt != null && requireNotNull(lastCheckedAt).isBefore(lastLiveFetchedAt)) {
+        if (lastLiveFetchedAt != null && evaluatedAt.isBefore(lastLiveFetchedAt)) {
             return false
         }
         if (
@@ -208,6 +236,14 @@ class ScheduleDepartureEtaService(
         val travelMinutes = requireNotNull(job.lastTravelMinutes)
         val source = requireNotNull(job.lastEtaSource)
         val onTimeUnavailableDiagnostic = job.isOnTimeUnavailableDiagnostic(schedule)
+        val effectiveRouteSnapshot = EffectiveTransitRouteSnapshot.parse(
+            objectMapper = objectMapper,
+            json = job.lastEffectiveTransitRouteJson,
+        )
+        val acceptedEffectiveRouteSnapshot = effectiveRouteSnapshot
+            ?.takeIf {
+                it.accepted && it.effectiveTransitRoute != null
+            }
         val evaluatedAt = listOfNotNull(job.lastCheckedAt, job.lastLiveFetchedAt)
             .maxOrNull()
             ?: Instant.now(clock)
@@ -241,6 +277,12 @@ class ScheduleDepartureEtaService(
             onTimeArrivalPossible = job.lastPredictedArrivalAt?.let {
                 !it.isAfter(schedule.startAt)
             },
+            transitRouteProvenance = acceptedEffectiveRouteSnapshot?.transitRouteProvenance,
+            transitTimingBasis = acceptedEffectiveRouteSnapshot?.transitTimingBasis,
+            firstBoardingWaitMinutes = acceptedEffectiveRouteSnapshot?.firstBoardingWaitMinutes,
+            routeChanged = acceptedEffectiveRouteSnapshot?.routeChanged == true,
+            effectiveTransitRoute = acceptedEffectiveRouteSnapshot?.effectiveTransitRoute,
+            etaRefreshDueAt = job.lastEtaRefreshDueAt,
         )
     }
 
@@ -347,6 +389,14 @@ class ScheduleDepartureEtaService(
         this?.nextCheckAt?.takeIf {
             status == SchedulePushJobStatus.ACTIVE || status == SchedulePushJobStatus.PROCESSING
         }
+
+    private companion object {
+        const val DEFAULT_DEPARTURE_STATUS_SNAPSHOT_GRACE_MINUTES = 5L
+        const val MAX_DEPARTURE_STATUS_SNAPSHOT_GRACE_MINUTES = 60L
+        const val MIN_SNAPSHOT_EVALUATION_CADENCE_MINUTES = 10
+        const val MAX_SNAPSHOT_EVALUATION_CADENCE_MINUTES = 60
+        const val SNAPSHOT_EVALUATION_CADENCE_STEP_MINUTES = 5
+    }
 }
 
 private data class DepartureRoute(

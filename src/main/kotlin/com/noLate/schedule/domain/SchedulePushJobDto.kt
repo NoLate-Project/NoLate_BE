@@ -41,10 +41,12 @@ data class SchedulePushJobDto(
     val intervalMinutes: Int,
     val status: SchedulePushJobStatus,
     val nextCheckAt: Instant,
+    val semanticCatchUpPending: Boolean,
     val lastTravelMinutes: Int?,
     val lastRecommendedDepartureAt: Instant?,
     val lastNotifiedDepartureAt: Instant?,
     val lastCheckedAt: Instant?,
+    val lastEtaRefreshDueAt: Instant?,
     val lastLiveFetchedAt: Instant?,
     val lastLiveTravelMinutes: Int?,
     val lastEtaSource: TrafficSource?,
@@ -61,7 +63,8 @@ data class SchedulePushJobDto(
     val checkCount: Int,
     val retryCount: Int,
     val failureReason: String?,
-    val version: Long?
+    val version: Long?,
+    val lastEffectiveTransitRouteJson: String? = null,
 ) {
     companion object {
         fun fromEntity(entity: SchedulePushJob): SchedulePushJobDto {
@@ -75,10 +78,12 @@ data class SchedulePushJobDto(
                 intervalMinutes = entity.intervalMinutes,
                 status = entity.status,
                 nextCheckAt = entity.nextCheckAt,
+                semanticCatchUpPending = entity.semanticCatchUpPending,
                 lastTravelMinutes = entity.lastTravelMinutes,
                 lastRecommendedDepartureAt = entity.lastRecommendedDepartureAt,
                 lastNotifiedDepartureAt = entity.lastNotifiedDepartureAt,
                 lastCheckedAt = entity.lastCheckedAt,
+                lastEtaRefreshDueAt = entity.lastEtaRefreshDueAt,
                 lastLiveFetchedAt = entity.lastLiveFetchedAt,
                 lastLiveTravelMinutes = entity.lastLiveTravelMinutes,
                 lastEtaSource = entity.lastEtaSource,
@@ -95,7 +100,8 @@ data class SchedulePushJobDto(
                 checkCount = entity.checkCount,
                 retryCount = entity.retryCount,
                 failureReason = entity.failureReason,
-                version = entity.version
+                version = entity.version,
+                lastEffectiveTransitRouteJson = entity.lastEffectiveTransitRouteJson,
             )
         }
     }

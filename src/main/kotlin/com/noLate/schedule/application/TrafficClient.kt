@@ -16,6 +16,62 @@ enum class TransitTimingBasis {
     TIMETABLE_TRANSFER_UNKNOWN,
 }
 
+/** 재조회에서 실제 ETA 계산에 사용한 대중교통 여정의 표시용 스냅샷. */
+data class EffectiveTransitRoute(
+    val provider: String,
+    /** 같은 노선/승하차/방향 조합을 안정적으로 식별하는 SHA-256 값이다. */
+    val identity: String,
+    val departureAt: Instant,
+    val arrivalAt: Instant,
+    val totalMinutes: Int,
+    val segments: List<EffectiveTransitRouteSegment>,
+) {
+    init {
+        require(provider.isNotBlank()) { "effective transit provider는 비어 있을 수 없습니다." }
+        require(identity.matches(SHA_256_HEX_PATTERN)) {
+            "effective transit identity는 SHA-256 hex여야 합니다."
+        }
+        require(!departureAt.isAfter(arrivalAt)) {
+            "effective transit departureAt은 arrivalAt보다 늦을 수 없습니다."
+        }
+        require(totalMinutes > 0) { "effective transit totalMinutes는 0보다 커야 합니다." }
+        require(segments.isNotEmpty()) { "effective transit segments는 비어 있을 수 없습니다." }
+        require(segments.map(EffectiveTransitRouteSegment::sequence).distinct().size == segments.size) {
+            "effective transit segment sequence는 중복될 수 없습니다."
+        }
+    }
+
+    private companion object {
+        val SHA_256_HEX_PATTERN = Regex("[0-9a-f]{64}")
+    }
+}
+
+enum class EffectiveTransitRouteSegmentKind {
+    WALK,
+    BUS,
+    SUBWAY,
+    ETC,
+}
+
+data class EffectiveTransitRouteSegment(
+    val sequence: Int,
+    val kind: EffectiveTransitRouteSegmentKind,
+    val durationMinutes: Int,
+    val waitingMinutes: Int? = null,
+    val lineName: String? = null,
+    val fromName: String? = null,
+    val toName: String? = null,
+    val directionName: String? = null,
+) {
+    init {
+        require(sequence >= 0) { "effective transit segment sequence는 0 이상이어야 합니다." }
+        require(durationMinutes >= 0) { "effective transit segment durationMinutes는 0 이상이어야 합니다." }
+        require(waitingMinutes == null || waitingMinutes >= 0) {
+            "effective transit segment waitingMinutes는 null 또는 0 이상이어야 합니다."
+        }
+    }
+}
+
 /**
  * ETA 계산값과 그 값이 어디에서 왔는지를 함께 전달한다.
  *
@@ -39,6 +95,13 @@ data class TrafficResult(
     val transitRouteProvenance: TransitRouteProvenance? = null,
     /** 첫 승차만 실시간이고 미래 환승은 시간표임을 숨기지 않는 계산 근거다. */
     val transitTimingBasis: TransitTimingBasis? = null,
+    /**
+     * 첫 탑승 대기시간의 설명용 구성요소. [travelMinutes]에 이미 포함되어 있으므로 호출자는
+     * 이 값을 총 ETA에 다시 더하면 안 된다.
+     */
+    val firstBoardingWaitMinutes: Int? = null,
+    /** 저장 경로가 아니라 이번 계산에서 실제 채택·진단한 여정이다. */
+    val effectiveTransitRoute: EffectiveTransitRoute? = null,
 ) {
     /**
      * 추천 출발 판단에 정상 provider 결과로 채택할 수 있는지 나타낸다.
@@ -63,6 +126,9 @@ data class TrafficResult(
                 !recommendedDepartureAt.isAfter(predictedArrivalAt)
         ) {
             "추천 출발시각은 예측 도착시각보다 늦을 수 없습니다."
+        }
+        require(firstBoardingWaitMinutes == null || firstBoardingWaitMinutes >= 0) {
+            "firstBoardingWaitMinutes는 null 또는 0 이상이어야 합니다."
         }
     }
 }

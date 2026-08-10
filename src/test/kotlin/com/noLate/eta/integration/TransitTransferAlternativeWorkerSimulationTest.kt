@@ -19,7 +19,8 @@ import com.noLate.eta.infrastructure.routejson.SelectedTransitRouteDecoder
 import com.noLate.notification.application.useCase.NotificationSendResult
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.schedule.application.TrafficProviderClient
-import com.noLate.schedule.application.TrafficFailureReasons
+import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
+import com.noLate.schedule.application.TransitRouteProvenance
 import com.noLate.schedule.application.service.SchedulePushJobCoordinator
 import com.noLate.schedule.application.service.SchedulePushJobWorker
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
@@ -39,6 +40,7 @@ import com.noLate.transit.application.TransitArrivalService
 import com.noLate.transit.domain.TransitArrivalDto
 import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -64,7 +66,7 @@ class TransitTransferAlternativeWorkerSimulationTest {
     private val clock = Clock.fixed(now, ZoneOffset.UTC)
 
     @Test
-    fun `선택 환승을 놓치면 대체 여정 provider를 조회하지 않고 선택 경로 fallback을 보존한다`() {
+    fun `선택 환승을 놓치면 검증된 대체 경로를 채택해 경로 변경 푸시와 snapshot을 전달한다`() {
         val pushJobRepository = mock<SchedulePushJobRepository>()
         val scheduleRepository = mock<ScheduleRepository>()
         val notificationUseCase = mock<NotificationUseCase>()
@@ -131,8 +133,9 @@ class TransitTransferAlternativeWorkerSimulationTest {
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         val matcher = TransitJourneyMatcher()
+        val objectMapper = jacksonObjectMapper().findAndRegisterModules()
         val etaService = TransitEtaCalculationService(
-            selectedRouteDecoder = SelectedTransitRouteDecoder(jacksonObjectMapper()),
+            selectedRouteDecoder = SelectedTransitRouteDecoder(objectMapper),
             journeyProviders = listOf(odsayProvider),
             safeDepartureResolver = SafeDepartureResolver(
                 matcher = matcher,
@@ -150,7 +153,7 @@ class TransitTransferAlternativeWorkerSimulationTest {
         )
         val worker = SchedulePushJobWorker(
             scheduleRepository = scheduleRepository,
-            objectMapper = jacksonObjectMapper(),
+            objectMapper = objectMapper,
             trafficClient = ModeAwareTrafficClient(
                 trafficProviderClient = roadProvider,
                 transitRealtimeTrafficClient = TransitRealtimeTrafficClient(etaService),
@@ -179,7 +182,7 @@ class TransitTransferAlternativeWorkerSimulationTest {
             ),
             odsayProvider.searchedAt,
         )
-        // 같은 degraded 상태를 다시 조회해도 상태 전이 알림은 중복 발송하지 않는다.
+        // 같은 accepted 대체 경로를 다시 조회해도 경로 전이 알림은 중복 발송하지 않는다.
         assertEquals(1, worker.runDueJobs(now))
         verify(roadProvider, never()).getTravelMinutes(any())
         verify(arrivalService, times(1)).getBusArrivals(
@@ -192,7 +195,7 @@ class TransitTransferAlternativeWorkerSimulationTest {
             cityCodeNamespace = any(),
             providerCode = anyOrNull(),
         )
-        verify(arrivalService, never()).getBusArrivals(
+        verify(arrivalService, times(1)).getBusArrivals(
             arsId = anyOrNull(),
             routeName = eq("500"),
             cityCode = anyOrNull(),
@@ -204,35 +207,43 @@ class TransitTransferAlternativeWorkerSimulationTest {
         )
         verify(notificationUseCase, times(1)).sendToMember(
             memberId = eq(1L),
-            title = eq("선택한 환승을 놓칠 수 있어요"),
+            title = eq("대중교통 경로가 바뀌었어요"),
             body = check {
-                assertTrue(it.contains("환승 차량을 현재 ETA로는 탈 수 없어요"))
-                assertTrue(it.contains("경로를 다시 확인"))
-                assertTrue(!it.contains("지금 출발"))
+                assertTrue(it.contains("현재 탈 수 있고"))
+                assertTrue(it.contains("500 → 9호선"))
+                assertTrue(it.contains("새 경로를 확인"))
             },
             data = check {
-                assertEquals(
-                    TrafficFailureReasons.TRANSIT_TRANSFER_MISSED,
-                    it["etaFailureReason"],
-                )
-                assertEquals("MISSED", it["transitTransferFeasibility"])
-                assertEquals("", it["predictedArrivalAt"])
-                assertEquals("", it["onTimeArrivalPossible"])
+                assertEquals("", it["etaFailureReason"])
+                assertEquals("", it["transitTransferFeasibility"])
+                assertEquals("2026-08-01T03:58:00Z", it["predictedArrivalAt"])
+                assertEquals("true", it["onTimeArrivalPossible"])
+                assertEquals("ODSAY_ALTERNATIVE_ROUTE", it["etaRouteProvenance"])
+                assertEquals("true", it["routeChanged"])
+                assertTrue(requireNotNull(it["effectiveRouteIdentity"]).matches(Regex("[0-9a-f]{64}")))
             },
             inboxDeduplicationKey = any(),
             persistInInbox = eq(true),
         )
-        assertEquals(40, job.lastTravelMinutes)
-        // 환승 실패는 degraded 결과이므로 저장 경로 분수로 알람을 재계산하지 않고
-        // 직전 fresh 추천 출발시각을 보존한다.
+        assertEquals(33, job.lastTravelMinutes)
         assertEquals(previousDepartureAt, job.lastRecommendedDepartureAt)
-        assertNull(job.lastPredictedArrivalAt)
-        assertEquals(TrafficSource.SELECTED_ROUTE, job.lastEtaSource)
-        assertEquals(true, job.lastEtaStale)
-        assertEquals(
-            "TRANSIT_TRANSFER_MISSED: 첫 승차 지연으로 선택 여정의 환승 차량을 탈 수 없습니다.",
-            job.lastEtaFailureReason,
+        assertEquals(Instant.parse("2026-08-01T03:58:00Z"), job.lastPredictedArrivalAt)
+        assertEquals(TrafficSource.LIVE_PROVIDER, job.lastEtaSource)
+        assertEquals(false, job.lastEtaStale)
+        assertNull(job.lastEtaFailureReason)
+        val snapshot = requireNotNull(
+            EffectiveTransitRouteSnapshot.parse(
+                objectMapper,
+                job.lastEffectiveTransitRouteJson,
+            )
         )
+        assertTrue(snapshot.accepted)
+        assertTrue(snapshot.routeChanged)
+        assertEquals(
+            TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+            snapshot.transitRouteProvenance,
+        )
+        assertNotNull(snapshot.effectiveTransitRoute)
     }
 
     private fun arrival(route: String, expectedAt: String) = TransitArrivalDto(
