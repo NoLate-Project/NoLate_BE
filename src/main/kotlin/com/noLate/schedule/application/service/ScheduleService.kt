@@ -125,11 +125,12 @@ class ScheduleService(
         scheduleDto: ScheduleDto,
         externalSourceKey: String?,
     ): ScheduleDto {
-        val authorizedDto = withAuthorizedCalendar(
+        val calendarAuthorizedDto = withAuthorizedCalendar(
             memberId = memberId,
-            scheduleDto = withAuthorizedCategory(memberId, scheduleDto),
+            scheduleDto = scheduleDto,
             existingCalendarId = null,
         )
+        val authorizedDto = withAuthorizedCategory(memberId, calendarAuthorizedDto)
         val routeNormalizedDto = normalizeRouteSetupDto(authorizedDto, existingSchedule = null)
         validateScheduleCoordinates(routeNormalizedDto)
         val normalizedDto = normalizeNotificationDto(
@@ -159,12 +160,22 @@ class ScheduleService(
         scheduleDto: ScheduleDto,
     ): ScheduleDto {
         val existingSchedule = findEditableActive(memberId, scheduleId)
+        if (
+            existingSchedule.memberId != memberId &&
+            existingSchedule.calendarId != scheduleDto.calendarId
+        ) {
+            throw BusinessException(
+                ErrorCode.FORBIDDEN,
+                "일정 원작성자만 일정을 다른 캘린더로 이동할 수 있습니다.",
+            )
+        }
         val previousAudience = cacheAudience(existingSchedule)
-        val authorizedDto = withAuthorizedCalendar(
+        val calendarAuthorizedDto = withAuthorizedCalendar(
             memberId = memberId,
-            scheduleDto = withAuthorizedCategory(memberId, scheduleDto, existingSchedule),
+            scheduleDto = scheduleDto,
             existingCalendarId = existingSchedule.calendarId,
         )
+        val authorizedDto = withAuthorizedCategory(memberId, calendarAuthorizedDto, existingSchedule)
         val destinationSafeDto = preserveConfirmedDestinationCoordinates(
             scheduleDto = authorizedDto,
             existingSchedule = existingSchedule,
@@ -701,7 +712,11 @@ class ScheduleService(
         val existingSnapshot = existingSchedule?.categorySnapshot
         val existingCategoryId = existingSchedule?.categoryId
             ?: existingSnapshot?.categoryId?.toLongOrNull()
-        if (existingSnapshot != null && existingCategoryId == categoryId) {
+        if (
+            existingSnapshot != null &&
+            existingCategoryId == categoryId &&
+            existingSchedule.calendarId == scheduleDto.calendarId
+        ) {
             return scheduleDto.copy(
                 category = ScheduleCategoryDto(
                     id = existingSnapshot.categoryId,
@@ -714,11 +729,31 @@ class ScheduleService(
             ?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
 
+        if (category.calendarId != scheduleDto.calendarId) {
+            throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                if (scheduleDto.calendarId == null) {
+                    "개인 일정에는 개인 캘린더 카테고리를 선택해 주세요."
+                } else {
+                    "선택한 공유 캘린더의 카테고리를 선택해 주세요."
+                },
+            )
+        }
+
         if (!sharingAvailabilityPolicy.enabled && category.memberId != memberId) {
             sharingAvailabilityPolicy.requireEnabled()
         }
 
-        val writable = category.memberId == memberId || shares
+        val calendarWritable = category.calendarId?.let { calendarId ->
+            calendarMemberRepository
+                ?.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                    calendarId,
+                    memberId,
+                    ScheduleCalendarMemberStatus.ACTIVE,
+                )
+                ?.role in setOf(ScheduleCalendarRole.OWNER, ScheduleCalendarRole.EDITOR)
+        } == true
+        val writable = calendarWritable || category.memberId == memberId || shares
             .findByCategoryIdAndTargetMemberId(categoryId, memberId)
             ?.let {
                 !it.deleted && it.status == ScheduleShareStatus.ACTIVE &&

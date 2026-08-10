@@ -6,12 +6,21 @@ import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
+import jakarta.persistence.Index
 import jakarta.persistence.Table
 import org.hibernate.annotations.Comment
 
 @Entity
-@Table(name = "schedule_categories")
-@Comment("사용자별 일정 카테고리")
+@Table(
+    name = "schedule_categories",
+    indexes = [
+        Index(
+            name = "idx_schedule_categories_calendar_deleted_sort",
+            columnList = "calendar_id,deleted,sort_order",
+        ),
+    ],
+)
+@Comment("개인 또는 공유 캘린더별 일정 카테고리")
 class ScheduleCategory(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -19,8 +28,12 @@ class ScheduleCategory(
     var id: Long? = null,
 
     @Column(name = "member_id", nullable = false)
-    @Comment("카테고리를 소유한 회원 id")
+    @Comment("개인 카테고리 소유자 또는 공유 캘린더 카테고리 생성 회원 id")
     var memberId: Long = 0,
+
+    @Column(name = "calendar_id")
+    @Comment("공유 캘린더 소속 id. null이면 개인 캘린더 카테고리")
+    var calendarId: Long? = null,
 
     @Column(nullable = false, length = 80)
     @Comment("사용자가 지정한 카테고리 이름")
@@ -59,6 +72,7 @@ class ScheduleCategory(
             iconKey = iconKey,
             sortOrder = sortOrder,
             ownerMemberId = memberId,
+            calendarId = calendarId,
             updatedAt = (updateDt ?: updatedAt)?.toString(),
         )
     }
@@ -71,6 +85,7 @@ data class ScheduleCategorySettingDto(
     val iconKey: String? = null,
     val sortOrder: Int,
     val ownerMemberId: Long? = null,
+    val calendarId: Long? = null,
     val shared: Boolean = false,
     val sharePermission: ScheduleSharePermission? = null,
     val updatedAt: String? = null,

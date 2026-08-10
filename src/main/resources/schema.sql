@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS schedule_category_snapshots (
 CREATE TABLE IF NOT EXISTS schedule_categories (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Schedule category primary key',
     member_id BIGINT NOT NULL COMMENT 'Owner member id',
+    calendar_id BIGINT NULL COMMENT 'Owning shared calendar id; NULL for personal categories',
     title VARCHAR(80) NOT NULL COMMENT 'User-defined category title',
     color VARCHAR(32) NOT NULL DEFAULT '#5A96FF' COMMENT 'Category display color',
     icon_key VARCHAR(40) NULL COMMENT 'UI icon key',
@@ -99,7 +100,10 @@ CREATE TABLE IF NOT EXISTS schedule_categories (
     create_dt DATETIME(6) NULL,
     update_dt DATETIME(6) NULL,
     PRIMARY KEY (id),
-    INDEX idx_schedule_categories_member_deleted_sort (member_id, deleted, sort_order)
+    INDEX idx_schedule_categories_member_deleted_sort (member_id, deleted, sort_order),
+    INDEX idx_schedule_categories_calendar_deleted_sort (calendar_id, deleted, sort_order),
+    CONSTRAINT fk_schedule_categories_calendar
+        FOREIGN KEY (calendar_id) REFERENCES schedule_calendars (id)
 ) COMMENT='User-defined schedule categories';
 
 CREATE TABLE IF NOT EXISTS schedule_shares (
