@@ -27,7 +27,7 @@ class HomePageController {
           <meta property="og:site_name" content="NoLate" />
           <meta property="og:title" content="NoLate - 일정과 이동을 함께 준비하는 출발 도우미" />
           <meta property="og:description" content="일정 등록, 경로 탐색, 출발 알림, 캘린더 가져오기와 일정 공유를 제공하는 모바일 생산성 앱입니다." />
-          <title>NoLate | 서비스 소개</title>
+          <title>NoLate</title>
           <style>
             :root {
               color-scheme: light;
@@ -95,6 +95,14 @@ class HomePageController {
               font-size: clamp(42px, 7vw, 72px);
               line-height: 1.08;
               letter-spacing: -0.055em;
+            }
+            .tagline {
+              max-width: 720px;
+              margin: -4px 0 24px;
+              font-size: clamp(24px, 3vw, 34px);
+              line-height: 1.25;
+              font-weight: 850;
+              letter-spacing: -0.035em;
             }
             .lead {
               max-width: 680px;
@@ -217,8 +225,9 @@ class HomePageController {
           <main>
             <section class="hero">
               <div>
-                <div class="eyebrow">MOBILE SCHEDULE &amp; DEPARTURE ASSISTANT</div>
-                <h1>늦지 않도록,<br />일정과 이동을 함께 준비합니다.</h1>
+                <div class="eyebrow">APP NAME / 앱 이름</div>
+                <h1>NoLate</h1>
+                <p class="tagline">늦지 않도록, 일정과 이동을 함께 준비합니다.</p>
                 <h2>App Purpose / 앱의 목적</h2>
                 <p class="lead">
                   NoLate는 일정의 시간과 장소, 이동 경로와 예상 소요시간을 연결해 적절한 출발 시점을 준비하도록 돕는 모바일 일정 관리 서비스입니다.
