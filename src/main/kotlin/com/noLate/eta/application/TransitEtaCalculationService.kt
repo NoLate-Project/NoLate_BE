@@ -255,6 +255,8 @@ class TransitEtaCalculationService(
             predictedArrivalAt = predictedArrivalAt,
             transitRouteProvenance = projected.projection.routeProvenance,
             transitTimingBasis = transfer.timingBasis.toTrafficTimingBasis(),
+            firstBoardingWaitMinutes = overlay?.firstBoardingWaitMinutes
+                ?: journey.legs.firstOrNull { it.isRide }?.waitingMinutes,
         )
     }
 
@@ -305,6 +307,7 @@ class TransitEtaCalculationService(
             stale = false,
             recommendedDepartureAt = departureAt,
             predictedArrivalAt = overlay.predictedArrivalAt,
+            firstBoardingWaitMinutes = overlay.firstBoardingWaitMinutes,
         )
     }
 
@@ -329,6 +332,7 @@ class TransitEtaCalculationService(
             request = request,
             routeProvenance = projected.projection.routeProvenance,
             timingBasis = projected.projection.transfer.timingBasis.toTrafficTimingBasis(),
+            firstBoardingWaitMinutes = overlay.firstBoardingWaitMinutes,
         )
     }
 
@@ -346,6 +350,7 @@ class TransitEtaCalculationService(
         predictedArrivalAt = projected.predictedArrivalAt,
         transitRouteProvenance = projected.projection.routeProvenance,
         transitTimingBasis = projected.projection.transfer.timingBasis.toTrafficTimingBasis(),
+        firstBoardingWaitMinutes = projected.journey.legs.firstOrNull { it.isRide }?.waitingMinutes,
     )
 
     private fun onTimeUnavailableResult(
@@ -355,6 +360,7 @@ class TransitEtaCalculationService(
         request: TrafficRequest,
         routeProvenance: TransitRouteProvenance? = null,
         timingBasis: TransitTimingBasis? = null,
+        firstBoardingWaitMinutes: Int? = null,
     ): TrafficResult {
         val travelMinutes = EtaTravelTimePolicy.normalizeMinutes(
             Duration.between(request.evaluatedAt, predictedArrivalAt).toMillis() / MILLIS_PER_MINUTE,
@@ -371,6 +377,7 @@ class TransitEtaCalculationService(
             predictedArrivalAt = predictedArrivalAt,
             transitRouteProvenance = routeProvenance,
             transitTimingBasis = timingBasis,
+            firstBoardingWaitMinutes = firstBoardingWaitMinutes,
         )
     }
 
@@ -386,6 +393,9 @@ class TransitEtaCalculationService(
             predictedArrivalAt = null,
             transitRouteProvenance = projected.projection.routeProvenance,
             transitTimingBasis = projected.projection.transfer.timingBasis.toTrafficTimingBasis(),
+            firstBoardingWaitMinutes = projected.projection.overlayResolution.overlay
+                ?.firstBoardingWaitMinutes
+                ?: projected.journey.legs.firstOrNull { it.isRide }?.waitingMinutes,
         )
     }
 

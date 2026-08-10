@@ -4,6 +4,7 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.SchedulePushJob
@@ -42,6 +43,7 @@ class SchedulePushJobService private constructor(
     private val schedulePushJobRepository: SchedulePushJobRepository,
     private val memberRepository: MemberRepository?,
     private val departureAlarmSyncService: DepartureAlarmSyncService?,
+    private val liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher?,
     private val departureSnoozeMinutes: Long = 5,
     private val clock: Clock = Clock.systemUTC(),
     @Suppress("UNUSED_PARAMETER") legacyTestBoundary: Boolean,
@@ -51,6 +53,7 @@ class SchedulePushJobService private constructor(
         schedulePushJobRepository: SchedulePushJobRepository,
         memberRepository: MemberRepository,
         departureAlarmSyncServiceProvider: ObjectProvider<DepartureAlarmSyncService>,
+        liveActivityLifecyclePublisherProvider: ObjectProvider<LiveActivityLifecyclePublisher>,
         @Value("\${schedule.push.departure-snooze-minutes:5}")
         departureSnoozeMinutes: Long = 5,
         clock: Clock = Clock.systemUTC(),
@@ -58,6 +61,7 @@ class SchedulePushJobService private constructor(
         schedulePushJobRepository,
         memberRepository,
         departureAlarmSyncServiceProvider.getIfAvailable(),
+        liveActivityLifecyclePublisherProvider.getIfAvailable(),
         departureSnoozeMinutes,
         clock,
         false,
@@ -72,6 +76,7 @@ class SchedulePushJobService private constructor(
         schedulePushJobRepository,
         null,
         null,
+        null,
         departureSnoozeMinutes,
         clock,
         true,
@@ -84,6 +89,7 @@ class SchedulePushJobService private constructor(
     ) : this(
         schedulePushJobRepository,
         memberRepository,
+        null,
         null,
         5,
         Clock.systemUTC(),
@@ -174,7 +180,14 @@ class SchedulePushJobService private constructor(
         val route = schedule.route ?: return null
 
         if (!route.notificationEnabled) {
-            scheduleDto.id?.let { departureAlarmSyncService?.cancel(memberId, it) }
+            scheduleDto.id?.let {
+                departureAlarmSyncService?.cancel(memberId, it)
+                liveActivityLifecyclePublisher?.endMemberSchedule(
+                    memberId,
+                    it,
+                    "NOTIFICATION_DISABLED",
+                )
+            }
             return null
         }
 
@@ -211,7 +224,14 @@ class SchedulePushJobService private constructor(
         plan: ScheduleTravelPlanDto,
     ): SchedulePushJobDto? {
         if (!plan.notificationEnabled) {
-            scheduleDto.id?.let { departureAlarmSyncService?.cancel(memberId, it) }
+            scheduleDto.id?.let {
+                departureAlarmSyncService?.cancel(memberId, it)
+                liveActivityLifecyclePublisher?.endMemberSchedule(
+                    memberId,
+                    it,
+                    "NOTIFICATION_DISABLED",
+                )
+            }
             return null
         }
         val scheduleId = scheduleDto.id ?: return null
@@ -300,15 +320,25 @@ class SchedulePushJobService private constructor(
         }
         schedulePushJobRepository.findAllByScheduleIdOrderByIdAsc(scheduleId).forEach { it.cancel() }
         departureAlarmSyncService?.cancelAllForSchedule(scheduleId)
+        liveActivityLifecyclePublisher?.endSchedule(scheduleId, "SCHEDULE_CANCELLED")
     }
 
     @Transactional
-    fun cancelByScheduleIdAndMemberId(scheduleId: Long, memberId: Long) {
+    fun cancelByScheduleIdAndMemberId(
+        scheduleId: Long,
+        memberId: Long,
+        liveActivityEndReason: String = "NOTIFICATION_DISABLED",
+    ) {
         if (memberRepository != null &&
             memberRepository.findByIdForUpdate(memberId)?.deleted != false
         ) return
         schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)?.cancel()
         departureAlarmSyncService?.cancel(memberId, scheduleId)
+        liveActivityLifecyclePublisher?.endMemberSchedule(
+            memberId,
+            scheduleId,
+            liveActivityEndReason,
+        )
     }
 
     @Transactional
@@ -326,6 +356,11 @@ class SchedulePushJobService private constructor(
 
         if (!now.isBefore(pushJob.scheduleAt)) {
             pushJob.complete()
+            liveActivityLifecyclePublisher?.endMemberSchedule(
+                memberId,
+                scheduleId,
+                "JOB_COMPLETE",
+            )
             return null
         }
 

@@ -102,6 +102,14 @@ interface NotificationDeviceTokenRepository : JpaRepository<NotificationDeviceTo
         @Param("deviceFingerprint") deviceFingerprint: String?,
     ): List<Long>
 
+    @Query(
+        "select token.id from NotificationDeviceToken token " +
+            "where token.deviceFingerprint = :deviceFingerprint order by token.id"
+    )
+    fun findIdsByDeviceFingerprint(
+        @Param("deviceFingerprint") deviceFingerprint: String,
+    ): List<Long>
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query(
         """
@@ -117,17 +125,44 @@ interface NotificationDeviceTokenRepository : JpaRepository<NotificationDeviceTo
     @Query("select token from NotificationDeviceToken token where token.id = :id")
     fun findByIdForUpdate(@Param("id") id: Long): NotificationDeviceToken?
 
+    @Query(
+        value = """
+        select count(*)
+        from schedule_live_activities
+        where push_device_token_id = :tokenId
+          and state = 'END_PENDING'
+        """,
+        nativeQuery = true,
+    )
+    fun countEndPendingLiveActivities(@Param("tokenId") tokenId: Long): Long
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(
-        """
-        delete from NotificationDeviceToken token
-        where token.retirementRequested = true
+        value = """
+        delete from push_device_token
+        where retirement_requested = true
           and (
-            token.dispatchLeaseId is null
-            or token.dispatchLeaseUntil is null
-            or token.dispatchLeaseUntil <= :now
+            dispatch_lease_id is null
+            or dispatch_lease_until is null
+            or dispatch_lease_until <= :now
           )
-        """
+          and not exists (
+            select 1
+            from live_activity_deliveries
+            where live_activity_deliveries.push_device_token_id = push_device_token.id
+              and live_activity_deliveries.operation = 'END'
+              and live_activity_deliveries.status in (
+                  'PENDING', 'FAILED', 'DISPATCHING', 'UNCERTAIN', 'EXHAUSTED'
+              )
+          )
+          and not exists (
+            select 1
+            from schedule_live_activities
+            where schedule_live_activities.push_device_token_id = push_device_token.id
+              and schedule_live_activities.state = 'END_PENDING'
+          )
+        """,
+        nativeQuery = true,
     )
     fun deleteExpiredRetired(@Param("now") now: java.time.Instant): Int
 

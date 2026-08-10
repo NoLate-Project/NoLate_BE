@@ -3,6 +3,7 @@ package com.noLate.schedule.application.service
 import com.noLate.notification.infrastructure.AppNotificationRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
+import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleRouteSetupReminderStatus
@@ -37,6 +38,7 @@ class ScheduleTravelAccessCleanupService(
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
     private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
+    private val liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher? = null,
 ) {
 
     @Transactional
@@ -169,6 +171,14 @@ class ScheduleTravelAccessCleanupService(
         revokedPairs.sortedWith(compareBy<Pair<Long, Long>> { it.second }.thenBy { it.first })
             .forEach { (scheduleId, memberId) ->
                 departureAlarmSyncService?.cancel(memberId, scheduleId)
+                // This publisher persists its lifecycle intent in this access-revocation
+                // transaction. Once travel PII is revoked, a stopped job can no longer be the
+                // only path that removes the lock-screen Live Activity.
+                liveActivityLifecyclePublisher?.endMemberSchedule(
+                    memberId,
+                    scheduleId,
+                    "TRAVEL_ACCESS_REVOKED",
+                )
             }
 
         // A revoked participant plan is no longer an authoritative startup-backfill source. Soft

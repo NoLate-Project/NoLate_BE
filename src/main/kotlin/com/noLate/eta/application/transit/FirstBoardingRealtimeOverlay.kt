@@ -22,6 +22,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.ceil
 
 data class TransitRealtimeOverlay(
     val travelMinutes: Int,
@@ -29,6 +30,8 @@ data class TransitRealtimeOverlay(
     val observedAt: Instant,
     /** 실시간 도착 후보가 첫 승차 정류장에 도착하는 절대 시각. */
     val boardingAt: Instant,
+    /** 표시 전용 첫 대기시간이며 travelMinutes에 이미 합산되어 있다. */
+    val firstBoardingWaitMinutes: Int = 0,
 )
 
 data class TransitRealtimeOverlayResolution(
@@ -191,6 +194,7 @@ class FirstBoardingRealtimeOverlay(
                 predictedArrivalAt = baseDepartureAt.plusSeconds(travelMinutes.toLong() * 60),
                 observedAt = selected.candidate.observedAt ?: Instant.now(clock),
                 boardingAt = selected.candidate.expectedAt,
+                firstBoardingWaitMinutes = ceil(liveWaitMinutes).toInt().coerceAtLeast(0),
             )
         )
     }
@@ -218,6 +222,7 @@ class FirstBoardingRealtimeOverlay(
             predictedArrivalAt = scheduledArrivalAt.plusSeconds(waitDeltaSeconds),
             observedAt = selected.observedAt ?: Instant.now(clock),
             boardingAt = selected.expectedAt,
+            firstBoardingWaitMinutes = ceil(liveWaitMinutes).toInt().coerceAtLeast(0),
         )
     }
 

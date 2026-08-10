@@ -6,6 +6,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.application.service.NotificationTokenRetirementService
+import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -33,6 +34,7 @@ class MemberSessionFenceService(
     private val refreshTokenService: RefreshTokenService,
     private val tokenRetirementService: NotificationTokenRetirementService,
     private val clock: Clock = Clock.systemUTC(),
+    private val scheduleLiveActivityService: ScheduleLiveActivityService? = null,
 ) {
     /**
      * 비밀번호/SNS 검증을 마친 explicit login의 새 session generation을 할당한다.
@@ -83,6 +85,10 @@ class MemberSessionFenceService(
 
         advanceLockedSession(member)
         refreshTokenService.deleteAllByMemberId(memberId)
+        scheduleLiveActivityService?.prepareEndAllForMemberBeforeTokenRetirement(
+            memberId,
+            "LOGOUT",
+        )
         tokenRetirementService.retireAllByMember(memberId)
         return SessionLogoutResult.REVOKED
     }
@@ -98,6 +104,10 @@ class MemberSessionFenceService(
         if (member.deleted) return
         advanceLockedSession(member)
         refreshTokenService.deleteAllByMemberId(memberId)
+        scheduleLiveActivityService?.prepareEndAllForMemberBeforeTokenRetirement(
+            memberId,
+            "SESSION_INVALIDATED",
+        )
         tokenRetirementService.retireAllByMember(memberId)
     }
 
@@ -122,6 +132,10 @@ class MemberSessionFenceService(
 
         advanceLockedSession(member)
         refreshTokenService.deleteAllByMemberId(memberId)
+        scheduleLiveActivityService?.prepareEndAllForMemberBeforeTokenRetirement(
+            memberId,
+            "ACCOUNT_WITHDRAWAL",
+        )
     }
 
     private fun advanceLockedSession(member: Member) {

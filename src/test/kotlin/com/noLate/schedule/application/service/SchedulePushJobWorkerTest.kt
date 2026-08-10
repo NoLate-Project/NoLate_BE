@@ -5,6 +5,9 @@ import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.useCase.NotificationUseCase
 import com.noLate.notification.application.useCase.NotificationSendResult
+import com.noLate.notification.liveactivity.application.ScheduleLiveActivityEtaProjection
+import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
+import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
@@ -35,6 +38,7 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.check
 import org.mockito.kotlin.eq
@@ -92,6 +96,12 @@ class SchedulePushJobWorkerTest {
 
     @Mock
     lateinit var mockedPushJobCoordinator: SchedulePushJobCoordinator
+
+    @Mock
+    lateinit var scheduleLiveActivityService: ScheduleLiveActivityService
+
+    @Mock
+    lateinit var liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher
 
     @Test
     fun `disabled ETA worker does not claim or recover jobs`() {
@@ -962,7 +972,8 @@ class SchedulePushJobWorkerTest {
         whenever(mockedPushJobCoordinator.execute<Unit>(any())).thenAnswer { invocation ->
             invocation.getArgument<() -> Unit>(0).invoke()
         }
-        whenever(mockedPushJobCoordinator.persist(any(), any(), any())).thenReturn(true)
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull()))
+            .thenReturn(true)
         whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(60))
         whenever(
@@ -985,6 +996,49 @@ class SchedulePushJobWorkerTest {
         )
         assertEquals(0, fence.firstValue.expectedCheckCount)
         assertEquals(testNow.plusSeconds(120), fence.firstValue.sourceExpiresAt)
+    }
+
+    @Test
+    fun `성공한 ETA 저장 뒤 Live Activity에 대기시간 포함 projection을 독립 전달한다`() {
+        val schedule = schedule(
+            routeJson = """{"steps":[{"mode":"BUS","route":"341"}]}""",
+        )
+        val job = SchedulePushJob.create(
+            memberId = 1,
+            scheduleId = 10,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(60, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minusSeconds(1),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        SchedulePushJob::class.java.getDeclaredField("id").apply {
+            isAccessible = true
+            set(job, 321L)
+        }
+        job.startProcessing("mock-owner", testNow)
+        whenever(mockedPushJobCoordinator.claimNextDueJob(any(), any())).thenReturn(job, null)
+        whenever(mockedPushJobCoordinator.execute<Unit>(any())).thenAnswer { invocation ->
+            invocation.getArgument<() -> Unit>(0).invoke()
+        }
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull()))
+            .thenReturn(true)
+        whenever(scheduleRepository.findScheduleDetail(10, 1)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            liveTrafficResult(60).copy(firstBoardingWaitMinutes = 20)
+        )
+
+        worker(
+            coordinator = mockedPushJobCoordinator,
+            liveActivityService = scheduleLiveActivityService,
+        ).runDueJobs(testNow)
+
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        assertEquals(60, projection.firstValue.travelMinutes)
+        assertEquals(20, projection.firstValue.firstBoardingWaitMinutes)
+        assertEquals("회사", projection.firstValue.destinationName)
+        assertEquals(listOf("bus"), projection.firstValue.routeSegments.map { it.kind })
+        assertEquals(0, projection.firstValue.checkCount)
     }
 
     @Test
@@ -1929,11 +1983,53 @@ class SchedulePushJobWorkerTest {
         whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, failedCount = 1))
 
-        worker().runDueJobs(testNow)
+        worker(
+            coordinator = SchedulePushJobCoordinator(
+                pushJobRepository,
+                liveActivityLifecyclePublisher = liveActivityLifecyclePublisher,
+            ),
+        ).runDueJobs(testNow)
 
         assertEquals(SchedulePushJobStatus.FAILED, job.status)
         assertEquals(3, job.retryCount)
         assertNull(job.lockedBy)
+        verify(liveActivityLifecyclePublisher).endMemberSchedule(
+            job.memberId,
+            job.scheduleId,
+            "JOB_TERMINAL_FAILURE",
+        )
+    }
+
+    @Test
+    fun `재시도 가능한 기기 실패도 한계 도달 시 Live Activity END를 함께 저장한다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        job.retryLater("첫 번째 실패", testNow)
+        job.retryLater("두 번째 실패", testNow)
+
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 1,
+                    failedCount = 1,
+                    retryableFailedCount = 1,
+                ),
+            )
+
+        worker(
+            coordinator = SchedulePushJobCoordinator(
+                pushJobRepository,
+                liveActivityLifecyclePublisher = liveActivityLifecyclePublisher,
+            ),
+        ).runDueJobs(testNow)
+
+        assertEquals(SchedulePushJobStatus.FAILED, job.status)
+        verify(liveActivityLifecyclePublisher).endMemberSchedule(
+            job.memberId,
+            job.scheduleId,
+            "JOB_TERMINAL_FAILURE",
+        )
     }
 
     @Test
@@ -2232,6 +2328,7 @@ class SchedulePushJobWorkerTest {
         operationalMetrics: NoLateOperationalMetrics? = null,
         alarmSyncService: DepartureAlarmSyncService? = null,
         coordinator: SchedulePushJobCoordinator? = null,
+        liveActivityService: ScheduleLiveActivityService? = null,
     ) = SchedulePushJobWorker(
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -2257,6 +2354,7 @@ class SchedulePushJobWorkerTest {
         clock = clock,
         operationalMetrics = operationalMetrics,
         departureAlarmSyncService = alarmSyncService,
+        scheduleLiveActivityService = liveActivityService,
     )
 
     private fun assertEtaProcessingExceptionCount(

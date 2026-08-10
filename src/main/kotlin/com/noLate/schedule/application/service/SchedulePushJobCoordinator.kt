@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
@@ -27,6 +28,7 @@ class SchedulePushJobCoordinator private constructor(
     private val memberRepository: MemberRepository?,
     private val entityManager: EntityManager?,
     private val departureAlarmSyncService: DepartureAlarmSyncService?,
+    private val liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher?,
     @Suppress("UNUSED_PARAMETER") legacyTestBoundary: Boolean,
 ) {
     @Autowired
@@ -35,11 +37,13 @@ class SchedulePushJobCoordinator private constructor(
         memberRepository: MemberRepository,
         entityManager: EntityManager,
         departureAlarmSyncServiceProvider: ObjectProvider<DepartureAlarmSyncService>,
+        liveActivityLifecyclePublisherProvider: ObjectProvider<LiveActivityLifecyclePublisher>,
     ) : this(
         repository,
         memberRepository,
         entityManager,
         departureAlarmSyncServiceProvider.getIfAvailable(),
+        liveActivityLifecyclePublisherProvider.getIfAvailable(),
         false,
     )
 
@@ -47,7 +51,15 @@ class SchedulePushJobCoordinator private constructor(
     internal constructor(
         repository: SchedulePushJobRepository,
         departureAlarmSyncService: DepartureAlarmSyncService? = null,
-    ) : this(repository, null, null, departureAlarmSyncService, true)
+        liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher? = null,
+    ) : this(
+        repository,
+        null,
+        null,
+        departureAlarmSyncService,
+        liveActivityLifecyclePublisher,
+        true,
+    )
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun claimNextDueJob(now: Instant, workerId: String): SchedulePushJob? {
@@ -154,6 +166,11 @@ class SchedulePushJobCoordinator private constructor(
             if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
                 job.complete()
                 departureAlarmSyncService?.cancel(job.memberId, job.scheduleId)
+                liveActivityLifecyclePublisher?.endMemberSchedule(
+                    job.memberId,
+                    job.scheduleId,
+                    "STALE_JOB_EXPIRED",
+                )
             } else {
                 job.recoverProcessingTimeout(
                     reason = "Processing timeout. lockedBy=${job.lockedBy}, lockedAt=${job.lockedAt}",
@@ -170,6 +187,7 @@ class SchedulePushJobCoordinator private constructor(
         job: SchedulePushJob,
         workerId: String,
         alarmIntent: SchedulePushAlarmIntent? = null,
+        liveActivityEndReason: String? = null,
     ): Boolean {
         if (memberRepository != null &&
             memberRepository.findByIdForUpdate(job.memberId)?.deleted != false
@@ -190,6 +208,15 @@ class SchedulePushJobCoordinator private constructor(
         // BEFORE_COMMIT alarm outbox까지 이 transaction에 참여한다. 둘 중 하나라도 실패하면
         // PROCESSING lease를 남겨 stale recovery가 동일 ETA 전이를 안전하게 다시 평가한다.
         applyAlarmIntent(alarmIntent)
+        // Terminal lifecycle intent is an outbox row in this exact REQUIRES_NEW source
+        // transaction. A later process crash can delay projection, but cannot lose the END.
+        if (liveActivityEndReason != null) {
+            liveActivityLifecyclePublisher?.endMemberSchedule(
+                job.memberId,
+                job.scheduleId,
+                liveActivityEndReason,
+            )
+        }
         return true
     }
 

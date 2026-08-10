@@ -123,6 +123,7 @@ class TransitEtaCalculationServiceTest {
         val result = service(listOf(odsay)).calculate(request())
 
         assertEquals(60, result.travelMinutes)
+        assertEquals(20, result.firstBoardingWaitMinutes)
         assertEquals(evaluatedAt.plus(60, ChronoUnit.MINUTES), result.predictedArrivalAt)
         assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
         assertFalse(result.stale)

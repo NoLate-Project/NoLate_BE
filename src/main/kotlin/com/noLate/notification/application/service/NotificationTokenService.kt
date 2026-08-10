@@ -8,6 +8,11 @@ import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.domain.CURRENT_PUSH_DELIVERY_ACK_CAPABILITY_VERSION
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
+import com.noLate.notification.liveactivity.domain.LiveActivityDeliveryOperation
+import com.noLate.notification.liveactivity.domain.LiveActivityDeliveryStatus
+import com.noLate.notification.liveactivity.infrastructure.LiveActivityDeliveryRepository
+import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
+import com.noLate.notification.liveactivity.application.liveActivityEndRetirementReservation
 import org.hibernate.exception.ConstraintViolationException
 import org.slf4j.LoggerFactory
 import org.springframework.dao.ConcurrencyFailureException
@@ -96,6 +101,22 @@ class NotificationTokenService (
                     accessTokenSessionGeneration = accessTokenSessionGeneration,
                     deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
                 )
+                if (result.retryAfterCommit) {
+                    if (System.nanoTime() >= leaseWaitDeadline) {
+                        throw ConcurrencyFailureException(
+                            "Push token ownership transfer is waiting for Live Activity END.",
+                        )
+                    }
+                    try {
+                        Thread.sleep(dispatchLeasePollMillis.coerceIn(1, 250))
+                    } catch (interrupted: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw ConcurrencyFailureException(
+                            "Push token ownership transfer was interrupted.",
+                        )
+                    }
+                    continue
+                }
                 logRegistration(
                     memberId,
                     normalizedDeviceId,
@@ -241,6 +262,7 @@ private val TOKEN_FINGERPRINT_UNIQUE_CONSTRAINTS = setOf(
 data class NotificationTokenRegistrationResult(
     val removedOwnershipCount: Int,
     val result: String,
+    val retryAfterCommit: Boolean = false,
 )
 
 @Service
@@ -249,6 +271,8 @@ class NotificationTokenWriter(
     private val memberRepository: MemberRepository,
     private val registrationObserver: NotificationTokenRegistrationObserver? = null,
     private val clock: java.time.Clock = java.time.Clock.systemUTC(),
+    private val liveActivityDeliveryRepository: LiveActivityDeliveryRepository? = null,
+    private val scheduleLiveActivityService: ScheduleLiveActivityService? = null,
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun register(
@@ -272,8 +296,19 @@ class NotificationTokenWriter(
                 tokenFingerprint,
                 deviceFingerprint,
             )
+        val liveActivityHandoffOwnerIds = if (
+            platform == PushPlatform.IOS &&
+            deviceFingerprint != null &&
+            scheduleLiveActivityService != null
+        ) {
+            scheduleLiveActivityService.findLiveActivityHandoffOwnerMemberIdsForRegistration(
+                deviceFingerprint,
+            )
+        } else {
+            emptyList()
+        }
         val memberFenceIds = (
-            snapshotOwnerIds +
+            snapshotOwnerIds + liveActivityHandoffOwnerIds +
                 listOf(memberId)
             )
             .distinct()
@@ -295,12 +330,146 @@ class NotificationTokenWriter(
         // 않는다. signed session generation이 logout과의 단조 fence다.
         // 테스트 hook도 member row lock을 획득한 뒤에만 실행된다. 운영 bean이 없으면 no-op이다.
         registrationObserver?.afterMemberSessionFence(memberId)
+        if (
+            platform == PushPlatform.IOS &&
+            deviceFingerprint != null &&
+            scheduleLiveActivityService != null
+        ) {
+            val currentHandoffOwnerIds =
+                scheduleLiveActivityService.findLiveActivityHandoffOwnerMemberIdsForRegistration(
+                    deviceFingerprint,
+                )
+            if (currentHandoffOwnerIds.any { it !in memberFenceIds }) {
+                throw CannotAcquireLockException(
+                    "Live Activity handoff owner appeared after member fencing.",
+                )
+            }
+        }
 
         // 전역 lock order: member row -> token fingerprint/device rows.
         val candidateIds = notificationRepository.findRegistrationCandidateIds(
             tokenFingerprint,
             deviceFingerprint,
         )
+        val candidateSnapshots = if (candidateIds.isEmpty()) emptyList()
+        else notificationRepository.findAllById(candidateIds)
+        if (candidateSnapshots.any { it.memberId !in memberFenceIds }) {
+            throw CannotAcquireLockException(
+                "Push token ownership changed during registration fencing.",
+            )
+        }
+        val oldOwnerCandidates = candidateSnapshots.filter { it.memberId != memberId }
+        val ownershipEndRouteIds = scheduleLiveActivityService
+            ?.prepareEndBeforeFcmOwnershipTransfer(
+                oldOwnerCandidates.map { it.memberId }.distinct().sorted(),
+                oldOwnerCandidates.mapNotNull { it.id }.distinct().sorted(),
+            )
+            .orEmpty()
+        val foreignRetiredEndRouteSnapshots = if (
+            ownershipEndRouteIds.isNotEmpty() &&
+            platform == PushPlatform.IOS &&
+            deviceFingerprint != null
+        ) {
+            candidateSnapshots.filter {
+                it.id in ownershipEndRouteIds &&
+                    it.memberId != memberId &&
+                    it.deviceFingerprint == deviceFingerprint &&
+                    it.platform == PushPlatform.IOS &&
+                    it.retirementRequested &&
+                    (
+                        (it.dispatchLeaseId == null && it.dispatchLeaseUntil == null) ||
+                            it.dispatchLeaseId == liveActivityEndRetirementReservation(
+                                it.memberId,
+                                deviceFingerprint,
+                            )
+                        ) &&
+                    it.tokenFingerprint != tokenFingerprint
+            }
+        } else {
+            emptyList()
+        }
+        val foreignRetiredEndOwnerIds = foreignRetiredEndRouteSnapshots
+            .map { it.memberId }
+            .distinct()
+        val foreignRetiredEndHandoffPlan = if (
+            deviceFingerprint != null &&
+            foreignRetiredEndRouteSnapshots.isNotEmpty() &&
+            foreignRetiredEndOwnerIds.size == 1
+        ) {
+            scheduleLiveActivityService?.prepareSameDeviceFcmEndHandoff(
+                foreignRetiredEndOwnerIds.single(),
+                deviceFingerprint,
+                foreignRetiredEndRouteSnapshots.mapNotNull { it.id }.distinct().sorted(),
+            )
+        } else {
+            null
+        }
+        val foreignOrphanEndOwnerIds = liveActivityHandoffOwnerIds
+            .filter { it != memberId }
+            .distinct()
+            .sorted()
+        val foreignOrphanEndHandoffPlan = if (
+            platform == PushPlatform.IOS &&
+            deviceFingerprint != null &&
+            candidateSnapshots.isEmpty() &&
+            ownershipEndRouteIds.isEmpty() &&
+            foreignOrphanEndOwnerIds.size == 1
+        ) {
+            scheduleLiveActivityService?.prepareForeignOrphanFcmEndHandoff(
+                foreignOrphanEndOwnerIds.single(),
+                deviceFingerprint,
+            )?.takeIf { it.replaceableExistingPushDeviceTokenIds.isEmpty() }
+        } else {
+            null
+        }
+        val sameDeviceEndHandoffRouteIds = if (
+            ownershipEndRouteIds.isEmpty() &&
+            platform == PushPlatform.IOS &&
+            deviceFingerprint != null
+        ) {
+            candidateSnapshots.filter {
+                    it.memberId == memberId &&
+                    it.deviceFingerprint == deviceFingerprint &&
+                    it.platform == PushPlatform.IOS &&
+                    (
+                        !it.retirementRequested ||
+                            it.tokenFingerprint != tokenFingerprint ||
+                            it.dispatchLeaseId == liveActivityEndRetirementReservation(
+                                memberId,
+                                deviceFingerprint,
+                            )
+                        )
+            }.mapNotNull { it.id }.distinct().sorted()
+        } else {
+            emptyList()
+        }
+        // Lock END tombstones before the FCM rows. applySameDeviceFcmEndHandoff runs only after
+        // the exact retired route is validated and rotated below, in this same transaction.
+        val sameDeviceEndHandoffPlan = if (
+            ownershipEndRouteIds.isEmpty() &&
+            platform == PushPlatform.IOS &&
+            deviceFingerprint != null
+        ) {
+            scheduleLiveActivityService?.prepareSameDeviceFcmEndHandoff(
+                memberId,
+                deviceFingerprint,
+                sameDeviceEndHandoffRouteIds,
+            )
+        } else {
+            null
+        }
+        val sameDeviceOrphanRecoveryPlan = if (
+            ownershipEndRouteIds.isEmpty() &&
+            platform == PushPlatform.IOS &&
+            deviceFingerprint != null
+        ) {
+            scheduleLiveActivityService?.prepareSameDeviceFcmOrphanRecovery(
+                memberId,
+                deviceFingerprint,
+            )
+        } else {
+            null
+        }
         val candidates = if (candidateIds.isEmpty()) {
             emptyList()
         } else {
@@ -311,16 +480,203 @@ class NotificationTokenWriter(
                 "Push token ownership changed during registration fencing.",
             )
         }
+        if (
+            scheduleLiveActivityService != null &&
+            candidates.any { candidate ->
+                candidate.memberId != memberId &&
+                    oldOwnerCandidates.none { it.id == candidate.id }
+            }
+        ) {
+            throw CannotAcquireLockException(
+                "Push token candidate appeared after Live Activity ownership fencing.",
+            )
+        }
+        if (foreignOrphanEndHandoffPlan != null) {
+            if (
+                candidates.isNotEmpty() ||
+                foreignOrphanEndHandoffPlan.memberId !in memberFenceIds ||
+                foreignOrphanEndHandoffPlan.memberId == memberId ||
+                foreignOrphanEndHandoffPlan.deviceFingerprint != deviceFingerprint ||
+                foreignOrphanEndHandoffPlan.replaceableExistingPushDeviceTokenIds.isNotEmpty()
+            ) {
+                throw CannotAcquireLockException(
+                    "Foreign orphan Live Activity END changed during registration fencing.",
+                )
+            }
+            val endOnlyRoute = NotificationDeviceToken(
+                memberId = foreignOrphanEndHandoffPlan.memberId,
+                deviceId = deviceId,
+                platform = platform,
+                token = token,
+                tokenFingerprint = tokenFingerprint,
+                deviceFingerprint = deviceFingerprint,
+                deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
+            )
+            notificationRepository.saveAndFlush(endOnlyRoute)
+            scheduleLiveActivityService?.applySameDeviceFcmEndHandoff(
+                foreignOrphanEndHandoffPlan,
+                endOnlyRoute,
+                retireForEndOnly = true,
+            ) ?: throw CannotAcquireLockException(
+                "Live Activity foreign orphan END handoff service became unavailable.",
+            )
+            return NotificationTokenRegistrationResult(
+                removedOwnershipCount = 0,
+                result = "foreign_orphan_live_activity_end_handoff",
+                retryAfterCommit = true,
+            )
+        }
+        if (ownershipEndRouteIds.isNotEmpty()) {
+            val correctlyReserved = ownershipEndRouteIds.all { routeId ->
+                candidates.any {
+                    it.id == routeId &&
+                        it.memberId != memberId &&
+                        it.retirementRequested
+                }
+            }
+            if (!correctlyReserved) {
+                throw CannotAcquireLockException(
+                    "Live Activity END route changed during ownership fencing.",
+                )
+            }
+            val foreignEndOnlyCandidateAndReservation =
+                foreignRetiredEndHandoffPlan?.let { plan ->
+                val epochMatches = candidates.filter {
+                    it.id in plan.replaceableExistingPushDeviceTokenIds &&
+                        it.memberId == plan.memberId &&
+                        it.memberId != memberId &&
+                        it.deviceFingerprint == deviceFingerprint &&
+                        it.platform == PushPlatform.IOS &&
+                        platform == PushPlatform.IOS &&
+                        it.retirementRequested &&
+                        it.tokenFingerprint != tokenFingerprint
+                }
+                if (
+                    plan.deviceFingerprint != deviceFingerprint ||
+                    plan.replaceableExistingPushDeviceTokenIds.size != 1 ||
+                    epochMatches.mapNotNull { it.id }.toSet() !=
+                    plan.replaceableExistingPushDeviceTokenIds
+                ) {
+                    throw CannotAcquireLockException(
+                        "Foreign retired FCM route changed during END-only handoff.",
+                    )
+                }
+                val reservationReleased = epochMatches.any {
+                    scheduleLiveActivityService?.releaseFcmEndReservationForHandoff(plan, it)
+                        ?: throw CannotAcquireLockException(
+                            "Live Activity foreign END reservation service became unavailable.",
+                        )
+                }
+                if (epochMatches.any {
+                        it.dispatchLeaseId != null || it.dispatchLeaseUntil != null
+                    }
+                ) {
+                    throw PushTokenDispatchLeaseActiveException()
+                }
+                epochMatches.single() to reservationReleased
+            }
+            if (foreignEndOnlyCandidateAndReservation != null) {
+                val (foreignEndOnlyCandidate, reservationReleased) =
+                    foreignEndOnlyCandidateAndReservation
+                val oldOwnerId = foreignEndOnlyCandidate.memberId
+                val replaced = foreignEndOnlyCandidate.replaceRetiredSameDeviceOwnershipEpoch(
+                    memberId = oldOwnerId,
+                    deviceId = deviceId,
+                    platform = platform,
+                    token = token,
+                    tokenFingerprint = tokenFingerprint,
+                    deviceFingerprint = requireNotNull(deviceFingerprint),
+                    deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
+                    allowUnchangedTokenAfterEndReservation = reservationReleased,
+                )
+                if (!replaced) {
+                    throw CannotAcquireLockException(
+                        "Foreign retired FCM route could not advance to an END-only epoch.",
+                    )
+                }
+                notificationRepository.saveAndFlush(foreignEndOnlyCandidate)
+                scheduleLiveActivityService?.applySameDeviceFcmEndHandoff(
+                    requireNotNull(foreignRetiredEndHandoffPlan),
+                    foreignEndOnlyCandidate,
+                    retireForEndOnly = true,
+                ) ?: throw CannotAcquireLockException(
+                    "Live Activity foreign END handoff service became unavailable.",
+                )
+                // The row intentionally remains owned by the old member and END-reserved. Only a
+                // later registration transaction after terminal END may transfer it to memberId.
+                return NotificationTokenRegistrationResult(
+                    removedOwnershipCount = 0,
+                    result = "foreign_live_activity_end_handoff",
+                    retryAfterCommit = true,
+                )
+            }
+            // Returning commits the old-owner END and route reservation. The public service then
+            // retries in a fresh transaction and may transfer only after the END is terminal.
+            return NotificationTokenRegistrationResult(
+                removedOwnershipCount = 0,
+                result = "live_activity_end_pending",
+                retryAfterCommit = true,
+            )
+        }
+        val sameDeviceEndHandoffCandidateAndReservation = sameDeviceEndHandoffPlan?.let { plan ->
+            val epochMatches = candidates.filter {
+                it.id in plan.replaceableExistingPushDeviceTokenIds &&
+                    it.memberId == memberId &&
+                    it.deviceFingerprint == deviceFingerprint &&
+                    it.platform == PushPlatform.IOS &&
+                    platform == PushPlatform.IOS &&
+                    (
+                        !it.retirementRequested ||
+                            it.tokenFingerprint != tokenFingerprint ||
+                            it.dispatchLeaseId == liveActivityEndRetirementReservation(
+                                memberId,
+                                requireNotNull(deviceFingerprint),
+                            )
+                        )
+            }
+            if (
+                plan.memberId != memberId ||
+                plan.deviceFingerprint != deviceFingerprint ||
+                plan.replaceableExistingPushDeviceTokenIds.size > 1 ||
+                epochMatches.mapNotNull { it.id }.toSet() !=
+                    plan.replaceableExistingPushDeviceTokenIds
+            ) {
+                throw CannotAcquireLockException(
+                    "Retired FCM route changed during same-device END handoff.",
+                )
+            }
+            val reservationReleased = epochMatches.any {
+                scheduleLiveActivityService?.releaseFcmEndReservationForHandoff(plan, it)
+                    ?: throw CannotAcquireLockException(
+                        "Live Activity END reservation service became unavailable.",
+                    )
+            }
+            if (epochMatches.any { it.dispatchLeaseId != null || it.dispatchLeaseUntil != null }) {
+                throw PushTokenDispatchLeaseActiveException()
+            }
+            epochMatches.singleOrNull()?.let { it to reservationReleased }
+        }
+        val sameDeviceEndHandoffCandidate = sameDeviceEndHandoffCandidateAndReservation?.first
+        val sameDeviceEndReservationReleased =
+            sameDeviceEndHandoffCandidateAndReservation?.second == true
+        val sameDeviceEndHandoffCandidateId = sameDeviceEndHandoffCandidate?.id
         val now = Instant.now(clock)
         val expiredRetired = candidates.filter {
-            it.retirementRequested && !it.hasActiveDispatchLease(now)
+            (sameDeviceEndHandoffCandidateId == null || it.id != sameDeviceEndHandoffCandidateId) &&
+                it.retirementRequested && !it.hasActiveDispatchLease(now) &&
+                !it.hasOutstandingLiveActivityEnd()
         }
         if (expiredRetired.isNotEmpty()) {
             notificationRepository.deleteAll(expiredRetired)
             notificationRepository.flush()
         }
         val liveCandidates = candidates.filterNot { it in expiredRetired }
-        if (liveCandidates.any { it.hasActiveDispatchLease(now) }) {
+        if (liveCandidates.any {
+                (sameDeviceEndHandoffCandidateId == null ||
+                    it.id != sameDeviceEndHandoffCandidateId) &&
+                    (it.hasActiveDispatchLease(now) || it.hasOutstandingLiveActivityEnd())
+            }
+        ) {
             throw PushTokenDispatchLeaseActiveException()
         }
         val tokenMatches = liveCandidates.filter { it.tokenFingerprint == tokenFingerprint }
@@ -329,7 +685,7 @@ class NotificationTokenWriter(
                 liveCandidates.filter { it.deviceFingerprint == fingerprint }
             }
             .orEmpty()
-        val preferred = if (deviceFingerprint != null) {
+        val preferred = sameDeviceEndHandoffCandidate ?: if (deviceFingerprint != null) {
             deviceMatches.maxByOrNull { it.id ?: Long.MIN_VALUE }
                 ?: tokenMatches.maxByOrNull { it.id ?: Long.MIN_VALUE }
         } else {
@@ -348,6 +704,57 @@ class NotificationTokenWriter(
         }
 
         if (preferred != null) {
+            if (
+                sameDeviceEndHandoffCandidate != null &&
+                preferred.id == sameDeviceEndHandoffCandidateId
+            ) {
+                val replaced = if (preferred.retirementRequested) {
+                    preferred.replaceRetiredSameDeviceOwnershipEpoch(
+                        memberId = memberId,
+                        deviceId = deviceId,
+                        platform = platform,
+                        token = token,
+                        tokenFingerprint = tokenFingerprint,
+                        deviceFingerprint = requireNotNull(deviceFingerprint),
+                        deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
+                        allowUnchangedTokenAfterEndReservation =
+                            sameDeviceEndReservationReleased,
+                    )
+                } else {
+                    preferred.replaceOwnership(
+                        memberId = memberId,
+                        deviceId = deviceId,
+                        platform = platform,
+                        token = token,
+                        tokenFingerprint = tokenFingerprint,
+                        deviceFingerprint = deviceFingerprint,
+                        deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
+                    )
+                    true
+                }
+                if (!replaced) {
+                    throw CannotAcquireLockException(
+                        "Retired FCM route could not advance to a replacement epoch.",
+                    )
+                }
+                notificationRepository.saveAndFlush(preferred)
+                scheduleLiveActivityService?.applySameDeviceFcmEndHandoff(
+                    requireNotNull(sameDeviceEndHandoffPlan),
+                    preferred,
+                ) ?: throw CannotAcquireLockException(
+                    "Live Activity END handoff service became unavailable.",
+                )
+                if (sameDeviceOrphanRecoveryPlan != null) {
+                    scheduleLiveActivityService.applySameDeviceFcmOrphanRecovery(
+                        sameDeviceOrphanRecoveryPlan,
+                        preferred,
+                    )
+                }
+                return NotificationTokenRegistrationResult(
+                    duplicates.size,
+                    "updated_live_activity_end_handoff",
+                )
+            }
             preferred.replaceOwnership(
                 memberId = memberId,
                 deviceId = deviceId,
@@ -358,7 +765,30 @@ class NotificationTokenWriter(
                 deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
             )
             notificationRepository.saveAndFlush(preferred)
-            return NotificationTokenRegistrationResult(duplicates.size, "updated")
+            if (sameDeviceEndHandoffPlan != null) {
+                scheduleLiveActivityService?.applySameDeviceFcmEndHandoff(
+                    sameDeviceEndHandoffPlan,
+                    preferred,
+                ) ?: throw CannotAcquireLockException(
+                    "Live Activity END handoff service became unavailable.",
+                )
+            }
+            if (sameDeviceOrphanRecoveryPlan != null) {
+                scheduleLiveActivityService?.applySameDeviceFcmOrphanRecovery(
+                    sameDeviceOrphanRecoveryPlan,
+                    preferred,
+                ) ?: throw CannotAcquireLockException(
+                    "Live Activity orphan recovery service became unavailable.",
+                )
+            }
+            return NotificationTokenRegistrationResult(
+                duplicates.size,
+                if (sameDeviceEndHandoffPlan == null) {
+                    "updated"
+                } else {
+                    "updated_live_activity_end_handoff"
+                },
+            )
         }
 
         val entity = NotificationDeviceToken(
@@ -371,7 +801,50 @@ class NotificationTokenWriter(
             deliveryAckCapabilityVersion = deliveryAckCapabilityVersion,
         )
         notificationRepository.saveAndFlush(entity)
-        return NotificationTokenRegistrationResult(duplicates.size, "created")
+        if (sameDeviceEndHandoffPlan != null) {
+            scheduleLiveActivityService?.applySameDeviceFcmEndHandoff(
+                sameDeviceEndHandoffPlan,
+                entity,
+            ) ?: throw CannotAcquireLockException(
+                "Live Activity END handoff service became unavailable.",
+            )
+        }
+        if (sameDeviceOrphanRecoveryPlan != null) {
+            scheduleLiveActivityService?.applySameDeviceFcmOrphanRecovery(
+                sameDeviceOrphanRecoveryPlan,
+                entity,
+            ) ?: throw CannotAcquireLockException(
+                "Live Activity orphan recovery service became unavailable.",
+            )
+        }
+        return NotificationTokenRegistrationResult(
+            duplicates.size,
+            if (sameDeviceEndHandoffPlan == null) {
+                "created"
+            } else {
+                "created_live_activity_end_handoff"
+            },
+        )
+    }
+
+    private fun NotificationDeviceToken.hasOutstandingLiveActivityEnd(): Boolean {
+        val tokenId = id ?: return false
+        val hasDelivery = liveActivityDeliveryRepository?.countOpenByPushDeviceToken(
+            tokenId,
+            LiveActivityDeliveryOperation.END,
+            OUTSTANDING_LIVE_ACTIVITY_END_STATUSES,
+        )?.let { it > 0 } == true
+        return hasDelivery || notificationRepository.countEndPendingLiveActivities(tokenId) > 0
+    }
+
+    private companion object {
+        val OUTSTANDING_LIVE_ACTIVITY_END_STATUSES = setOf(
+            LiveActivityDeliveryStatus.PENDING,
+            LiveActivityDeliveryStatus.FAILED,
+            LiveActivityDeliveryStatus.DISPATCHING,
+            LiveActivityDeliveryStatus.UNCERTAIN,
+            LiveActivityDeliveryStatus.EXHAUSTED,
+        )
     }
 }
 
