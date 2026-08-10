@@ -39,6 +39,11 @@ data class TrafficResult(
     val transitRouteProvenance: TransitRouteProvenance? = null,
     /** 첫 승차만 실시간이고 미래 환승은 시간표임을 숨기지 않는 계산 근거다. */
     val transitTimingBasis: TransitTimingBasis? = null,
+    /**
+     * 첫 탑승 대기시간의 설명용 구성요소. [travelMinutes]에 이미 포함되어 있으므로 호출자는
+     * 이 값을 총 ETA에 다시 더하면 안 된다.
+     */
+    val firstBoardingWaitMinutes: Int? = null,
 ) {
     /**
      * 추천 출발 판단에 정상 provider 결과로 채택할 수 있는지 나타낸다.
@@ -63,6 +68,9 @@ data class TrafficResult(
                 !recommendedDepartureAt.isAfter(predictedArrivalAt)
         ) {
             "추천 출발시각은 예측 도착시각보다 늦을 수 없습니다."
+        }
+        require(firstBoardingWaitMinutes == null || firstBoardingWaitMinutes >= 0) {
+            "firstBoardingWaitMinutes는 null 또는 0 이상이어야 합니다."
         }
     }
 }

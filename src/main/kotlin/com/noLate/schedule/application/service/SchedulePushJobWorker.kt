@@ -8,6 +8,8 @@ import com.noLate.global.observability.recordSafely
 import com.noLate.notification.application.service.PushDispatchFence
 import com.noLate.notification.application.service.DepartureAlarmReminderCoverageSelector
 import com.noLate.notification.application.useCase.NotificationUseCase
+import com.noLate.notification.liveactivity.application.ScheduleLiveActivityEtaProjection
+import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
 import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.application.TrafficClient
@@ -68,6 +70,7 @@ class SchedulePushJobWorker(
     private val clock: Clock = Clock.systemUTC(),
     private val operationalMetrics: NoLateOperationalMetrics? = null,
     private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
+    private val scheduleLiveActivityService: ScheduleLiveActivityService? = null,
 ) {
     init {
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
@@ -140,6 +143,7 @@ class SchedulePushJobWorker(
         maxOf(notBefore, Instant.now(clock))
 
     private fun process(job: SchedulePushJob, now: Instant) {
+        var liveActivityProjection: ScheduleLiveActivityEtaProjection? = null
         try {
             // 일정이 시작된 뒤에는 "출발" 알림의 의미가 사라지므로 남은 후속 푸시를 종료한다.
             if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
@@ -148,6 +152,7 @@ class SchedulePushJobWorker(
                     job = job,
                     outcome = EtaJobMetricOutcome.PROCESSED,
                     alarmIntent = job.cancelAlarmIntent(),
+                    liveActivityEndReason = "DELIVERY_WINDOW_EXPIRED",
                 )
                 return
             }
@@ -159,6 +164,7 @@ class SchedulePushJobWorker(
                         job = job,
                         outcome = EtaJobMetricOutcome.PROCESSED,
                         alarmIntent = job.cancelAlarmIntent(),
+                        liveActivityEndReason = "SCHEDULE_REMOVED",
                     )
                     return
                 }
@@ -173,6 +179,7 @@ class SchedulePushJobWorker(
                     job = job,
                     outcome = EtaJobMetricOutcome.PROCESSED,
                     alarmIntent = job.cancelAlarmIntent(),
+                    liveActivityEndReason = "TRAVEL_ACCESS_REVOKED",
                 )
                 return
             }
@@ -183,6 +190,7 @@ class SchedulePushJobWorker(
                         job = job,
                         outcome = EtaJobMetricOutcome.PROCESSED,
                         alarmIntent = job.cancelAlarmIntent(),
+                        liveActivityEndReason = "NOTIFICATION_DISABLED",
                     )
                     return
                 }
@@ -271,6 +279,28 @@ class SchedulePushJobWorker(
                     .takeIf { !trafficResult.accepted }
                     ?.takeUnless { it.isAfter(schedule.startAt) }
                 ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+            liveActivityProjection = ScheduleLiveActivityEtaProjection(
+                memberId = job.memberId,
+                scheduleId = job.scheduleId,
+                notificationGeneration = job.notificationGeneration,
+                checkCount = job.checkCount,
+                evaluatedAt = maxOf(now, trafficResult.fetchedAt ?: now),
+                scheduleTitle = schedule.title,
+                destinationName = route.destinationName,
+                scheduleStartAt = schedule.startAt,
+                travelMinutes = travelMinutes,
+                recommendedDepartureAt = recommendedDepartureAt,
+                predictedArrivalAt = predictedArrivalAt,
+                firstBoardingWaitMinutes = trafficResult.firstBoardingWaitMinutes,
+                etaSource = trafficResult.source,
+                etaStale = trafficResult.stale,
+                routeSegments = selectedRoute.routeSegments,
+                staleAt = minOf(
+                    schedule.startAt,
+                    maxOf(now, trafficResult.fetchedAt ?: now)
+                        .plus(job.intervalMinutes.toLong() + 5, ChronoUnit.MINUTES),
+                ),
+            )
             val alarmIntent = departureAlarmSyncService?.let {
                 SchedulePushAlarmIntent.AutomaticEta(
                     memberId = job.memberId,
@@ -599,6 +629,10 @@ class SchedulePushJobWorker(
                             outcome = transition,
                             uncertainDelivery = sendResult.ambiguousCount > 0,
                             alarmIntent = alarmIntent,
+                            liveActivityProjection = liveActivityProjection,
+                            liveActivityEndReason = "JOB_TERMINAL_FAILURE".takeIf {
+                                transition == EtaJobMetricOutcome.TERMINAL_FAILURE
+                            },
                         )
                         return
                     }
@@ -625,6 +659,10 @@ class SchedulePushJobWorker(
                             job = job,
                             outcome = transition,
                             alarmIntent = alarmIntent,
+                            liveActivityProjection = liveActivityProjection,
+                            liveActivityEndReason = "JOB_TERMINAL_FAILURE".takeIf {
+                                transition == EtaJobMetricOutcome.TERMINAL_FAILURE
+                            },
                         )
                         return
                     }
@@ -721,6 +759,8 @@ class SchedulePushJobWorker(
                 outcome = EtaJobMetricOutcome.PROCESSED,
                 uncertainDelivery = pushOutcome.uncertain,
                 alarmIntent = alarmIntent,
+                liveActivityProjection = liveActivityProjection,
+                liveActivityEndReason = "JOB_COMPLETE".takeIf { nextCheckAt == null },
             )
         } catch (exception: Exception) {
             operationalMetrics.recordSafely {
@@ -741,7 +781,14 @@ class SchedulePushJobWorker(
                 now = now,
                 reason = exception.message?.take(500) ?: exception.javaClass.simpleName,
             )
-            persistMeasuredTransition(job, transition)
+            persistMeasuredTransition(
+                job = job,
+                outcome = transition,
+                liveActivityProjection = liveActivityProjection,
+                liveActivityEndReason = "JOB_TERMINAL_FAILURE".takeIf {
+                    transition == EtaJobMetricOutcome.TERMINAL_FAILURE
+                },
+            )
         }
     }
 
@@ -755,9 +802,16 @@ class SchedulePushJobWorker(
         outcome: EtaJobMetricOutcome,
         uncertainDelivery: Boolean = false,
         alarmIntent: SchedulePushAlarmIntent? = null,
+        liveActivityProjection: ScheduleLiveActivityEtaProjection? = null,
+        liveActivityEndReason: String? = null,
     ) {
         val persisted = runCatching {
-            pushJobCoordinator.persist(job, workerId, alarmIntent)
+            pushJobCoordinator.persist(
+                job,
+                workerId,
+                alarmIntent,
+                liveActivityEndReason,
+            )
         }.onFailure { failure ->
             log.error(
                 "Schedule push state transition persistence failed. " +
@@ -770,6 +824,24 @@ class SchedulePushJobWorker(
             )
         }.getOrDefault(false)
         if (!persisted) return
+
+        // Non-terminal ETA projection is retried by the next scheduled check. Terminal END is not
+        // handled here: coordinator.persist atomically stored its durable lifecycle intent in the
+        // source transition transaction above.
+        runCatching {
+            if (liveActivityEndReason == null && liveActivityProjection != null) {
+                scheduleLiveActivityService?.projectEta(liveActivityProjection)
+            }
+            Unit
+        }.onFailure { failure ->
+            log.warn(
+                "Live Activity projection failed after ETA state commit. " +
+                    "jobId={}, scheduleId={}, errorCode={}",
+                job.id,
+                job.scheduleId,
+                failure.javaClass.simpleName,
+            )
+        }
 
         operationalMetrics.recordSafely { recordEtaJob(outcome) }
         if (uncertainDelivery) {
@@ -898,6 +970,7 @@ class SchedulePushJobWorker(
                 destinationLat = destination.destinationLat,
                 destinationLng = destination.destinationLng,
                 routeJson = personal.routeJson,
+                destinationName = destination.destinationName ?: destination.locationName,
                 alertMode = personal.alertMode,
             )
         }
@@ -913,6 +986,7 @@ class SchedulePushJobWorker(
             destinationLat = legacy.destinationLat,
             destinationLng = legacy.destinationLng,
             routeJson = legacy.routeJson,
+            destinationName = legacy.destinationName ?: legacy.locationName,
             alertMode = legacy.alertMode,
         )
     }
@@ -1087,6 +1161,7 @@ private data class PushRouteSource(
     val destinationLat: Double?,
     val destinationLng: Double?,
     val routeJson: String?,
+    val destinationName: String?,
     val alertMode: ScheduleAlertMode,
 )
 

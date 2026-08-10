@@ -206,7 +206,11 @@ class ScheduleNotificationActionIdempotencyIntegrationTest @Autowired constructo
             departureMemberFence,
         )
         verify(scheduleService, times(1)).markDeparted(memberId, scheduleId)
-        verify(pushJobService, times(1)).cancelByScheduleIdAndMemberId(scheduleId, memberId)
+        verify(pushJobService, times(1)).cancelByScheduleIdAndMemberId(
+            scheduleId,
+            memberId,
+            "DEPARTED",
+        )
         // 최초 detail + retry authoritative current detail.
         verify(scheduleService, times(2)).getScheduleDetail(memberId, scheduleId)
     }
@@ -271,7 +275,11 @@ class ScheduleNotificationActionIdempotencyIntegrationTest @Autowired constructo
 
         assertEquals(0, receiptRepository.count())
         verify(pushJobService, never()).snoozeDepartureReminder(any(), any())
-        verify(pushJobService, never()).cancelByScheduleIdAndMemberId(any(), any())
+        verify(pushJobService, never()).cancelByScheduleIdAndMemberId(
+            any(),
+            any(),
+            org.mockito.kotlin.anyOrNull(),
+        )
         verify(departureStatusService, never()).markDeparted(any(), any(), any())
         verify(scheduleService, never()).markDeparted(any(), any())
     }

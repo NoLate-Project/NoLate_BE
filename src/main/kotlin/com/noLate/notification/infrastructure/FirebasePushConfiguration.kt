@@ -20,6 +20,9 @@ import com.noLate.notification.application.PushPayloadRejectedException
 import com.noLate.notification.application.PushSendResult
 import com.noLate.notification.domain.OpaquePushIdentifier
 import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
+import com.noLate.notification.liveactivity.application.LiveActivityPushClient
+import com.noLate.notification.liveactivity.infrastructure.FirebaseLiveActivityPushClient
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
@@ -118,6 +121,12 @@ class FirebasePushConfiguration {
     @Bean
     fun firebasePushClient(firebaseMessaging: FirebaseMessaging, clock: Clock): PushClient =
         FirebasePushClient(firebaseMessaging, clock)
+
+    @Bean
+    fun firebaseLiveActivityPushClient(
+        firebaseMessaging: FirebaseMessaging,
+        objectMapper: ObjectMapper,
+    ): LiveActivityPushClient = FirebaseLiveActivityPushClient(firebaseMessaging, objectMapper)
 }
 
 internal class FirebasePushClient(

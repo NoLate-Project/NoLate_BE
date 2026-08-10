@@ -11,6 +11,18 @@ class SelectedRouteMetadataTest {
     private val objectMapper = ObjectMapper()
 
     @Test
+    fun `상세 JSON이 없어도 이동수단 경로바 구간은 유지한다`() {
+        val metadata = SelectedRouteMetadata.parse(
+            objectMapper,
+            null,
+            ScheduleTravelMode.CAR,
+        )
+
+        assertEquals(listOf("drive"), metadata.routeSegments.map { it.kind })
+        assertEquals("자동차", metadata.routeSegments.single().label)
+    }
+
+    @Test
     fun `searchOption과 선택 대중교통 여정을 저장 JSON에서 복원한다`() {
         val json = """
             {
@@ -109,5 +121,37 @@ class SelectedRouteMetadataTest {
         )
 
         assertEquals(30, metadata.travelMinutes)
+    }
+
+    @Test
+    fun `긴 대중교통 여정은 앞뒤 환승 순서와 단일 생략 구간을 보존한다`() {
+        val metadata = SelectedRouteMetadata.parse(
+            objectMapper,
+            """
+                {
+                  "selectedItinerary": {
+                    "legs": [
+                      {"mode":"WALK"},
+                      {"mode":"BUS", "route":"341"},
+                      {"mode":"WALK"},
+                      {"mode":"SUBWAY", "route":"2호선"},
+                      {"mode":"WALK"},
+                      {"mode":"BUS", "route":"146"}
+                    ]
+                  }
+                }
+            """.trimIndent(),
+            ScheduleTravelMode.TRANSIT,
+        )
+
+        assertEquals(5, metadata.routeSegments.size)
+        assertEquals(
+            listOf("walk", "bus", "transfer", "walk", "bus"),
+            metadata.routeSegments.map { it.kind },
+        )
+        assertEquals("341", metadata.routeSegments[1].label)
+        assertEquals("2구간 생략", metadata.routeSegments[2].label)
+        assertEquals("#9CA3AF", metadata.routeSegments[2].colorHex)
+        assertEquals("146", metadata.routeSegments[4].label)
     }
 }

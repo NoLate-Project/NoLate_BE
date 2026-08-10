@@ -24,6 +24,12 @@ import com.noLate.notification.infrastructure.DepartureAlarmScheduleReceiptRepos
 import com.noLate.notification.infrastructure.DepartureAlarmPresentationAssignmentRepository
 import com.noLate.notification.infrastructure.PushDeliveryRepository
 import com.noLate.notification.infrastructure.PushSendHistoryRepository
+import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
+import com.noLate.notification.liveactivity.application.NOLATE_LIVE_ACTIVITY_ATTRIBUTES_TYPE
+import com.noLate.notification.liveactivity.domain.LiveActivityLifecycleScopeType
+import com.noLate.notification.liveactivity.domain.ScheduleLiveActivity
+import com.noLate.notification.liveactivity.infrastructure.LiveActivityLifecycleIntentRepository
+import com.noLate.notification.liveactivity.infrastructure.ScheduleLiveActivityRepository
 import com.noLate.schedule.application.service.ScheduleAccessPolicy
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
 import com.noLate.schedule.application.service.ScheduleSharingAvailabilityPolicy
@@ -103,6 +109,7 @@ import org.springframework.transaction.support.TransactionTemplate
     ScheduleAccessPolicy::class,
     ScheduleSharingAvailabilityPolicy::class,
     ScheduleTravelAccessCleanupService::class,
+    LiveActivityLifecyclePublisher::class,
     AccountOwnerWithdrawalCleanupTestConfig::class,
 )
 @TestPropertySource(
@@ -136,6 +143,8 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
     private val departureAlarmPresentationAssignmentRepository:
         DepartureAlarmPresentationAssignmentRepository,
     private val actionReceiptRepository: ScheduleNotificationActionReceiptRepository,
+    private val scheduleLiveActivityRepository: ScheduleLiveActivityRepository,
+    private val lifecycleIntentRepository: LiveActivityLifecycleIntentRepository,
     private val transactionManager: PlatformTransactionManager,
     private val invalidationRecorder: AccountCleanupInvalidationRecorder,
 ) {
@@ -150,6 +159,13 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
                 email = "participant-withdrawal@example.com",
             )
         )
+        val liveActivityOnlyParticipant = memberRepository.saveAndFlush(
+            Member(
+                name = "live-only-participant",
+                password = "Password1!",
+                email = "live-only-participant-withdrawal@example.com",
+            )
+        )
         val owner = memberRepository.saveAndFlush(
             Member(
                 name = "owner",
@@ -159,6 +175,7 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
             )
         )
         val participantId = requireNotNull(participant.id)
+        val liveActivityOnlyParticipantId = requireNotNull(liveActivityOnlyParticipant.id)
         val ownerId = requireNotNull(owner.id)
         val startAt = Instant.parse("2099-07-25T01:00:00Z")
         val schedule = scheduleRepository.saveAndFlush(
@@ -170,6 +187,21 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
             )
         )
         val scheduleId = requireNotNull(schedule.id)
+        scheduleLiveActivityRepository.saveAndFlush(
+            ScheduleLiveActivity(
+                memberId = liveActivityOnlyParticipantId,
+                scheduleId = scheduleId,
+                pushDeviceTokenId = 999,
+                deviceFingerprint = "a".repeat(64),
+                activityType = NOLATE_LIVE_ACTIVITY_ATTRIBUTES_TYPE,
+                sourceNotificationGeneration = 2,
+                sourceCheckCount = 3,
+                contentFingerprint = "b".repeat(64),
+                attributesJson = "{}",
+                contentStateJson = "{}",
+                expiresAt = startAt,
+            ),
+        )
         planRepository.saveAndFlush(
             ScheduleTravelPlan(
                 scheduleId = scheduleId,
@@ -294,6 +326,9 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
         cleanupService.withdraw(owner)
 
         assertFalse(memberRepository.findById(participantId).orElseThrow().deleted)
+        assertFalse(
+            memberRepository.findById(liveActivityOnlyParticipantId).orElseThrow().deleted,
+        )
         assertTrue(memberRepository.findById(ownerId).orElseThrow().deleted)
         assertTrue(scheduleRepository.findById(scheduleId).isEmpty)
         assertTrue(jobRepository.findAllByScheduleId(scheduleId).isEmpty())
@@ -318,8 +353,16 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
         assertTrue(
             invalidationRecorder.events.any {
                 it.reason == "account-withdrawn" &&
-                    it.memberIds == setOf(ownerId, participantId)
+                    it.memberIds == setOf(ownerId, participantId, liveActivityOnlyParticipantId)
             }
+        )
+        assertTrue(
+            lifecycleIntentRepository.findAll().any {
+                it.scopeType == LiveActivityLifecycleScopeType.SCHEDULE &&
+                    it.scheduleId == scheduleId &&
+                    it.reason == "SCHEDULE_OWNER_WITHDRAWAL" &&
+                    it.completedAt == null
+            },
         )
     }
 

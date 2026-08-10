@@ -2,6 +2,9 @@ package com.noLate.notification.application.service
 
 import com.noLate.notification.domain.NotificationDeviceToken
 import com.noLate.notification.infrastructure.NotificationDeviceTokenRepository
+import com.noLate.notification.liveactivity.domain.LiveActivityDeliveryOperation
+import com.noLate.notification.liveactivity.domain.LiveActivityDeliveryStatus
+import com.noLate.notification.liveactivity.infrastructure.LiveActivityDeliveryRepository
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
@@ -23,6 +26,7 @@ class NotificationTokenRetirementService(
     private val clock: Clock,
     @Value("\${notification.push-token.retirement-reaper-enabled:true}")
     private val reaperEnabled: Boolean = true,
+    private val liveActivityDeliveryRepository: LiveActivityDeliveryRepository? = null,
 ) {
     @Transactional
     fun retireAllByMember(memberId: Long) {
@@ -64,13 +68,14 @@ class NotificationTokenRetirementService(
             }
             ?: return false
         val deleteNow = token.requestRetirement(Instant.now(clock))
-        if (deleteNow) {
+        val removed = deleteNow && !hasOutstandingLiveActivityEnd(token)
+        if (removed) {
             repository.delete(token)
         } else {
             repository.save(token)
         }
         repository.flush()
-        return deleteNow
+        return removed
     }
 
     @Scheduled(
@@ -87,7 +92,9 @@ class NotificationTokenRetirementService(
     private fun retire(tokens: Collection<NotificationDeviceToken>) {
         if (tokens.isEmpty()) return
         val now = Instant.now(clock)
-        val deleteNow = tokens.filter { it.requestRetirement(now) }
+        val deleteNow = tokens.filter {
+            it.requestRetirement(now) && !hasOutstandingLiveActivityEnd(it)
+        }
         val keepLeased = tokens.filterNot { it in deleteNow }
         if (deleteNow.isNotEmpty()) {
             repository.deleteAll(deleteNow)
@@ -96,5 +103,25 @@ class NotificationTokenRetirementService(
             repository.saveAll(keepLeased)
         }
         repository.flush()
+    }
+
+    private fun hasOutstandingLiveActivityEnd(token: NotificationDeviceToken): Boolean {
+        val tokenId = token.id ?: return false
+        val hasDelivery = liveActivityDeliveryRepository?.countOpenByPushDeviceToken(
+            tokenId,
+            LiveActivityDeliveryOperation.END,
+            OUTSTANDING_LIVE_ACTIVITY_END_STATUSES,
+        )?.let { it > 0 } == true
+        return hasDelivery || repository.countEndPendingLiveActivities(tokenId) > 0
+    }
+
+    private companion object {
+        val OUTSTANDING_LIVE_ACTIVITY_END_STATUSES = setOf(
+            LiveActivityDeliveryStatus.PENDING,
+            LiveActivityDeliveryStatus.FAILED,
+            LiveActivityDeliveryStatus.DISPATCHING,
+            LiveActivityDeliveryStatus.UNCERTAIN,
+            LiveActivityDeliveryStatus.EXHAUSTED,
+        )
     }
 }

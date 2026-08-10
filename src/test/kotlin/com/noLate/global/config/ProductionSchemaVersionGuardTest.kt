@@ -124,6 +124,50 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
+    fun `Live Activity migration is required before production workers start`() {
+        val migration = Files.readString(
+            Path.of("docs/schedule/migrations/2026-08-06-live-activity-delivery.sql"),
+        )
+        val tables = migration.indexOf("CREATE TABLE IF NOT EXISTS live_activity_start_tokens")
+        val postcondition = migration.indexOf("CALL assert_live_activity_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(tables >= 0)
+        assertTrue(postcondition > tables)
+        assertTrue(marker > postcondition)
+        assertTrue(migration.contains(ProductionSchemaVersionGuard.LIVE_ACTIVITY_SCHEMA_VERSION))
+        assertTrue(
+            ProductionSchemaVersionGuard.LIVE_ACTIVITY_SCHEMA_VERSION in
+                ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS,
+        )
+    }
+
+    @Test
+    fun `Live Activity appearance migration is required before production workers start`() {
+        val migration = Files.readString(
+            Path.of("docs/schedule/migrations/2026-08-06-live-activity-appearance.sql"),
+        )
+        val column = migration.indexOf("ADD COLUMN appearance VARCHAR(10) NULL")
+        val postcondition = migration.indexOf("CALL assert_live_activity_appearance_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(column >= 0)
+        assertTrue(postcondition > column)
+        assertTrue(marker > postcondition)
+        assertTrue(
+            migration.contains(ProductionSchemaVersionGuard.LIVE_ACTIVITY_APPEARANCE_SCHEMA_VERSION),
+        )
+        assertTrue(
+            ProductionSchemaVersionGuard.LIVE_ACTIVITY_APPEARANCE_SCHEMA_VERSION in
+                ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS,
+        )
+    }
+
+    @Test
     fun `production refuses automatic Hibernate schema mutation`() {
         val error = assertThrows(IllegalStateException::class.java) {
             guard(markerDatabase(), ddlMode = "update").afterSingletonsInstantiated()

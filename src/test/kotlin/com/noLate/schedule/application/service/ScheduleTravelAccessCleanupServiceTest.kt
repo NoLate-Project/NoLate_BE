@@ -8,6 +8,7 @@ import com.noLate.notification.domain.PushDelivery
 import com.noLate.notification.domain.PushPlatform
 import com.noLate.notification.domain.PushSendHistory
 import com.noLate.notification.domain.PushSendStatus
+import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCalendarMember
@@ -52,6 +53,7 @@ class ScheduleTravelAccessCleanupServiceTest {
 
     @Test
     fun `content mode reduction cancels an active member push job`() {
+        val lifecyclePublisher = org.mockito.kotlin.mock<LiveActivityLifecyclePublisher>()
         val schedule = schedule()
         val job = pushJob()
         whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
@@ -61,9 +63,10 @@ class ScheduleTravelAccessCleanupServiceTest {
         whenever(pushJobRepository.findAllByScheduleIdInAndMemberIdIn(listOf(10L), listOf(2L)))
             .thenReturn(listOf(job))
 
-        service().cancelRevokedForSchedule(10L, listOf(2L))
+        service(lifecyclePublisher).cancelRevokedForSchedule(10L, listOf(2L))
 
         assertEquals(SchedulePushJobStatus.CANCELED, job.status)
+        verify(lifecyclePublisher).endMemberSchedule(2L, 10L, "TRAVEL_ACCESS_REVOKED")
     }
 
     @Test
@@ -414,7 +417,9 @@ class ScheduleTravelAccessCleanupServiceTest {
             .findAllByCalendarIdAndMemberIdInAndPayloadType(any(), any(), any())
     }
 
-    private fun service() = ScheduleTravelAccessCleanupService(
+    private fun service(
+        lifecyclePublisher: LiveActivityLifecyclePublisher? = null,
+    ) = ScheduleTravelAccessCleanupService(
         scheduleRepository = scheduleRepository,
         pushJobRepository = pushJobRepository,
         travelPlanRepository = travelPlanRepository,
@@ -425,6 +430,7 @@ class ScheduleTravelAccessCleanupServiceTest {
         accessPolicy = accessPolicy,
         calendarRepository = calendarRepository,
         calendarMemberRepository = calendarMemberRepository,
+        liveActivityLifecyclePublisher = lifecyclePublisher,
     )
 
     private fun decision(
