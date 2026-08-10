@@ -26,8 +26,8 @@ class SafeDepartureResolver(
     private val toleranceSeconds: Long = DEFAULT_TOLERANCE_SECONDS,
 ) {
     init {
-        require(maxSearches in 1..MAX_SEARCH_LIMIT) {
-            "안전 출발시각 공급자 조회 횟수는 1~$MAX_SEARCH_LIMIT 사이여야 합니다."
+        require(maxSearches in 1..MAX_PROVIDER_SEARCHES) {
+            "안전 출발시각 공급자 조회 횟수는 1~$MAX_PROVIDER_SEARCHES 사이여야 합니다."
         }
         require(toleranceSeconds in 0..MAX_TOLERANCE_SECONDS) {
             "안전 출발시각 수렴 허용치는 0~${MAX_TOLERANCE_SECONDS}초 사이여야 합니다."
@@ -108,23 +108,52 @@ class SafeDepartureResolver(
             val candidates = provider.search(request.copy(departureAt = searchAt))
             val projected = select(candidates)
             if (projected == null) {
-                if (targetArrivalAt == null || feasible.isNotEmpty()) {
+                if (feasible.isNotEmpty()) {
                     return feasible.latestFeasible()
                 }
                 // Sparse timetables can temporarily push the selected itinerary out of the
-                // provider's bounded result set. Spend only the already configured query budget
-                // and probe one deterministic earlier slot before falling back.
+                // provider's bounded result set. This remains recoverable even without an arrival
+                // deadline: spend only the already configured query budget and probe another
+                // deterministic slot before falling back.
                 val sparseProbe = searchAt
                     .minus(SPARSE_TIMETABLE_PROBE_MINUTES, ChronoUnit.MINUTES)
                     .truncatedTo(ChronoUnit.MINUTES)
-                    .coerceAtLeast(minimumSearchAt)
-                if (sparseProbe == searchAt || sparseProbe in visited) {
+                val nextSearchAt = nextBoundedProbe(
+                    current = searchAt,
+                    proposed = sparseProbe,
+                    primaryAdjustmentSeconds = -SPARSE_TIMETABLE_PROBE_MINUTES *
+                        SECONDS_PER_MINUTE,
+                    minimum = minimumSearchAt,
+                    maximum = latestAllowedSearch,
+                    visited = visited,
+                )
+                if (nextSearchAt == null) {
                     return feasible.latestFeasible()
                 }
-                searchAt = sparseProbe
+                searchAt = nextSearchAt
                 return@search
             }
-            if (targetArrivalAt == null) return projected
+            if (targetArrivalAt == null && projected.eligible) return projected
+
+            if (targetArrivalAt == null) {
+                // MISSED/UNKNOWN 후보를 첫 응답에서 곧바로 경고로 확정하지 않는다. projection이
+                // 제공한 불연속 보정값으로 같은 bounded 조회 예산 안에서 더 이른 시간표를 찾는다.
+                val adjustmentSeconds = projected.searchAdjustmentSeconds
+                    ?: -SPARSE_TIMETABLE_PROBE_MINUTES * SECONDS_PER_MINUTE
+                val nextSearchAt = nextBoundedProbe(
+                    current = searchAt,
+                    proposed = searchAt.adjustForProviderMinute(adjustmentSeconds),
+                    primaryAdjustmentSeconds = adjustmentSeconds,
+                    minimum = minimumSearchAt,
+                    maximum = latestAllowedSearch,
+                    visited = visited,
+                )
+                if (nextSearchAt == null) {
+                    return feasible.latestFeasible()
+                }
+                searchAt = nextSearchAt
+                return@search
+            }
 
             val arrivalDeltaSeconds = Duration.between(
                 projected.predictedArrivalAt,
@@ -142,15 +171,48 @@ class SafeDepartureResolver(
             }
 
             val adjustmentSeconds = projected.searchAdjustmentSeconds ?: arrivalDeltaSeconds
-            var nextSearchAt = searchAt.adjustForProviderMinute(adjustmentSeconds)
-                .coerceAtLeast(minimumSearchAt)
-            if (latestAllowedSearch != null) {
-                nextSearchAt = nextSearchAt.coerceAtMost(latestAllowedSearch)
-            }
-            if (nextSearchAt == searchAt) return feasible.latestFeasible()
+            val nextSearchAt = nextBoundedProbe(
+                current = searchAt,
+                proposed = searchAt.adjustForProviderMinute(adjustmentSeconds),
+                primaryAdjustmentSeconds = adjustmentSeconds,
+                minimum = minimumSearchAt,
+                maximum = latestAllowedSearch,
+                visited = visited,
+                allowOpposite = feasible.isEmpty(),
+            ) ?: return feasible.latestFeasible()
             searchAt = nextSearchAt
         }
         return feasible.latestFeasible()
+    }
+
+    /**
+     * 음수 보정이 `evaluatedAt` 경계에 막혀 같은 분이 되면 즉시 포기하지 않고 반대편 슬롯을
+     * 확인한다. 동일 분 재조회 없이 최대 3회 provider 예산을 실제 회복 기회로 사용한다.
+     */
+    private fun nextBoundedProbe(
+        current: Instant,
+        proposed: Instant,
+        primaryAdjustmentSeconds: Long,
+        minimum: Instant,
+        maximum: Instant?,
+        visited: Set<Instant>,
+        allowOpposite: Boolean = true,
+    ): Instant? {
+        fun Instant.withinBounds(): Instant =
+            coerceAtLeast(minimum).let { bounded ->
+                maximum?.let { bounded.coerceAtMost(it) } ?: bounded
+            }
+
+        val primary = proposed.withinBounds()
+        if (primary != current && primary !in visited) return primary
+        if (!allowOpposite) return null
+
+        val opposite = if (primaryAdjustmentSeconds <= 0L) {
+            current.plus(BIDIRECTIONAL_PROBE_MINUTES, ChronoUnit.MINUTES)
+        } else {
+            current.minus(BIDIRECTIONAL_PROBE_MINUTES, ChronoUnit.MINUTES)
+        }.truncatedTo(ChronoUnit.MINUTES).withinBounds()
+        return opposite.takeIf { it != current && it !in visited }
     }
 
     private fun <T> List<ProjectedTransitJourney<T>>.latestFeasible(): ProjectedTransitJourney<T>? =
@@ -186,11 +248,13 @@ class SafeDepartureResolver(
 
     private companion object {
         const val DEFAULT_MAX_SEARCHES = 3
-        const val MAX_SEARCH_LIMIT = 6
+        const val MAX_PROVIDER_SEARCHES = 3
         const val DEFAULT_TOLERANCE_SECONDS = 60L
         const val MAX_TOLERANCE_SECONDS = 300L
         const val MINIMUM_JOURNEY_SECONDS = 60L
         const val SPARSE_TIMETABLE_PROBE_MINUTES = 5L
+        const val BIDIRECTIONAL_PROBE_MINUTES = 5L
+        const val SECONDS_PER_MINUTE = 60L
     }
 }
 

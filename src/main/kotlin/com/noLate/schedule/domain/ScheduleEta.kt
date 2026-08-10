@@ -1,5 +1,8 @@
 package com.noLate.schedule.domain
 
+import com.noLate.schedule.application.EffectiveTransitRoute
+import com.noLate.schedule.application.TransitRouteProvenance
+import com.noLate.schedule.application.TransitTimingBasis
 import java.time.Instant
 
 enum class TrafficSource {
@@ -132,4 +135,16 @@ data class ScheduleDepartureEtaStatusDto(
     val predictedArrivalAt: Instant? = null,
     /** null은 절대 도착시각을 계산하지 못한 상태다. */
     val onTimeArrivalPossible: Boolean? = null,
+    /** 이번 ETA에서 실제 사용한 선택/대체 대중교통 경로의 출처다. */
+    val transitRouteProvenance: TransitRouteProvenance? = null,
+    /** 첫 승차 실시간 도착과 미래 환승 시간표를 어떤 방식으로 결합했는지 나타낸다. */
+    val transitTimingBasis: TransitTimingBasis? = null,
+    /** 총 이동시간에 이미 포함된 첫 탑승 대기시간이다. */
+    val firstBoardingWaitMinutes: Int? = null,
+    /** 현재 채택한 여정이 사용자가 저장한 선택 경로와 다른 대체 여정인지 여부다. */
+    val routeChanged: Boolean = false,
+    /** 이번 정상 ETA에서 실제 채택한 대중교통 여정. 저장 지도 경로와 별개다. */
+    val effectiveTransitRoute: EffectiveTransitRoute? = null,
+    /** 이 ETA 평가가 약속한 다음 갱신 시각. push retry용 [nextCheckAt]과 분리된다. */
+    val etaRefreshDueAt: Instant? = null,
 )

@@ -41,9 +41,17 @@ and verify the reviewed migrations in order, then start the new binary:
 6. `docs/schedule/migrations/2026-08-01-push-delivery-ack-capability.sql`
 7. `docs/schedule/migrations/2026-08-04-schedule-route-optimistic-lock.sql`
 8. `docs/schedule/migrations/2026-08-04-departure-alarm-plan-v2.sql`
+9. `docs/schedule/migrations/2026-08-06-live-activity-delivery.sql`
+10. `docs/schedule/migrations/2026-08-06-live-activity-appearance.sql`
+11. `docs/schedule/migrations/2026-08-10-effective-transit-route.sql`
 
 Production startup requires exactly one marker for each migration. A missing predecessor, partial
 table, failed postcondition, or attempted reapplication fails closed for operator inspection.
+The final migration adds the accepted transit itinerary snapshot, the immutable
+`last_eta_refresh_due_at` freshness boundary, and the durable semantic catch-up flag used after an
+immutable push retry; deploy none of those entity mappings without that marker.
+While workers are stopped, it also backfills the legacy `last_checked_at + 1 second` catch-up marker
+into the explicit flag so an already scheduled correction is not lost across deployment.
 
 When `schedule.push.enabled=true` in production, startup also fails closed unless the complete
 delivery and ETA path is configured: scheduler, durable push outbox, Firebase, TMAP plus its server

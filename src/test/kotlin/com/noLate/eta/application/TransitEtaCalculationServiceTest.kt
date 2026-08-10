@@ -26,6 +26,7 @@ import com.noLate.transit.domain.TransitArrivalDto
 import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -429,7 +430,7 @@ class TransitEtaCalculationServiceTest {
     }
 
     @Test
-    fun `대체 여정이 정시여도 itinerary 전달 계약이 없으면 선택 경로 실패를 actionable ETA로 승격하지 않는다`() {
+    fun `선택 환승을 놓치면 같은 응답의 검증된 대체 여정을 LIVE ETA로 채택한다`() {
         whenever(busArrivals()).thenReturn(
             listOf(busArrival(expectedAt = evaluatedAt.plus(12, ChronoUnit.MINUTES)))
         )
@@ -465,17 +466,21 @@ class TransitEtaCalculationServiceTest {
             )
         )
 
-        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
-        assertFalse(result.accepted)
-        assertTrue(result.stale)
-        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_MISSED, result.failureReason)
-        assertEquals(TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, result.transitRouteProvenance)
+        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
+        assertTrue(result.accepted)
+        assertFalse(result.stale)
+        assertNull(result.failureReason)
+        assertEquals(55, result.travelMinutes)
+        assertEquals(evaluatedAt.plus(55, ChronoUnit.MINUTES), result.predictedArrivalAt)
+        assertEquals(TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE, result.transitRouteProvenance)
         assertEquals(
             TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
             result.transitTimingBasis,
         )
-        assertNull(result.predictedArrivalAt)
-        assertEquals(40, result.travelMinutes)
+        val effectiveRoute = requireNotNull(result.effectiveTransitRoute)
+        assertEquals("odsay", effectiveRoute.provider)
+        assertTrue(effectiveRoute.identity.matches(Regex("[0-9a-f]{64}")))
+        assertEquals("500", effectiveRoute.segments.first().lineName)
         verify(arrivalService, times(1)).getBusArrivals(
             arsId = anyOrNull(),
             routeName = eq("402"),
@@ -486,7 +491,7 @@ class TransitEtaCalculationServiceTest {
             cityCodeNamespace = any(),
             providerCode = anyOrNull(),
         )
-        verify(arrivalService, never()).getBusArrivals(
+        verify(arrivalService, times(1)).getBusArrivals(
             arsId = anyOrNull(),
             routeName = eq("500"),
             cityCode = anyOrNull(),
@@ -499,7 +504,7 @@ class TransitEtaCalculationServiceTest {
     }
 
     @Test
-    fun `선택 여정의 미래 환승 시간표가 없으면 대체 경로로 조용히 바꾸지 않고 저신뢰도 진단을 반환한다`() {
+    fun `선택 여정의 미래 환승 시간표가 없어도 검증된 대체 경로가 있으면 명시적으로 전환한다`() {
         whenever(busArrivals()).thenReturn(
             listOf(busArrival(expectedAt = evaluatedAt.plus(12, ChronoUnit.MINUTES)))
         )
@@ -546,16 +551,312 @@ class TransitEtaCalculationServiceTest {
             )
         ).calculate(request(selectedRouteJson = selectedTransferRouteJson()))
 
-        assertFalse(result.accepted)
-        assertTrue(result.stale)
-        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, result.failureReason)
-        assertEquals(TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, result.transitRouteProvenance)
-        assertNull(result.predictedArrivalAt)
+        assertTrue(result.accepted)
+        assertFalse(result.stale)
+        assertNull(result.failureReason)
+        assertEquals(TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE, result.transitRouteProvenance)
         assertEquals(
-            TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
+            TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
             result.transitTimingBasis,
         )
-        assertNull(result.predictedArrivalAt)
+        assertEquals(evaluatedAt.plus(55, ChronoUnit.MINUTES), result.predictedArrivalAt)
+    }
+
+    @Test
+    fun `첫 동일 signature 차량의 환승 여유가 부족해도 다음 안전 차량을 선택 경로로 유지한다`() {
+        stubBusArrivals("402", evaluatedAt.plus(5, ChronoUnit.MINUTES))
+        val exactBoundary = transferJourney(
+            firstRouteId = "bus-402",
+            firstLineName = "402",
+            secondRouteId = "subway-2",
+            secondLineName = "2호선",
+            firstArrivalMinute = 20,
+            transferWalkMinutes = 4,
+            secondDepartureMinute = 24,
+            finalArrivalMinute = 50,
+        )
+        val nextSafeVehicle = exactBoundary.copy(
+            legs = exactBoundary.legs.map { leg ->
+                if (leg.sequence == 2) leg.copy(waitingMinutes = 5) else leg
+            }
+        )
+        val odsay = RecordingProvider(
+            providerId = "odsay",
+            result = listOf(exactBoundary, nextSafeVehicle),
+        )
+
+        val result = service(listOf(odsay)).calculate(
+            request(
+                targetArrivalAt = evaluatedAt.plus(60, ChronoUnit.MINUTES),
+                selectedRouteJson = selectedTransferRouteJson(),
+            )
+        )
+
+        assertTrue(result.accepted)
+        assertEquals(TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, result.transitRouteProvenance)
+        assertEquals(evaluatedAt.plus(50, ChronoUnit.MINUTES), result.predictedArrivalAt)
+        assertEquals("402", requireNotNull(result.effectiveTransitRoute).segments.first().lineName)
+    }
+
+    @Test
+    fun `도착 마감이 있으면 한 응답의 안전한 선택 차량 중 가장 늦은 출발을 채택한다`() {
+        stubBusArrivals(
+            "402",
+            evaluatedAt.plus(10, ChronoUnit.MINUTES),
+            evaluatedAt.plus(15, ChronoUnit.MINUTES),
+        )
+        val first = journey(
+            routeId = "bus-402",
+            lineName = "402",
+            totalMinutes = 43,
+            scheduledWaitMinutes = 5,
+            departureAt = evaluatedAt,
+        )
+        val later = journey(
+            routeId = "bus-402",
+            lineName = "402",
+            totalMinutes = 43,
+            scheduledWaitMinutes = 5,
+            departureAt = evaluatedAt.plus(5, ChronoUnit.MINUTES),
+        )
+
+        val result = service(
+            listOf(RecordingProvider("odsay", result = listOf(first, later)))
+        ).calculate(request(targetArrivalAt = evaluatedAt.plus(60, ChronoUnit.MINUTES)))
+
+        assertTrue(result.accepted)
+        assertEquals(evaluatedAt.plus(5, ChronoUnit.MINUTES), result.recommendedDepartureAt)
+        assertEquals(TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, result.transitRouteProvenance)
+
+        val firstVehicleResult = service(
+            listOf(RecordingProvider("odsay", result = listOf(first)))
+        ).calculate(request(targetArrivalAt = evaluatedAt.plus(60, ChronoUnit.MINUTES)))
+        assertEquals(
+            requireNotNull(firstVehicleResult.effectiveTransitRoute).identity,
+            requireNotNull(result.effectiveTransitRoute).identity,
+            "차량 시각만 달라진 같은 노선은 동일한 deterministic route identity여야 한다.",
+        )
+    }
+
+    @Test
+    fun `앞 조회의 안전한 대체 경로보다 뒤 조회에서 회복된 선택 경로를 전역 우선한다`() {
+        val initialDeparture = evaluatedAt.plus(10, ChronoUnit.MINUTES)
+        stubBusArrivals(
+            "402",
+            evaluatedAt.plus(15, ChronoUnit.MINUTES),
+            evaluatedAt.plus(25, ChronoUnit.MINUTES),
+            evaluatedAt.plus(30, ChronoUnit.MINUTES),
+        )
+        stubBusArrivals("500", evaluatedAt.plus(15, ChronoUnit.MINUTES))
+        val searchedAt = mutableListOf<Instant>()
+        val odsay = FunctionalProvider { search ->
+            searchedAt += search.departureAt
+            val selectedJourney = transferJourney(
+                firstRouteId = "bus-402",
+                firstLineName = "402",
+                secondRouteId = "subway-2",
+                secondLineName = "2호선",
+                firstArrivalMinute = 20,
+                transferWalkMinutes = 4,
+                secondDepartureMinute = 24,
+                finalArrivalMinute = 35,
+                secondWaitingMinutes = if (search.departureAt == initialDeparture) 0 else 5,
+                departureAt = search.departureAt,
+            )
+            if (search.departureAt == initialDeparture) {
+                listOf(
+                    selectedJourney,
+                    transferJourney(
+                        firstRouteId = "bus-500",
+                        firstLineName = "500",
+                        secondRouteId = "subway-9",
+                        secondLineName = "9호선",
+                        firstArrivalMinute = 15,
+                        transferWalkMinutes = 3,
+                        secondDepartureMinute = 22,
+                        finalArrivalMinute = 40,
+                        secondWaitingMinutes = 8,
+                        departureAt = search.departureAt,
+                    ),
+                )
+            } else {
+                listOf(selectedJourney)
+            }
+        }
+
+        val result = service(listOf(odsay)).calculate(
+            request(
+                plannedDepartureAt = initialDeparture,
+                targetArrivalAt = evaluatedAt.plus(60, ChronoUnit.MINUTES),
+                selectedRouteJson = selectedTransferRouteJson(),
+            )
+        )
+
+        assertEquals(
+            listOf(
+                evaluatedAt.plus(10, ChronoUnit.MINUTES),
+                evaluatedAt.plus(9, ChronoUnit.MINUTES),
+                evaluatedAt.plus(25, ChronoUnit.MINUTES),
+            ),
+            searchedAt,
+        )
+        assertTrue(result.accepted)
+        assertEquals(TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, result.transitRouteProvenance)
+        assertEquals(evaluatedAt.plus(25, ChronoUnit.MINUTES), result.recommendedDepartureAt)
+        assertEquals(evaluatedAt.plus(60, ChronoUnit.MINUTES), result.predictedArrivalAt)
+    }
+
+    @Test
+    fun `대체 후보는 응답당 앞선 세 개까지만 실시간 검증한다`() {
+        stubBusArrivals("402", evaluatedAt.plus(5, ChronoUnit.MINUTES))
+        listOf("500", "501", "502", "503").forEach { route ->
+            stubBusArrivals(route, evaluatedAt.plus(10, ChronoUnit.MINUTES))
+        }
+        val selectedUnknown = transferJourney(
+            firstRouteId = "bus-402",
+            firstLineName = "402",
+            secondRouteId = "subway-2",
+            secondLineName = "2호선",
+            firstArrivalMinute = 20,
+            transferWalkMinutes = 4,
+            secondDepartureMinute = 24,
+            finalArrivalMinute = 50,
+        )
+        val alternatives = listOf("500", "501", "502", "503").mapIndexed { index, route ->
+            journey(
+                routeId = "bus-$route",
+                lineName = route,
+                totalMinutes = 30 + index,
+                scheduledWaitMinutes = 5,
+            )
+        }
+
+        val result = service(
+            listOf(RecordingProvider("odsay", result = listOf(selectedUnknown) + alternatives))
+        ).calculate(request(selectedRouteJson = selectedTransferRouteJson()))
+
+        assertTrue(result.accepted)
+        assertEquals(TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE, result.transitRouteProvenance)
+        listOf("500", "501", "502").forEach { route ->
+            verify(arrivalService, times(1)).getBusArrivals(
+                arsId = anyOrNull(),
+                routeName = eq(route),
+                cityCode = anyOrNull(),
+                nodeId = anyOrNull(),
+                stationName = anyOrNull(),
+                limit = any(),
+                cityCodeNamespace = any(),
+                providerCode = anyOrNull(),
+            )
+        }
+        verify(arrivalService, never()).getBusArrivals(
+            arsId = anyOrNull(),
+            routeName = eq("503"),
+            cityCode = anyOrNull(),
+            nodeId = anyOrNull(),
+            stationName = anyOrNull(),
+            limit = any(),
+            cityCodeNamespace = any(),
+            providerCode = anyOrNull(),
+        )
+    }
+
+    @Test
+    fun `선택 signature가 응답에서 사라져도 세 번 탐색 후 검증된 대체 경로를 채택한다`() {
+        stubBusArrivals(
+            "500",
+            evaluatedAt.plus(10, ChronoUnit.MINUTES),
+            evaluatedAt.plus(15, ChronoUnit.MINUTES),
+            evaluatedAt.plus(20, ChronoUnit.MINUTES),
+        )
+        val searchedAt = mutableListOf<Instant>()
+        val odsay = FunctionalProvider { search ->
+            searchedAt += search.departureAt
+            listOf(
+                journey(
+                    routeId = "bus-500",
+                    lineName = "500",
+                    totalMinutes = 30,
+                    scheduledWaitMinutes = 5,
+                    departureAt = search.departureAt,
+                )
+            )
+        }
+
+        val result = service(listOf(odsay)).calculate(
+            request(
+                plannedDepartureAt = evaluatedAt.plus(10, ChronoUnit.MINUTES),
+                targetArrivalAt = evaluatedAt.plus(60, ChronoUnit.MINUTES),
+            )
+        )
+
+        assertEquals(
+            listOf(
+                evaluatedAt.plus(10, ChronoUnit.MINUTES),
+                evaluatedAt.plus(5, ChronoUnit.MINUTES),
+                evaluatedAt,
+            ),
+            searchedAt,
+        )
+        assertTrue(result.accepted)
+        assertEquals(TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE, result.transitRouteProvenance)
+        assertEquals(evaluatedAt.plus(10, ChronoUnit.MINUTES), result.recommendedDepartureAt)
+        assertEquals(evaluatedAt.plus(40, ChronoUnit.MINUTES), result.predictedArrivalAt)
+    }
+
+    @Test
+    fun `선택 signature도 유효 ODsay 대체 후보도 없으면 NOT_FOUND로 닫는다`() {
+        val result = service(
+            listOf(RecordingProvider("odsay", result = emptyList()))
+        ).calculate(request())
+
+        assertFalse(result.accepted)
+        assertEquals(TrafficFailureReasons.TRANSIT_SELECTED_ROUTE_NOT_FOUND, result.failureReason)
+        verify(arrivalService, never()).getBusArrivals(
+            arsId = anyOrNull(),
+            routeName = anyOrNull(),
+            cityCode = anyOrNull(),
+            nodeId = anyOrNull(),
+            stationName = anyOrNull(),
+            limit = any(),
+            cityCodeNamespace = any(),
+            providerCode = anyOrNull(),
+        )
+    }
+
+    @Test
+    fun `선택 signature가 없고 대체 후보의 실시간 도착도 없으면 accepted로 승격하지 않는다`() {
+        stubBusArrivals("500")
+        val searchedAt = mutableListOf<Instant>()
+        val odsay = FunctionalProvider { search ->
+            searchedAt += search.departureAt
+            listOf(
+                journey(
+                    routeId = "bus-500",
+                    lineName = "500",
+                    totalMinutes = 30,
+                    scheduledWaitMinutes = 5,
+                    departureAt = search.departureAt,
+                )
+            )
+        }
+
+        val result = service(listOf(odsay)).calculate(
+            request(plannedDepartureAt = evaluatedAt.plus(10, ChronoUnit.MINUTES))
+        )
+
+        assertEquals(
+            listOf(
+                evaluatedAt.plus(10, ChronoUnit.MINUTES),
+                evaluatedAt.plus(5, ChronoUnit.MINUTES),
+                evaluatedAt,
+            ),
+            searchedAt,
+        )
+        assertFalse(result.accepted)
+        assertEquals(TrafficSource.TIMETABLE_PROVIDER, result.source)
+        assertEquals(TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE, result.failureReason)
+        assertEquals(TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE, result.transitRouteProvenance)
     }
 
     @Test
@@ -591,6 +892,60 @@ class TransitEtaCalculationServiceTest {
             result.transitTimingBasis,
         )
         assertNull(result.predictedArrivalAt)
+    }
+
+    @Test
+    fun `환승 시간표 UNKNOWN 경고는 세 번의 ODsay 회복 조회를 모두 쓴 뒤 반환한다`() {
+        stubBusArrivals("402", evaluatedAt.plus(15, ChronoUnit.MINUTES))
+        val searchedAt = mutableListOf<Instant>()
+        val odsay = FunctionalProvider { search ->
+            searchedAt += search.departureAt
+            val journey = transferJourney(
+                firstRouteId = "bus-402",
+                firstLineName = "402",
+                secondRouteId = "subway-2",
+                secondLineName = "2호선",
+                firstArrivalMinute = 20,
+                transferWalkMinutes = 5,
+                secondDepartureMinute = 30,
+                finalArrivalMinute = 50,
+                departureAt = search.departureAt,
+            )
+            listOf(
+                journey.copy(
+                    legs = journey.legs.map { leg ->
+                        if (leg.sequence == 2) {
+                            leg.copy(
+                                scheduledDepartureAt = null,
+                                timingBasis = TransitLegTimingBasis.UNKNOWN,
+                            )
+                        } else {
+                            leg
+                        }
+                    }
+                )
+            )
+        }
+
+        val result = service(listOf(odsay)).calculate(
+            request(
+                plannedDepartureAt = evaluatedAt.plus(10, ChronoUnit.MINUTES),
+                selectedRouteJson = selectedTransferRouteJson(),
+            )
+        )
+
+        assertEquals(
+            listOf(
+                evaluatedAt.plus(10, ChronoUnit.MINUTES),
+                evaluatedAt.plus(5, ChronoUnit.MINUTES),
+                evaluatedAt,
+            ),
+            searchedAt,
+        )
+        assertFalse(result.accepted)
+        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, result.failureReason)
+        assertEquals(TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, result.transitRouteProvenance)
+        assertNotNull(result.effectiveTransitRoute)
     }
 
     @Test
@@ -739,11 +1094,13 @@ class TransitEtaCalculationServiceTest {
         transferWalkMinutes: Int,
         secondDepartureMinute: Long,
         finalArrivalMinute: Long,
+        secondWaitingMinutes: Int = 0,
+        departureAt: Instant = evaluatedAt,
     ): TransitJourney = TransitJourney(
         provider = "odsay",
-        requestedDepartureAt = evaluatedAt,
-        departureAt = evaluatedAt,
-        arrivalAt = evaluatedAt.plus(finalArrivalMinute, ChronoUnit.MINUTES),
+        requestedDepartureAt = departureAt,
+        departureAt = departureAt,
+        arrivalAt = departureAt.plus(finalArrivalMinute, ChronoUnit.MINUTES),
         totalMinutes = finalArrivalMinute.toInt(),
         fetchedAt = evaluatedAt,
         legs = listOf(
@@ -752,8 +1109,8 @@ class TransitEtaCalculationServiceTest {
                 mode = TransitLegMode.BUS,
                 durationMinutes = firstArrivalMinute.toInt(),
                 waitingMinutes = 5,
-                scheduledDepartureAt = evaluatedAt,
-                scheduledArrivalAt = evaluatedAt.plus(firstArrivalMinute, ChronoUnit.MINUTES),
+                scheduledDepartureAt = departureAt,
+                scheduledArrivalAt = departureAt.plus(firstArrivalMinute, ChronoUnit.MINUTES),
                 from = TransitStop(arsId = "02005", name = "서울역버스환승센터"),
                 to = TransitStop(providerStopId = "transfer", name = "환승역"),
                 line = TransitLine(providerRouteId = firstRouteId, name = firstLineName),
@@ -765,8 +1122,8 @@ class TransitEtaCalculationServiceTest {
                 sequence = 1,
                 mode = TransitLegMode.WALK,
                 durationMinutes = transferWalkMinutes,
-                scheduledDepartureAt = evaluatedAt.plus(firstArrivalMinute, ChronoUnit.MINUTES),
-                scheduledArrivalAt = evaluatedAt.plus(
+                scheduledDepartureAt = departureAt.plus(firstArrivalMinute, ChronoUnit.MINUTES),
+                scheduledArrivalAt = departureAt.plus(
                     firstArrivalMinute + transferWalkMinutes,
                     ChronoUnit.MINUTES,
                 ),
@@ -776,9 +1133,9 @@ class TransitEtaCalculationServiceTest {
                 sequence = 2,
                 mode = TransitLegMode.SUBWAY,
                 durationMinutes = (finalArrivalMinute - secondDepartureMinute).toInt(),
-                waitingMinutes = 0,
-                scheduledDepartureAt = evaluatedAt.plus(secondDepartureMinute, ChronoUnit.MINUTES),
-                scheduledArrivalAt = evaluatedAt.plus(finalArrivalMinute, ChronoUnit.MINUTES),
+                waitingMinutes = secondWaitingMinutes,
+                scheduledDepartureAt = departureAt.plus(secondDepartureMinute, ChronoUnit.MINUTES),
+                scheduledArrivalAt = departureAt.plus(finalArrivalMinute, ChronoUnit.MINUTES),
                 from = TransitStop(providerStopId = "transfer-subway", name = "환승역"),
                 to = TransitStop(providerStopId = "destination", name = "목적지역"),
                 line = TransitLine(
@@ -840,6 +1197,23 @@ class TransitEtaCalculationServiceTest {
         sourceUpdatedAt = evaluatedAt.toString(),
         freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
     )
+
+    private fun stubBusArrivals(routeName: String, vararg expectedAt: Instant) {
+        whenever(
+            arrivalService.getBusArrivals(
+                arsId = anyOrNull(),
+                routeName = eq(routeName),
+                cityCode = anyOrNull(),
+                nodeId = anyOrNull(),
+                stationName = anyOrNull(),
+                limit = any(),
+                cityCodeNamespace = any(),
+                providerCode = anyOrNull(),
+            )
+        ).thenReturn(
+            expectedAt.map { busArrival(it).copy(routeName = routeName) }
+        )
+    }
 
     private fun selectedOdsayRouteJson(): String =
         """

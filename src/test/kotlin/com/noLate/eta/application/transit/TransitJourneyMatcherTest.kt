@@ -59,6 +59,35 @@ class TransitJourneyMatcherTest {
     }
 
     @Test
+    fun `한 응답의 동일 signature 다음 차량들을 하나도 버리지 않고 시간순으로 반환한다`() {
+        val first = journey(
+            provider = "odsay",
+            routeId = "bus-402",
+            departureAt = searchedAt.plus(2, ChronoUnit.MINUTES),
+            arrivalAt = searchedAt.plus(42, ChronoUnit.MINUTES),
+        )
+        val next = journey(
+            provider = "odsay",
+            routeId = "bus-402",
+            departureAt = searchedAt.plus(7, ChronoUnit.MINUTES),
+            arrivalAt = searchedAt.plus(47, ChronoUnit.MINUTES),
+        )
+        val different = journey(
+            provider = "odsay",
+            routeId = "bus-421",
+            departureAt = searchedAt,
+            arrivalAt = searchedAt.plus(35, ChronoUnit.MINUTES),
+        )
+
+        val result = matcher.findSelectedCandidates(
+            selected = selected,
+            candidates = listOf(next, different, first),
+        )
+
+        assertEquals(listOf(first, next), result)
+    }
+
+    @Test
     fun `동일한 노선 정보여도 다른 공급자 후보는 선택한 ODsay 경로로 취급하지 않는다`() {
         val tmapCandidate = journey(
             provider = "tmap",

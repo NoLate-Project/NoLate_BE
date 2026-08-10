@@ -60,15 +60,22 @@ class SchedulePushJobUpdateTest {
             notifiedDepartureAt = originalScheduleAt.minus(35, ChronoUnit.MINUTES),
             departureReminderStage = ScheduleDepartureReminderStage.DEPART_NOW,
             departureReminderBoundaryAt = originalScheduleAt.minus(35, ChronoUnit.MINUTES),
+            semanticCatchUpPending = true,
             nextCheckAt = originalMonitorStartAt.plus(20, ChronoUnit.MINUTES),
             completeAfterCheck = false,
             etaSource = TrafficSource.LIVE_PROVIDER,
             liveFetchedAt = originalMonitorStartAt,
             etaStale = false,
             etaRouteFingerprint = "old-route-fingerprint",
+            effectiveTransitRouteJson = "{\"version\":1}",
             now = originalMonitorStartAt,
         )
+        val originalEtaRefreshDueAt = originalMonitorStartAt.plus(20, ChronoUnit.MINUTES)
+        assertEquals(originalEtaRefreshDueAt, job.lastEtaRefreshDueAt)
+        assertEquals(true, job.semanticCatchUpPending)
         job.snoozeUntil(originalMonitorStartAt.plus(30, ChronoUnit.MINUTES))
+        assertEquals(originalEtaRefreshDueAt, job.lastEtaRefreshDueAt)
+        assertEquals(false, job.semanticCatchUpPending)
 
         whenever(repository.findByScheduleIdAndMemberIdForUpdate(10L, 1L)).thenReturn(job)
         whenever(repository.save(any<SchedulePushJob>())).thenAnswer { it.getArgument(0) }
@@ -86,16 +93,19 @@ class SchedulePushJobUpdateTest {
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(0, job.checkCount)
         assertEquals(0, job.retryCount)
+        assertEquals(false, job.semanticCatchUpPending)
         assertNull(job.lastTravelMinutes)
         assertNull(job.lastRecommendedDepartureAt)
         assertNull(job.lastNotifiedDepartureAt)
         assertNull(job.lastCheckedAt)
+        assertNull(job.lastEtaRefreshDueAt)
         assertNull(job.lastLiveFetchedAt)
         assertNull(job.lastLiveTravelMinutes)
         assertNull(job.lastEtaSource)
         assertNull(job.lastEtaStale)
         assertNull(job.lastEtaFailureReason)
         assertNull(job.lastEtaRouteFingerprint)
+        assertNull(job.lastEffectiveTransitRouteJson)
         assertNull(job.lastTrafficChangeMinutes)
         assertNull(job.lastChangedAt)
         assertNull(job.lastPushedAt)
@@ -154,6 +164,45 @@ class SchedulePushJobUpdateTest {
         assertEquals(true, job.lastEtaStale)
         assertNull(job.lastTrafficChangeMinutes)
         assertNull(job.lastChangedAt)
+    }
+
+    @Test
+    fun `retry evaluation persists effective route snapshot and cancellation clears it`() {
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = originalScheduleAt,
+            departureAt = originalDepartureAt,
+            monitorStartAt = originalMonitorStartAt,
+            intervalMinutes = 20,
+        )
+        val snapshotJson = "{\"version\":1,\"accepted\":true}"
+
+        job.recordEtaEvaluationBeforeRetry(
+            travelMinutes = 35,
+            recommendedDepartureAt = originalScheduleAt.minus(35, ChronoUnit.MINUTES),
+            etaSource = TrafficSource.TIMETABLE_PROVIDER,
+            liveFetchedAt = originalMonitorStartAt,
+            etaStale = false,
+            etaFailureReason = null,
+            predictedArrivalAt = null,
+            etaTravelMode = ScheduleTravelMode.TRANSIT,
+            etaRouteFingerprint = "route-a",
+            etaRefreshDueAt = originalMonitorStartAt.plus(1, ChronoUnit.MINUTES),
+            effectiveTransitRouteJson = snapshotJson,
+            now = originalMonitorStartAt,
+        )
+
+        assertEquals(snapshotJson, job.lastEffectiveTransitRouteJson)
+        assertEquals(
+            originalMonitorStartAt.plus(1, ChronoUnit.MINUTES),
+            job.lastEtaRefreshDueAt,
+        )
+
+        job.cancel()
+
+        assertNull(job.lastEffectiveTransitRouteJson)
+        assertNull(job.lastEtaRefreshDueAt)
     }
 
     @Test

@@ -153,8 +153,9 @@ class TransitEtaWorkerSimulationTest {
         ).thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         val matcher = TransitJourneyMatcher()
+        val objectMapper = jacksonObjectMapper().findAndRegisterModules()
         val transitEtaService = TransitEtaCalculationService(
-            selectedRouteDecoder = SelectedTransitRouteDecoder(jacksonObjectMapper()),
+            selectedRouteDecoder = SelectedTransitRouteDecoder(objectMapper),
             journeyProviders = listOf(odsayProvider),
             safeDepartureResolver = SafeDepartureResolver(
                 matcher = matcher,
@@ -176,7 +177,7 @@ class TransitEtaWorkerSimulationTest {
         )
         val worker = SchedulePushJobWorker(
             scheduleRepository = scheduleRepository,
-            objectMapper = jacksonObjectMapper(),
+            objectMapper = objectMapper,
             trafficClient = trafficClient,
             notificationUseCase = notificationUseCase,
             periodicPushPolicy = PeriodicPushPolicy(),

@@ -17,15 +17,26 @@ class TransitJourneyMatcher {
     fun findSelected(
         selected: SelectedTransitRoute,
         candidates: List<TransitJourney>,
-    ): TransitJourney? =
+    ): TransitJourney? = findSelectedCandidates(selected, candidates).firstOrNull()
+
+    /**
+     * 같은 응답에 연속된 동일 노선 차량이 함께 들어올 수 있으므로 첫 항목만 고르지 않는다.
+     * 계산 계층이 각 차량의 실시간 승차·환승 가능성을 확인할 수 있게 전체 일치 후보를
+     * 시간순으로 반환한다.
+     */
+    fun findSelectedCandidates(
+        selected: SelectedTransitRoute,
+        candidates: List<TransitJourney>,
+    ): List<TransitJourney> =
         candidates
             .asSequence()
             .filter { it.provider.equals(selected.provider, ignoreCase = true) }
             .filter { candidate -> matches(selected.rides, candidate.rideLegs) }
-            .minWithOrNull(
+            .sortedWith(
                 compareBy<TransitJourney> { it.arrivalAt }
                     .thenBy { it.departureAt }
             )
+            .toList()
 
     internal fun matches(
         selectedRides: List<TransitRideSignature>,

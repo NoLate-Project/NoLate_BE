@@ -15,8 +15,16 @@
 
 ## Invariants
 
-1. 앱이 대체 itinerary의 승하차 상세를 전달할 계약을 갖기 전까지 선택 경로만 계산한다.
-   같은 ODsay 응답의 다른 후보도 projection하거나 arrival provider를 조회하지 않는다.
+1. 재조회마다 선택 경로와 같은 signature의 차량을 모두 평가하고, 환승 가능성과 도착 마감을
+   만족하는 다음 차량이 하나라도 있으면 다른 경로보다 우선한다. 동일 signature가 응답에
+   존재하지만 안전한 차량이 없거나 선택 signature가 응답에서 일시적으로 사라졌을 때만 같은
+   ODsay 응답의 다른 여정을 최대 3개 평가한다.
+   채택한 대체 여정은 `ODSAY_ALTERNATIVE_ROUTE`와 전체 승하차 구간을 푸시 작업 snapshot에
+   원자적으로 저장해 일반 푸시, Live Activity, 일정 상세가 같은 경로를 표시하게 한다.
+   경로 identity는 승차 노선·승하차 정류장·방향의 안정 ID를 우선하고, ID가 없을 때만
+   범위가 포함된 이름을 사용한다. 도보 구간과 ID가 있는 객체의 표시명 변경은 identity를
+   바꾸지 않는다. 경로 전환의 retry latch는 `(notificationGeneration, checkCount)`에 묶어
+   snooze가 check 번호를 0으로 초기화해도 이전 세대의 전환 푸시를 다시 재생하지 않는다.
 2. ODsay 시간은 분 단위로 정규화하고 구간 합계, 전체 timeline, 대기시간 범위를 검증한다.
 3. 시간표 불연속 탐색은 설정된 호출 상한을 넘지 않는다.
 4. 첫 승차 대기만 현재 도착정보로 교체한다. 실시간 첫 차량은 정류장 접근 뒤
@@ -27,7 +35,8 @@
    만들지 않도록 `UNKNOWN`으로 내리고, 기존 조회 예산 안에서 더 이른 여정을 재탐색한다.
 5. 미래 환승은 ODsay 시간표로만 판정하며 실시간으로 표시하지 않는다. 필요한 시간표 시각이
    없거나 위 안전 여유를 입증할 수 없으면 `TRANSIT_TRANSFER_TIMING_UNKNOWN` 저신뢰도 진단으로
-   내린다.
+   내린다. 단일 후보의 `MISSED`/`UNKNOWN`은 즉시 최종 경고가 아니며, 같은 노선의 다음 차량과
+   검증 가능한 대체 여정 및 최대 3회의 시간표 탐색을 모두 소진한 뒤에만 경고로 확정한다.
 6. 정상 결과와 명시적 `TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE` 즉시 출발 결과만 provider
    `recommendedDepartureAt`을 사용한다. 그 밖의 timeout/degraded 진단은 직전 fresh
    `lastRecommendedDepartureAt`을, 첫 조회라면 사용자가 저장한 `departureAt`을 그대로 유지한다.
@@ -55,7 +64,10 @@
     `(급행)` 계열 표기는 `EXPRESS`, 비어 있지 않고 상충하지 않는 일반 ODsay 지하철 노선명은
     해당 공급자의 표기 계약에 따라 `LOCAL`로 저장한다. 재조회 후보와 실시간 열차 모두 같은
     종별임을 확인해야 하며, 이름 누락·상충·legacy `UNKNOWN`은 추론하지 않고 저장 ETA로 내린다.
-    이는 같은 노선 ID를 쓰는 일반·급행의 정차역 차이를 숨기지 않기 위한 경계다.
+    이는 같은 노선 ID를 쓰는 일반·급행의 정차역 차이를 숨기지 않기 위한 경계다. ODsay의
+    `way`는 종착역이 아니라 방면 정보이므로 실시간 열차의 운행 범위 증거로 사용하지 않는다.
+    역순서 topology가 없는 현재 계약에서는 단축 운행의 거짓 성공을 막기 위해 실시간 열차
+    종착역이 사용자 하차역과 정확히 일치할 때만 지하철 overlay를 허용한다.
 12. 도착정보는 provider 원천 갱신시각을 증명하고 freshness 상한 안에 있을 때만 첫 승차
     실시간 보정에 사용한다. 서버가 받은 시각만 있는 응답은 실시간처럼 승격하지 않는다.
 13. ETA push 한 회차의 immutable payload는 기본 120초 TTL 안에서만 발송한다. 기본 1분

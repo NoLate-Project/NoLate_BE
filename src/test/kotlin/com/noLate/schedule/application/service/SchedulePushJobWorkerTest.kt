@@ -1,6 +1,6 @@
 package com.noLate.schedule.application.service
 
-import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.useCase.NotificationUseCase
@@ -9,9 +9,15 @@ import com.noLate.notification.liveactivity.application.ScheduleLiveActivityEtaP
 import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
 import com.noLate.schedule.application.TrafficClient
+import com.noLate.schedule.application.EffectiveTransitRoute
+import com.noLate.schedule.application.EffectiveTransitRouteSegment
+import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
+import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.TrafficResult
+import com.noLate.schedule.application.TransitRouteProvenance
+import com.noLate.schedule.application.TransitTimingBasis
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
 import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
@@ -30,6 +36,7 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -71,7 +78,7 @@ class SchedulePushJobWorkerTest {
     private val seoulTimeFormatter = DateTimeFormatter
         .ofPattern("HH:mm")
         .withZone(ZoneId.of("Asia/Seoul"))
-    private val objectMapper = ObjectMapper()
+    private val objectMapper = jacksonObjectMapper().findAndRegisterModules()
 
     @Mock
     lateinit var pushJobRepository: SchedulePushJobRepository
@@ -647,6 +654,74 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
+    fun `verified alternative route transition triggers push and persists its identity`() {
+        val schedule = schedule(
+            routeJson = """{"steps":[{"mode":"BUS","route":"341"}]}""",
+            travelMode = ScheduleTravelMode.TRANSIT,
+        )
+        val job = SchedulePushJob.create(
+            memberId = 1L,
+            scheduleId = 10L,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(1, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        val recommendedDepartureAt = schedule.startAt.minus(65, ChronoUnit.MINUTES)
+        val predictedArrivalAt = schedule.startAt.minus(10, ChronoUnit.MINUTES)
+        val effectiveRoute = effectiveTransitRoute(
+            identity = "e".repeat(64),
+            departureAt = recommendedDepartureAt,
+            arrivalAt = predictedArrivalAt,
+            totalMinutes = 55,
+            lineName = "2호선",
+        )
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = 55,
+                source = TrafficSource.TIMETABLE_PROVIDER,
+                fetchedAt = testNow,
+                stale = false,
+                recommendedDepartureAt = recommendedDepartureAt,
+                predictedArrivalAt = predictedArrivalAt,
+                transitRouteProvenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+                transitTimingBasis = TransitTimingBasis.TIMETABLE_ONLY,
+                firstBoardingWaitMinutes = 6,
+                effectiveTransitRoute = effectiveRoute,
+            )
+        )
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(1L),
+            title = eq("대중교통 경로가 바뀌었어요"),
+            body = check {
+                assertTrue(it.contains("현재 탈 수 있고"))
+                assertTrue(it.contains("2호선"))
+            },
+            data = check {
+                assertEquals("true", it["routeChanged"])
+                assertEquals("e".repeat(64), it["effectiveRouteIdentity"])
+                assertEquals("6", it["firstBoardingWaitMinutes"])
+                assertEquals("ODSAY_ALTERNATIVE_ROUTE", it["etaRouteProvenance"])
+            },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
+        )
+        val stored = EffectiveTransitRouteSnapshot.parse(
+            objectMapper,
+            job.lastEffectiveTransitRouteJson,
+        )
+        assertTrue(stored?.accepted == true)
+        assertTrue(stored?.routeChanged == true)
+        assertEquals("e".repeat(64), stored?.effectiveTransitRoute?.identity)
+    }
+
+    @Test
     fun `정시 도착 불가 ETA는 거짓 정시 문구 대신 예상 도착시각과 degraded provenance를 알린다`() {
         val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
         val job = SchedulePushJob.create(
@@ -1002,6 +1077,7 @@ class SchedulePushJobWorkerTest {
     fun `성공한 ETA 저장 뒤 Live Activity에 대기시간 포함 projection을 독립 전달한다`() {
         val schedule = schedule(
             routeJson = """{"steps":[{"mode":"BUS","route":"341"}]}""",
+            travelMode = ScheduleTravelMode.TRANSIT,
         )
         val job = SchedulePushJob.create(
             memberId = 1,
@@ -1024,7 +1100,18 @@ class SchedulePushJobWorkerTest {
             .thenReturn(true)
         whenever(scheduleRepository.findScheduleDetail(10, 1)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(
-            liveTrafficResult(60).copy(firstBoardingWaitMinutes = 20)
+            liveTrafficResult(60).copy(
+                firstBoardingWaitMinutes = 20,
+                transitRouteProvenance = TransitRouteProvenance.SELECTED_ROUTE_PRESERVED,
+                transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
+                effectiveTransitRoute = effectiveTransitRoute(
+                    identity = "f".repeat(64),
+                    departureAt = schedule.startAt.minus(60, ChronoUnit.MINUTES),
+                    arrivalAt = schedule.startAt,
+                    totalMinutes = 60,
+                    lineName = "2호선",
+                ),
+            )
         )
 
         worker(
@@ -1037,8 +1124,195 @@ class SchedulePushJobWorkerTest {
         assertEquals(60, projection.firstValue.travelMinutes)
         assertEquals(20, projection.firstValue.firstBoardingWaitMinutes)
         assertEquals("회사", projection.firstValue.destinationName)
-        assertEquals(listOf("bus"), projection.firstValue.routeSegments.map { it.kind })
+        assertEquals(listOf("subway"), projection.firstValue.routeSegments.map { it.kind })
+        assertEquals(listOf("2호선"), projection.firstValue.routeSegments.map { it.label })
         assertEquals(0, projection.firstValue.checkCount)
+        assertEquals("f".repeat(64), EffectiveTransitRouteSnapshot.parse(
+            objectMapper,
+            job.lastEffectiveTransitRouteJson,
+        )?.effectiveTransitRoute?.identity)
+    }
+
+    @Test
+    fun `degraded effective candidate never replaces the saved Live Activity route bar`() {
+        val schedule = schedule(
+            routeJson = """{"steps":[{"mode":"BUS","route":"341"}]}""",
+            travelMode = ScheduleTravelMode.TRANSIT,
+        )
+        val job = SchedulePushJob.create(
+            memberId = 1,
+            scheduleId = 10,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(60, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minusSeconds(1),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        SchedulePushJob::class.java.getDeclaredField("id").apply {
+            isAccessible = true
+            set(job, 322L)
+        }
+        job.startProcessing("mock-owner", testNow)
+        whenever(mockedPushJobCoordinator.claimNextDueJob(any(), any())).thenReturn(job, null)
+        whenever(mockedPushJobCoordinator.execute<Unit>(any())).thenAnswer { invocation ->
+            invocation.getArgument<() -> Unit>(0).invoke()
+        }
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull()))
+            .thenReturn(true)
+        whenever(scheduleRepository.findScheduleDetail(10, 1)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = 60,
+                source = TrafficSource.TIMETABLE_PROVIDER,
+                fetchedAt = testNow,
+                stale = true,
+                failureReason = TrafficFailureReasons.PROVIDER_TIMEOUT,
+                transitRouteProvenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+                transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
+                firstBoardingWaitMinutes = 20,
+                effectiveTransitRoute = effectiveTransitRoute(
+                    identity = "1".repeat(64),
+                    departureAt = schedule.startAt.minus(60, ChronoUnit.MINUTES),
+                    arrivalAt = schedule.startAt,
+                    totalMinutes = 60,
+                    lineName = "2호선",
+                ),
+            )
+        )
+
+        worker(
+            coordinator = mockedPushJobCoordinator,
+            liveActivityService = scheduleLiveActivityService,
+        ).runDueJobs(testNow)
+
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        assertEquals(30, projection.firstValue.travelMinutes)
+        assertEquals(schedule.startAt.minus(30, ChronoUnit.MINUTES), projection.firstValue.recommendedDepartureAt)
+        assertNull(projection.firstValue.predictedArrivalAt)
+        assertNull(projection.firstValue.firstBoardingWaitMinutes)
+        assertEquals(TrafficSource.SAVED_FALLBACK, projection.firstValue.etaSource)
+        assertTrue(projection.firstValue.etaStale)
+        assertEquals(listOf("bus"), projection.firstValue.routeSegments.map { it.kind })
+        assertEquals(listOf("341"), projection.firstValue.routeSegments.map { it.label })
+        val snapshot = EffectiveTransitRouteSnapshot.parse(
+            objectMapper,
+            job.lastEffectiveTransitRouteJson,
+        )
+        assertTrue(snapshot?.accepted == false)
+        assertFalse(snapshot?.routeChanged == true)
+    }
+
+    @Test
+    fun `degraded refresh keeps one coherent previously accepted Live Activity projection`() {
+        val schedule = schedule(
+            routeJson = """{"steps":[{"mode":"BUS","route":"341"}]}""",
+            travelMode = ScheduleTravelMode.TRANSIT,
+        )
+        val acceptedRoute = effectiveTransitRoute(
+            identity = "2".repeat(64),
+            departureAt = schedule.startAt.minus(50, ChronoUnit.MINUTES),
+            arrivalAt = schedule.startAt.minus(5, ChronoUnit.MINUTES),
+            totalMinutes = 45,
+            lineName = "2호선",
+        )
+        val acceptedResult = TrafficResult(
+            travelMinutes = 45,
+            source = TrafficSource.LIVE_PROVIDER,
+            fetchedAt = testNow.minus(10, ChronoUnit.MINUTES),
+            stale = false,
+            recommendedDepartureAt = acceptedRoute.departureAt,
+            predictedArrivalAt = acceptedRoute.arrivalAt,
+            transitRouteProvenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+            transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
+            firstBoardingWaitMinutes = 7,
+            effectiveTransitRoute = acceptedRoute,
+        )
+        val acceptedSnapshot = requireNotNull(
+            EffectiveTransitRouteSnapshot.from(
+                trafficResult = acceptedResult,
+                previous = null,
+                evaluationCheckCount = 0,
+            )
+        )
+        val job = SchedulePushJob.create(
+            memberId = 1,
+            scheduleId = 10,
+            scheduleAt = schedule.startAt,
+            departureAt = acceptedRoute.departureAt,
+            monitorStartAt = testNow.minus(20, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        job.startProcessing("previous-worker", testNow.minus(10, ChronoUnit.MINUTES))
+        job.finishCheck(
+            travelMinutes = acceptedResult.travelMinutes,
+            recommendedDepartureAt = acceptedRoute.departureAt,
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            etaSource = acceptedResult.source,
+            liveFetchedAt = acceptedResult.fetchedAt,
+            etaStale = false,
+            predictedArrivalAt = acceptedRoute.arrivalAt,
+            etaTravelMode = ScheduleTravelMode.TRANSIT,
+            etaRouteFingerprint = routeFingerprint(schedule),
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(acceptedSnapshot),
+            now = testNow.minus(10, ChronoUnit.MINUTES),
+        )
+        SchedulePushJob::class.java.getDeclaredField("id").apply {
+            isAccessible = true
+            set(job, 323L)
+        }
+        job.startProcessing("mock-owner", testNow)
+        whenever(mockedPushJobCoordinator.claimNextDueJob(any(), any())).thenReturn(job, null)
+        whenever(mockedPushJobCoordinator.execute<Unit>(any())).thenAnswer { invocation ->
+            invocation.getArgument<() -> Unit>(0).invoke()
+        }
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull()))
+            .thenReturn(true)
+        whenever(scheduleRepository.findScheduleDetail(10, 1)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = 60,
+                source = TrafficSource.TIMETABLE_PROVIDER,
+                fetchedAt = testNow,
+                stale = true,
+                failureReason = TrafficFailureReasons.PROVIDER_TIMEOUT,
+                transitRouteProvenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+                transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
+                firstBoardingWaitMinutes = 20,
+                effectiveTransitRoute = effectiveTransitRoute(
+                    identity = "3".repeat(64),
+                    departureAt = schedule.startAt.minus(60, ChronoUnit.MINUTES),
+                    arrivalAt = schedule.startAt,
+                    totalMinutes = 60,
+                    lineName = "9호선",
+                ),
+            )
+        )
+
+        worker(
+            coordinator = mockedPushJobCoordinator,
+            liveActivityService = scheduleLiveActivityService,
+        ).runDueJobs(testNow)
+
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        assertEquals(45, projection.firstValue.travelMinutes)
+        assertEquals(acceptedRoute.departureAt, projection.firstValue.recommendedDepartureAt)
+        assertEquals(acceptedRoute.arrivalAt, projection.firstValue.predictedArrivalAt)
+        assertEquals(7, projection.firstValue.firstBoardingWaitMinutes)
+        assertEquals(TrafficSource.LIVE_PROVIDER, projection.firstValue.etaSource)
+        assertTrue(projection.firstValue.etaStale)
+        assertEquals(listOf("2호선"), projection.firstValue.routeSegments.map { it.label })
+        assertTrue(projection.firstValue.routeSegments.none { it.label == "9호선" })
+        val degradedSnapshot = EffectiveTransitRouteSnapshot.parse(
+            objectMapper,
+            job.lastEffectiveTransitRouteJson,
+        )
+        assertFalse(degradedSnapshot?.accepted == true)
+        assertEquals("2".repeat(64), degradedSnapshot?.lastAcceptedRouteIdentity)
+        assertEquals("2".repeat(64), degradedSnapshot?.acceptedRoute()?.identity)
     }
 
     @Test
@@ -1063,6 +1337,178 @@ class SchedulePushJobWorkerTest {
         assertEquals(testNow.plusSeconds(1), job.nextCheckAt)
         assertEquals(testNow, job.lastPushedAt)
         assertEquals(testNow, job.departureNoticeSentAt)
+    }
+
+    @Test
+    fun `재시도 event A를 보낸 회차는 provider B 대신 A 경로를 API 상태로 유지한다`() {
+        val schedule = schedule(
+            startAt = shortScheduleStartAt,
+            travelMode = ScheduleTravelMode.TRANSIT,
+        )
+        val job = dueDepartureJob(schedule)
+        val eventA = seedFrozenTransitEtaEvent(
+            job = job,
+            schedule = schedule,
+            trafficResult = acceptedTransitTrafficResult(
+                schedule = schedule,
+                identity = "a".repeat(64),
+                travelMinutes = 45,
+                provenance = TransitRouteProvenance.SELECTED_ROUTE_PRESERVED,
+                firstBoardingWaitMinutes = 4,
+                lineName = "2호선",
+                fetchedAt = testNow.minusSeconds(30),
+            ),
+        )
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            acceptedTransitTrafficResult(
+                schedule = schedule,
+                identity = "b".repeat(64),
+                travelMinutes = 55,
+                provenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+                firstBoardingWaitMinutes = 7,
+                lineName = "9호선",
+                fetchedAt = testNow,
+            )
+        )
+        whenever(notificationUseCase.findPersistedEvent(eq(job.memberId), any()))
+            .thenReturn(eventA)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, attemptedCount = 1, sentCount = 1))
+
+        worker(liveActivityService = scheduleLiveActivityService).runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMember(
+            memberId = eq(job.memberId),
+            title = eq(eventA.title),
+            body = eq(eventA.body),
+            data = check {
+                assertEquals("45", it["travelMinutes"])
+                assertEquals("a".repeat(64), it["effectiveRouteIdentity"])
+                assertEquals(
+                    TransitRouteProvenance.SELECTED_ROUTE_PRESERVED.name,
+                    it["etaRouteProvenance"],
+                )
+            },
+            inboxDeduplicationKey = any(),
+            persistInInbox = eq(true),
+        )
+        assertEquals(1, job.checkCount)
+        assertEquals(testNow.plusSeconds(1), job.nextCheckAt)
+        assertEquals(45, job.lastTravelMinutes)
+        assertEquals(shortScheduleStartAt.minus(45, ChronoUnit.MINUTES), job.lastRecommendedDepartureAt)
+        assertEquals(testNow.minusSeconds(30), job.lastCheckedAt)
+        val stored = EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson)
+        assertEquals("a".repeat(64), stored?.effectiveTransitRoute?.identity)
+        verifyNoInteractions(scheduleLiveActivityService)
+    }
+
+    @Test
+    fun `재시도 event A 발송이 실패하면 provider B를 저장하거나 Live Activity에 투영하지 않는다`() {
+        val schedule = schedule(
+            startAt = shortScheduleStartAt,
+            travelMode = ScheduleTravelMode.TRANSIT,
+        )
+        val job = dueDepartureJob(schedule)
+        val eventA = seedFrozenTransitEtaEvent(
+            job = job,
+            schedule = schedule,
+            trafficResult = acceptedTransitTrafficResult(
+                schedule = schedule,
+                identity = "c".repeat(64),
+                travelMinutes = 45,
+                provenance = TransitRouteProvenance.SELECTED_ROUTE_PRESERVED,
+                firstBoardingWaitMinutes = 4,
+                lineName = "2호선",
+                fetchedAt = testNow.minusSeconds(30),
+            ),
+        )
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            acceptedTransitTrafficResult(
+                schedule = schedule,
+                identity = "d".repeat(64),
+                travelMinutes = 55,
+                provenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+                firstBoardingWaitMinutes = 7,
+                lineName = "9호선",
+                fetchedAt = testNow,
+            )
+        )
+        whenever(notificationUseCase.findPersistedEvent(eq(job.memberId), any()))
+            .thenReturn(eventA)
+        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 1,
+                    attemptedCount = 1,
+                    failedCount = 1,
+                    retryableFailedCount = 1,
+                )
+            )
+
+        worker(liveActivityService = scheduleLiveActivityService).runDueJobs(testNow)
+
+        assertEquals(0, job.checkCount)
+        assertEquals(1, job.retryCount)
+        assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
+        assertEquals(testNow.plus(1, ChronoUnit.MINUTES), job.nextCheckAt)
+        assertEquals(testNow.plusSeconds(30), job.lastEtaRefreshDueAt)
+        assertEquals(45, job.lastTravelMinutes)
+        assertEquals(testNow.minusSeconds(30), job.lastCheckedAt)
+        val stored = EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson)
+        assertEquals("c".repeat(64), stored?.effectiveTransitRoute?.identity)
+        verifyNoInteractions(scheduleLiveActivityService)
+    }
+
+    @Test
+    fun `outbox event와 job ETA가 어긋나면 fail closed로 발송 없이 A 상태를 보존한다`() {
+        val schedule = schedule(
+            startAt = shortScheduleStartAt,
+            travelMode = ScheduleTravelMode.TRANSIT,
+        )
+        val job = dueDepartureJob(schedule)
+        val coherentEvent = seedFrozenTransitEtaEvent(
+            job = job,
+            schedule = schedule,
+            trafficResult = acceptedTransitTrafficResult(
+                schedule = schedule,
+                identity = "e".repeat(64),
+                travelMinutes = 45,
+                provenance = TransitRouteProvenance.SELECTED_ROUTE_PRESERVED,
+                firstBoardingWaitMinutes = 4,
+                lineName = "2호선",
+                fetchedAt = testNow.minusSeconds(30),
+            ),
+        )
+        val malformedEvent = coherentEvent.copy(
+            data = coherentEvent.data + ("effectiveRouteIdentity" to "f".repeat(64)),
+        )
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            acceptedTransitTrafficResult(
+                schedule = schedule,
+                identity = "1".repeat(64),
+                travelMinutes = 55,
+                provenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
+                firstBoardingWaitMinutes = 7,
+                lineName = "9호선",
+                fetchedAt = testNow,
+            )
+        )
+        whenever(notificationUseCase.findPersistedEvent(eq(job.memberId), any()))
+            .thenReturn(malformedEvent)
+
+        worker(liveActivityService = scheduleLiveActivityService).runDueJobs(testNow)
+
+        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+        assertEquals(1, job.checkCount)
+        assertEquals(testNow.plusSeconds(1), job.nextCheckAt)
+        assertEquals(45, job.lastTravelMinutes)
+        assertEquals(testNow.minusSeconds(30), job.lastCheckedAt)
+        val stored = EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson)
+        assertEquals("e".repeat(64), stored?.effectiveTransitRoute?.identity)
+        verifyNoInteractions(scheduleLiveActivityService)
     }
 
     @Test
@@ -1629,6 +2075,7 @@ class SchedulePushJobWorkerTest {
 
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(testNow.plus(1, ChronoUnit.MINUTES), job.nextCheckAt)
+        assertEquals(testNow.plus(1, ChronoUnit.MINUTES), job.lastEtaRefreshDueAt)
         assertEquals(1, job.retryCount)
         assertNull(job.lastPushedAt)
         assertTrue(job.failureReason.orEmpty().contains("푸시 공급자"))
@@ -2444,6 +2891,134 @@ class SchedulePushJobWorkerTest {
         fetchedAt = testNow,
         stale = false,
     )
+
+    private fun effectiveTransitRoute(
+        identity: String,
+        departureAt: Instant,
+        arrivalAt: Instant,
+        totalMinutes: Int,
+        lineName: String,
+    ) = EffectiveTransitRoute(
+        provider = "ODSAY",
+        identity = identity,
+        departureAt = departureAt,
+        arrivalAt = arrivalAt,
+        totalMinutes = totalMinutes,
+        segments = listOf(
+            EffectiveTransitRouteSegment(
+                sequence = 0,
+                kind = EffectiveTransitRouteSegmentKind.SUBWAY,
+                durationMinutes = totalMinutes,
+                lineName = lineName,
+                fromName = "강남역",
+                toName = "시청역",
+            )
+        ),
+    )
+
+    private fun acceptedTransitTrafficResult(
+        schedule: Schedule,
+        identity: String,
+        travelMinutes: Int,
+        provenance: TransitRouteProvenance,
+        firstBoardingWaitMinutes: Int,
+        lineName: String,
+        fetchedAt: Instant,
+    ): TrafficResult {
+        val departureAt = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+        return TrafficResult(
+            travelMinutes = travelMinutes,
+            source = TrafficSource.LIVE_PROVIDER,
+            fetchedAt = fetchedAt,
+            stale = false,
+            recommendedDepartureAt = departureAt,
+            predictedArrivalAt = schedule.startAt,
+            transitRouteProvenance = provenance,
+            transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
+            firstBoardingWaitMinutes = firstBoardingWaitMinutes,
+            effectiveTransitRoute = effectiveTransitRoute(
+                identity = identity,
+                departureAt = departureAt,
+                arrivalAt = schedule.startAt,
+                totalMinutes = travelMinutes,
+                lineName = lineName,
+            ),
+        )
+    }
+
+    private fun seedFrozenTransitEtaEvent(
+        job: SchedulePushJob,
+        schedule: Schedule,
+        trafficResult: TrafficResult,
+    ): AppNotificationSnapshot {
+        val routeSnapshot = requireNotNull(
+            EffectiveTransitRouteSnapshot.from(
+                trafficResult = trafficResult,
+                previous = null,
+                evaluationCheckCount = job.checkCount,
+                notificationGeneration = job.notificationGeneration,
+            )
+        )
+        val recommendedDepartureAt = requireNotNull(trafficResult.recommendedDepartureAt)
+        val predictedArrivalAt = requireNotNull(trafficResult.predictedArrivalAt)
+        job.recordEtaEvaluationBeforeRetry(
+            travelMinutes = trafficResult.travelMinutes,
+            recommendedDepartureAt = recommendedDepartureAt,
+            etaSource = trafficResult.source,
+            liveFetchedAt = trafficResult.fetchedAt,
+            etaStale = trafficResult.stale,
+            etaFailureReason = trafficResult.failureReason,
+            predictedArrivalAt = predictedArrivalAt,
+            etaTravelMode = ScheduleTravelMode.TRANSIT,
+            etaRouteFingerprint = routeFingerprint(schedule),
+            etaRefreshDueAt = requireNotNull(trafficResult.fetchedAt)
+                .plus(1, ChronoUnit.MINUTES),
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(routeSnapshot),
+            now = requireNotNull(trafficResult.fetchedAt),
+        )
+        val deduplicationKey =
+            "schedule-push-job:unsaved-${job.memberId}-${job.scheduleId}:" +
+                "g${job.notificationGeneration}:c${job.checkCount}"
+        return AppNotificationSnapshot(
+            id = 77L,
+            logicalEventKey = deduplicationKey,
+            title = "경로 A 출발 안내",
+            body = "동결된 경로 A를 사용합니다.",
+            data = mapOf(
+                "type" to "SCHEDULE_DEPARTURE_REMINDER",
+                "scheduleId" to job.scheduleId.toString(),
+                "travelMinutes" to trafficResult.travelMinutes.toString(),
+                "recommendedDepartureAt" to recommendedDepartureAt.toString(),
+                "predictedArrivalAt" to predictedArrivalAt.toString(),
+                "onTimeArrivalPossible" to "true",
+                "etaSource" to trafficResult.source.name,
+                "etaStale" to trafficResult.stale.toString(),
+                "etaFailureReason" to "",
+                "transitTransferFeasibility" to "",
+                "etaRouteProvenance" to requireNotNull(trafficResult.transitRouteProvenance).name,
+                "etaTimingBasis" to requireNotNull(trafficResult.transitTimingBasis).name,
+                "firstBoardingWaitMinutes" to
+                    requireNotNull(trafficResult.firstBoardingWaitMinutes).toString(),
+                "routeChanged" to routeSnapshot.routeChanged.toString(),
+                "effectiveRouteIdentity" to
+                    requireNotNull(routeSnapshot.effectiveTransitRoute).identity,
+                "departNow" to "false",
+                "departureReminderDecision" to "ADVANCE_NOTICE",
+                "reminderBoundaryAt" to testNow.toString(),
+                "snoozeMinutes" to "5",
+                "trafficChangeMinutes" to "0",
+                "departureAdvanceMinutes" to "0",
+                "schedulePushJobId" to (job.id?.toString() ?: ""),
+                "schedulePushCheckCount" to job.checkCount.toString(),
+                "notificationGeneration" to job.notificationGeneration.toString(),
+                "notificationInputFingerprint" to job.notificationInputFingerprint,
+                SCHEDULE_ETA_EVENT_EXPIRES_AT to testNow.plusSeconds(90).toString(),
+            ),
+            createdAt = testNow.minusSeconds(30),
+            deduplicationKey = deduplicationKey,
+            scheduleId = job.scheduleId,
+        )
+    }
 
     private fun routeFingerprint(schedule: Schedule): String {
         val route = requireNotNull(schedule.route)

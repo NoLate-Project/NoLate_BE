@@ -168,6 +168,41 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
+    fun `effective transit route migration is verified before its required production marker`() {
+        val migration = Files.readString(
+            Path.of("docs/schedule/migrations/2026-08-10-effective-transit-route.sql"),
+        )
+        val ddl = migration.indexOf("ALTER TABLE schedule_push_job")
+        val column = migration.indexOf("ADD COLUMN last_effective_transit_route_json LONGTEXT NULL")
+        val refreshDueColumn = migration.indexOf(
+            "ADD COLUMN last_eta_refresh_due_at DATETIME(6) NULL",
+        )
+        val semanticCatchUpColumn = migration.indexOf(
+            "ADD COLUMN semantic_catch_up_pending BOOLEAN NOT NULL DEFAULT FALSE",
+        )
+        val semanticCatchUpBackfill = migration.indexOf("UPDATE schedule_push_job")
+        val postcondition = migration.indexOf("CALL assert_effective_transit_route_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(ddl >= 0)
+        assertTrue(column > ddl)
+        assertTrue(refreshDueColumn > column)
+        assertTrue(semanticCatchUpColumn > refreshDueColumn)
+        assertTrue(semanticCatchUpBackfill > semanticCatchUpColumn)
+        assertTrue(postcondition > semanticCatchUpBackfill)
+        assertTrue(marker > postcondition)
+        assertTrue(
+            migration.contains(ProductionSchemaVersionGuard.EFFECTIVE_TRANSIT_ROUTE_SCHEMA_VERSION),
+        )
+        assertTrue(
+            ProductionSchemaVersionGuard.EFFECTIVE_TRANSIT_ROUTE_SCHEMA_VERSION in
+                ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS,
+        )
+    }
+
+    @Test
     fun `production refuses automatic Hibernate schema mutation`() {
         val error = assertThrows(IllegalStateException::class.java) {
             guard(markerDatabase(), ddlMode = "update").afterSingletonsInstantiated()
