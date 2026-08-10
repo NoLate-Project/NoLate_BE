@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.nio.file.Files
@@ -11,6 +12,7 @@ import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+@Tag("mysql")
 class DepartureAlarmFireEvidenceMySqlMigrationTest {
     @Test
     fun `migration creates constrained evidence schema and rejects reapplication`() {
