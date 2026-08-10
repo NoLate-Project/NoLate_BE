@@ -22,6 +22,7 @@ Last verified: 2026-06-17 KST
   - 최소 ETA 재조회 주기
 - `/api/subscriptions/me`
   - 내 구독 정책과 이번 달 사용량 조회
+  - `monetization.ads.enabled` 전역 스위치와 플랜을 합친 `adsEnabled` 반환
 - 일정 알림 설정 검증
   - 알림 리드 타임 제한
   - ETA 조회 간격 제한
@@ -34,6 +35,12 @@ Last verified: 2026-06-17 KST
 - `src/main/kotlin/com/noLate/subscription/domain/SubscriptionPlan.kt`
 - `src/main/kotlin/com/noLate/subscription/domain/SubscriptionPolicyDto.kt`
 - `NoLate_FE/src/api/subscription.ts`
+
+### 광고 전역 스위치
+
+- 기본값은 꺼짐이며 `MONETIZATION_ADS_ENABLED=true`일 때만 활성화된다.
+- FREE 회원에게만 `adsEnabled=true`를 반환하고 PREMIUM 회원은 항상 false다.
+- 앱의 정책 조회가 실패하면 FE 기본 정책도 `adsEnabled=false`로 광고를 닫는다.
 
 ### 테스트
 
