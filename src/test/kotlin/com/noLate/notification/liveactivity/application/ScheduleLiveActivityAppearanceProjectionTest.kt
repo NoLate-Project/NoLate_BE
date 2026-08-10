@@ -18,6 +18,7 @@ import com.noLate.notification.liveactivity.infrastructure.ScheduleLiveActivityR
 import com.noLate.schedule.domain.TrafficSource
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.springframework.context.ApplicationEventPublisher
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doReturn
@@ -41,6 +42,7 @@ class ScheduleLiveActivityAppearanceProjectionTest {
         val startRepository = mock<LiveActivityStartTokenRepository>()
         val activityRepository = mock<ScheduleLiveActivityRepository>()
         val deliveryRepository = mock<LiveActivityDeliveryRepository>()
+        val eventPublisher = mock<ApplicationEventPublisher>()
         val member = mock<Member> {
             on { id } doReturn 7L
             on { deleted } doReturn false
@@ -105,6 +107,7 @@ class ScheduleLiveActivityAppearanceProjectionTest {
             deliveryRepository = deliveryRepository,
             objectMapper = objectMapper,
             clock = Clock.fixed(now, ZoneOffset.UTC),
+            applicationEventPublisher = eventPublisher,
         )
 
         service.projectEta(projection(now, checkCount = 1))
@@ -115,6 +118,7 @@ class ScheduleLiveActivityAppearanceProjectionTest {
 
         val deliveries = argumentCaptor<LiveActivityDelivery>()
         verify(deliveryRepository, times(2)).save(deliveries.capture())
+        verify(eventPublisher, times(2)).publishEvent(any<LiveActivityDispatchRequested>())
         assertThat(deliveries.allValues.map { it.operation }).containsExactly(
             LiveActivityDeliveryOperation.START,
             LiveActivityDeliveryOperation.UPDATE,

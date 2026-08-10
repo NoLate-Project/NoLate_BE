@@ -19,7 +19,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.domain.PageRequest
-import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
@@ -50,6 +49,23 @@ class LiveActivityDispatchLease(
 ) {
     override fun toString(): String =
         "LiveActivityDispatchLease(deliveryId=$deliveryId, operation=$operation)"
+}
+
+data class LiveActivityStaleRecoveryResult(
+    val recoveredCount: Int,
+    val retryTimes: Set<Instant> = emptySet(),
+) {
+    val nextRetryAt: Instant?
+        get() = retryTimes.minOrNull()
+}
+
+data class LiveActivityDispatchRunResult(
+    val processedCount: Int,
+    val batchExhausted: Boolean,
+    val retryTimes: Set<Instant> = emptySet(),
+) {
+    val nextRetryAt: Instant?
+        get() = retryTimes.minOrNull()
 }
 
 @Service
@@ -262,7 +278,12 @@ class LiveActivityDispatchCoordinator(
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun completeRetryableFailure(lease: LiveActivityDispatchLease, code: String, now: Instant) {
+    fun completeRetryableFailure(
+        lease: LiveActivityDispatchLease,
+        code: String,
+        now: Instant,
+    ): Instant? {
+        var nextRetryAt: Instant? = null
         withLockedLease(lease) { delivery, activity, _ ->
             val canceledUnacceptedStart =
                 isExactCanceledInFlightStart(delivery, activity, lease.leaseId)
@@ -298,7 +319,11 @@ class LiveActivityDispatchCoordinator(
                 delivery.markClientReconciled(now, "CANCELLED_START_CONFIRMED_UNACCEPTED")
                 activity.markEnded(now)
             }
+            nextRetryAt = delivery.availableAt.takeIf {
+                delivery.status == LiveActivityDeliveryStatus.FAILED
+            }
         }
+        return nextRetryAt
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -376,7 +401,12 @@ class LiveActivityDispatchCoordinator(
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun completeAmbiguous(lease: LiveActivityDispatchLease, code: String, now: Instant) {
+    fun completeAmbiguous(
+        lease: LiveActivityDispatchLease,
+        code: String,
+        now: Instant,
+    ): Instant? {
+        var nextRetryAt: Instant? = null
         withLockedLease(lease) { delivery, activity, _ ->
             when (delivery.operation) {
                 // Suppress duplicate remote START while waiting for client token reconciliation.
@@ -386,18 +416,19 @@ class LiveActivityDispatchCoordinator(
                 }
                 // Repeating the same immutable END is idempotent and safer than claiming the
                 // Activity disappeared when provider acceptance is unknown.
-                LiveActivityDeliveryOperation.END -> delivery.markRetryableAfterAmbiguous(
-                    now,
-                    code,
-                    minOf(retryAt(delivery, now), delivery.expirationAt),
-                )
+                LiveActivityDeliveryOperation.END -> {
+                    val retryAt = minOf(retryAt(delivery, now), delivery.expirationAt)
+                    delivery.markRetryableAfterAmbiguous(now, code, retryAt)
+                    nextRetryAt = retryAt
+                }
                 LiveActivityDeliveryOperation.UPDATE -> delivery.markAmbiguous(now, code)
             }
         }
+        return nextRetryAt
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    fun recoverStaleDispatches(now: Instant, batchSize: Int): Int {
+    fun recoverStaleDispatches(now: Instant, batchSize: Int): LiveActivityStaleRecoveryResult {
         val boundary = now.minusSeconds(dispatchLeaseSeconds)
         val ids = deliveryRepository.findStaleDispatchCandidateIds(
             LiveActivityDeliveryStatus.DISPATCHING,
@@ -411,6 +442,7 @@ class LiveActivityDispatchCoordinator(
             )
         }
         var recovered = 0
+        val retryTimes = mutableSetOf<Instant>()
         snapshots.forEach { snapshot ->
             val id = requireNotNull(snapshot.id)
             val activity = activityRepository.findByIdForUpdate(snapshot.liveActivityId)
@@ -437,11 +469,15 @@ class LiveActivityDispatchCoordinator(
                     delivery.markAmbiguous(now, "PROCESS_DIED_AFTER_PROVIDER_BOUNDARY")
                     activity?.markStartAccepted(delivery.revision)
                 }
-                LiveActivityDeliveryOperation.END -> delivery.markRetryableAfterAmbiguous(
-                    now,
-                    "PROCESS_DIED_AFTER_PROVIDER_BOUNDARY",
-                    minOf(retryAt(delivery, now), delivery.expirationAt),
-                )
+                LiveActivityDeliveryOperation.END -> {
+                    val retryAt = minOf(retryAt(delivery, now), delivery.expirationAt)
+                    delivery.markRetryableAfterAmbiguous(
+                        now,
+                        "PROCESS_DIED_AFTER_PROVIDER_BOUNDARY",
+                        retryAt,
+                    )
+                    retryTimes += retryAt
+                }
                 LiveActivityDeliveryOperation.UPDATE -> delivery.markAmbiguous(
                     now,
                     "PROCESS_DIED_AFTER_PROVIDER_BOUNDARY",
@@ -454,7 +490,10 @@ class LiveActivityDispatchCoordinator(
             }
             recovered += 1
         }
-        return recovered
+        return LiveActivityStaleRecoveryResult(
+            recoveredCount = recovered,
+            retryTimes = retryTimes,
+        )
     }
 
     private fun withLockedLease(
@@ -638,32 +677,48 @@ class LiveActivityDispatchWorker(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    @Scheduled(fixedDelayString = "\${notification.live-activity.dispatch-delay-millis:1000}")
-    fun dispatchDue() {
-        if (!enabled) return
-        val client = clientProvider.getIfAvailable() ?: return
-        val now = Instant.now(clock)
-        coordinator.recoverStaleDispatches(now, batchSize)
-        repeat(batchSize.coerceIn(1, 200)) {
-            val lease = coordinator.claimNext(Instant.now(clock)) ?: return
-            dispatch(client, lease)
+    fun dispatchDue(): LiveActivityDispatchRunResult {
+        if (!enabled) return LiveActivityDispatchRunResult(0, false)
+        val client = clientProvider.getIfAvailable()
+            ?: return LiveActivityDispatchRunResult(0, false)
+        val limit = batchSize.coerceIn(1, 200)
+        var processed = 0
+        val retryTimes = mutableSetOf<Instant>()
+        repeat(limit) {
+            val lease = coordinator.claimNext(Instant.now(clock))
+                ?: return LiveActivityDispatchRunResult(processed, false, retryTimes)
+            processed += 1
+            dispatch(client, lease)?.let(retryTimes::add)
         }
+        return LiveActivityDispatchRunResult(processed, true, retryTimes)
     }
 
-    private fun dispatch(client: LiveActivityPushClient, lease: LiveActivityDispatchLease) {
+    fun recoverStaleDispatches(): LiveActivityStaleRecoveryResult {
+        if (!enabled || clientProvider.getIfAvailable() == null) {
+            return LiveActivityStaleRecoveryResult(0)
+        }
+        return coordinator.recoverStaleDispatches(Instant.now(clock), batchSize)
+    }
+
+    private fun dispatch(
+        client: LiveActivityPushClient,
+        lease: LiveActivityDispatchLease,
+    ): Instant? {
         val request = runCatching { lease.toRequest() }.getOrElse {
             coordinator.completePermanentFailure(
                 lease,
                 "INVALID_FROZEN_PAYLOAD",
                 Instant.now(clock),
             )
-            return
+            return null
         }
-        try {
+        return try {
             val result = client.send(request)
             coordinator.completeSuccess(lease, result.messageId, Instant.now(clock))
+            null
         } catch (_: InvalidLiveActivityRouteException) {
             coordinator.completeInvalidActivityRoute(lease, Instant.now(clock))
+            null
         } catch (_: InvalidLiveActivityFcmTokenException) {
             coordinator.completeInvalidFcmRoute(lease, Instant.now(clock))
             // The immutable FCM ownership snapshot, not the provider exception body, authorizes
@@ -674,16 +729,19 @@ class LiveActivityDispatchWorker(
                 tokenFingerprint = lease.fcmTokenFingerprint,
                 ownershipVersion = lease.fcmOwnershipVersion,
             )
+            null
         } catch (_: RetryableLiveActivityDeliveryException) {
             coordinator.completeRetryableFailure(lease, "PROVIDER_THROTTLED", Instant.now(clock))
         } catch (_: ConfirmedLiveActivityDeliveryException) {
             coordinator.completePermanentFailure(lease, "PROVIDER_REJECTED", Instant.now(clock))
+            null
         } catch (_: IllegalArgumentException) {
             coordinator.completePermanentFailure(lease, "PAYLOAD_REJECTED", Instant.now(clock))
+            null
         } catch (failure: Exception) {
             // Firebase INTERNAL/UNAVAILABLE after SDK retries can be acceptance-ambiguous. A blind
             // START replay risks a duplicate Activity, so freeze it for client reconciliation.
-            coordinator.completeAmbiguous(
+            val retryAt = coordinator.completeAmbiguous(
                 lease,
                 failure.javaClass.simpleName.take(120),
                 Instant.now(clock),
@@ -694,6 +752,7 @@ class LiveActivityDispatchWorker(
                 lease.operation,
                 failure.javaClass.simpleName,
             )
+            retryAt
         }
     }
 

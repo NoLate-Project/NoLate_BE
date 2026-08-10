@@ -78,15 +78,18 @@ class P6SpySqlErrorEventListenerTest {
 
     @Test
     fun `스케줄러가 정상 실행한 쿼리는 기록하지 않는다`() {
-        Thread.currentThread().name = "scheduling-1"
+        listOf("scheduling-1", "nolate-scheduler-1").forEach { threadName ->
+            appender.list.clear()
+            Thread.currentThread().name = threadName
 
-        listener.onAfterAnyExecute(
-            statementInformation("select * from schedule_push_job"),
-            1_000_000,
-            null,
-        )
+            listener.onAfterAnyExecute(
+                statementInformation("select * from schedule_push_job"),
+                1_000_000,
+                null,
+            )
 
-        assertTrue(appender.list.isEmpty())
+            assertTrue(appender.list.isEmpty(), threadName)
+        }
     }
 
     @Test
@@ -95,6 +98,7 @@ class P6SpySqlErrorEventListenerTest {
         listOf(
             "nolate-operational-snapshot",
             "apple-token-revocation",
+            "nolate-live-activity-dispatch",
         ).forEach { threadName ->
             appender.list.clear()
             Thread.currentThread().name = threadName

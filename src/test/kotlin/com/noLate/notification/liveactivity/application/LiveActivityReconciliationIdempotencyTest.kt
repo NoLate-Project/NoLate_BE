@@ -17,6 +17,7 @@ import com.noLate.notification.liveactivity.infrastructure.LiveActivityStartToke
 import com.noLate.notification.liveactivity.infrastructure.ScheduleLiveActivityRepository
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.springframework.context.ApplicationEventPublisher
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doReturn
@@ -36,6 +37,7 @@ class LiveActivityReconciliationIdempotencyTest {
     private val startRepository = mock<LiveActivityStartTokenRepository>()
     private val activityRepository = mock<ScheduleLiveActivityRepository>()
     private val deliveryRepository = mock<LiveActivityDeliveryRepository>()
+    private val eventPublisher = mock<ApplicationEventPublisher>()
     private val member = mock<Member> {
         on { id } doReturn 7L
         on { deleted } doReturn false
@@ -92,6 +94,7 @@ class LiveActivityReconciliationIdempotencyTest {
         assertThat(delivery.attemptCount).isEqualTo(1)
         assertThat(delivery.availableAt).isEqualTo(retryAt)
         verify(deliveryRepository, never()).save(any<LiveActivityDelivery>())
+        verify(eventPublisher).publishEvent(LiveActivityDispatchRequested(retryAt))
     }
 
     @Test
@@ -123,6 +126,7 @@ class LiveActivityReconciliationIdempotencyTest {
         assertThat(delivery.attemptCount).isEqualTo(1)
         assertThat(delivery.availableAt).isEqualTo(retryAt)
         verify(deliveryRepository, never()).save(any<LiveActivityDelivery>())
+        verify(eventPublisher).publishEvent(LiveActivityDispatchRequested(retryAt))
     }
 
     @Test
@@ -196,6 +200,7 @@ class LiveActivityReconciliationIdempotencyTest {
         deliveryRepository,
         jacksonObjectMapper(),
         Clock.fixed(now, ZoneOffset.UTC),
+        applicationEventPublisher = eventPublisher,
     )
 
     private fun fcm() = NotificationDeviceToken(

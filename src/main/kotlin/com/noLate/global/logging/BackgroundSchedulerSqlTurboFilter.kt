@@ -63,8 +63,10 @@ internal fun isBackgroundSchedulerSql(): Boolean =
 internal fun isBackgroundSchedulerThread(threadName: String): Boolean =
     // main은 일반 초기화 SQL도 함께 실행하므로 통째로 제외하지 않는다.
     threadName.startsWith("scheduling-") ||
+        threadName.startsWith("nolate-scheduler-") ||
         threadName == "nolate-operational-snapshot" ||
-        threadName == "apple-token-revocation"
+        threadName == "apple-token-revocation" ||
+        threadName == "nolate-live-activity-dispatch"
 
 private fun String.isHibernateSqlLogger(): Boolean =
     this == "org.hibernate.SQL" ||

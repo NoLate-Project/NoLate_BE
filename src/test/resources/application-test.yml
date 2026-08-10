@@ -52,6 +52,10 @@ eta:
 firebase:
   enabled: false
 
+notification:
+  live-activity:
+    dispatch-enabled: false
+
 observability:
   snapshot:
     enabled: false

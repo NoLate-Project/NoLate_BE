@@ -24,8 +24,10 @@ class BackgroundSchedulerSqlTurboFilterTest {
 
         listOf(
             "scheduling-1",
+            "nolate-scheduler-1",
             "nolate-operational-snapshot",
             "apple-token-revocation",
+            "nolate-live-activity-dispatch",
         ).forEach { threadName ->
             Thread.currentThread().name = threadName
 

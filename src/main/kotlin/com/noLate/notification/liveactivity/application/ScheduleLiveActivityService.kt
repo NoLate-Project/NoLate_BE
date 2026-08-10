@@ -23,6 +23,7 @@ import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.domain.PageRequest
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
@@ -117,6 +118,7 @@ class ScheduleLiveActivityService(
     @Value("\${notification.live-activity.terminal-retention-hours:24}")
     private val terminalRetentionHours: Long = 24,
     private val pushJobRepository: SchedulePushJobRepository? = null,
+    private val applicationEventPublisher: ApplicationEventPublisher? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -522,7 +524,13 @@ class ScheduleLiveActivityService(
             pushDeviceTokenId = fcmId,
             fcmOwnershipVersion = fcm.ownershipVersion,
         )
-        return deliveryRepository.findByEventKeyForUpdate(eventKey) != null
+        val existing = deliveryRepository.findByEventKeyForUpdate(eventKey) ?: return false
+        if (existing.status in DISPATCHABLE_DELIVERY_STATUSES) {
+            applicationEventPublisher?.publishEvent(
+                LiveActivityDispatchRequested(existing.availableAt),
+            )
+        }
+        return true
     }
 
     @Transactional
@@ -1218,6 +1226,11 @@ class ScheduleLiveActivityService(
             if (existing.operation == LiveActivityDeliveryOperation.END) {
                 existing.requeueKnownUnaccepted(now)
             }
+            if (existing.status in DISPATCHABLE_DELIVERY_STATUSES) {
+                applicationEventPublisher?.publishEvent(
+                    LiveActivityDispatchRequested(existing.availableAt),
+                )
+            }
             return existing
         }
         // ActivityKit remote START must include an alert. UPDATE/END intentionally remain silent.
@@ -1228,7 +1241,7 @@ class ScheduleLiveActivityService(
         if (reserveFcmForRetirement) {
             reserveFcmEndBatch(fcm, now)
         }
-        return deliveryRepository.save(
+        val delivery = deliveryRepository.save(
             LiveActivityDelivery(
                 eventKey = eventKey,
                 liveActivityId = rowId,
@@ -1271,6 +1284,10 @@ class ScheduleLiveActivityService(
                 availableAt = now,
             )
         )
+        applicationEventPublisher?.publishEvent(
+            LiveActivityDispatchRequested(delivery.availableAt),
+        )
+        return delivery
     }
 
     private fun reserveOpenEndForRetirement(activity: ScheduleLiveActivity, now: Instant) {
@@ -1500,6 +1517,10 @@ class ScheduleLiveActivityService(
     }
 
     private companion object {
+        val DISPATCHABLE_DELIVERY_STATUSES = setOf(
+            LiveActivityDeliveryStatus.PENDING,
+            LiveActivityDeliveryStatus.FAILED,
+        )
         const val MAX_JSON_BYTES = 3_000
         const val END_PROVIDER_TTL_SECONDS = 3_600L
         val CONTROL_CHARACTER = Regex("[\\u0000-\\u001f\\u007f]")

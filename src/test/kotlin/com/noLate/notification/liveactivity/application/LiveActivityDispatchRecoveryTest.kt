@@ -130,7 +130,8 @@ class LiveActivityDispatchRecoveryTest {
             retryBaseSeconds = 30,
         ).recoverStaleDispatches(now, 10)
 
-        assertThat(recovered).isEqualTo(1)
+        assertThat(recovered.recoveredCount).isEqualTo(1)
+        assertThat(recovered.nextRetryAt).isNull()
         assertThat(delivery.status).isEqualTo(LiveActivityDeliveryStatus.UNCERTAIN)
         assertThat(activity.state).isEqualTo(ScheduleLiveActivityState.START_SENT)
         assertThat(delivery.dispatchLeaseId).isNull()
@@ -423,7 +424,8 @@ class LiveActivityDispatchRecoveryTest {
             retryBaseSeconds = 30,
         ).recoverStaleDispatches(now, 10)
 
-        assertThat(recovered).isEqualTo(1)
+        assertThat(recovered.recoveredCount).isEqualTo(1)
+        assertThat(recovered.nextRetryAt).isEqualTo(now.plusSeconds(30))
         assertThat(delivery.status).isEqualTo(LiveActivityDeliveryStatus.FAILED)
         assertThat(delivery.availableAt).isEqualTo(now.plusSeconds(30))
         assertThat(activity.state).isEqualTo(ScheduleLiveActivityState.END_PENDING)

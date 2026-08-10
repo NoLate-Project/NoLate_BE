@@ -392,6 +392,16 @@ firebase:
   write-timeout-millis: ${FIREBASE_WRITE_TIMEOUT_MILLIS:5000}
 
 notification:
+  live-activity:
+    dispatch-enabled: ${NOTIFICATION_LIVE_ACTIVITY_DISPATCH_ENABLED:true}
+    batch-size: ${NOTIFICATION_LIVE_ACTIVITY_BATCH_SIZE:50}
+    # 정상 경로는 delivery 커밋 직후 이벤트로 즉시 실행한다. 아래 주기는 이벤트 유실,
+    # 프로세스 재시작, 오래 점유된 lease만 복구하기 위한 저빈도 안전망이다.
+    fallback-scan-millis: ${NOTIFICATION_LIVE_ACTIVITY_FALLBACK_SCAN_MILLIS:30000}
+    stale-recovery-millis: ${NOTIFICATION_LIVE_ACTIVITY_STALE_RECOVERY_MILLIS:60000}
+    dispatch-lease-seconds: ${NOTIFICATION_LIVE_ACTIVITY_DISPATCH_LEASE_SECONDS:600}
+    max-attempts: ${NOTIFICATION_LIVE_ACTIVITY_MAX_ATTEMPTS:3}
+    retry-base-seconds: ${NOTIFICATION_LIVE_ACTIVITY_RETRY_BASE_SECONDS:30}
   push-token:
     provider-max-call-seconds: ${NOTIFICATION_PUSH_PROVIDER_MAX_CALL_SECONDS:60}
     dispatch-lease-seconds: ${NOTIFICATION_PUSH_TOKEN_DISPATCH_LEASE_SECONDS:600}
