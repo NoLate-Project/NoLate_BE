@@ -19,8 +19,11 @@ class LegalDocumentControllerTest {
     fun `homepage explains service content social login and Google Calendar data use`() {
         val html = HomePageController().getHomePage()
 
-        assertTrue(html.contains("<title>NoLate | 서비스 소개</title>"))
+        assertTrue(html.contains("<title>NoLate</title>"))
         assertTrue(html.contains("content=\"NoLate\""))
+        assertTrue(html.contains("<h1>NoLate</h1>"))
+        assertTrue(html.contains("APP NAME / 앱 이름"))
+        assertTrue(html.contains("늦지 않도록, 일정과 이동을 함께 준비합니다."))
         assertTrue(html.contains("App Purpose / 앱의 목적"))
         assertTrue(html.contains("모바일 일정 관리·이동 지원 생산성 서비스"))
         assertTrue(html.contains("앱에서 제공하는 메뉴와 기능"))
