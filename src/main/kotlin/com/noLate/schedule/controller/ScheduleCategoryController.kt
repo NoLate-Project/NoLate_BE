@@ -5,6 +5,8 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.schedule.application.service.ScheduleCategoryReorderItem
+import com.noLate.schedule.application.service.ScheduleCategoryMovePreviewDto
+import com.noLate.schedule.application.service.ScheduleCategoryMoveResultDto
 import com.noLate.schedule.application.service.ScheduleCategoryService
 import com.noLate.schedule.domain.ScheduleCategorySettingDto
 import io.swagger.v3.oas.annotations.Operation
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
 @RestController
@@ -78,6 +81,43 @@ class ScheduleCategoryController(
         return ApiResponse.success(result)
     }
 
+    @Operation(summary = "개인 카테고리 공유 캘린더 이동 미리보기")
+    @GetMapping("/{categoryId}/move-preview")
+    fun previewCategoryMove(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @PathVariable categoryId: Long,
+        @RequestParam calendarId: Long,
+    ): ApiResponse<ScheduleCategoryMovePreviewDto> {
+        val authenticated = requireCategoryPrincipal(principal)
+        return ApiResponse.success(
+            scheduleCategoryService.previewMove(
+                memberId = authenticated.id,
+                categoryId = categoryId,
+                calendarId = calendarId,
+                presentedSessionGeneration = requireCategorySessionGeneration(authenticated),
+            )
+        )
+    }
+
+    @Operation(summary = "개인 카테고리를 공유 캘린더로 이동")
+    @PostMapping("/{categoryId}/move")
+    fun moveCategory(
+        @AuthenticationPrincipal principal: MemberPrincipal?,
+        @PathVariable categoryId: Long,
+        @RequestBody request: MoveScheduleCategoryRequest,
+    ): ApiResponse<ScheduleCategoryMoveResultDto> {
+        val authenticated = requireCategoryPrincipal(principal)
+        return ApiResponse.success(
+            scheduleCategoryService.moveCategory(
+                memberId = authenticated.id,
+                categoryId = categoryId,
+                calendarId = request.calendarId,
+                mergeIntoCategoryId = request.mergeIntoCategoryId,
+                presentedSessionGeneration = requireCategorySessionGeneration(authenticated),
+            )
+        )
+    }
+
     @Operation(summary = "일정 카테고리 삭제")
     @DeleteMapping("/{categoryId}")
     fun deleteCategory(
@@ -123,6 +163,11 @@ data class UpdateScheduleCategoryRequest(
     val color: String? = null,
     val iconKey: String? = null,
     val sortOrder: Int? = null,
+)
+
+data class MoveScheduleCategoryRequest(
+    val calendarId: Long,
+    val mergeIntoCategoryId: Long? = null,
 )
 
 data class ReorderScheduleCategoriesRequest(

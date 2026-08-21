@@ -81,7 +81,7 @@ class ScheduleService(
     }
 
     /**
-     * 외부 캘린더 한 발생 건을 회원별로 한 번만 저장한다.
+     * 외부 캘린더 한 발생 건을 회원의 저장 대상 캘린더별로 한 번만 저장한다.
      *
      * 애플리케이션 조회는 일반적인 재시도를 빠르게 처리하고, DB 유일 인덱스는
      * 여러 기기에서 동시에 같은 원본을 보내는 경우에도 실제 중복 행을 막는다.
@@ -92,14 +92,52 @@ class ScheduleService(
         scheduleDto: ScheduleDto,
         source: ScheduleImportSource,
     ): ScheduleImportResultDto {
-        val externalSourceKey = buildExternalSourceKey(source)
-        val existing = scheduleRepository
+        val externalSourceKey = buildExternalSourceKey(source, scheduleDto.calendarId)
+        val keyedForRequestedScope = scheduleRepository
             .findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, externalSourceKey)
-        if (existing != null) {
+        if (keyedForRequestedScope != null && keyedForRequestedScope.calendarId == scheduleDto.calendarId) {
             return ScheduleImportResultDto(
-                schedule = existing.toDto(objectMapper),
+                schedule = keyedForRequestedScope.toDto(objectMapper),
                 created = false,
             )
+        }
+        if (keyedForRequestedScope != null) {
+            // A private imported schedule can later be moved into a shared calendar while its
+            // one-way hash still names PERSONAL. The incoming source gives us enough information
+            // to repair the old row to its actual current scope before the requested scope is used.
+            repairMovedImportScope(memberId, keyedForRequestedScope, source)
+        }
+
+        if (scheduleDto.calendarId != null) {
+            val personalScopedKey = buildExternalSourceKey(source, targetCalendarId = null)
+            val formerlyPersonal = scheduleRepository
+                .findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, personalScopedKey)
+            if (formerlyPersonal != null) {
+                val sameDestination = formerlyPersonal.calendarId == scheduleDto.calendarId
+                repairMovedImportScope(memberId, formerlyPersonal, source)
+                if (sameDestination) {
+                    return ScheduleImportResultDto(
+                        schedule = formerlyPersonal.toDto(objectMapper),
+                        created = false,
+                    )
+                }
+            }
+        }
+
+        // 대상 범위가 키에 포함되기 전 생성된 행도 현재 실제 calendarId에 맞게 승격한다.
+        // 이 행이 개인에서 공유로 이동된 경우에도 shared 재가져오기가 새 행을 만들지 않는다.
+        val legacyKey = buildLegacyExternalSourceKey(source)
+        val legacyScoped = scheduleRepository
+            .findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, legacyKey)
+        if (legacyScoped != null) {
+            val sameDestination = legacyScoped.calendarId == scheduleDto.calendarId
+            repairMovedImportScope(memberId, legacyScoped, source)
+            if (sameDestination) {
+                return ScheduleImportResultDto(
+                    schedule = legacyScoped.toDto(objectMapper),
+                    created = false,
+                )
+            }
         }
 
         // 원본 키 저장 기능이 없던 앱에서 가져온 일정은 정확히 같은 가져오기 메모와
@@ -725,8 +763,10 @@ class ScheduleService(
                 )
             )
         }
-        val category = categories.findById(categoryId).orElse(null)
-            ?.takeUnless { it.deleted }
+        val category = categories.findActiveForScheduleAssignment(categoryId)
+            // Directly constructed unit-test services historically stub findById only. The
+            // production repository always executes the locking query above.
+            ?: categories.findById(categoryId).orElse(null)?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
 
         if (category.calendarId != scheduleDto.calendarId) {
@@ -993,7 +1033,30 @@ class ScheduleService(
         return text
     }
 
-    private fun buildExternalSourceKey(source: ScheduleImportSource): String {
+    private fun buildExternalSourceKey(source: ScheduleImportSource, targetCalendarId: Long?): String {
+        val targetScope = targetCalendarId?.let { "SHARED:$it" } ?: "PERSONAL"
+        return hashExternalSourceParts(buildExternalSourceParts(source) + targetScope)
+    }
+
+    private fun buildLegacyExternalSourceKey(source: ScheduleImportSource): String =
+        hashExternalSourceParts(buildExternalSourceParts(source))
+
+    private fun repairMovedImportScope(
+        memberId: Long,
+        schedule: Schedule,
+        source: ScheduleImportSource,
+    ) {
+        val actualScopeKey = buildExternalSourceKey(source, schedule.calendarId)
+        val occupied = scheduleRepository
+            .findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, actualScopeKey)
+            ?.takeUnless { it.id == schedule.id }
+        // A pre-existing correctly scoped copy wins. Clearing only this stale key avoids a unique
+        // constraint collision and, importantly, frees PERSONAL for an intentional re-import.
+        schedule.externalSourceKey = actualScopeKey.takeIf { occupied == null }
+        scheduleRepository.saveAndFlush(schedule)
+    }
+
+    private fun buildExternalSourceParts(source: ScheduleImportSource): List<String> {
         val calendarId = requireSourceText(source.calendarId, "source.calendarId")
         val eventId = requireSourceText(source.eventId, "source.eventId")
         val occurrenceStartAt = parseInstant(source.occurrenceStartAt, "source.occurrenceStartAt").toString()
@@ -1009,6 +1072,10 @@ class ScheduleService(
         if (source.provider != ScheduleImportProvider.GOOGLE) {
             sourceParts += occurrenceStartAt
         }
+        return sourceParts
+    }
+
+    private fun hashExternalSourceParts(sourceParts: List<String>): String {
         val canonical = sourceParts.joinToString(separator = "") { value -> "${value.length}:$value" }
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(canonical.toByteArray(StandardCharsets.UTF_8))
@@ -1041,6 +1108,7 @@ class ScheduleService(
             )
             .firstOrNull { candidate ->
                 candidate.externalSourceKey == null &&
+                    candidate.calendarId == scheduleDto.calendarId &&
                     extractLegacyImportUserNotes(candidate.notes, source.provider) == requestedUserNotes
             }
     }

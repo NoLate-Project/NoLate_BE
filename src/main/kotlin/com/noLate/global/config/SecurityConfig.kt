@@ -163,6 +163,9 @@ class SecurityConfig(
                     // page and form actions are anonymous. Do not expose future handlers under
                     // this namespace through a broad wildcard.
                     .requestMatchers(HttpMethod.GET, "/account-deletion").permitAll()
+                    // Browser fallback only. The controller validates the single path token;
+                    // invitation lookup and acceptance stay behind authenticated API routes.
+                    .requestMatchers(HttpMethod.GET, "/share/*").permitAll()
                     .requestMatchers(
                         HttpMethod.POST,
                         "/account-deletion/requests",

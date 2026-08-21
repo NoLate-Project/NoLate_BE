@@ -193,6 +193,8 @@ class ProductionSchemaVersionGuard(
             "2026-08-04-departure-alarm-plan-v2"
         const val NAVIGATION_PERFORMANCE_SCHEMA_VERSION =
             "2026-08-04-navigation-performance-v1"
+        const val INTERACTION_PERFORMANCE_SCHEMA_VERSION =
+            "2026-08-17-interaction-performance-v1"
         const val LIVE_ACTIVITY_SCHEMA_VERSION =
             "2026-08-06-live-activity-delivery-v1"
         const val LIVE_ACTIVITY_APPEARANCE_SCHEMA_VERSION =
@@ -216,6 +218,7 @@ class ProductionSchemaVersionGuard(
             SCHEDULE_ROUTE_OPTIMISTIC_LOCK_SCHEMA_VERSION,
             DEPARTURE_ALARM_PLAN_V2_SCHEMA_VERSION,
             NAVIGATION_PERFORMANCE_SCHEMA_VERSION,
+            INTERACTION_PERFORMANCE_SCHEMA_VERSION,
             LIVE_ACTIVITY_SCHEMA_VERSION,
             LIVE_ACTIVITY_APPEARANCE_SCHEMA_VERSION,
             EFFECTIVE_TRANSIT_ROUTE_SCHEMA_VERSION,

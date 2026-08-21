@@ -337,6 +337,37 @@ class ScheduleShareServiceUnitTest {
     }
 
     @Test
+    fun `calendar-bound category cannot be shared through the legacy category grant`() {
+        val ownerId = 1L
+        val target = member(id = 2L, email = "friend@example.com")
+        whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com"))
+            .thenReturn(2L)
+        whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
+        whenever(categoryRepository.findOwnedActiveForShareUpdate(7L, ownerId))
+            .thenReturn(
+                ScheduleCategory(
+                    id = 7L,
+                    memberId = ownerId,
+                    calendarId = 30L,
+                    title = "공유 캘린더 분류",
+                )
+            )
+
+        val error = assertThrows<BusinessException> {
+            service.shareCategory(
+                ownerMemberId = ownerId,
+                categoryId = 7L,
+                targetEmail = "friend@example.com",
+                permission = ScheduleSharePermission.EDITOR,
+                presentedSessionGeneration = 0L,
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_STATE, error.errorCode)
+        verify(categoryShareRepository, never()).saveAndFlush(any())
+    }
+
+    @Test
     fun `stale share request locks actor and target in id order then performs no domain write`() {
         val target = member(id = 2L, email = "target@example.com")
         val staleActor = member(id = 5L, email = "owner-5@example.com").apply {

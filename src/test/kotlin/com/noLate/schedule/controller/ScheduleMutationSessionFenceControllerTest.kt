@@ -4,6 +4,8 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.schedule.application.service.ScheduleCategoryService
+import com.noLate.schedule.application.service.ScheduleCategoryMovePreviewDto
+import com.noLate.schedule.application.service.ScheduleCategoryMoveResultDto
 import com.noLate.schedule.application.service.ScheduleShareService
 import com.noLate.schedule.domain.ScheduleCategorySettingDto
 import com.noLate.schedule.domain.ScheduleShareInvitationAcceptDto
@@ -43,6 +45,27 @@ class ScheduleMutationSessionFenceControllerTest {
 
         assertEquals(expected, result.data)
         verify(categoryService).getCategories(7L, 11L)
+    }
+
+    @Test
+    fun `category move preview and mutation receive signed session generation`() {
+        val preview = mock<ScheduleCategoryMovePreviewDto>()
+        val moved = mock<ScheduleCategoryMoveResultDto>()
+        whenever(categoryService.previewMove(7L, 30L, 40L, 11L)).thenReturn(preview)
+        whenever(categoryService.moveCategory(7L, 30L, 40L, 50L, 11L)).thenReturn(moved)
+        val controller = ScheduleCategoryController(categoryService)
+
+        val previewResponse = controller.previewCategoryMove(principal, 30L, 40L)
+        val moveResponse = controller.moveCategory(
+            principal,
+            30L,
+            MoveScheduleCategoryRequest(calendarId = 40L, mergeIntoCategoryId = 50L),
+        )
+
+        assertEquals(preview, previewResponse.data)
+        assertEquals(moved, moveResponse.data)
+        verify(categoryService).previewMove(7L, 30L, 40L, 11L)
+        verify(categoryService).moveCategory(7L, 30L, 40L, 50L, 11L)
     }
 
     @Test

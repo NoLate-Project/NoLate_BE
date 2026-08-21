@@ -64,6 +64,11 @@ class ScheduleCategory(
         this.sortOrder = sortOrder
     }
 
+    fun moveToCalendar(calendarId: Long, sortOrder: Int) {
+        this.calendarId = calendarId
+        this.sortOrder = sortOrder
+    }
+
     fun toDto(): ScheduleCategorySettingDto {
         return ScheduleCategorySettingDto(
             id = id?.toString(),

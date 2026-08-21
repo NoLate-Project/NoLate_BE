@@ -23,6 +23,21 @@ interface ScheduleCalendarMemberRepository : JpaRepository<ScheduleCalendarMembe
         status: ScheduleCalendarMemberStatus = ScheduleCalendarMemberStatus.ACTIVE,
     ): List<ScheduleCalendarMember>
 
+    @Query(
+        """
+        select member.memberId
+        from ScheduleCalendarMember member
+        where member.calendarId = :calendarId
+          and member.status = :status
+          and member.deleted = false
+        order by member.memberId asc
+        """
+    )
+    fun findActiveMemberIdsByCalendarId(
+        @Param("calendarId") calendarId: Long,
+        @Param("status") status: ScheduleCalendarMemberStatus = ScheduleCalendarMemberStatus.ACTIVE,
+    ): List<Long>
+
     fun findAllByCalendarIdInAndStatusAndDeletedFalseOrderByCalendarIdAscIdAsc(
         calendarIds: Collection<Long>,
         status: ScheduleCalendarMemberStatus = ScheduleCalendarMemberStatus.ACTIVE,

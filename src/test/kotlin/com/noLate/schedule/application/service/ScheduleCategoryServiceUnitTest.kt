@@ -4,12 +4,22 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleCalendar
+import com.noLate.schedule.domain.ScheduleCalendarMember
+import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
+import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleSharePermission
+import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -29,6 +39,7 @@ import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.mock.env.MockEnvironment
+import java.time.Instant
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleCategoryServiceUnitTest {
@@ -254,6 +265,141 @@ class ScheduleCategoryServiceUnitTest {
             verify(categoryRepository).findOwnedActiveForShareUpdate(4L, 7L)
         }
         verify(cleanupService).cancelRevokedForCategory(4L, listOf(2L))
+    }
+
+    @Test
+    fun `move preview locks actor before destination calendar and source category`() {
+        val calendarRepository = mock<ScheduleCalendarRepository>()
+        val calendarMemberRepository = mock<ScheduleCalendarMemberRepository>()
+        val scheduleRepository = mock<ScheduleRepository>()
+        val previewService = ScheduleCategoryService(
+            categoryRepository = categoryRepository,
+            memberRepository = memberRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+            calendarRepository = calendarRepository,
+            calendarMemberRepository = calendarMemberRepository,
+            scheduleRepository = scheduleRepository,
+        )
+        val source = ScheduleCategory(id = 4L, memberId = 7L, title = "개인")
+        val calendar = ScheduleCalendar(id = 20L, ownerMemberId = 7L, title = "가족")
+        val membership = ScheduleCalendarMember(
+            id = 21L,
+            calendarId = 20L,
+            memberId = 7L,
+            role = ScheduleCalendarRole.OWNER,
+        )
+        whenever(calendarRepository.findActiveForUpdate(20L)).thenReturn(calendar)
+        whenever(
+            calendarMemberRepository.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                20L,
+                7L,
+                ScheduleCalendarMemberStatus.ACTIVE,
+            )
+        ).thenReturn(membership)
+        whenever(categoryRepository.findOwnedActiveForShareUpdate(4L, 7L)).thenReturn(source)
+        whenever(scheduleRepository.findAllByCategoryIdIncludingSnapshotAndDeletedFalseOrderByIdAsc(4L))
+            .thenReturn(emptyList())
+
+        previewService.previewMove(
+            memberId = 7L,
+            categoryId = 4L,
+            calendarId = 20L,
+            presentedSessionGeneration = 0L,
+        )
+
+        inOrder(memberRepository, calendarRepository, categoryRepository) {
+            verify(memberRepository).findByIdForUpdate(7L)
+            verify(calendarRepository).findActiveForUpdate(20L)
+            verify(categoryRepository).findOwnedActiveForShareUpdate(4L, 7L)
+        }
+    }
+
+    @Test
+    fun `category move locks members then schedules then destination calendar`() {
+        val categoryShareRepository = mock<ScheduleCategoryShareRepository>()
+        val invitationRepository = mock<ScheduleShareInvitationRepository>()
+        val calendarRepository = mock<ScheduleCalendarRepository>()
+        val calendarMemberRepository = mock<ScheduleCalendarMemberRepository>()
+        val scheduleRepository = mock<ScheduleRepository>()
+        val moveService = ScheduleCategoryService(
+            categoryRepository = categoryRepository,
+            memberRepository = memberRepository,
+            categoryShareRepository = categoryShareRepository,
+            invitationRepository = invitationRepository,
+            sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
+                MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
+            ),
+            calendarRepository = calendarRepository,
+            calendarMemberRepository = calendarMemberRepository,
+            scheduleRepository = scheduleRepository,
+        )
+        val source = ScheduleCategory(id = 4L, memberId = 7L, title = "개인")
+        val personalFallback = ScheduleCategory(id = 5L, memberId = 7L, title = "기타")
+        val calendar = ScheduleCalendar(id = 20L, ownerMemberId = 7L, title = "가족")
+        val membership = ScheduleCalendarMember(
+            id = 21L,
+            calendarId = 20L,
+            memberId = 7L,
+            role = ScheduleCalendarRole.OWNER,
+        )
+        val schedule = Schedule(
+            id = 30L,
+            memberId = 7L,
+            title = "운동",
+            startAt = Instant.parse("2026-08-20T01:00:00Z"),
+            endAt = Instant.parse("2026-08-20T02:00:00Z"),
+        ).apply {
+            updateCategorySnapshot("4", source.title, source.color)
+        }
+        whenever(
+            categoryRepository.existsByIdAndMemberIdAndCalendarIdIsNullAndDeletedFalse(4L, 7L)
+        ).thenReturn(true)
+        whenever(categoryShareRepository.findAllByCategoryIdAndDeletedFalse(4L)).thenReturn(emptyList())
+        whenever(
+            calendarMemberRepository.findActiveMemberIdsByCalendarId(
+                20L,
+                ScheduleCalendarMemberStatus.ACTIVE,
+            )
+        ).thenReturn(listOf(7L))
+        whenever(scheduleRepository.findActiveIdsByCategoryIdIncludingSnapshotOrderByIdAsc(4L))
+            .thenReturn(listOf(30L))
+        whenever(scheduleRepository.findAllActiveByIdsForUpdate(listOf(30L))).thenReturn(listOf(schedule))
+        whenever(calendarRepository.findActiveForUpdate(20L)).thenReturn(calendar)
+        whenever(
+            calendarMemberRepository.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                20L,
+                7L,
+                ScheduleCalendarMemberStatus.ACTIVE,
+            )
+        ).thenReturn(membership)
+        whenever(
+            invitationRepository.findAllPendingByResourceForUpdate(
+                ScheduleShareResourceType.CATEGORY,
+                4L,
+            )
+        ).thenReturn(emptyList())
+        whenever(categoryRepository.findOwnedActiveForShareUpdate(4L, 7L)).thenReturn(source)
+        whenever(categoryShareRepository.findAllByCategoryIdForUpdate(4L)).thenReturn(emptyList())
+        whenever(categoryRepository.findAllActiveByCalendarIdForUpdate(20L)).thenReturn(emptyList())
+        whenever(
+            categoryRepository.findByMemberIdAndCalendarIdIsNullAndDeletedFalseOrderBySortOrderAscIdAsc(7L)
+        ).thenReturn(listOf(personalFallback))
+
+        moveService.moveCategory(
+            memberId = 7L,
+            categoryId = 4L,
+            calendarId = 20L,
+            mergeIntoCategoryId = null,
+            presentedSessionGeneration = 0L,
+        )
+
+        inOrder(memberRepository, scheduleRepository, calendarRepository) {
+            verify(memberRepository).findByIdForUpdate(7L)
+            verify(scheduleRepository).findAllActiveByIdsForUpdate(listOf(30L))
+            verify(calendarRepository).findActiveForUpdate(20L)
+        }
     }
 
     @Test

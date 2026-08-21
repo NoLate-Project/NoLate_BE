@@ -3,7 +3,10 @@ package com.noLate.schedule.application.service
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.application.cache.ScheduleCalendarCacheAudienceResolver
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
+import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategorySettingDto
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
@@ -14,6 +17,7 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
@@ -37,6 +41,8 @@ class ScheduleCategoryService(
     private val sharingBlockPolicy: SharingBlockPolicy? = null,
     private val calendarRepository: ScheduleCalendarRepository? = null,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository? = null,
+    private val scheduleRepository: ScheduleRepository? = null,
+    private val calendarCacheAudienceResolver: ScheduleCalendarCacheAudienceResolver? = null,
 ) {
     private val defaultCategories = listOf(
         DefaultScheduleCategory("업무", "#f44336", "briefcase-outline"),
@@ -191,6 +197,212 @@ class ScheduleCategoryService(
     }
 
     @Transactional
+    fun previewMove(
+        memberId: Long,
+        categoryId: Long,
+        calendarId: Long,
+        presentedSessionGeneration: Long,
+    ): ScheduleCategoryMovePreviewDto {
+        // Calendar mutations use member -> calendar globally. Keeping the same order here avoids
+        // a preview holding the destination calendar while an add/remove/archive path holds this
+        // member row and waits for that calendar.
+        lockMutationMembers(memberId, presentedSessionGeneration)
+        val access = requireWritableCalendarAccess(memberId, calendarId)
+        val source = categoryRepository.findOwnedActiveForShareUpdate(categoryId, memberId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+        requireMovablePersonalCategory(source, memberId)
+
+        val schedules = requireScheduleRepository()
+            .findAllByCategoryIdIncludingSnapshotAndDeletedFalseOrderByIdAsc(categoryId)
+        requireNoForeignOwnedSchedules(schedules, memberId)
+        val sameNameCategory = categoryRepository
+            .findFirstByCalendarIdAndTitleIgnoreCaseAndDeletedFalseOrderByIdAsc(calendarId, source.title)
+
+        return ScheduleCategoryMovePreviewDto(
+            sourceCategory = source.toDto(),
+            destinationCalendarId = calendarId,
+            destinationCalendarTitle = access.calendar.title,
+            activeScheduleCount = schedules.count { it.memberId == memberId },
+            sameNameCategory = sameNameCategory?.toDto()?.copy(
+                shared = true,
+                sharePermission = access.role.toCategoryPermission(),
+            ),
+        )
+    }
+
+    /**
+     * Moves one private category and every active schedule linked to it as one transaction.
+     *
+     * The initial schedule/share reads only discover the lock set. Every authoritative row is
+     * re-read after its parent lock, and a participant expansion fails with a retryable 409 rather
+     * than acquiring a newly discovered member lock out of order.
+     */
+    @Transactional
+    fun moveCategory(
+        memberId: Long,
+        categoryId: Long,
+        calendarId: Long,
+        mergeIntoCategoryId: Long?,
+        presentedSessionGeneration: Long,
+    ): ScheduleCategoryMoveResultDto {
+        sharingAvailabilityPolicy.requireEnabled()
+        val schedules = requireScheduleRepository()
+        val shares = requireCategoryShareRepository()
+        val invitations = requireInvitationRepository()
+        val calendarMembers = requireCalendarMemberRepository()
+
+        // A scalar existence check rejects unrelated category ids without attaching source state
+        // before the owner member fence. The locked entity below remains the sole authority.
+        if (!categoryRepository.existsByIdAndMemberIdAndCalendarIdIsNullAndDeletedFalse(categoryId, memberId)) {
+            throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+        }
+        val sharePreview = shares.findAllByCategoryIdAndDeletedFalse(categoryId)
+        val previewTargetMemberIds = sharePreview.map { it.targetMemberId }.distinct()
+        // Scalar previews avoid retaining stale membership roles in the persistence context while
+        // waiting for member locks. Authorization is evaluated from fresh state after calendar lock.
+        val destinationMemberPreviewIds = calendarMembers.findActiveMemberIdsByCalendarId(calendarId)
+
+        // All related writers begin with member rows. In particular, normal schedule edits use
+        // member -> push-job -> schedule -> calendar, while calendar mutations use member ->
+        // calendar. Taking schedule/calendar first here would allow a classic two-row deadlock.
+        lockMutationMembers(
+            memberId,
+            presentedSessionGeneration,
+            previewTargetMemberIds + destinationMemberPreviewIds,
+        )
+
+        // Re-discover after the member fence: an owner/editor creation that committed while this
+        // transaction waited must be included before any schedule row is locked. Once the known
+        // writer members are held, the set can only expand through a concurrently committed new
+        // share, which is rejected by the authoritative participant check below.
+        val scheduleIdsAfterMemberFence = schedules
+            .findActiveIdsByCategoryIdIncludingSnapshotOrderByIdAsc(categoryId)
+        val lockedSchedulesById = lockSchedulesById(
+            schedules,
+            scheduleIdsAfterMemberFence,
+        ).associateBy { requireNotNull(it.id) }
+
+        // Schedules precede their destination calendar, matching the schedule-edit move order.
+        // The destination member preview is validated again while the calendar parent is locked.
+        val access = requireWritableCalendarAccess(memberId, calendarId)
+        val destinationMemberIds = calendarMembers.findActiveMemberIdsByCalendarId(calendarId)
+        val lockedMemberIds = (previewTargetMemberIds + destinationMemberPreviewIds + memberId).toSet()
+        if (destinationMemberIds.any { it !in lockedMemberIds }) {
+            throw ConcurrencyFailureException(
+                "Calendar membership changed while acquiring the category move fence.",
+            )
+        }
+        // Invitation acceptance serializes on the invitation before granting its category share.
+        // Lock pending invitations before the category so an acceptance cannot appear after the
+        // authoritative share re-read below.
+        val pendingInvitations = invitations.findAllPendingByResourceForUpdate(
+            resourceType = ScheduleShareResourceType.CATEGORY,
+            resourceId = categoryId,
+        )
+        val source = categoryRepository.findOwnedActiveForShareUpdate(categoryId, memberId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+        requireMovablePersonalCategory(source, memberId)
+
+        val currentShares = shares.findAllByCategoryIdForUpdate(categoryId)
+        if (currentShares.any { it.targetMemberId !in lockedMemberIds }) {
+            throw ConcurrencyFailureException(
+                "Category participant set changed while acquiring the move fence.",
+            )
+        }
+
+        // Holding the category row prevents new ScheduleService assignments. Never acquire a new
+        // schedule lock after it: a newly discovered id means the preview fence expanded and the
+        // caller must retry from the global member -> schedule order.
+        val linkedScheduleIds = schedules
+            .findActiveIdsByCategoryIdIncludingSnapshotOrderByIdAsc(categoryId)
+            .toSet()
+        if (!lockedSchedulesById.keys.containsAll(linkedScheduleIds)) {
+            throw ConcurrencyFailureException(
+                "Category schedule set changed while acquiring the move fence.",
+            )
+        }
+        val lockedSchedules = linkedScheduleIds
+            .sorted()
+            .mapNotNull(lockedSchedulesById::get)
+            .filter { it.referencesCategory(categoryId) }
+        requireNoForeignOwnedSchedules(lockedSchedules, memberId)
+
+        val destinationCategories = categoryRepository.findAllActiveByCalendarIdForUpdate(calendarId)
+        val sameNameCategories = destinationCategories.filter { it.title.equals(source.title, ignoreCase = true) }
+        val destinationCategory = resolveMoveDestinationCategory(
+            source = source,
+            destinationCategories = destinationCategories,
+            sameNameCategories = sameNameCategories,
+            mergeIntoCategoryId = mergeIntoCategoryId,
+            calendarId = calendarId,
+        )
+        val merged = destinationCategory !== source
+
+        val beforeAudience = buildSet {
+            add(memberId)
+            addAll(currentShares.map { it.targetMemberId })
+            lockedSchedules.forEach { schedule ->
+                addAll(calendarCacheAudienceResolver?.resolve(schedule).orEmpty())
+            }
+        }
+
+        currentShares.forEach { it.revoke() }
+        shares.saveAllAndFlush(currentShares)
+        pendingInvitations.forEach { it.revoke() }
+
+        // Give the cleanup policy the post-move calendar access while the old category link is
+        // still queryable. In the merge branch, repointing the snapshot first would make the
+        // source-category cleanup query empty and could leave revoked travel jobs behind.
+        lockedSchedules.forEach { schedule ->
+            schedule.calendarId = calendarId
+        }
+        schedules.saveAllAndFlush(lockedSchedules)
+        travelAccessCleanupService?.cancelRevokedForCategory(
+            categoryId,
+            currentShares.map { it.targetMemberId },
+        )
+
+        lockedSchedules.forEach { schedule ->
+            schedule.updateCategorySnapshot(
+                categoryId = requireNotNull(destinationCategory.id).toString(),
+                title = destinationCategory.title,
+                color = destinationCategory.color,
+            )
+        }
+        schedules.saveAll(lockedSchedules)
+
+        if (merged) {
+            source.softDelete()
+        } else {
+            source.moveToCalendar(
+                calendarId = calendarId,
+                sortOrder = destinationCategories.maxOfOrNull { it.sortOrder }?.plus(1) ?: 0,
+            )
+        }
+        categoryRepository.saveAndFlush(source)
+        ensurePersonalCategoryRemains(memberId)
+
+        val afterAudience = buildSet {
+            add(memberId)
+            addAll(destinationMemberIds)
+            lockedSchedules.forEach { schedule ->
+                addAll(calendarCacheAudienceResolver?.resolve(schedule).orEmpty())
+            }
+        }
+        publishCategoryInvalidation(beforeAudience + afterAudience, "category-moved-to-calendar")
+
+        return ScheduleCategoryMoveResultDto(
+            sourceCategoryId = categoryId.toString(),
+            category = destinationCategory.toDto().copy(
+                shared = true,
+                sharePermission = access.role.toCategoryPermission(),
+            ),
+            movedScheduleCount = lockedSchedules.size,
+            merged = merged,
+        )
+    }
+
+    @Transactional
     fun deleteCategory(
         memberId: Long,
         categoryId: Long,
@@ -329,6 +541,10 @@ class ScheduleCategoryService(
     }
 
     private fun requireWritableCalendar(memberId: Long, calendarId: Long): ScheduleCalendarRole {
+        return requireWritableCalendarAccess(memberId, calendarId).role
+    }
+
+    private fun requireWritableCalendarAccess(memberId: Long, calendarId: Long): WritableCalendarAccess {
         sharingAvailabilityPolicy.requireEnabled()
         val calendar = calendarRepository?.findActiveForUpdate(calendarId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
@@ -345,8 +561,104 @@ class ScheduleCategoryService(
         if (membership.role !in setOf(ScheduleCalendarRole.OWNER, ScheduleCalendarRole.EDITOR)) {
             throw BusinessException(ErrorCode.FORBIDDEN, "공유 캘린더 카테고리를 편집할 권한이 없습니다.")
         }
-        return membership.role
+        return WritableCalendarAccess(calendar, membership.role)
     }
+
+    private fun requireMovablePersonalCategory(category: ScheduleCategory, memberId: Long) {
+        if (category.memberId != memberId) {
+            throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+        }
+        if (category.calendarId != null) {
+            throw BusinessException(ErrorCode.INVALID_STATE, "개인 캘린더 카테고리만 이동할 수 있습니다.")
+        }
+        val categoryId = requireNotNull(category.id)
+        if (calendarRepository?.findByLegacyCategoryIdAndDeletedFalse(categoryId) != null) {
+            throw BusinessException(
+                ErrorCode.INVALID_STATE,
+                "기존 공유 캘린더로 전환된 카테고리는 다시 이동할 수 없습니다.",
+            )
+        }
+    }
+
+    private fun requireNoForeignOwnedSchedules(schedules: Collection<Schedule>, memberId: Long) {
+        if (schedules.any { it.memberId != memberId }) {
+            throw BusinessException(
+                ErrorCode.INVALID_STATE,
+                "다른 사용자가 만든 일정이 포함된 기존 공유 카테고리는 이동할 수 없습니다.",
+            )
+        }
+    }
+
+    private fun lockSchedulesById(
+        schedules: ScheduleRepository,
+        scheduleIds: Collection<Long>,
+    ): List<Schedule> {
+        val normalizedIds = scheduleIds.distinct().sorted()
+        if (normalizedIds.isEmpty()) return emptyList()
+        return schedules.findAllActiveByIdsForUpdate(normalizedIds)
+    }
+
+    private fun resolveMoveDestinationCategory(
+        source: ScheduleCategory,
+        destinationCategories: List<ScheduleCategory>,
+        sameNameCategories: List<ScheduleCategory>,
+        mergeIntoCategoryId: Long?,
+        calendarId: Long,
+    ): ScheduleCategory {
+        if (sameNameCategories.isEmpty()) {
+            if (mergeIntoCategoryId != null) {
+                throw BusinessException(
+                    ErrorCode.INVALID_INPUT,
+                    "합칠 같은 이름의 카테고리가 대상 캘린더에 없습니다.",
+                )
+            }
+            return source
+        }
+        if (mergeIntoCategoryId == null) {
+            throw BusinessException(
+                ErrorCode.INVALID_STATE,
+                "대상 캘린더에 같은 이름의 카테고리가 있습니다. 합칠 카테고리를 선택해 주세요.",
+            )
+        }
+        val destination = destinationCategories.firstOrNull { it.id == mergeIntoCategoryId }
+            ?: throw BusinessException(ErrorCode.SCHEDULE_CATEGORY_NOT_FOUND)
+        if (destination.calendarId != calendarId ||
+            sameNameCategories.none { it.id == destination.id }
+        ) {
+            throw BusinessException(
+                ErrorCode.INVALID_INPUT,
+                "같은 이름의 대상 캘린더 카테고리만 합칠 수 있습니다.",
+            )
+        }
+        return destination
+    }
+
+    private fun ensurePersonalCategoryRemains(memberId: Long) {
+        val personalCategories = categoryRepository
+            .findByMemberIdAndCalendarIdIsNullAndDeletedFalseOrderBySortOrderAscIdAsc(memberId)
+        if (personalCategories.isNotEmpty()) return
+        categoryRepository.save(
+            ScheduleCategory(
+                memberId = memberId,
+                title = "개인",
+                color = "#2196f3",
+                iconKey = "person-outline",
+                sortOrder = 0,
+            )
+        )
+    }
+
+    private fun requireScheduleRepository(): ScheduleRepository = scheduleRepository
+        ?: throw BusinessException(ErrorCode.INVALID_STATE, "일정 저장소가 준비되지 않았습니다.")
+
+    private fun requireCategoryShareRepository(): ScheduleCategoryShareRepository = categoryShareRepository
+        ?: throw BusinessException(ErrorCode.INVALID_STATE, "카테고리 공유 저장소가 준비되지 않았습니다.")
+
+    private fun requireInvitationRepository(): ScheduleShareInvitationRepository = invitationRepository
+        ?: throw BusinessException(ErrorCode.INVALID_STATE, "공유 초대 저장소가 준비되지 않았습니다.")
+
+    private fun requireCalendarMemberRepository(): ScheduleCalendarMemberRepository = calendarMemberRepository
+        ?: throw BusinessException(ErrorCode.INVALID_STATE, "공유 캘린더 멤버 저장소가 준비되지 않았습니다.")
 
     private fun nextCategorySortOrder(memberId: Long, calendarId: Long?): Int {
         return if (calendarId == null) {
@@ -396,6 +708,14 @@ private fun ScheduleCalendarRole.toCategoryPermission(): ScheduleSharePermission
     ScheduleCalendarRole.EDITOR -> ScheduleSharePermission.EDITOR
     ScheduleCalendarRole.VIEWER -> ScheduleSharePermission.VIEWER
 }
+
+private fun Schedule.referencesCategory(categoryId: Long): Boolean =
+    this.categoryId == categoryId || this.categorySnapshot?.categoryId == categoryId.toString()
+
+private data class WritableCalendarAccess(
+    val calendar: ScheduleCalendar,
+    val role: ScheduleCalendarRole,
+)
 
 /**
  * The first non-locking share snapshot can race a share transaction that already owns the actor
@@ -517,6 +837,21 @@ private const val CATEGORY_DELETE_MAX_ATTEMPTS = 3
 data class ScheduleCategoryReorderItem(
     val id: Long,
     val sortOrder: Int,
+)
+
+data class ScheduleCategoryMovePreviewDto(
+    val sourceCategory: ScheduleCategorySettingDto,
+    val destinationCalendarId: Long,
+    val destinationCalendarTitle: String,
+    val activeScheduleCount: Int,
+    val sameNameCategory: ScheduleCategorySettingDto? = null,
+)
+
+data class ScheduleCategoryMoveResultDto(
+    val sourceCategoryId: String,
+    val category: ScheduleCategorySettingDto,
+    val movedScheduleCount: Int,
+    val merged: Boolean,
 )
 
 private data class DefaultScheduleCategory(
