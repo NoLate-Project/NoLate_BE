@@ -143,6 +143,25 @@ class LegalDocumentControllerTest {
                     it.contains("저장하지 않습니다")
             }
         })
+        val advertisingBody = document.sections
+            .single { it.title == "6-1. 광고 제공, 동의 관리 및 추적" }
+            .body
+            .joinToString("\n")
+        listOf(
+            "Google Mobile Ads",
+            "Google User Messaging Platform(UMP)",
+            "기기 식별자",
+            "대략적 위치",
+            "광고 데이터",
+            "제품 상호작용",
+            "ATT 권한",
+        ).forEach { disclosure -> assertTrue(policyBody.contains(disclosure)) }
+        assertTrue(advertisingBody.contains("AdMob 콘솔에서 구성된 개인정보 메시지"))
+        assertTrue(advertisingBody.contains("GPS 기반 정밀 위치를 직접 첨부하지 않습니다"))
+        assertTrue(advertisingBody.contains("https://policies.google.com/privacy"))
+        assertTrue(policyBody.contains("Google Mobile Ads·AdMob·UMP에 전달하거나 광고 제공·타기팅·측정에 사용하지 않습니다"))
+        assertTrue(policyBody.contains("광고 노출 빈도 정보는 기기에만 저장합니다"))
+        assertTrue(policyBody.contains("개인정보 보호 및 보안 > 추적"))
     }
 
     @Test
@@ -156,6 +175,9 @@ class LegalDocumentControllerTest {
         assertTrue(html.contains("Limited Use"))
         assertTrue(html.contains("calendar.calendarlist.readonly"))
         assertTrue(html.contains("calendar.events.readonly"))
+        assertTrue(html.contains("Google Mobile Ads"))
+        assertTrue(html.contains("Google User Messaging Platform(UMP)"))
+        assertTrue(html.contains("광고 제공, 동의 관리 및 추적"))
     }
 
     @Test
