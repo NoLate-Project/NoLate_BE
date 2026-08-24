@@ -2,7 +2,7 @@ FROM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 
 COPY gradle ./gradle
-COPY gradlew settings.gradle build.gradle ./
+COPY gradlew settings.gradle build.gradle gradle.properties ./
 COPY src ./src
 # Several schema and deployment contract tests deliberately verify reviewed repository artifacts.
 # Keep those artifacts in the build stage only; they are not copied into the runtime image.
