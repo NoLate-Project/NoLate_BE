@@ -2,6 +2,7 @@ package com.noLate.legal.controller
 
 import com.noLate.legal.domain.LegalDocumentType
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -59,11 +60,70 @@ class LegalDocumentControllerTest {
         assertTrue(response.success)
         assertEquals(LegalDocumentType.PRIVACY_POLICY, document.type)
         assertEquals("개인정보처리방침", document.title)
-        assertEquals("2026.08.17", document.version)
+        assertEquals("2026.08.24", document.version)
+        assertEquals("2026-08-24", document.effectiveDate)
         assertTrue(document.sections.any { it.title.contains("외부 캘린더") })
+        val policyBody = document.sections.flatMap { it.body }.joinToString("\n")
+        assertTrue(policyBody.contains("calendar.calendarlist.readonly"))
+        assertTrue(policyBody.contains("calendar.events.readonly"))
+        assertTrue(policyBody.contains("calendarList와 events"))
+        assertTrue(policyBody.contains("최근 7일부터 향후 90일까지"))
+        assertTrue(policyBody.contains("HTTPS/TLS"))
+        val googleCalendarDataBody = document.sections
+            .single { it.title == "3. 외부 캘린더 데이터 처리" }
+            .body
+            .joinToString("\n")
+        val processedDataBody = document.sections
+            .single { it.title == "2. 처리하는 개인정보 항목" }
+            .body
+            .joinToString("\n")
+        val googleLimitedUseBody = document.sections
+            .single { it.title.contains("Limited Use") }
+            .body
+            .joinToString("\n")
+        listOf("정식 배포 앱에서는", "iOS Keychain", "Android Keystore", "암호화된 운영체제 보안 저장소")
+            .forEach { protectionMechanism ->
+                assertTrue(googleCalendarDataBody.contains(protectionMechanism))
+                assertTrue(googleLimitedUseBody.contains(protectionMechanism))
+            }
+        assertTrue(policyBody.contains("접근 토큰은 NoLate 서버에 전송하거나 저장하지 않습니다"))
+        assertTrue(policyBody.contains("사용자가 명시적으로 선택한 일정"))
+        listOf(
+            "캘린더 식별자",
+            "원본 일정 식별자",
+            "반복 일정 발생 시각",
+            "SHA-256 기반 일방향 키",
+            "원문 식별자는 저장하지 않습니다",
+        ).forEach { importSourceDisclosure ->
+            assertTrue(processedDataBody.contains(importSourceDisclosure))
+            assertTrue(googleCalendarDataBody.contains(importSourceDisclosure))
+        }
+        assertTrue(policyBody.contains("인증된 API와 회원·일정·공유 권한 검사"))
+        assertTrue(policyBody.contains("권한을 부여한 공유 구성원만 접근"))
+        assertTrue(policyBody.contains("추출된 장소 검색어와 확정된 좌표만"))
         assertTrue(document.sections.any { section ->
-            section.body.any { it.contains("Google Calendar") && it.contains("서버에는 저장하지 않습니다") }
+            section.title.contains("Limited Use") &&
+                section.body.any { it.contains("Google API Services User Data Policy") }
         })
+        assertTrue(policyBody.contains("NoLate's use and transfer to any other app"))
+        assertTrue(policyBody.contains("맞춤형 또는 리타게팅 광고"))
+        assertTrue(policyBody.contains("판매·대여"))
+        assertTrue(policyBody.contains("신용평가·대출"))
+        assertTrue(policyBody.contains("데이터 중개"))
+        assertTrue(policyBody.contains("AI 또는 머신러닝 모델 학습"))
+        assertTrue(policyBody.contains("로그아웃 또는 회원 탈퇴 시 앱의 로컬 저장소에서 삭제 처리"))
+        assertTrue(policyBody.contains("Google API가 401 응답을 반환한 경우에도 제거"))
+        assertTrue(policyBody.contains("Google 계정 설정에서 NoLate의 연동 권한을 철회"))
+        assertFalse(policyBody.contains("접근 토큰은 앱 삭제"))
+        val googleCalendarExternalServiceDisclosure = document.sections
+            .flatMap { it.body }
+            .single { it.startsWith("Google LLC: Google Calendar 연동 시") }
+        assertTrue(googleCalendarExternalServiceDisclosure.contains("OAuth 승인"))
+        assertTrue(googleCalendarExternalServiceDisclosure.contains("접근 토큰"))
+        assertTrue(googleCalendarExternalServiceDisclosure.contains("캘린더 식별자"))
+        assertTrue(googleCalendarExternalServiceDisclosure.contains("조회 기간"))
+        assertTrue(googleCalendarExternalServiceDisclosure.contains("프로필 또는 이메일 정보를 요청하거나 사용하지 않으며"))
+        assertFalse(googleCalendarExternalServiceDisclosure.contains("Google 로그인 및"))
         assertTrue(document.sections.any { section ->
             section.body.any { it.contains("/account-deletion") }
         })
@@ -92,6 +152,10 @@ class LegalDocumentControllerTest {
         assertTrue(html.contains("<html lang=\"ko\">"))
         assertTrue(html.contains("개인정보처리방침"))
         assertTrue(html.contains("Google Calendar"))
+        assertTrue(html.contains("Google API Services User Data Policy"))
+        assertTrue(html.contains("Limited Use"))
+        assertTrue(html.contains("calendar.calendarlist.readonly"))
+        assertTrue(html.contains("calendar.events.readonly"))
     }
 
     @Test

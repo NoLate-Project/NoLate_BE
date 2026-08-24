@@ -78,8 +78,8 @@ object LegalDocuments {
     val privacyPolicy = LegalDocumentDto(
         type = LegalDocumentType.PRIVACY_POLICY,
         title = "개인정보처리방침",
-        version = "2026.08.17",
-        effectiveDate = "2026-08-17",
+        version = "2026.08.24",
+        effectiveDate = "2026-08-24",
         summary = "NoLate는 일정, 위치, 캘린더 연동 정보를 늦지 않는 일정 관리를 제공하기 위해 필요한 범위에서만 처리합니다.",
         sections = listOf(
             section(
@@ -96,7 +96,7 @@ object LegalDocuments {
                 "2. 처리하는 개인정보 항목",
                 "회원 정보: 이름, 이메일, 비밀번호 해시, 로그인 유형, SNS 식별자",
                 "서비스 이용 정보: 일정 제목, 일정 시간, 장소명, 좌표, 카테고리, 이동수단, 알림 설정, 공유 일정 정보",
-                "캘린더 연동 정보: 연동 제공자, 캘린더 이름, 일정 후보의 제목, 시간, 장소, 메모, 종일 여부",
+                "캘린더 연동 정보: 연동 제공자, 캘린더 이름, 캘린더 식별자, 원본 일정 식별자, 반복 일정 발생 시각, 일정 후보의 제목, 시간, 장소, 메모, 종일 여부. 사용자가 선택한 일정의 중복 저장을 방지하기 위해 연동 제공자, 캘린더 식별자, 원본 일정 식별자 및 반복 일정 발생 시각을 서버로 전송하나, 서버는 이를 SHA-256 기반 일방향 키로 변환하고 원문 식별자는 저장하지 않습니다.",
                 "기기 및 알림 정보: 앱에서 생성한 기기 식별값, 푸시 토큰, OS 정보, 인증 토큰",
                 "알림 품질 정보: 논리 알림 식별값, 서버가 확인한 푸시 수신·표시·알람 예약·사용자 동작 시각과 발송 결과, 기기에서 기록한 알람 예정·실제 실행 시각, 알람 세대와 실행 지연. 기기 식별값은 서버 저장 전에 일방향 변환합니다.",
                 "ETA 정확도 개선 참여 시: 이동수단, ETA 출처·계산 버전·조회 시각, 목표 도착·추천 출발·예상 도착 시각, 사용자가 기록한 실제 출발·도착 시각, 정시 도착 판정과 예측 오차. 도착 기록 과정에서 위치를 추가 수집하지 않습니다.",
@@ -108,10 +108,18 @@ object LegalDocuments {
             section(
                 "3. 외부 캘린더 데이터 처리",
                 "Apple EventKit 또는 Android 기기 캘린더는 사용자의 기기 권한이 허용된 경우에만 앱에서 읽습니다.",
-                "Google Calendar는 사용자가 Google OAuth로 동의한 경우 읽기 전용 범위로 다가오는 일정과 캘린더 목록을 조회합니다.",
-                "Google Calendar 접근 토큰은 기기 보안 저장소에 저장되며, 현재 서버에는 저장하지 않습니다.",
-                "사용자가 선택한 일정의 장소와 메모는 앱에서 명시적인 출발지·도착지 후보를 찾는 데 사용합니다. 전체 메모를 지도 사업자에 전송하지 않고, 추출된 장소 검색어와 좌표만 장소 검색 및 경로 생성에 사용합니다.",
-                "외부 캘린더의 전체 원본을 서버에 일괄 저장하지 않고, 사용자가 가져오기로 선택한 일정만 NoLate 일정으로 저장합니다.",
+                "Google Calendar는 사용자가 연동 화면에서 명시적으로 동의하고 Google OAuth 권한을 승인한 경우에만 https://www.googleapis.com/auth/calendar.calendarlist.readonly 및 https://www.googleapis.com/auth/calendar.events.readonly 범위로 Google Calendar API의 calendarList와 events를 읽기 전용 호출합니다. 기본 또는 선택된 캘린더 목록과 최근 7일부터 향후 90일까지의 일정 후보만 조회하며, 원본 캘린더 일정은 생성·수정·삭제하지 않습니다.",
+                "Google Calendar 접근 토큰은 앱과 Google API 사이의 HTTPS/TLS 통신에만 사용하고, 정식 배포 앱에서는 iOS Keychain 또는 Android Keystore 기반의 암호화된 운영체제 보안 저장소에만 저장하며, NoLate 서버로 전송하거나 서버에 저장하지 않습니다.",
+                "조회한 캘린더 및 일정 후보는 가져오기 선택 화면을 위해 기기에서 처리하고, 사용자가 명시적으로 선택한 일정의 연동 제공자, 원본 캘린더 식별자, 원본 일정 식별자, 반복 일정 발생 시각, 제목, 시간, 장소, 메모 등을 NoLate 일정 생성 요청으로 서버에 전송합니다. 선택 일정의 중복 저장을 방지하기 위해 연동 제공자, 원본 캘린더·일정 식별자와 반복 일정 발생 시각을 서버에서 SHA-256 기반 일방향 키로 변환하고 원문 식별자는 저장하지 않습니다. 서버에 저장된 선택 일정은 인증된 API와 회원·일정·공유 권한 검사를 거쳐 해당 회원 및 사용자가 권한을 부여한 공유 구성원만 접근할 수 있습니다. 외부 캘린더의 전체 원본은 서버에 일괄 저장하지 않습니다.",
+                "사용자가 선택한 일정에서 경로 준비 기능을 켠 경우 장소와 메모는 앱에서 명시적인 출발지·도착지 후보를 찾는 데 사용합니다. 전체 메모를 지도·경로 제공자에 전송하지 않고, 추출된 장소 검색어와 확정된 좌표만 장소 검색 및 경로 생성에 사용합니다.",
+            ),
+            section(
+                "3-1. Google API Services 사용자 데이터 정책 및 Limited Use",
+                "NoLate가 Google API로부터 수신한 정보의 사용 및 다른 앱으로의 전송은 Google API Services User Data Policy(https://developers.google.com/terms/api-services-user-data-policy)와 Limited Use 요구사항을 준수합니다.",
+                "NoLate's use and transfer to any other app of information received from Google APIs will adhere to the Google API Services User Data Policy, including the Limited Use requirements.",
+                "Google Calendar API로 수신한 Google Workspace 사용자 데이터와 그 파생 데이터는 사용자가 요청한 캘린더 일정 후보 조회, 선택 일정 가져오기 및 선택한 경로 준비 기능을 제공하는 목적으로만 사용합니다.",
+                "Google Workspace 사용자 데이터, 그 파생 데이터 및 Google 접근 토큰을 맞춤형 또는 리타게팅 광고를 포함한 광고 타기팅·측정·개인화, 판매·대여, 신용평가·대출, 데이터 중개, AI 또는 머신러닝 모델 학습에 사용하지 않습니다.",
+                "Google Workspace 사용자 데이터 보호를 위해 최소 권한의 읽기 전용 OAuth 범위와 HTTPS/TLS 전송을 사용하고, 정식 배포 앱에서는 iOS Keychain 또는 Android Keystore 기반의 암호화된 운영체제 보안 저장소에 Google 접근 토큰을 저장합니다. Google 접근 토큰은 NoLate 서버에 전송하거나 저장하지 않습니다.",
             ),
             section(
                 "4. 보유 및 이용 기간",
@@ -123,7 +131,7 @@ object LegalDocuments {
                 "외부 계정 삭제 요청 기록은 계정 존재 여부를 드러내지 않는 처리 증적과 재시도 제한을 위해 30일 동안 보관하고 이후 정기 삭제합니다. 입력한 이메일과 네트워크 주소 원문은 이 기록에 저장하지 않습니다.",
                 "탈퇴한 회원 행은 데이터 참조 안정성을 위해 비식별 상태로 유지될 수 있으나 이름, 이메일, 비밀번호, SNS 식별자는 제거하고 로그인할 수 없게 합니다.",
                 "관계 법령에 따라 보관이 필요한 정보는 해당 법령에서 정한 기간 동안 별도 보관 후 파기합니다.",
-                "기기에만 저장된 외부 캘린더 접근 토큰은 앱 삭제, 로그아웃, 권한 철회 또는 토큰 만료 시 더 이상 사용할 수 없습니다.",
+                "Google Calendar 접근 토큰은 로그아웃 또는 회원 탈퇴 시 앱의 로컬 저장소에서 삭제 처리하고, 토큰이 만료되었거나 Google API가 401 응답을 반환한 경우에도 제거합니다. 이용자는 Google 계정 설정에서 NoLate의 연동 권한을 철회할 수 있습니다.",
             ),
             section(
                 "5. 개인정보 처리의 위탁",
@@ -136,7 +144,7 @@ object LegalDocuments {
                 "6. 개인정보의 제3자 제공 및 외부 서비스 이용",
                 "NoLate는 이용자의 개인정보를 사전 동의 없이 제3자에게 판매하지 않으며, 법령상 근거가 있거나 이용자가 기능 사용 과정에서 직접 요청한 경우에 필요한 범위에서만 제공합니다.",
                 "일정 공유 기능: 사용자가 공유를 생성하거나 초대를 수락한 경우 지정된 다른 NoLate 회원에게 일정 제목, 시간, 장소, 카테고리, 공유 권한, 공유 상태 등 공유 기능 제공에 필요한 정보가 제공될 수 있으며, 공유 해제 또는 일정 삭제 시까지 보관됩니다.",
-                "Google LLC: Google 로그인 및 Google Calendar 연동 시 인증 식별 정보, Calendar API 요청에 필요한 접근 토큰, 캘린더 식별자, 조회 기간이 처리될 수 있습니다. Google Calendar 원본 데이터는 사용자가 선택한 일정만 NoLate 일정으로 저장합니다.",
+                "Google LLC: Google Calendar 연동 시 OAuth 승인과 Calendar API 요청에 필요한 접근 토큰, 캘린더 식별자, 조회 기간이 처리될 수 있습니다. NoLate는 Google 계정 로그인, 프로필 또는 이메일 정보를 요청하거나 사용하지 않으며, Google Calendar 원본 데이터는 사용자가 선택한 일정만 NoLate 일정으로 저장합니다.",
                 "Apple Inc., NAVER Corp., Kakao Corp.: 사용자가 해당 SNS 로그인을 선택한 경우 인증 결과, SNS 식별자, 이름, 이메일 등 로그인 처리에 필요한 정보가 처리될 수 있습니다.",
                 "TMAP Mobility/SK open API, ODsay, NAVER 지도·검색, OpenStreetMap, 서울시/공공데이터 교통 API: 경로 탐색, 장소 검색, 실시간 도착 정보 제공을 위해 출발지·도착지 좌표, 장소 검색어, 경로 조건, 정류장·노선 식별자, 요청 시간이 전송될 수 있습니다.",
                 "각 외부 서비스 제공자는 전달받은 정보를 해당 서비스의 정책과 법령에 따라 처리하며, 이용자는 외부 계정 또는 기기 설정에서 연동과 권한을 철회할 수 있습니다.",
