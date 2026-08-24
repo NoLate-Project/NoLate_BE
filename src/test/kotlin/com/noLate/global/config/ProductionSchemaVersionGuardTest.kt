@@ -124,6 +124,32 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
+    fun `interaction performance migration creates telemetry before the production marker`() {
+        val migration = Files.readString(
+            Path.of("docs/performance/migrations/2026-08-17-interaction-performance.sql"),
+        )
+        val table = migration.indexOf("CREATE TABLE IF NOT EXISTS interaction_performance_events")
+        val postcondition = migration.indexOf("CALL assert_interaction_performance_postconditions()")
+        val marker = migration.indexOf(
+            "INSERT INTO application_schema_migrations(version, description, applied_at)",
+        )
+
+        assertTrue(table >= 0)
+        assertTrue(postcondition > table)
+        assertTrue(marker > postcondition)
+        assertTrue(
+            migration.contains(ProductionSchemaVersionGuard.INTERACTION_PERFORMANCE_SCHEMA_VERSION),
+        )
+        assertTrue(
+            ProductionSchemaVersionGuard.INTERACTION_PERFORMANCE_SCHEMA_VERSION in
+                ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS,
+        )
+        assertTrue(migration.contains("idx_interaction_perf_operation"))
+        assertTrue(migration.contains("chk_interaction_perf_operation"))
+        assertTrue(migration.contains("expires_at"))
+    }
+
+    @Test
     fun `Live Activity migration is required before production workers start`() {
         val migration = Files.readString(
             Path.of("docs/schedule/migrations/2026-08-06-live-activity-delivery.sql"),

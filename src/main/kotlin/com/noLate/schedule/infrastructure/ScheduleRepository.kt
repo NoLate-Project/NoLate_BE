@@ -18,6 +18,20 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
     fun findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId: Long): List<Schedule>
     fun findAllByMemberId(memberId: Long): List<Schedule>
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select s
+        from Schedule s
+        where s.id in :scheduleIds
+          and s.deleted = false
+        order by s.id asc
+        """
+    )
+    fun findAllActiveByIdsForUpdate(
+        @Param("scheduleIds") scheduleIds: Collection<Long>,
+    ): List<Schedule>
+
     /**
      * Account withdrawal is a physical privacy cleanup, so a prior soft delete must not hide an
      * owned schedule from the participant/job/outbox cleanup scope.
@@ -51,6 +65,29 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
     fun findAllByCategoryIdIncludingSnapshotAndDeletedFalseOrderByIdAsc(
         @Param("categoryId") categoryId: Long,
     ): List<Schedule>
+
+    /**
+     * Mutation-fence discovery must not attach Schedule entities before their owner member is
+     * locked. Otherwise a later pessimistic query can reuse stale managed state and overwrite a
+     * schedule edit that committed while the member fence was being acquired.
+     */
+    @Query(
+        value = """
+        select distinct s.id
+        from schedules s
+        left join schedule_category_snapshots snapshot on snapshot.schedule_id = s.id
+        where s.deleted = false
+          and (
+            s.category_id = :categoryId
+            or snapshot.category_id = concat('', :categoryId)
+          )
+        order by s.id asc
+        """,
+        nativeQuery = true,
+    )
+    fun findActiveIdsByCategoryIdIncludingSnapshotOrderByIdAsc(
+        @Param("categoryId") categoryId: Long,
+    ): List<Long>
 
     @Query(
         """

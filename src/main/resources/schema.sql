@@ -629,6 +629,50 @@ CREATE TABLE IF NOT EXISTS navigation_performance_events (
     CONSTRAINT chk_nav_perf_platform CHECK (client_platform IN ('IOS', 'ANDROID', 'WEB'))
 ) COMMENT='Identifier-free 90-day authenticated screen navigation performance telemetry';
 
+CREATE TABLE IF NOT EXISTS interaction_performance_events (
+    event_id VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        COMMENT 'Client-generated UUID for idempotent batch retry',
+    member_id BIGINT NOT NULL COMMENT 'Owner used for authorization and account cleanup',
+    route VARCHAR(80) NOT NULL COMMENT 'Identifier-free normalized route template',
+    operation_name VARCHAR(80) NOT NULL COMMENT 'Stable content-ready, interaction, or network operation name',
+    performance_kind VARCHAR(24) NOT NULL COMMENT 'CONTENT_READY, INTERACTION, or NETWORK',
+    outcome VARCHAR(16) NOT NULL COMMENT 'SUCCESS, ERROR, or CANCELLED',
+    duration_ms INT NOT NULL COMMENT 'Operation duration in milliseconds',
+    client_platform VARCHAR(16) NOT NULL COMMENT 'IOS, ANDROID, or WEB',
+    app_version VARCHAR(32) NULL,
+    build_version VARCHAR(32) NULL,
+    occurred_at DATETIME(6) NOT NULL COMMENT 'Client-observed operation start',
+    received_at DATETIME(6) NOT NULL COMMENT 'Server batch receipt time',
+    expires_at DATETIME(6) NOT NULL COMMENT 'Automatic 90-day retention boundary',
+    PRIMARY KEY (event_id),
+    INDEX idx_interaction_perf_operation (operation_name, occurred_at),
+    INDEX idx_interaction_perf_route (route, occurred_at),
+    INDEX idx_interaction_perf_slow (duration_ms, occurred_at),
+    INDEX idx_interaction_perf_member_expiry (member_id, expires_at),
+    CONSTRAINT chk_interaction_perf_duration CHECK (duration_ms BETWEEN 0 AND 120000),
+    CONSTRAINT chk_interaction_perf_operation CHECK (
+        operation_name IN (
+            'schedule.content_ready', 'schedule.range_load', 'schedule.range_refresh',
+            'schedule.revision_sync', 'schedule.calendar_metadata_load',
+            'schedule.detail_load', 'schedule.detail_content_ready',
+            'calendar.settings_content_ready', 'calendar.list_load',
+            'calendar.members_load', 'category.settings_content_ready',
+            'category.list_load', 'quick_schedule.analyze', 'route.search',
+            'alarm.content_ready', 'alarm.preview_schedule_load',
+            'alarm.complete_departure'
+        )
+    ),
+    CONSTRAINT chk_interaction_perf_kind CHECK (
+        performance_kind IN ('CONTENT_READY', 'INTERACTION', 'NETWORK')
+    ),
+    CONSTRAINT chk_interaction_perf_outcome CHECK (
+        outcome IN ('SUCCESS', 'ERROR', 'CANCELLED')
+    ),
+    CONSTRAINT chk_interaction_perf_platform CHECK (
+        client_platform IN ('IOS', 'ANDROID', 'WEB')
+    )
+) COMMENT='Identifier-free 90-day authenticated content and interaction performance telemetry';
+
 CREATE TABLE IF NOT EXISTS departure_alarm_sync_state (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Departure alarm desired-state primary key',
     version BIGINT NOT NULL DEFAULT 0 COMMENT 'Optimistic lock version',

@@ -12,6 +12,7 @@ class HomePageController {
         """
         User-agent: *
         Allow: /
+        Disallow: /share/
         """.trimIndent()
 
     @GetMapping("/", produces = [MediaType.TEXT_HTML_VALUE])

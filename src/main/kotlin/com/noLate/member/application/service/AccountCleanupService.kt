@@ -19,6 +19,7 @@ import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.notification.liveactivity.infrastructure.ScheduleLiveActivityRepository
 import com.noLate.performance.application.NavigationPerformanceService
+import com.noLate.performance.application.InteractionPerformanceService
 import com.noLate.routehistory.infrastructure.RecentRoutePlaceRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
@@ -98,6 +99,7 @@ class AccountCleanupService(
     private val sharingMemberBlockRepository: SharingMemberBlockRepository? = null,
     private val quickScheduleReliabilityTelemetryService: QuickScheduleReliabilityTelemetryService? = null,
     private val navigationPerformanceService: NavigationPerformanceService? = null,
+    private val interactionPerformanceService: InteractionPerformanceService? = null,
     private val scheduleLiveActivityRepository: ScheduleLiveActivityRepository? = null,
     private val liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher? = null,
 ) {
@@ -264,6 +266,7 @@ class AccountCleanupService(
         departureAlarmSyncStateRepository.deleteAllByMemberId(memberId)
         quickScheduleReliabilityTelemetryService?.deleteForMember(memberId)
         navigationPerformanceService?.deleteForMember(memberId)
+        interactionPerformanceService?.deleteForMember(memberId)
         val ownedInvitationIds = invitationRepository
             .findAllByOwnerMemberIdAndDeletedFalseOrderByIdDesc(memberId)
             .mapNotNull { it.id }

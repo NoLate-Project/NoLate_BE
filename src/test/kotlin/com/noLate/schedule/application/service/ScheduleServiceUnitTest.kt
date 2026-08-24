@@ -34,6 +34,7 @@ import com.noLate.subscription.application.SubscriptionPolicyService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -181,6 +182,186 @@ class ScheduleServiceUnitTest {
         assertTrue(storedBySourceKey.keys.all { it.length == 64 })
         assertEquals(3, storedBySourceKey.size)
         verify(scheduleRepository, times(3)).save(any<Schedule>())
+    }
+
+    @Test
+    fun `same external occurrence can be imported once per personal or shared calendar`() {
+        val memberId = 1L
+        val storedBySourceKey = mutableMapOf<String, Schedule>()
+        var nextId = 40L
+        whenever(
+            scheduleRepository.findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(eq(memberId), any())
+        ).thenAnswer { invocation -> storedBySourceKey[invocation.getArgument(1)] }
+        whenever(scheduleRepository.save(any<Schedule>())).thenAnswer { invocation ->
+            invocation.getArgument<Schedule>(0).apply {
+                id = nextId++
+                storedBySourceKey[requireNotNull(externalSourceKey)] = this
+            }
+        }
+        val source = ScheduleImportSource(
+            provider = ScheduleImportProvider.APPLE_DEVICE,
+            calendarId = "eventkit-calendar",
+            eventId = "same-event",
+            occurrenceStartAt = "2026-06-05T01:00:00Z",
+        )
+
+        val personal = scheduleService.importSchedule(memberId, scheduleDto(), source)
+        val shared = scheduleService.importSchedule(
+            memberId,
+            scheduleDto().copy(calendarId = 21L),
+            source,
+        )
+        val repeatedPersonal = scheduleService.importSchedule(memberId, scheduleDto(), source)
+        val repeatedShared = scheduleService.importSchedule(
+            memberId,
+            scheduleDto().copy(calendarId = 21L),
+            source,
+        )
+
+        assertTrue(personal.created)
+        assertTrue(shared.created)
+        assertFalse(repeatedPersonal.created)
+        assertFalse(repeatedShared.created)
+        assertFalse(personal.schedule.id == shared.schedule.id)
+        assertEquals(2, storedBySourceKey.size)
+        verify(scheduleRepository, times(2)).save(any<Schedule>())
+    }
+
+    @Test
+    fun `personal reimport after category move rekeys moved row and creates a new personal copy`() {
+        val memberId = 1L
+        val stored = mutableListOf<Schedule>()
+        var nextId = 80L
+        whenever(
+            scheduleRepository.findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(eq(memberId), any())
+        ).thenAnswer { invocation ->
+            val key = invocation.getArgument<String>(1)
+            stored.firstOrNull { !it.deleted && it.externalSourceKey == key }
+        }
+        whenever(scheduleRepository.save(any<Schedule>())).thenAnswer { invocation ->
+            invocation.getArgument<Schedule>(0).also { schedule ->
+                if (schedule.id == null) schedule.id = nextId++
+                if (stored.none { it.id == schedule.id }) stored += schedule
+            }
+        }
+        whenever(scheduleRepository.saveAndFlush(any<Schedule>())).thenAnswer { invocation ->
+            invocation.getArgument<Schedule>(0)
+        }
+        val source = ScheduleImportSource(
+            provider = ScheduleImportProvider.APPLE_DEVICE,
+            calendarId = "eventkit-calendar",
+            eventId = "move-then-personal",
+            occurrenceStartAt = "2026-06-05T01:00:00Z",
+        )
+
+        val first = scheduleService.importSchedule(memberId, scheduleDto(), source)
+        val moved = stored.single().apply { calendarId = 21L }
+        val stalePersonalKey = moved.externalSourceKey
+
+        val personalAgain = scheduleService.importSchedule(memberId, scheduleDto(), source)
+        val repeatedPersonal = scheduleService.importSchedule(memberId, scheduleDto(), source)
+
+        assertTrue(first.created)
+        assertTrue(personalAgain.created)
+        assertFalse(repeatedPersonal.created)
+        assertEquals(2, stored.size)
+        assertEquals(setOf<Long?>(null, 21L), stored.map { it.calendarId }.toSet())
+        assertFalse(stalePersonalKey == moved.externalSourceKey)
+        assertEquals(2, stored.mapNotNull { it.externalSourceKey }.distinct().size)
+        assertEquals(personalAgain.schedule.id, repeatedPersonal.schedule.id)
+    }
+
+    @Test
+    fun `shared reimport after category move claims and rekeys the moved personal row`() {
+        val memberId = 1L
+        val stored = mutableListOf<Schedule>()
+        var nextId = 90L
+        whenever(
+            scheduleRepository.findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(eq(memberId), any())
+        ).thenAnswer { invocation ->
+            val key = invocation.getArgument<String>(1)
+            stored.firstOrNull { !it.deleted && it.externalSourceKey == key }
+        }
+        whenever(scheduleRepository.save(any<Schedule>())).thenAnswer { invocation ->
+            invocation.getArgument<Schedule>(0).also { schedule ->
+                if (schedule.id == null) schedule.id = nextId++
+                if (stored.none { it.id == schedule.id }) stored += schedule
+            }
+        }
+        whenever(scheduleRepository.saveAndFlush(any<Schedule>())).thenAnswer { invocation ->
+            invocation.getArgument<Schedule>(0)
+        }
+        val source = ScheduleImportSource(
+            provider = ScheduleImportProvider.APPLE_DEVICE,
+            calendarId = "eventkit-calendar",
+            eventId = "move-then-shared",
+            occurrenceStartAt = "2026-06-05T01:00:00Z",
+        )
+
+        val first = scheduleService.importSchedule(memberId, scheduleDto(), source)
+        val moved = stored.single().apply { calendarId = 21L }
+        val stalePersonalKey = moved.externalSourceKey
+
+        val sharedAgain = scheduleService.importSchedule(
+            memberId,
+            scheduleDto().copy(calendarId = 21L),
+            source,
+        )
+        val repeatedShared = scheduleService.importSchedule(
+            memberId,
+            scheduleDto().copy(calendarId = 21L),
+            source,
+        )
+
+        assertTrue(first.created)
+        assertFalse(sharedAgain.created)
+        assertFalse(repeatedShared.created)
+        assertEquals(first.schedule.id, sharedAgain.schedule.id)
+        assertEquals(first.schedule.id, repeatedShared.schedule.id)
+        assertEquals(1, stored.size)
+        assertFalse(stalePersonalKey == moved.externalSourceKey)
+    }
+
+    @Test
+    fun `shared reimport claims a moved legacy unscoped import`() {
+        val memberId = 1L
+        val movedLegacy = scheduleEntity(id = 95L, memberId = memberId).apply {
+            calendarId = 21L
+        }
+        var sourceKeyLookupCount = 0
+        var legacyKey: String? = null
+        whenever(
+            scheduleRepository.findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(eq(memberId), any())
+        ).thenAnswer { invocation ->
+            sourceKeyLookupCount += 1
+            val requestedKey = invocation.getArgument<String>(1)
+            if (sourceKeyLookupCount == 3) {
+                legacyKey = requestedKey
+                movedLegacy.externalSourceKey = requestedKey
+                movedLegacy
+            } else {
+                null
+            }
+        }
+        whenever(scheduleRepository.saveAndFlush(movedLegacy)).thenReturn(movedLegacy)
+        val source = ScheduleImportSource(
+            provider = ScheduleImportProvider.APPLE_DEVICE,
+            calendarId = "legacy-eventkit-calendar",
+            eventId = "legacy-move-then-shared",
+            occurrenceStartAt = "2026-06-05T01:00:00Z",
+        )
+
+        val result = scheduleService.importSchedule(
+            memberId,
+            scheduleDto().copy(calendarId = 21L),
+            source,
+        )
+
+        assertFalse(result.created)
+        assertEquals(movedLegacy.id, result.schedule.id)
+        assertEquals(4, sourceKeyLookupCount)
+        assertNotEquals(legacyKey, movedLegacy.externalSourceKey)
+        verify(scheduleRepository, never()).save(any<Schedule>())
     }
 
     @Test

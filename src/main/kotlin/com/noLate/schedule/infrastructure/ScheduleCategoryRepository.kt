@@ -13,6 +13,39 @@ interface ScheduleCategoryRepository : JpaRepository<ScheduleCategory, Long> {
     fun findByMemberIdAndCalendarIdIsNullAndDeletedFalseOrderBySortOrderAscIdAsc(memberId: Long): List<ScheduleCategory>
 
     fun findByIdAndMemberIdAndDeletedFalse(id: Long, memberId: Long): ScheduleCategory?
+    fun existsByIdAndMemberIdAndCalendarIdIsNullAndDeletedFalse(id: Long, memberId: Long): Boolean
+
+    fun findFirstByCalendarIdAndTitleIgnoreCaseAndDeletedFalseOrderByIdAsc(
+        calendarId: Long,
+        title: String,
+    ): ScheduleCategory?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select c
+        from ScheduleCategory c
+        where c.id = :categoryId
+          and c.deleted = false
+        """
+    )
+    fun findActiveForScheduleAssignment(
+        @Param("categoryId") categoryId: Long,
+    ): ScheduleCategory?
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select c
+        from ScheduleCategory c
+        where c.calendarId = :calendarId
+          and c.deleted = false
+        order by c.id asc
+        """
+    )
+    fun findAllActiveByCalendarIdForUpdate(
+        @Param("calendarId") calendarId: Long,
+    ): List<ScheduleCategory>
 
     @Query(
         value = """
