@@ -2,6 +2,7 @@ package com.noLate.eta.domain
 
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import java.time.Instant
+import java.util.Locale
 
 enum class TransitLegMode {
     WALK,
@@ -19,8 +20,12 @@ data class TransitStop(
     val arsId: String? = null,
     val name: String? = null,
 ) {
-    fun stableIds(): Set<String> = buildSet {
-        providerStopId?.normalizedId()?.let { add("ODsay:$it") }
+    /**
+     * 공급자 내부 정류장 ID는 provider namespace와 결합해야
+     * 서로 다른 API가 같은 ID를 사용해도 동일 정류장으로 오인하지 않는다.
+     */
+    fun stableIds(providerId: String?): Set<String> = buildSet {
+        providerScopedStopId(providerId, providerStopId)?.let(::add)
         arsId?.filter(Char::isDigit)?.takeIf(String::isNotBlank)?.let { add("ARS:$it") }
         localStopId?.normalizedId()?.let { localId ->
             add(cityCode?.normalizedId()?.let { "CITY:$it:$localId" } ?: "LOCAL:$localId")
@@ -132,3 +137,22 @@ data class SelectedTransitRoute(
 
 internal fun String.normalizedId(): String? =
     trim().takeIf(String::isNotBlank)
+
+/**
+ * provider를 알 수 없는 내부 ID는 출처를 증명할 수 없으므로 안정 ID로 사용하지 않는다.
+ * 이 경우 ARS/CITY/LOCAL ID 또는 정류장 이름 비교로 안전하게 내려간다.
+ */
+internal fun providerScopedStopId(
+    providerId: String?,
+    stopId: String?,
+): String? {
+    val normalizedProvider = providerId
+        ?.trim()
+        ?.lowercase(Locale.ROOT)
+        ?.takeIf(String::isNotBlank)
+        ?: return null
+
+    val normalizedStopId = stopId?.normalizedId() ?: return null
+
+    return "PROVIDER:$normalizedProvider:$normalizedStopId"
+}

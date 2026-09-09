@@ -391,6 +391,30 @@ CREATE TABLE IF NOT EXISTS schedule_push_job (
     INDEX idx_schedule_push_job_schedule_id (schedule_id)
 ) COMMENT='Schedule push jobs';
 
+-- A latest-state push job cannot reconstruct historical evaluations, so no backfill is performed.
+-- IDs are evaluation snapshots without lifecycle foreign keys.
+CREATE TABLE IF NOT EXISTS schedule_eta_evaluation_history (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'ETA evaluation history primary key',
+    evaluation_id VARCHAR(36) NOT NULL COMMENT 'Canonical UUID reused only for the same evaluation save retry',
+    push_job_id BIGINT NOT NULL COMMENT 'Evaluated push-job snapshot id without lifecycle FK coupling',
+    schedule_id BIGINT NOT NULL COMMENT 'Evaluated schedule snapshot id',
+    member_id BIGINT NOT NULL COMMENT 'Evaluated member snapshot id',
+    evaluated_at DATETIME(6) NOT NULL COMMENT 'Calculation request reference time',
+    eta_source VARCHAR(30) NOT NULL COMMENT 'Provider or fallback result source',
+    eta_stale BOOLEAN NOT NULL COMMENT 'Result freshness or low-confidence diagnostic',
+    failure_reason VARCHAR(500) NULL COMMENT 'Sanitized failure code or safe diagnostic; null on success',
+    travel_minutes INT NOT NULL COMMENT 'Travel duration returned by this evaluation',
+    recommended_departure_at DATETIME(6) NULL COMMENT 'Calculated departure; null when unavailable',
+    predicted_arrival_at DATETIME(6) NULL COMMENT 'Calculated arrival; may exceed the target',
+    target_arrival_at DATETIME(6) NOT NULL COMMENT 'Target arrival frozen at evaluation time',
+    provider_fetched_at DATETIME(6) NULL COMMENT 'TrafficResult fetchedAt; null for stored-route fallback',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_eta_evaluation_id (evaluation_id),
+    INDEX idx_eta_evaluation_schedule_member_time (schedule_id, member_id, evaluated_at, id),
+    INDEX idx_eta_evaluation_job_time (push_job_id, evaluated_at, id),
+    INDEX idx_eta_evaluation_time (evaluated_at, id)
+) ENGINE=InnoDB COMMENT='Append-only successful and fallback ETA evaluation summaries';
+
 CREATE TABLE IF NOT EXISTS schedule_departure_statuses (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Per-member departure status primary key',
     schedule_id BIGINT NOT NULL COMMENT 'Schedule id',

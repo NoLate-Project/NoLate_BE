@@ -59,4 +59,27 @@ class SelectedTransitRouteDecoderTest {
             }
         """.trimIndent()
     }
+
+    @Test
+    fun `Kakao 정류장 ID는 Kakao provider namespace로 디코드한다`() {
+        val kakaoRouteJson = routeJson(serviceClass = "local")
+            .replace(
+                "\"provider\": \"odsay\"",
+                "\"provider\": \"kakao\"",
+            )
+
+        val ride = requireNotNull(
+            decoder.decode(kakaoRouteJson)
+        ).rides.single()
+
+        // 공급자 내부 정류장 ID는 값이 겹칠 수 있으므로 provider namespace와 함께 비교해야 한다.
+        assertEquals(
+            setOf("PROVIDER:kakao:station-a"),
+            ride.fromIds,
+        )
+        assertEquals(
+            setOf("PROVIDER:kakao:station-b"),
+            ride.toIds,
+        )
+    }
 }

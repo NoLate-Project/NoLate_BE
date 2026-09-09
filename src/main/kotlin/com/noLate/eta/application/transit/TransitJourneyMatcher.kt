@@ -31,7 +31,13 @@ class TransitJourneyMatcher {
         candidates
             .asSequence()
             .filter { it.provider.equals(selected.provider, ignoreCase = true) }
-            .filter { candidate -> matches(selected.rides, candidate.rideLegs) }
+            .filter { candidate ->
+                matches(
+                    selectedRides = selected.rides,
+                    candidateRides = candidate.rideLegs,
+                    candidateProvider = candidate.provider,
+                )
+            }
             .sortedWith(
                 compareBy<TransitJourney> { it.arrivalAt }
                     .thenBy { it.departureAt }
@@ -41,14 +47,15 @@ class TransitJourneyMatcher {
     internal fun matches(
         selectedRides: List<TransitRideSignature>,
         candidateRides: List<TransitJourneyLeg>,
+        candidateProvider: String,
     ): Boolean {
         if (selectedRides.size != candidateRides.size || selectedRides.isEmpty()) return false
         return selectedRides.zip(candidateRides).all { (selected, candidate) ->
             selected.mode == candidate.mode &&
                 sameLine(selected, candidate) &&
                 sameServiceClass(selected, candidate) &&
-                sameStop(selected.fromIds, selected.fromName, candidate.from) &&
-                sameStop(selected.toIds, selected.toName, candidate.to) &&
+                sameStop(selected.fromIds, selected.fromName, candidate.from, candidateProvider) &&
+                sameStop(selected.toIds, selected.toName, candidate.to, candidateProvider) &&
                 sameDirection(selected, candidate)
         }
     }
@@ -84,8 +91,10 @@ class TransitJourneyMatcher {
         selectedIds: Set<String>,
         selectedName: String?,
         candidate: com.noLate.eta.domain.TransitStop?,
+        candidateProvider: String,
     ): Boolean {
-        val candidateIds = candidate?.stableIds().orEmpty()
+        // 정류장에 provider를 중복 저장하지 않고 해당 정류장을 반환한 여정의 provider를 사용한다.
+        val candidateIds = candidate?.stableIds(candidateProvider).orEmpty()
         if (selectedIds.isNotEmpty() && candidateIds.isNotEmpty()) {
             return selectedIds
                 .map(String::normalizeIdentity)

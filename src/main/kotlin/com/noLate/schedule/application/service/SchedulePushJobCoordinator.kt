@@ -2,8 +2,10 @@ package com.noLate.schedule.application.service
 
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
+import com.noLate.schedule.domain.ScheduleEtaEvaluationHistory
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
+import com.noLate.schedule.infrastructure.ScheduleEtaEvaluationHistoryRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import jakarta.persistence.EntityManager
 import org.springframework.beans.factory.annotation.Autowired
@@ -29,8 +31,9 @@ class SchedulePushJobCoordinator private constructor(
     private val entityManager: EntityManager?,
     private val departureAlarmSyncService: DepartureAlarmSyncService?,
     private val liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher?,
+    private val scheduleEtaEvaluationHistoryRepository: ScheduleEtaEvaluationHistoryRepository?,
     @Suppress("UNUSED_PARAMETER") legacyTestBoundary: Boolean,
-) {
+    ) {
     @Autowired
     constructor(
         repository: SchedulePushJobRepository,
@@ -38,12 +41,14 @@ class SchedulePushJobCoordinator private constructor(
         entityManager: EntityManager,
         departureAlarmSyncServiceProvider: ObjectProvider<DepartureAlarmSyncService>,
         liveActivityLifecyclePublisherProvider: ObjectProvider<LiveActivityLifecyclePublisher>,
+        scheduleEtaEvaluationHistoryRepository: ScheduleEtaEvaluationHistoryRepository,
     ) : this(
         repository,
         memberRepository,
         entityManager,
         departureAlarmSyncServiceProvider.getIfAvailable(),
         liveActivityLifecyclePublisherProvider.getIfAvailable(),
+        scheduleEtaEvaluationHistoryRepository,
         false,
     )
 
@@ -52,12 +57,14 @@ class SchedulePushJobCoordinator private constructor(
         repository: SchedulePushJobRepository,
         departureAlarmSyncService: DepartureAlarmSyncService? = null,
         liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher? = null,
+        scheduleEtaEvaluationHistoryRepository: ScheduleEtaEvaluationHistoryRepository? = null,
     ) : this(
         repository,
         null,
         null,
         departureAlarmSyncService,
         liveActivityLifecyclePublisher,
+        scheduleEtaEvaluationHistoryRepository,
         true,
     )
 
@@ -188,6 +195,8 @@ class SchedulePushJobCoordinator private constructor(
         workerId: String,
         alarmIntent: SchedulePushAlarmIntent? = null,
         liveActivityEndReason: String? = null,
+        // Worker에서 생성한 이력을 실제 저장 담당자에게 전달한다.
+        scheduleEtaEvaluationHistory : ScheduleEtaEvaluationHistory ? = null,
     ): Boolean {
         if (memberRepository != null &&
             memberRepository.findByIdForUpdate(job.memberId)?.deleted != false
@@ -205,6 +214,23 @@ class SchedulePushJobCoordinator private constructor(
             }
         }
         repository.saveAndFlush(job)
+        // ETA 이력 저장
+        if(scheduleEtaEvaluationHistory != null) {
+            require(
+                scheduleEtaEvaluationHistory.jobId == job.id &&
+                scheduleEtaEvaluationHistory.scheduleId == job.scheduleId &&
+                scheduleEtaEvaluationHistory.memberId == job.memberId
+            ){
+                "ETA 이력의 작업,일정,회원 정보가 저장할 작업과 일치해야 합니다."
+            }
+
+            val historyRepository = checkNotNull(scheduleEtaEvaluationHistoryRepository) {
+                "ETA 이력을 저장할려면 이력 Repository가 필요 합니다."
+            }
+
+            historyRepository.saveAndFlush(scheduleEtaEvaluationHistory)
+        }
+
         // BEFORE_COMMIT alarm outbox까지 이 transaction에 참여한다. 둘 중 하나라도 실패하면
         // PROCESSING lease를 남겨 stale recovery가 동일 ETA 전이를 안전하게 다시 평가한다.
         applyAlarmIntent(alarmIntent)

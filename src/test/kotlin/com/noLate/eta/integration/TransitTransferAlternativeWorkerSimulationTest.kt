@@ -34,6 +34,7 @@ import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.ModeAwareTrafficClient
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
+import com.noLate.schedule.infrastructure.ScheduleEtaEvaluationHistoryRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.TransitRealtimeTrafficClient
 import com.noLate.transit.application.TransitArrivalService
@@ -68,6 +69,7 @@ class TransitTransferAlternativeWorkerSimulationTest {
     @Test
     fun `선택 환승을 놓치면 검증된 대체 경로를 채택해 경로 변경 푸시와 snapshot을 전달한다`() {
         val pushJobRepository = mock<SchedulePushJobRepository>()
+        val etaHistoryRepository = mock<ScheduleEtaEvaluationHistoryRepository>()
         val scheduleRepository = mock<ScheduleRepository>()
         val notificationUseCase = mock<NotificationUseCase>()
         val roadProvider = mock<TrafficProviderClient>()
@@ -83,6 +85,7 @@ class TransitTransferAlternativeWorkerSimulationTest {
             monitorStartAt = now.minus(1, ChronoUnit.MINUTES),
             intervalMinutes = 20,
         )
+        prepareStoredEtaWorkerFixture(pushJobRepository, job)
         job.startProcessing("fixture-baseline")
         job.finishCheck(
             travelMinutes = 30,
@@ -129,7 +132,7 @@ class TransitTransferAlternativeWorkerSimulationTest {
                 providerCode = anyOrNull(),
             )
         ).thenReturn(listOf(arrival("500", "2026-08-01T03:33:00Z")))
-        whenever(notificationUseCase.sendToMember(any(), any(), any(), any(), any(), any()))
+        whenever(notificationUseCase.sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
         val matcher = TransitJourneyMatcher()
@@ -162,7 +165,10 @@ class TransitTransferAlternativeWorkerSimulationTest {
             periodicPushPolicy = PeriodicPushPolicy(),
             departureReminderPolicy = DepartureReminderPolicy(),
             trafficChangePolicy = TrafficChangePolicy(),
-            pushJobCoordinator = SchedulePushJobCoordinator(pushJobRepository),
+            pushJobCoordinator = SchedulePushJobCoordinator(
+                pushJobRepository,
+                scheduleEtaEvaluationHistoryRepository = etaHistoryRepository,
+            ),
             batchSize = 1,
             retryDelayMinutes = 1,
             maxRetryCount = 3,
@@ -205,7 +211,7 @@ class TransitTransferAlternativeWorkerSimulationTest {
             cityCodeNamespace = any(),
             providerCode = anyOrNull(),
         )
-        verify(notificationUseCase, times(1)).sendToMember(
+        verify(notificationUseCase, times(1)).sendToMemberFenced(
             memberId = eq(1L),
             title = eq("대중교통 경로가 바뀌었어요"),
             body = check {
@@ -224,7 +230,9 @@ class TransitTransferAlternativeWorkerSimulationTest {
             },
             inboxDeduplicationKey = any(),
             persistInInbox = eq(true),
+            dispatchFence = any(),
         )
+        verify(etaHistoryRepository, times(2)).saveAndFlush(any())
         assertEquals(33, job.lastTravelMinutes)
         assertEquals(previousDepartureAt, job.lastRecommendedDepartureAt)
         assertEquals(Instant.parse("2026-08-01T03:58:00Z"), job.lastPredictedArrivalAt)

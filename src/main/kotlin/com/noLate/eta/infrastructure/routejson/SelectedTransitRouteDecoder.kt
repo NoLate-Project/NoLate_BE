@@ -7,6 +7,7 @@ import com.noLate.eta.domain.SelectedTransitRoute
 import com.noLate.eta.domain.TransitLegMode
 import com.noLate.eta.domain.TransitRideSignature
 import com.noLate.eta.domain.TransitServiceClass
+import com.noLate.eta.domain.providerScopedStopId
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import org.springframework.stereotype.Component
 import java.util.Locale
@@ -26,8 +27,17 @@ class SelectedTransitRouteDecoder(
             ?.takeIf(String::isNotBlank)
             ?.let { runCatching { objectMapper.readTree(it) }.getOrNull() }
             ?: return null
+        // 정류장 ID를 namespace화해야 하므로 step을 파싱하기 전에 provider를 확인한다.
+        val provider = sequenceOf(
+            root.path("provider"),
+            root.path("routeInfo").path("provider"),
+        )
+            .firstText()
+            ?.lowercase(Locale.ROOT)
+
         val steps = routeSteps(root) ?: return null
-        val parsedSteps = steps.mapNotNull(::parseStep)
+        val parsedSteps = steps.mapNotNull { parseStep(it, provider) }
+
         val rides = parsedSteps
             .filter { it.mode == TransitLegMode.BUS || it.mode == TransitLegMode.SUBWAY }
             .map { step ->
@@ -45,13 +55,6 @@ class SelectedTransitRouteDecoder(
                 )
             }
         if (rides.isEmpty()) return null
-
-        val provider = sequenceOf(
-            root.path("provider"),
-            root.path("routeInfo").path("provider"),
-        )
-            .firstText()
-            ?.lowercase()
 
         return SelectedTransitRoute(
             provider = provider,
@@ -135,7 +138,10 @@ class SelectedTransitRouteDecoder(
             .firstOrNull { it.isArray && !it.isEmpty }
             ?.toList()
 
-    private fun parseStep(node: JsonNode): ParsedStep? {
+    private fun parseStep(
+        node: JsonNode,
+        provider: String?,
+    ): ParsedStep? {
         val mode = stepMode(node) ?: return null
         val passStops = sequenceOf(
             node.path("passStops"),
@@ -168,6 +174,7 @@ class SelectedTransitRouteDecoder(
                 ?: firstText(lane, "name", "busNo", "route"),
             serviceClass = subwayServiceClass(node, lane, mode),
             fromIds = stopIds(
+                provider = provider,
                 explicitCode = firstText(node, "startStopCode", "fromStopCode"),
                 stop = firstStop,
                 owner = node,
@@ -176,6 +183,7 @@ class SelectedTransitRouteDecoder(
             fromName = firstText(node, "startName", "fromName", "title")
                 ?: firstText(firstStop, "name", "stationName"),
             toIds = stopIds(
+                provider = provider,
                 explicitCode = firstText(node, "endStopCode", "toStopCode"),
                 stop = lastStop,
                 owner = node,
@@ -196,6 +204,7 @@ class SelectedTransitRouteDecoder(
     }
 
     private fun stopIds(
+        provider: String?,
         explicitCode: String?,
         stop: JsonNode?,
         owner: JsonNode,
@@ -213,7 +222,8 @@ class SelectedTransitRouteDecoder(
 
         val providerId = firstText(owner, "${prefix}ID", "${prefix}Id")
             ?: firstText(stop, "stationID", "stationId")
-        providerId?.let { add("ODsay:$it") }
+        // 공급자 내부 ID만 비교하면 Kakao와 ODsay의 같은 ID 값이 충돌할 수 있다.
+        providerScopedStopId(provider, providerId)?.let(::add)
 
         val localId = firstText(owner, "${prefix}LocalStationID", "${prefix}LocalStationId")
             ?: firstText(stop, "localStationID", "localStationId")

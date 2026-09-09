@@ -24,8 +24,10 @@ import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
 import com.noLate.schedule.application.service.policy.DepartureReminderDecision
 import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
+import com.noLate.schedule.application.toEvaluationHistory
 import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.ScheduleAlertMode
+import com.noLate.schedule.domain.ScheduleEtaEvaluationHistory
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
@@ -148,6 +150,8 @@ class SchedulePushJobWorker(
     private fun process(job: SchedulePushJob, now: Instant) {
         var liveActivityProjection: ScheduleLiveActivityEtaProjection? = null
         var preserveFrozenEtaState = false
+
+        var scheduleEtaEvaluationHistory : ScheduleEtaEvaluationHistory? = null
         try {
             // 일정이 시작된 뒤에는 "출발" 알림의 의미가 사라지므로 남은 후속 푸시를 종료한다.
             if (job.isPastDeliveryWindow(now, deliveryGraceMinutes)) {
@@ -157,6 +161,7 @@ class SchedulePushJobWorker(
                     outcome = EtaJobMetricOutcome.PROCESSED,
                     alarmIntent = job.cancelAlarmIntent(),
                     liveActivityEndReason = "DELIVERY_WINDOW_EXPIRED",
+                    scheduleEtaEvaluationHistory = scheduleEtaEvaluationHistory
                 )
                 return
             }
@@ -169,6 +174,7 @@ class SchedulePushJobWorker(
                         outcome = EtaJobMetricOutcome.PROCESSED,
                         alarmIntent = job.cancelAlarmIntent(),
                         liveActivityEndReason = "SCHEDULE_REMOVED",
+                        scheduleEtaEvaluationHistory = scheduleEtaEvaluationHistory
                     )
                     return
                 }
@@ -184,6 +190,7 @@ class SchedulePushJobWorker(
                     outcome = EtaJobMetricOutcome.PROCESSED,
                     alarmIntent = job.cancelAlarmIntent(),
                     liveActivityEndReason = "TRAVEL_ACCESS_REVOKED",
+                    scheduleEtaEvaluationHistory = scheduleEtaEvaluationHistory
                 )
                 return
             }
@@ -195,6 +202,7 @@ class SchedulePushJobWorker(
                         outcome = EtaJobMetricOutcome.PROCESSED,
                         alarmIntent = job.cancelAlarmIntent(),
                         liveActivityEndReason = "NOTIFICATION_DISABLED",
+                        scheduleEtaEvaluationHistory = scheduleEtaEvaluationHistory
                     )
                     return
                 }
@@ -245,7 +253,19 @@ class SchedulePushJobWorker(
                 targetArrivalAt = schedule.startAt,
                 maxTravelMinutes = maxTravelMinutes,
             )
+            val evaluationId = UUID.randomUUID().toString()
+
             val trafficResult = trafficClient.getTravelMinutes(request)
+
+            scheduleEtaEvaluationHistory = trafficResult.toEvaluationHistory(
+                evaluationId = evaluationId,
+                jobId = requireNotNull(job.id) {
+                    "ETA 평가 대상 작업에는 저장된 ID가 필요합니다."
+                },
+                scheduleId = job.scheduleId,
+                memberId = job.memberId,
+                request = request,
+            )
             val previousEffectiveRouteSnapshot = EffectiveTransitRouteSnapshot.parse(
                 objectMapper = objectMapper,
                 json = job.lastEffectiveTransitRouteJson,
@@ -752,6 +772,7 @@ class SchedulePushJobWorker(
                             liveActivityEndReason = "JOB_TERMINAL_FAILURE".takeIf {
                                 transition == EtaJobMetricOutcome.TERMINAL_FAILURE
                             },
+                            scheduleEtaEvaluationHistory = scheduleEtaEvaluationHistory
                         )
                         return
                     }
@@ -789,6 +810,7 @@ class SchedulePushJobWorker(
                             liveActivityEndReason = "JOB_TERMINAL_FAILURE".takeIf {
                                 transition == EtaJobMetricOutcome.TERMINAL_FAILURE
                             },
+                            scheduleEtaEvaluationHistory = scheduleEtaEvaluationHistory
                         )
                         return
                     }
@@ -913,6 +935,7 @@ class SchedulePushJobWorker(
                 liveActivityProjection = liveActivityProjection
                     .takeUnless { preserveFrozenEtaState },
                 liveActivityEndReason = "JOB_COMPLETE".takeIf { nextCheckAt == null },
+                scheduleEtaEvaluationHistory = scheduleEtaEvaluationHistory
             )
         } catch (exception: Exception) {
             operationalMetrics.recordSafely {
@@ -939,6 +962,7 @@ class SchedulePushJobWorker(
                 liveActivityEndReason = "JOB_TERMINAL_FAILURE".takeIf {
                     transition == EtaJobMetricOutcome.TERMINAL_FAILURE
                 },
+                scheduleEtaEvaluationHistory = scheduleEtaEvaluationHistory
             )
         }
     }
@@ -955,6 +979,7 @@ class SchedulePushJobWorker(
         alarmIntent: SchedulePushAlarmIntent? = null,
         liveActivityProjection: ScheduleLiveActivityEtaProjection? = null,
         liveActivityEndReason: String? = null,
+        scheduleEtaEvaluationHistory : ScheduleEtaEvaluationHistory? = null,
     ) {
         val persisted = runCatching {
             pushJobCoordinator.persist(
@@ -962,6 +987,7 @@ class SchedulePushJobWorker(
                 workerId,
                 alarmIntent,
                 liveActivityEndReason,
+                scheduleEtaEvaluationHistory,
             )
         }.onFailure { failure ->
             log.error(

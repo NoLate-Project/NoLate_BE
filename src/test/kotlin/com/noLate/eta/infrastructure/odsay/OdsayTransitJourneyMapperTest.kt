@@ -123,12 +123,12 @@ class OdsayTransitJourneyMapperTest {
         assertEquals("1", bus.line?.providerCode)
         assertEquals("402", bus.line?.name)
         assertEquals(
-            setOf("ODsay:100", "ARS:02005", "CITY:1000:SEOUL_NODE_1"),
-            bus.from?.stableIds(),
+            setOf("PROVIDER:odsay:100", "ARS:02005", "CITY:1000:SEOUL_NODE_1"),
+            bus.from?.stableIds(journey.provider),
         )
         assertEquals(
-            setOf("ODsay:200", "ARS:22009", "CITY:1000:SEOUL_NODE_2"),
-            bus.to?.stableIds(),
+            setOf("PROVIDER:odsay:200", "ARS:22009", "CITY:1000:SEOUL_NODE_2"),
+            bus.to?.stableIds(journey.provider),
         )
 
         val subway = journey.legs[3]

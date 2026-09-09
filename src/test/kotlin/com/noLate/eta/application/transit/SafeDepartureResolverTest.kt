@@ -24,9 +24,9 @@ class SafeDepartureResolverTest {
                 mode = TransitLegMode.BUS,
                 providerRouteId = "bus-402",
                 lineName = "402",
-                fromIds = setOf("ODsay:1001"),
+                fromIds = setOf("PROVIDER:odsay:1001"),
                 fromName = "서울역",
-                toIds = setOf("ODsay:2001"),
+                toIds = setOf("PROVIDER:odsay:2001"),
                 toName = "강남역",
                 directionCode = "DOWN",
             )

@@ -980,6 +980,38 @@ class TransitEtaCalculationServiceTest {
         assertNull(result.predictedArrivalAt)
     }
 
+    @Test
+    fun `저장 경로 provider와 같은 여정 provider를 선택한다`() {
+        whenever(busArrivals()).thenReturn(emptyList())
+
+        val kakao = RecordingProvider(
+            providerId = "kakao",
+            result = listOf(
+                journey(
+                    provider = "kakao",
+                    routeId = "bus-402",
+                    lineName = "402",
+                    totalMinutes = 43,
+                    scheduledWaitMinutes = 7,
+                )
+            ),
+        )
+
+        val result = service(listOf(kakao)).calculate(
+            request(
+                selectedRouteJson = selectedOdsayRouteJson()
+                    .replace(
+                        "\"provider\": \"odsay\"",
+                        "\"provider\": \"kakao\"",
+                    ),
+            )
+        )
+
+        assertTrue(kakao.searchCount > 0)
+        assertEquals("kakao", result.effectiveTransitRoute?.provider)
+    }
+
+
     private fun service(providers: List<TransitJourneyProvider>): TransitEtaCalculationService {
         val matcher = TransitJourneyMatcher()
         return TransitEtaCalculationService(

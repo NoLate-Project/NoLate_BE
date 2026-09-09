@@ -25,6 +25,21 @@ class ProductionSchemaVersionGuardTest {
     }
 
     @Test
+    fun `missing ETA history marker blocks startup even if earlier migrations were applied`() {
+        val jdbc = markerDatabase()
+        val historyMarker = ProductionSchemaVersionGuard.ETA_EVALUATION_HISTORY_SCHEMA_VERSION
+        insertMarkers(jdbc, ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS - historyMarker)
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            guard(jdbc).afterSingletonsInstantiated()
+        }
+
+        assertTrue(error.message!!.contains(historyMarker))
+        insertMarkers(jdbc, listOf(historyMarker))
+        assertDoesNotThrow { guard(jdbc).afterSingletonsInstantiated() }
+    }
+
+    @Test
     fun `account deletion migration adds request schema before the production marker`() {
         val migration = Files.readString(
             Path.of("docs/member/migrations/2026-07-26-account-deletion-requests.sql"),

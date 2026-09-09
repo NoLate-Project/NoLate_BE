@@ -33,12 +33,15 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * 대중교통 ETA의 단일 진입점.
+ * 대중교통 ETA 계산의 단일 진입점.
  *
- * ODsay에서 선택한 전체 시간표 경로를 같은 공급자로 다시 찾고, 조회 시야 안에서는 첫 승차
- * 실시간 도착정보를 겹친다. 선택 경로의 다음 차량까지 안전하지 않을 때만 같은 ODsay 응답의
- * 검증된 대체 여정을 사용하며, ODsay 실패를 TMAP 경로로 바꾸지는 않는다.
+ * 저장된 경로의 providerId와 일치하는 TransitJourneyProvider를 선택해 전체 여정을 다시 조회한다.
+ * 재조회한 시간표에 첫 승차 실시간 도착정보를 결합하고, 선택 경로가 안전하지 않을 때만
+ * 동일 공급자 응답 안의 검증된 대체 여정을 평가한다.
+ *
+ * 공급자별 HTTP·JSON 차이는 adapter에서 끝내고, 이 서비스는 공통 TransitJourney만 사용한다.
  */
+
 @Service
 class TransitEtaCalculationService(
     private val selectedRouteDecoder: SelectedTransitRouteDecoder,
@@ -57,10 +60,12 @@ class TransitEtaCalculationService(
 
         val selected = selectedRouteDecoder.decode(request.selectedRouteJson)
             ?: return request.fallbackResult(TrafficFailureReasons.TRANSIT_ROUTE_METADATA_MISSING)
-        val provider = selected.odsayProvider()
+
+        // 저장 경로와 같은 공급자만 선택해 서로 다른 공급자의 노선·정류장 ID가 섞이지 않도록 한다.
+        val provider = selected.journeyProvider()
         if (provider != null) {
             val refreshed = runCatching {
-                resolveOdsayJourney(provider, selected, request)
+                resolveProviderJourney(provider, selected, request)
             }
             val resolution = refreshed.getOrNull()
             val projected = resolution?.projected
@@ -109,11 +114,15 @@ class TransitEtaCalculationService(
         return legacyResult(selected, request, reason)
     }
 
-    private fun resolveOdsayJourney(
+    /**
+     * 선택된 공급자가 반환한 후보들을 공통 여정 모델로 평가한다.
+     * 여기서는 공급자 종류와 관계없이 실시간 첫 승차, 환승 가능성, 도착 마감을 계산한다.
+     */
+    private fun resolveProviderJourney(
         provider: TransitJourneyProvider,
         selected: SelectedTransitRoute,
         request: TrafficRequest,
-    ): OdsayJourneyResolution {
+    ): TransitJourneyResolution {
         val evaluatedAt = request.evaluatedAt
         val initialDepartureAt = maxOf(
             evaluatedAt,
@@ -243,7 +252,7 @@ class TransitEtaCalculationService(
             bestSelectedDegraded != null ||
             bestSelectedMissed != null ||
             bestSelectedUnknown != null
-        return OdsayJourneyResolution(
+        return TransitJourneyResolution(
             projected = bestSelectedActionable ?: bestAlternativeActionable,
             bestLateLive = if (hasSelectedDiagnosticEvidence) {
                 bestSelectedLateLive
@@ -683,13 +692,6 @@ class TransitEtaCalculationService(
     private fun Instant.coerceAtLeast(minimum: Instant): Instant =
         if (isBefore(minimum)) minimum else this
 
-    private fun SelectedTransitRoute.odsayProvider(): TransitJourneyProvider? {
-        if (!provider.equals(ODSAY_PROVIDER_ID, ignoreCase = true)) return null
-        return journeyProviders.singleOrNull {
-            it.providerId.equals(ODSAY_PROVIDER_ID, ignoreCase = true)
-        }
-    }
-
     private companion object {
         const val ODSAY_PROVIDER_ID = "odsay"
         const val MILLIS_PER_MINUTE = 60_000.0
@@ -697,9 +699,21 @@ class TransitEtaCalculationService(
         const val UNKNOWN_TRANSFER_PROBE_SECONDS = 5L * 60L
         const val ALTERNATIVE_RECOVERY_PROBE_SECONDS = 5L * 60L
     }
+
+    private fun SelectedTransitRoute.journeyProvider(): TransitJourneyProvider? {
+        val selectedProviderId = provider
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?: return null
+
+        return journeyProviders.singleOrNull {
+            it.providerId.trim().equals(selectedProviderId, ignoreCase = true)
+        }
+    }
 }
 
-private data class OdsayJourneyResolution(
+/** 한 공급자 조회에서 발견한 정상 후보와 degraded·환승 실패 후보를 함께 보존한다. */
+private data class TransitJourneyResolution(
     val projected: ProjectedTransitJourney<TransitCandidateProjection>?,
     val bestLateLive: ProjectedTransitJourney<TransitCandidateProjection>?,
     val bestDegraded: ProjectedTransitJourney<TransitCandidateProjection>?,

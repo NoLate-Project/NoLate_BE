@@ -32,6 +32,7 @@ import com.noLate.notification.infrastructure.PushSendHistoryRepository
 import com.noLate.notification.support.AllowAllPushRecipientAuthorizationTestConfig
 import com.noLate.notification.support.registerAuthenticatedPushToken
 import com.noLate.schedule.application.TrafficClient
+import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.TrafficResult
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
@@ -44,17 +45,22 @@ import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
+import com.noLate.schedule.infrastructure.ScheduleEtaEvaluationHistoryRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Tag
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.data.domain.PageRequest
 import org.springframework.test.context.TestPropertySource
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.transaction.annotation.Propagation
@@ -72,6 +78,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
+/**
+ * 백엔드 작업 흐름 E2E: 실제 Worker/Coordinator/알림 outbox/Repository와 H2를 연결한다.
+ * 교통·푸시 공급자와 출발 알람 동기화는 대역이며, 수신 권한은 테스트 설정으로 허용한다.
+ * 실제 HTTP 서버·모바일 앱·FCM 수신 검증은 포함하지 않는다.
+ */
+@Tag("backend-e2e")
 @DataJpaTest
 @Import(
     SchedulePushJobWorker::class,
@@ -141,6 +153,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     private val pushClient: WorkerDeliveryPushClient,
     private val trafficClient: WorkerDeliveryTrafficClient,
     private val jdbcTemplate: JdbcTemplate,
+    private val etaHistories: ScheduleEtaEvaluationHistoryRepository,
 ) {
     @MockitoBean
     private lateinit var departureAlarmSyncService: DepartureAlarmSyncService
@@ -151,6 +164,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
     fun clean() {
         pushClient.reset()
         trafficClient.reset()
+        etaHistories.deleteAll()
         deliveryRepository.deleteAll()
         historyRepository.deleteAll()
         inboxRepository.deleteAll()
@@ -184,6 +198,8 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         assertEquals(0, persisted.retryCount)
         assertEquals(0, persisted.checkCount)
         assertTrue(!persisted.lockedBy.isNullOrBlank())
+        assertEquals(0L, etaHistories.count())
+        assertTrue(trafficClient.requests().isEmpty())
     }
 
     @Test
@@ -202,6 +218,9 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         assertEquals(1, afterPartial.retryCount)
         assertEquals(now.plus(1, ChronoUnit.MINUTES), afterPartial.nextCheckAt)
         assertEquals(now, afterPartial.lastPushedAt)
+        val firstEvaluation = evaluations(schedule).single()
+        assertEquals(job.id, firstEvaluation.jobId)
+        assertEquals(TrafficSource.LIVE_PROVIDER, firstEvaluation.source)
         assertEquals(
             setOf(PushDeliveryStatus.SUCCESS, PushDeliveryStatus.FAILED),
             deliveries(schedule.memberId).map { it.status }.toSet(),
@@ -223,6 +242,12 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
             deliveries(schedule.memberId).associate { it.deviceFingerprint to it.attemptCount },
         )
         assertEquals(1, inboxRepository.findAllByMemberIdOrderByIdDesc(schedule.memberId).size)
+        // 같은 푸시 event/checkCount를 재시도해도 ETA를 재계산했다면 별도 평가로 남긴다.
+        val evaluations = evaluations(schedule)
+        assertEquals(2, evaluations.size)
+        assertEquals(2, evaluations.map { it.evaluationId }.distinct().size)
+        assertEquals(listOf(now.plusSeconds(60), now), evaluations.map { it.evaluatedAt })
+        assertEquals(firstEvaluation.id, evaluations.last().id)
     }
 
     @Test
@@ -275,6 +300,9 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         assertEquals(1, worker.runDueJobs(retryAt))
 
         val afterImmutableRetry = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        // 알림은 동결된 A(40분)를 사용해도 이력에는 이번 계산 B(25분)를 보존한다.
+        assertEquals(listOf(25, 40), evaluations(schedule).map { it.travelMinutes })
+        assertEquals(40, afterImmutableRetry.lastTravelMinutes)
         assertEquals(retryAt.plusSeconds(1), afterImmutableRetry.nextCheckAt)
         assertTrue(afterImmutableRetry.semanticCatchUpPending)
         assertEquals(1, worker.runDueJobs(retryAt.plusSeconds(1)))
@@ -503,7 +531,127 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
         assertEquals(null, afterSafety.lastPushedAt)
     }
 
-    private fun createDueSchedule(memberId: Long): Schedule {
+    @Test
+    fun `fallback 후 정상 복구까지 각 평가가 DB에 누적되고 다른 회원 조회에는 노출되지 않는다`() {
+        val schedule = createDueSchedule(memberId = 890L)
+        val job = createDueJob(schedule)
+        register(schedule.memberId, "history-device", "history-token")
+        trafficClient.respondWithResult(TrafficResult(
+            travelMinutes = 45,
+            source = TrafficSource.SAVED_FALLBACK,
+            stale = true,
+            failureReason = "PROVIDER_TIMEOUT: token=test-secret",
+        ))
+
+        assertEquals(1, worker.runDueJobs(now))
+        val failed = evaluations(schedule).single()
+        val afterFallback = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(TrafficSource.SAVED_FALLBACK, failed.source)
+        assertTrue(failed.stale)
+        assertEquals(TrafficFailureReasons.PROVIDER_TIMEOUT, failed.failureReason)
+        assertEquals(45, failed.travelMinutes)
+        assertEquals(now, failed.evaluatedAt)
+        assertEquals(schedule.startAt, failed.targetArrivalAt)
+        assertNull(failed.fetchedAt)
+        assertNull(failed.recommendedDepartureAt)
+        assertNull(failed.predictedArrivalAt)
+        assertEquals(job.departureAt, afterFallback.lastRecommendedDepartureAt)
+
+        // 아직 due가 아니면 API 재조회도 새 이력도 발생하지 않는다.
+        assertEquals(0, worker.runDueJobs(now))
+        assertEquals(1, trafficClient.requests().size)
+        assertEquals(1, evaluations(schedule).size)
+
+        val recoveredAt = afterFallback.nextCheckAt
+        trafficClient.respondWithResult(TrafficResult(
+            travelMinutes = 45,
+            source = TrafficSource.LIVE_PROVIDER,
+            fetchedAt = recoveredAt.plusSeconds(2),
+            stale = false,
+            recommendedDepartureAt = job.departureAt,
+            predictedArrivalAt = schedule.startAt,
+        ))
+        assertEquals(1, worker.runDueJobs(recoveredAt))
+
+        val stored = evaluations(schedule)
+        assertEquals(2, stored.size)
+        val recovered = stored.first()
+        assertNotEquals(failed.evaluationId, recovered.evaluationId)
+        assertEquals(failed.id, stored.last().id)
+        assertEquals(TrafficFailureReasons.PROVIDER_TIMEOUT, stored.last().failureReason)
+        assertEquals(TrafficSource.LIVE_PROVIDER, recovered.source)
+        assertEquals(false, recovered.stale)
+        assertNull(recovered.failureReason)
+        assertEquals(recoveredAt, recovered.evaluatedAt)
+        assertEquals(recoveredAt.plusSeconds(2), recovered.fetchedAt)
+        assertEquals(job.departureAt, recovered.recommendedDepartureAt)
+        assertEquals(schedule.startAt, recovered.predictedArrivalAt)
+        assertEquals(2, trafficClient.requests().size)
+        assertTrue(pushClient.attempts("history-token") > 0)
+        assertTrue(etaHistories.findAllByScheduleIdAndMemberIdOrderByEvaluatedAtDescIdDesc(
+            requireNotNull(schedule.id), 999_999L, PageRequest.of(0, 10),
+        ).isEmpty)
+    }
+
+    @Test
+    fun `저신뢰도 시간표의 늦은 도착 진단은 Worker 보정과 별개로 그대로 기록된다`() {
+        val schedule = createDueSchedule(memberId = 891L, travelMode = ScheduleTravelMode.TRANSIT)
+        val job = createDueJob(schedule)
+        register(schedule.memberId, "late-device", "late-token")
+        val departure = now.plusSeconds(600)
+        val arrival = schedule.startAt.plusSeconds(1_200)
+        trafficClient.respondWithResult(TrafficResult(
+            travelMinutes = 70,
+            source = TrafficSource.TIMETABLE_PROVIDER,
+            fetchedAt = now.plusSeconds(2),
+            stale = true,
+            failureReason = TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE,
+            recommendedDepartureAt = departure,
+            predictedArrivalAt = arrival,
+        ))
+
+        assertEquals(1, worker.runDueJobs(now))
+
+        val history = evaluations(schedule).single()
+        assertEquals(job.id, history.jobId)
+        assertEquals(TrafficSource.TIMETABLE_PROVIDER, history.source)
+        assertTrue(history.stale)
+        assertEquals(TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE, history.failureReason)
+        assertEquals(departure, history.recommendedDepartureAt)
+        assertEquals(arrival, history.predictedArrivalAt)
+        assertTrue(arrival.isAfter(history.targetArrivalAt))
+    }
+
+    @Test
+    fun `결과 없는 예외는 이력을 만들지 않고 다음 성공 평가부터 기록한다`() {
+        val schedule = createDueSchedule(memberId = 892L)
+        val job = createDueJob(schedule)
+        register(schedule.memberId, "exception-device", "exception-token")
+        trafficClient.failNext()
+
+        assertEquals(1, worker.runDueJobs(now))
+        assertEquals(0L, etaHistories.count())
+        assertEquals(0, pushClient.attempts("exception-token"))
+        val afterException = pushJobRepository.findById(requireNotNull(job.id)).orElseThrow()
+        assertEquals(SchedulePushJobStatus.ACTIVE, afterException.status)
+        assertEquals(1, afterException.retryCount)
+
+        assertEquals(1, worker.runDueJobs(afterException.nextCheckAt))
+        assertEquals(2, trafficClient.requests().size)
+        val history = evaluations(schedule).single()
+        assertEquals(afterException.nextCheckAt, history.evaluatedAt)
+        assertEquals(TrafficSource.LIVE_PROVIDER, history.source)
+    }
+
+    private fun evaluations(schedule: Schedule) =
+        etaHistories.findAllByScheduleIdAndMemberIdOrderByEvaluatedAtDescIdDesc(
+            requireNotNull(schedule.id), schedule.memberId, PageRequest.of(0, 20),
+        ).content
+
+    private fun createDueSchedule(
+        memberId: Long,
+        travelMode: ScheduleTravelMode = ScheduleTravelMode.CAR,
+    ): Schedule {
         val startAt = now.plus(60, ChronoUnit.MINUTES)
         return scheduleRepository.saveAndFlush(
             Schedule(
@@ -516,7 +664,7 @@ class SchedulePushJobDeliveryIntegrationTest @Autowired constructor(
                     travelMinutes = 45,
                     departAt = startAt.minus(45, ChronoUnit.MINUTES),
                     departedAt = null,
-                    travelMode = ScheduleTravelMode.CAR,
+                    travelMode = travelMode,
                     locationName = "destination",
                     originName = "origin",
                     originAddress = null,
@@ -712,19 +860,36 @@ data class WorkerPushCall(
 )
 
 class WorkerDeliveryTrafficClient : TrafficClient {
-    private val responses = ConcurrentLinkedQueue<Int>()
+    private val responses = ConcurrentLinkedQueue<() -> TrafficResult>()
+    private val calls = CopyOnWriteArrayList<TrafficRequest>()
 
     fun reset() {
         responses.clear()
+        calls.clear()
     }
 
     fun respondWith(vararg minutes: Int) {
-        responses.addAll(minutes.toList())
+        minutes.forEach { value -> responses.add { live(value) } }
     }
 
-    override fun getTravelMinutes(request: TrafficRequest): TrafficResult =
+    fun respondWithResult(vararg results: TrafficResult) {
+        results.forEach { result -> responses.add { result } }
+    }
+
+    fun failNext() {
+        responses.add { throw IllegalStateException("test provider unavailable") }
+    }
+
+    fun requests(): List<TrafficRequest> = calls.toList()
+
+    override fun getTravelMinutes(request: TrafficRequest): TrafficResult {
+        calls += request
+        return responses.poll()?.invoke() ?: live(45)
+    }
+
+    private fun live(minutes: Int) =
         TrafficResult(
-            travelMinutes = responses.poll() ?: 45,
+            travelMinutes = minutes,
             source = TrafficSource.LIVE_PROVIDER,
             fetchedAt = Instant.parse("2026-07-24T03:00:00Z"),
             stale = false,
