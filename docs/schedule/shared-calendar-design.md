@@ -1,20 +1,21 @@
 # Shared Calendar Design
 
-Status: Implemented in feature branches; staging migration pending
+Status: Base calendar domain implemented; sharing-policy v1 alignment in progress
 
-Last updated: 2026-08-10 KST
+Last updated: 2026-09-09 KST
 
 ## 1. Context
 
-NoLate currently supports sharing one schedule and sharing every schedule that belongs to an
-owner-owned category. Category sharing is useful as a compatibility feature, but it makes a label
-act as an access-control boundary. Moving a schedule between categories can therefore grant or
-revoke access without the user performing an explicit sharing action.
+The product exposes schedule, category, and calendar as three first-class sharing scopes. Each scope
+supports `VIEWER` and `EDITOR`; `OWNER` is derived and is never granted through a normal share
+request. The normative product and movement rules are in
+[`schedule-sharing-policy-v1.md`](./schedule-sharing-policy-v1.md).
 
-The shared-calendar design separates these concerns:
+The shared-calendar design keeps the scopes composable:
 
 - A calendar owns membership and access.
-- A category remains a color and classification label owned by either the personal calendar or one shared calendar.
+- A category remains a movable classification group owned by either the personal calendar or one shared calendar,
+  and may also have its own direct grants.
 - A schedule belongs to at most one shared calendar.
 - A member's origin, route, notification settings, and departure state remain member-owned data.
 
@@ -27,7 +28,7 @@ Sharing scope and schedule type are independent axes.
 
 | Axis | Values |
 | --- | --- |
-| Sharing scope | One schedule / Shared calendar |
+| Sharing scope | One schedule / Category / Shared calendar |
 | Schedule type | Normal / Route |
 | Shared content | Schedule only / Schedule and travel |
 
@@ -65,6 +66,18 @@ their own `ScheduleTravelPlan` and exposes member travel status according to rol
 - `OWNER` and `EDITOR` may create, edit, reorder, and delete calendar categories; `VIEWER` is read-only.
 - `member_id` remains the creator/audit field and is not the access boundary for a calendar category.
 
+### ScheduleCategoryShare
+
+- Represents ongoing access to the category and all current or future schedules assigned to it.
+- Supports `VIEWER` and `EDITOR` as a first-class product feature; it is not a temporary compatibility
+  path.
+- Coexists with calendar membership. A category recipient sees only that category unless another
+  grant widens access.
+- Category movement preserves the category id, active grants, and valid invitation links. Calendar
+  audience changes do not silently revoke the category grant.
+- A category `EDITOR` can create, update, and delete schedules in that category but cannot manage
+  sharing or move content to another access scope.
+
 ### ScheduleShare
 
 - Continues to represent one-off schedule access.
@@ -83,9 +96,15 @@ their own `ScheduleTravelPlan` and exposes member travel status according to rol
 All schedule endpoints use one policy result instead of querying share tables independently.
 
 ```text
+resourceOwner =
+    activeCalendar.owner
+    OR activePersonalCategory.owner
+    OR standaloneSchedule.author
+
 canView =
-    ownsSchedule
+    member == resourceOwner
     OR hasActiveDirectShare
+    OR hasActiveCategoryShare
     OR isActiveCalendarMember
 
 travelEnabled =
@@ -96,18 +115,28 @@ travelEnabled =
     )
 
 canEdit =
-    ownsSchedule
+    member == resourceOwner
     OR strongestActiveRole == EDITOR
     OR strongestActiveRole == OWNER
 
 canViewAllTravelPlans =
-    ownsSchedule
+    member == resourceOwner
     OR strongestActiveRole == EDITOR
     OR strongestActiveRole == OWNER
 ```
 
-Direct and calendar grants are combined by strongest permission and widest content mode. Results
-are de-duplicated by member id before producing travel status or notifications.
+Direct, category, and calendar grants are combined by strongest permission and widest content mode.
+Results are de-duplicated by member id before producing travel status or notifications.
+
+For schedules created by a category `EDITOR`, authorship does not become an irrevocable personal
+grant. The category owner manages the content, the author remains visible for audit/display, and the
+author loses access when all effective grants are removed. Code that treats `schedules.member_id` as
+an unconditional owner shortcut does not satisfy the v1 policy.
+
+`schedule_category_snapshots` are immutable presentation/audit data. A snapshot must not resurrect a
+deleted category as an ACL boundary. If account withdrawal detaches a foreign-authored schedule from
+a deleted personal category, the canonical category id is cleared and the now-standalone schedule is
+owned by its author; the retained snapshot remains display-only.
 
 ## 5. Route Setup Policy
 
@@ -154,7 +183,25 @@ cannot modify another member's preference; each member changes it only through t
 
 - An owner cannot leave or be removed while still owning the calendar.
 - Ownership transfer locks the calendar and both member rows and leaves exactly one active owner.
-- Ownership transfer revokes pending links issued by the previous owner; the new owner creates fresh links.
+- Ownership transfer keeps existing direct schedule/category grants but reassigns their management
+  owner to the new calendar owner.
+- It revokes every `PENDING` invitation for the calendar, its categories, and its schedules; the new
+  owner creates fresh links.
+- It retains `ACCEPTED` invitations and their acceptance ledgers, and reassigns their management
+  owner so a prior recipient's same-token retry remains idempotent while the matching grant or
+  membership remains active.
+
+### Account withdrawal
+
+- An active calendar owner must transfer ownership or archive the calendar before withdrawal.
+- A withdrawing calendar member or direct category editor leaves/revokes their access and personal
+  travel/notification state, but categories and schedules authored inside another owner's container
+  remain container content. The author reference remains for audit after account anonymization.
+- Withdrawing the owner of a personal category deletes that category and owner-owned content. A
+  schedule authored by another member is retained, detached from the deleted canonical category,
+  and becomes a standalone author-owned schedule; its immutable category snapshot is display-only.
+- A former calendar owner may withdraw after transfer without deleting calendar categories or
+  schedules that still carry the former owner's creator id.
 
 ### Calendar archive
 
@@ -166,12 +213,18 @@ cannot modify another member's preference; each member changes it only through t
 
 Lock acquisition order is part of the application contract.
 
-1. Calendar invitation creation, acceptance, ownership transfer, and archive lock the calendar row
-   first, then invitation rows in ascending id order. Acceptance uses an unlocked token lookup only
-   to discover the parent id and re-reads the invitation with `FOR UPDATE` before validation.
-2. Other calendar mutations lock the calendar row before member rows.
-3. Multi-member operations lock member rows in ascending member id order.
-4. Schedule moves lock the schedule, then involved calendars in ascending calendar id order.
+1. Multi-member mutations lock every affected member row first, in ascending member id order. An
+   unlocked preview may discover ids, but the mutation must re-check the participant set after the
+   parent lock and fail with a retryable conflict if that set expanded.
+2. The shared-resource parent order is schedule rows, calendars in ascending id order, then
+   categories. A category-bound calendar operation therefore locks `calendar -> category`; a
+   personal-category operation starts at the category row.
+3. Dependent rows always follow `category -> invitation -> share`. Invitation acceptance may use an
+   unlocked token lookup only to discover the parent id and must re-read the invitation with
+   `FOR UPDATE` after the parent lock. Category movement, deletion, acceptance, and ownership
+   transfer use this same order.
+4. Schedule moves lock the schedule before the source and destination parents. Ownership transfer
+   freezes contained schedules before the calendar, categories, invitations, and direct grants.
 5. Travel-plan writes lock the schedule before reading effective access and writing the plan/job.
 6. Reminder workers claim outbox rows; business transactions never call a push provider directly.
 
@@ -190,20 +243,22 @@ failure.
 
 ## 8. Compatibility Migration
 
-Migration is additive and reversible.
+The July/August 2026 migrations were written for an earlier plan that converted category sharing to
+calendar membership. The current product policy retains both scopes, so that backfill cannot be
+treated as canonical or rerun without inspection. In particular, copied calendar memberships can
+keep access alive after a category share is revoked and can widen access when another category is
+added to the generated calendar.
 
-1. Create calendar and membership tables and nullable schedule columns.
-2. Create one shared calendar for each actively shared category.
-3. Copy active category shares to calendar members.
-4. Attach schedules in those categories to the created calendars while retaining category ids.
-5. Treat pending category invitations as legacy invitations that create calendar membership.
-6. Dual-read category shares and calendar membership during the FE rollout.
-7. Stop creating category shares after the FE cutover.
-8. Remove the legacy path only after production verification.
-9. Add `schedule_categories.calendar_id`, promote legacy shared categories to their generated
-   calendars, and create one default `일정` category for every active calendar that has none.
+Use [`category-sharing-reconciliation-runbook.md`](./category-sharing-reconciliation-runbook.md) to
+inventory generated calendars, duplicate grant paths, pending category links, and author/owner rows.
+Do not automatically delete either grant for a generated calendar that a user may already have
+adopted.
 
-Existing category shares use `SCHEDULE_AND_TRAVEL` during backfill to preserve current behavior.
+Category and contained-schedule invitations keep their resource identity when the category moves.
+`PENDING` links remain usable, `ACCEPTED` links keep their acceptance ledger and idempotent retry, and
+their management owner changes to the destination calendar owner. Accepted-token retry assumes the
+matching grant remains active. Moving a category is therefore different from transferring calendar
+ownership, which revokes all pending links inside the calendar.
 
 ## 9. Initial API Surface
 
@@ -229,10 +284,13 @@ GET    /api/schedule-calendars/{calendarId}/invitations
 Existing schedule share endpoints add `contentMode`. Existing invitation acceptance remains the
 single token endpoint and dispatches by resource type.
 
-The additive production migrations are:
+The historical production migrations are:
 
 - `docs/schedule/migrations/2026-07-23-shared-calendars.sql`
 - `docs/schedule/migrations/2026-08-10-calendar-scoped-categories.sql`
+
+Any reconciliation must be a new version-marked migration with a quiesced writer window and
+before/after verification; neither historical file is the rollback for the current policy.
 
 ## 10. Non-goals
 
@@ -241,3 +299,5 @@ The additive production migrations are:
 - Public calendars
 - Permanent calendar deletion
 - Copying one member's route to another member
+- Merging two category identities during a move
+- Extracting a shared-calendar category into a personal calendar

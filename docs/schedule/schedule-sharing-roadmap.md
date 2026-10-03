@@ -1,6 +1,9 @@
 # Schedule Sharing Roadmap
 
-Last verified: 2026-07-27 KST
+Last verified: 2026-09-09 KST
+
+Normative product rules: [`schedule-sharing-policy-v1.md`](./schedule-sharing-policy-v1.md). When a
+historical implementation note below conflicts with that policy, the v1 policy wins.
 
 이 문서는 NoLate 일정 공유 기능의 현재 구현 상태와 고도화 계획을 정리한다.
 
@@ -14,7 +17,8 @@ Last verified: 2026-07-27 KST
 - 공유 캘린더 역할/상태: `OWNER`, `EDITOR`, `VIEWER` 및 `ACTIVE`, `LEFT`, `REMOVED`, `ARCHIVED`
 - 일정에 `calendar_id`, `schedule_type`, 캘린더 공유 범위 override를 추가하고 카테고리와 공유 경계를 분리
 - 개별 일정과 공유 캘린더 모두 `SCHEDULE_ONLY`, `SCHEDULE_AND_TRAVEL` 공유 범위 지원
-- 직접 공유, legacy 카테고리 공유, 캘린더 멤버십을 합산하는 `ScheduleAccessPolicy` 적용
+- 직접 일정 공유, 카테고리 공유, 캘린더 멤버십을 합산하고 container 기준 resource
+  owner를 계산하는 `ScheduleAccessPolicy` 적용
 - 캘린더 생성/설정/멤버/탈퇴/강퇴/소유권 이전/보관 및 직접 공유·링크 초대 API 구현
 - 캘린더 공유 push와 통합 inbox/outbox의 `CALENDAR` 리소스 노출 구현
 - 캘린더 보관 또는 이동 권한 축소 시 기존 출발 PushJob 즉시 취소, worker 발송 직전 중앙 권한 재검사
@@ -25,14 +29,21 @@ Last verified: 2026-07-27 KST
 - 링크 초대: `schedule_share_invitations`
 - 공유 일정 참가자별 출발 상태: `schedule_departure_statuses`
 - 공유 일정 참가자별 개인 이동 계획: `schedule_travel_plans`
-- 일정 제목/시각/공통 목적지는 한 일정이 소유하고, 출발지/수단/경로/출발 알림은 `(schedule_id, member_id)`별로 분리
-- 공유 대상 권한: `VIEWER`, `COMMENTER`, `EDITOR`, `OWNER`
+- 일정 제목/시각/공통 목적지는 resource owner가 관리하고, `schedules.member_id`는 작성자/감사
+  식별자로 유지하며, 출발지/수단/경로/출발 알림은 `(schedule_id, member_id)`별로 분리
+- 사용자에게 부여하는 공유 권한: `VIEWER`, `EDITOR` (`OWNER`는 파생 소유자 역할,
+  `COMMENTER`는 조회 호환용 legacy 값)
 - 공유 상태: `ACTIVE`, `REVOKED`
 - 초대 상태: `PENDING`, `ACCEPTED`, `EXPIRED`, `REVOKED`
 - 초대 토큰은 원문을 저장하지 않고 SHA-256 hash만 저장
 - 초대 수락 시 `PESSIMISTIC_WRITE`로 invitation row를 잠가 단일 사용 링크 동시 수락을 방지
 - 만료 시각을 지난 `PENDING` 링크는 API에서 `EXPIRED`로 계산하고 활성 링크 목록에서 제외
 - 카테고리 공유는 해당 카테고리에 속한 일정 묶음을 공유하는 모델
+- 카테고리는 identity·직접 grant·초대 수락 이력을 유지한 채 개인→공유 및 공유→공유
+  캘린더로 이동하며, 동일 이름 category와 자동 병합하지 않음
+- 카테고리 이동 미리보기는 category 직접 공유 유지 인원, schedule 직접 공유 grant 유지
+  건수와 category audience의 실제 gained/lost 인원을 응답하고, 전체 출발/도착 캘린더 멤버
+  수와 구분. schedule 직접 공유 대상은 category audience 증감에 포함하지 않음
 - 일정 조회는 내 일정, 직접 공유받은 일정, 공유 카테고리에 속한 일정을 포함
 - 일정 조회는 FK 없는 DB durable revision과 `owned/shared` 범위별·월 단위 Redis payload 캐시를 사용하고 `GET /api/schedules/calendar-cache/revision`으로 클라이언트 동기화 지원
 - 일정 생성·수정·삭제, 직접 일정/카테고리 공유, 캘린더 멤버·역할·설정·소유권·보관 변경은 transaction-local audience를 합쳐 terminal `BEFORE_COMMIT`에 revision row를 ID 오름차순 한 번만 잠가 원자 무효화
@@ -53,6 +64,10 @@ Last verified: 2026-07-27 KST
 - PushJob 유일키를 `(schedule_id, member_id)`로 분리해 참가자별 알림 등록/취소 지원
 - 일정 시각 또는 공통 목적지가 바뀌면 계획을 `STALE`로 표시하고 해당 참가자의 오래된 PushJob을 취소
 - Push worker에서도 계획 지문을 재검증해 배포 경합 중 오래된 경로 알림 발송 차단
+- 캘린더 소유권 이전 시 포함 일정·카테고리의 직접 grant 관리 owner를 이전하고,
+  세 공유 범위의 pending 링크를 회수하며 accepted-token 재요청 정합성은 보존
+- 탈퇴하는 캘린더/카테고리 편집자의 작성 콘텐츠를 container에 보존하고, 활성
+  캘린더 owner의 탈퇴는 소유권 이전 또는 보관 전까지 차단
 
 ### Frontend
 
@@ -72,6 +87,8 @@ Last verified: 2026-07-27 KST
 - 공유 일정에서 현재 사용자의 이동 경로를 생성/수정하고 저장 직후 최신 상세 상태로 동기화
 - 일반 일정 상세에도 `내 이동 경로` 진입점과 접을 수 있는 참가자 계획 목록 제공
 - 오너/`EDITOR`가 참가자 행을 선택하면 해당 사용자의 저장 경로를 지도와 타임라인에 읽기 전용으로 표시
+- 카테고리 이동 확인 화면에서 유지되는 직접 공유 수와 category audience의 정확한
+  실제 gained/lost 인원을 표시하고, 증감 필드가 없는 이전 응답은 전체 멤버 수로 라벨링
 
 주요 API:
 
@@ -130,6 +147,10 @@ POST /api/schedule-calendars/{calendarId}/invitations
 - 이메일/앱 ID 동시 직접 공유가 한 캘린더 멤버십으로 수렴하는 테스트
 - 소유권 이전 후 활성 OWNER가 정확히 한 명인지 검증하는 테스트
 - 캘린더 링크 수락, 통합 inbox/outbox, 보관 시 pending 초대 회수 테스트
+- 소유권 이전 시 캘린더·포함 카테고리·일정 pending 초대 회수와 accepted-token
+  idempotent 재요청 보존 테스트
+- 카테고리 이동 시 실제 audience 증감, id/grant/pending·accepted token 보존 테스트
+- 캘린더/카테고리 편집자 및 이전 owner 탈퇴 후 container 콘텐츠 보존 테스트
 - 직접/캘린더/카테고리 grant 합산과 100개 일정 batch 권한 조회 테스트
 - D-3 정확한 72시간 경계, stale plan, 회원별 묶음 발송, 동시 marker 생성 테스트
 - 공유 범위 축소 시 PushJob 즉시 취소와 worker 발송 직전 권한 재검사 테스트
@@ -200,8 +221,11 @@ POST /api/schedule-calendars/{calendarId}/invitations
 - 링크는 접근 권한 자체가 아니라 권한을 받을 계정으로 이어지는 초대장이다.
 - 로그인하지 않은 익명 사용자는 개인 일정 데이터에 접근하지 못한다.
 - 공유 수락 이후에는 링크가 아니라 계정 기반 공유 row가 권한의 기준이 된다.
-- 공유 캘린더는 멤버십과 접근 권한을 소유하고, 카테고리는 색상/분류만 담당한다.
-- 카테고리 공유는 공유 캘린더 전환 기간에만 유지하는 호환 기능이다.
+- 일정, 카테고리, 캘린더는 각각 독립적인 1급 공유 범위다.
+- 카테고리는 분류 단위이면서 현재·향후 포함 일정을 공유하는 접근 경계다.
+- 카테고리 직접 grant와 캘린더 멤버십이 겹치면 가장 강한 유효 권한을 적용한다.
+- 카테고리 이동은 identity와 직접 grant 및 유효 링크를 보존하고, 캘린더 경유 audience만
+  출발 범위에서 도착 범위로 바꾼다.
 - 단일 일정과 공유 캘린더 모두 `일정만` 또는 `이동까지 함께`를 선택할 수 있다.
 - `이동까지 함께`는 오너 경로 복사가 아니라 회원별 `myTravelPlan` 사용 권한을 의미한다.
 - 별도 참석 여부를 묻지 않고, 활성 캘린더 멤버는 캘린더의 모든 일정을 공유받는다.
@@ -216,7 +240,7 @@ POST /api/schedule-calendars/{calendarId}/invitations
 - `schedule_calendars`, `schedule_calendar_members` 도입 완료
 - `schedules.calendar_id`, 일정 타입, 공유 콘텐츠 모드 도입 완료
 - 직접 공유와 캘린더 멤버십을 합산하는 중앙 접근 정책 도입 완료
-- 기존 카테고리 공유를 공유 캘린더로 backfill하고 dual-read 기간 운영
+- 과거 category-to-calendar backfill의 중복 grant를 read-only inventory 후 명시적으로 조정
 - 캘린더 소유권 이전, 탈퇴, 강퇴, 보관 상태 구현 완료
 - D-3 경로 미설정 계산과 묶음 알림 outbox 구현 완료
 - MySQL Testcontainers 멤버 추가, reminder marker, 링크 수락·보관 동시성 테스트 추가 완료; Docker 환경에서 실제 통과 확인 필요
@@ -247,31 +271,35 @@ POST /api/schedule-calendars/{calendarId}/invitations
 
 ### 3. Permission Model Hardening
 
-- 현재 권한 enum은 있으나 실제 쓰기 권한은 보수적으로 제한되어 있다.
+- 신규 공유 선택지는 `VIEWER`, `EDITOR` 두 개로 고정한다.
 - `VIEWER`
   - 일정/카테고리 조회만 가능
   - 본인 이동 계획 생성/수정 및 본인 상세 조회 가능
   - 다른 참가자는 이동 계획 설정 상태만 확인 가능
 - `COMMENTER`
-  - 댓글, 참석 상태, 간단한 메모 같은 협업 기능이 생긴 뒤 활성화
+  - 기존 저장값/응답은 `VIEWER`로 표시하고 신규 grant는 만들지 않음
 - `EDITOR`
-  - 공유 카테고리에 일정 추가/수정 가능
+  - 공유 카테고리에 일정 추가/수정/삭제 가능
   - 참가자별 저장 이동 계획 상세 읽기 가능
   - 다른 참가자의 이동 계획 수정은 불가
-  - 개별 공유 일정 수정 가능 여부는 제품 정책 확정 필요
+  - 공유 관리, 권한 변경, 리소스 이동은 불가
 - `OWNER`
   - 공유 row로 직접 부여하지 않고 소유자 표현 또는 소유권 이전 플로우에서만 사용
 - 수정, 삭제, 알림 설정, 멤버 초대 권한을 별도 정책 함수로 분리
+- 카테고리 `EDITOR`가 만든 일정은 작성자 표시는 보존하되 카테고리 콘텐츠로 남기고,
+  grant 해제 뒤 작성자에게 영구 owner 우회를 주지 않음
 
 ### 4. Invitation Lifecycle
 
 - 만료 시각 기반 유효 상태 계산과 활성 목록 제외 구현 완료
+- 동일 회원의 `ACCEPTED` token 재요청은 기존 grant/멤버십으로 idempotent 응답 구현 완료
+- 캘린더 소유권 이전은 세 범위의 `PENDING`을 회수하고 `ACCEPTED` 초대 owner를 이전해
+  재요청 유효성을 보존
 - 초대 링크 회수 API 추가
 - 초대 재발급 API 추가
 - 만료된 초대의 DB 상태를 `EXPIRED`로 영속화하는 배치 추가
 - 초대 목록에서 `PENDING`, `ACCEPTED`, `EXPIRED`, `REVOKED` 필터 지원
 - 다중 수락 링크의 수락자 목록 조회
-- 단일 사용 링크에서 이미 수락된 사용자의 재수락은 idempotent하게 처리할지 결정
 
 ### 5. Security and Abuse Prevention
 
@@ -323,8 +351,10 @@ POST /api/schedule-calendars/{calendarId}/invitations
 - 운영 DB에 공유 테이블 추가 migration 작성
 - 개인 이동 계획 테이블 및 PushJob 복합 유일키 운영 migration 작성 완료
 - 공유 캘린더/멤버십/일정 공유 범위/D-3 outbox 운영 migration 작성 완료
-- legacy 카테고리 공유를 캘린더와 멤버십으로 backfill하는 idempotent SQL 작성 완료
-- staging에서 `2026-07-23-shared-calendars.sql` 실행 및 검증 query 확인
+- 과거 legacy 카테고리 공유를 캘린더 멤버십으로 복제한 SQL은 현재 정책과 충돌하므로 재실행
+  금지 및 generated calendar 분류 필요
+- `category-sharing-reconciliation-runbook.md`의 중복 grant, pending token, scope mismatch,
+  author/owner inventory를 staging과 production snapshot에서 실행
 - staging에서 `2026-07-19-member-travel-plans.sql` 실행, index/외래키/rollback 절차 검증
 - `schema.sql`와 실제 migration 도구의 책임 분리 검토
 
@@ -357,7 +387,6 @@ POST /api/schedule-calendars/{calendarId}/invitations
 - 링크 기본 만료 기간: 현재 기본 7일, 최대 30일
 - 기본 링크 수락 횟수: 현재 1회
 - 다중 수락 링크를 일반 사용자에게 노출할지 여부
-- `EDITOR`가 공유 일정 자체를 수정할 수 있는지, 공유 카테고리에 새 일정만 추가할 수 있는지
 - `EDITOR`에게 참가자 이동 계획의 출발지까지 공개할지, 시간/상태 요약만 공개할지
 - 저장 경로 공유와 별개로 실시간 현재 위치를 공유할지 여부와 명시적 동의/만료 정책
 - 공유 해제 후 개인 이동 계획 보관 기간과 재공유 시 복원 정책
@@ -366,9 +395,11 @@ POST /api/schedule-calendars/{calendarId}/invitations
 ## Recommended Next Work
 
 1. Docker 환경에서 MySQL Testcontainers 3개 동시성 테스트 실제 통과 확인
-2. staging DB에 `2026-07-23-shared-calendars.sql` 적용 후 backfill 수량, 유일키, FK, query plan 검증
+2. staging/production snapshot에서 `category-sharing-reconciliation-runbook.md`를 실행해 기존 backfill을
+   분류하고, 승인된 새 reconciliation migration만 적용·검증
 3. TestFlight 실기기에서 캘린더 공유와 D-3 push의 foreground/background/terminated 수신 및 탭 이동 검증
 4. 직접 초대·링크 수락·역할 변경·일정/개인 경로 분리를 반복 실행하는 모바일 E2E suite 구성
-5. 카테고리 공유 신규 생성을 중단할 FE cutover 버전과 legacy dual-read 종료 조건 확정
+5. 일정·카테고리·캘린더 공유의 `VIEWER`/`EDITOR` 계약과 카테고리 이동 audience를 두 계정
+   E2E로 검증
 6. 캘린더 일정 100/1,000개, 멤버 10/100명 조합의 조회·D-3 scan query 성능 측정
 7. 공개 `@handle`, 회원 검색 API, 친구/최근 공유 대상 모델 설계

@@ -1,6 +1,6 @@
 # Subscription / Policy Roadmap
 
-Last verified: 2026-06-17 KST
+Last verified: 2026-08-29 KST
 
 구독 플랜, 사용량 제한, 알림 정책 제한, 추후 결제/paywall 기능의 상세 로드맵이다.
 
@@ -38,7 +38,11 @@ Last verified: 2026-06-17 KST
 
 ### 광고 전역 스위치
 
-- 기본값은 꺼짐이며 `MONETIZATION_ADS_ENABLED=true`일 때만 활성화된다.
+- 코드 기본값은 fail-closed(`false`)로 유지한다.
+- 기본 Docker 운영 구성은 `MONETIZATION_ADS_ENABLED=true`를 명시하며, 장애·정책 대응 시
+  host 환경변수 또는 Compose `.env`에서 `false`로 바꾸고 app 컨테이너를 재생성한다.
+- Compose의 컨테이너 환경변수가 `/config/env.properties`보다 우선하므로 Docker 운영 중에는
+  `env.local.properties`만 바꿔서는 kill switch가 전환되지 않는다.
 - FREE 회원에게만 `adsEnabled=true`를 반환하고 PREMIUM 회원은 항상 false다.
 - 앱의 정책 조회가 실패하면 FE 기본 정책도 `adsEnabled=false`로 광고를 닫는다.
 
