@@ -98,7 +98,9 @@ interface ScheduleTravelPlanRepository : JpaRepository<ScheduleTravelPlan, Long>
     /**
      * 최초 v4 배포에서 legacy push job을 명시적으로 비운 뒤 재구성할 참가자 plan 후보.
      *
-     * 일정 소유자는 schedules.schedule_routes 기준 backfill이 authoritative하므로 제외한다.
+     * `schedules.member_id`는 공유 컨테이너 안에서 작성자/audit 값일 수 있으므로 제외 조건으로
+     * 사용할 수 없다. 같은 member/schedule의 canonical route 후보와 겹치면 reader가 개인 plan을
+     * 우선한다.
      * schedule fingerprint의 current 여부는 Java의 [ScheduleTravelPlanFingerprint] 단일 규칙으로
      * 최종 확인한다. SQL에서 SHA-256 canonicalization을 중복 구현하지 않는다.
      */
@@ -109,7 +111,6 @@ interface ScheduleTravelPlanRepository : JpaRepository<ScheduleTravelPlan, Long>
         join schedules s on s.id = stp.schedule_id
         where stp.deleted = false
           and stp.notification_enabled = true
-          and stp.member_id <> s.member_id
           and s.deleted = false
           and s.start_at > :now
           and not exists (

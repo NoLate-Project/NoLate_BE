@@ -81,12 +81,30 @@ class ScheduleServiceUnitTest {
         scheduleService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
             ),
             transactionManager = calendarTransactionManager,
         )
+    }
+
+    @Test
+    fun `notification schedules can exceed former quotas with the common two hour lead`() {
+        whenever(scheduleRepository.save(any<Schedule>()))
+            .thenAnswer { it.getArgument<Schedule>(0).apply { id = 10L } }
+        val dto = scheduleDto().copy(
+            notificationEnabled = true,
+            notificationLeadMinutes = 120,
+            notificationIntervalMinutes = 10,
+        )
+        repeat(102) {
+            val result = scheduleService.addSchedule(1L, dto)
+            assertEquals(true, result.notificationEnabled)
+            assertEquals(120, result.notificationLeadMinutes)
+            assertEquals(10, result.notificationIntervalMinutes)
+        }
+        verify(scheduleRepository, never()).countMonthlySmartSchedules(any(), any(), any())
     }
 
     @Test
@@ -446,7 +464,7 @@ class ScheduleServiceUnitTest {
         val securedService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             categoryRepository = categoryRepository,
             categoryShareRepository = shareRepository,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
@@ -658,7 +676,7 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
-    fun `shared editor can update content while keeping calendar and owner's existing category snapshot`() {
+    fun `shared editor updates content without overwriting original author personal route`() {
         val editorId = 2L
         val scheduleId = 10L
         val existing = scheduleEntity(id = scheduleId, memberId = 99L, title = "Old schedule").apply {
@@ -671,7 +689,7 @@ class ScheduleServiceUnitTest {
         val securedService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             scheduleAccessPolicy = accessPolicy,
             categoryRepository = categoryRepository,
             categoryShareRepository = categoryShareRepository,
@@ -695,13 +713,17 @@ class ScheduleServiceUnitTest {
             scheduleId,
             scheduleDto(title = "Editor update").copy(
                 calendarId = 30L,
+                origin = SchedulePlaceDto(name = "Editor's home", lat = 37.5, lng = 127.5),
                 alertMode = ScheduleAlertMode.STANDARD,
             ),
         )
 
         assertEquals("Editor update", result.title)
         assertEquals("Work", result.category.title)
-        assertEquals(ScheduleAlertMode.ALARM, result.alertMode)
+        assertEquals(null, result.origin)
+        assertEquals(ScheduleAlertMode.STANDARD, result.alertMode)
+        assertEquals("Home", existing.route?.originName)
+        assertEquals(ScheduleAlertMode.ALARM, existing.route?.alertMode)
         verify(categoryRepository, never()).findById(any())
         verify(categoryShareRepository, never()).findByCategoryIdAndTargetMemberId(any(), any())
     }
@@ -718,7 +740,7 @@ class ScheduleServiceUnitTest {
         val securedService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             scheduleAccessPolicy = accessPolicy,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
@@ -762,7 +784,7 @@ class ScheduleServiceUnitTest {
         val securedService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             scheduleAccessPolicy = accessPolicy,
             calendarRepository = calendarRepository,
             calendarMemberRepository = calendarMemberRepository,
@@ -781,7 +803,7 @@ class ScheduleServiceUnitTest {
         )
         val sourceCalendar = ScheduleCalendar(
             id = sourceCalendarId,
-            ownerMemberId = 99L,
+            ownerMemberId = memberId,
             title = "원본",
         )
         val editor = ScheduleCalendarMember(
@@ -796,6 +818,9 @@ class ScheduleServiceUnitTest {
             canEdit = true,
             travelEnabled = true,
             canViewAllTravelPlans = true,
+            effectivePermission = ScheduleSharePermission.OWNER,
+            resourceOwnerMemberId = memberId,
+            canManageAudience = true,
         )
         whenever(accessPolicy.resolve(memberId, existing)).thenReturn(editorAccess)
         whenever(calendarRepository.findAllForUpdate(listOf(targetCalendarId, sourceCalendarId)))
@@ -830,7 +855,7 @@ class ScheduleServiceUnitTest {
         val securedService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             categoryRepository = categoryRepository,
             categoryShareRepository = categoryShares,
             calendarRepository = calendars,
@@ -1071,7 +1096,7 @@ class ScheduleServiceUnitTest {
         val permissionAwareService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             categoryShareRepository = categoryShareRepository,
             scheduleShareRepository = directShareRepository,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
@@ -1151,7 +1176,7 @@ class ScheduleServiceUnitTest {
         val securedService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             scheduleAccessPolicy = accessPolicy,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
@@ -1181,7 +1206,7 @@ class ScheduleServiceUnitTest {
     }
 
     @Test
-    fun `all-owned schedule results skip bulk share access resolution`() {
+    fun `creator rows still use bulk policy because container ownership can differ`() {
         val memberId = 1L
         val accessPolicy = mock<ScheduleAccessPolicy>()
         val first = scheduleEntity(id = 1L, memberId = memberId)
@@ -1189,19 +1214,32 @@ class ScheduleServiceUnitTest {
         val securedService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             scheduleAccessPolicy = accessPolicy,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
             ),
         )
         whenever(scheduleRepository.findScheduleList(memberId)).thenReturn(listOf(first, second))
+        whenever(accessPolicy.resolveAll(memberId, listOf(first, second))).thenReturn(
+            listOf(first, second).associate { schedule ->
+                requireNotNull(schedule.id) to ScheduleAccessDecision(
+                    canView = true,
+                    canEdit = true,
+                    travelEnabled = false,
+                    canViewAllTravelPlans = true,
+                    effectivePermission = ScheduleSharePermission.OWNER,
+                    resourceOwnerMemberId = memberId,
+                    canManageAudience = true,
+                )
+            }
+        )
 
         val result = securedService.getScheduleList(memberId)
 
         assertEquals(listOf(1L, 2L), result.map { it.id })
         assertTrue(result.all { it.canViewAllTravelPlans == true })
-        verify(accessPolicy, never()).resolveAll(memberId, listOf(first, second))
+        verify(accessPolicy).resolveAll(memberId, listOf(first, second))
     }
 
     @Test
@@ -1212,7 +1250,7 @@ class ScheduleServiceUnitTest {
         val disabledService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
             ),
@@ -1240,7 +1278,7 @@ class ScheduleServiceUnitTest {
         val disabledService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             calendarCacheService = cacheService,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
@@ -1294,7 +1332,7 @@ class ScheduleServiceUnitTest {
         val enabledService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             calendarCacheService = cacheService,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
@@ -1373,7 +1411,7 @@ class ScheduleServiceUnitTest {
         val service = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             calendarCacheService = cacheService,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
@@ -1403,7 +1441,7 @@ class ScheduleServiceUnitTest {
         val disabledService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             categoryRepository = categoryRepository,
             categoryShareRepository = categoryShares,
             calendarRepository = calendars,
@@ -1588,7 +1626,7 @@ class ScheduleServiceUnitTest {
         val ownedOnlyService = ScheduleService(
             scheduleRepository = scheduleRepository,
             objectMapper = objectMapper,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "false"),
             ),

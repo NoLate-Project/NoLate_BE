@@ -11,6 +11,7 @@ import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitJourneyLeg
 import com.noLate.eta.domain.TransitJourneySearchRequest
 import com.noLate.eta.domain.TransitLegMode
+import com.noLate.eta.domain.TransitLegTimingBasis
 import com.noLate.eta.domain.TransitLine
 import com.noLate.eta.domain.TransitStop
 import com.noLate.eta.infrastructure.routejson.SelectedTransitRouteDecoder
@@ -351,6 +352,11 @@ class TransitEtaWorkerSimulationTest {
                             mode = TransitLegMode.BUS,
                             durationMinutes = 30,
                             waitingMinutes = 7,
+                            // 이 fixture는 실제 시간표가 있는 공급자를 가정한다. ODsay maasRP의
+                            // ROUTE_ESTIMATE 응답은 별도 mapper/계산 서비스 테스트에서 검증한다.
+                            scheduledDepartureAt = departureAt.plus(5, ChronoUnit.MINUTES),
+                            scheduledArrivalAt = departureAt.plus(35, ChronoUnit.MINUTES),
+                            timingBasis = TransitLegTimingBasis.TIMETABLE,
                             from = TransitStop(
                                 providerStopId = "1001",
                                 arsId = "02005",

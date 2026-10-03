@@ -61,6 +61,8 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
+import com.noLate.sharing.application.SharingBlockPolicy
+import com.noLate.sharing.infrastructure.SharingMemberBlockRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -1087,7 +1089,10 @@ class DurableScheduleNotificationOutboxTestConfig {
         categoryShareRepository: ScheduleCategoryShareRepository,
         calendarRepository: ScheduleCalendarRepository,
         calendarMemberRepository: ScheduleCalendarMemberRepository,
+        departureAlarmSyncStateRepository: DepartureAlarmSyncStateRepository,
+        sharingMemberBlockRepository: SharingMemberBlockRepository,
     ): PushRecipientAuthorizationValidator {
+        val sharingBlockPolicy = SharingBlockPolicy(sharingMemberBlockRepository)
         val accessPolicy = ScheduleAccessPolicy(
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
@@ -1097,6 +1102,7 @@ class DurableScheduleNotificationOutboxTestConfig {
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true")
             ),
+            sharingBlockPolicy = sharingBlockPolicy,
         )
         val delegate = SchedulePushRecipientAccessValidator(
             scheduleRepository = scheduleRepository,
@@ -1105,9 +1111,11 @@ class DurableScheduleNotificationOutboxTestConfig {
             categoryShareRepository = categoryShareRepository,
             calendarRepository = calendarRepository,
             calendarMemberRepository = calendarMemberRepository,
+            departureAlarmSyncStateRepository = departureAlarmSyncStateRepository,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true")
             ),
+            sharingBlockPolicy = sharingBlockPolicy,
         )
         return object : PushRecipientAuthorizationValidator {
             override fun canDispatch(

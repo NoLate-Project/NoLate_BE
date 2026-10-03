@@ -9,7 +9,9 @@ import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleDepartureParticipantRole
 import com.noLate.schedule.domain.ScheduleDto
+import com.noLate.schedule.domain.ScheduleNotificationInputFingerprint
 import com.noLate.schedule.domain.SchedulePlaceDto
+import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleTravelPlan
@@ -20,10 +22,11 @@ import com.noLate.schedule.domain.ScheduleTravelPlanParticipantDto
 import com.noLate.schedule.domain.ScheduleTravelPlanStatus
 import com.noLate.schedule.domain.ScheduleTravelPlanUpsertCommand
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
-import com.noLate.subscription.application.SubscriptionPolicyService
+import com.noLate.schedule.application.service.policy.ScheduleNotificationPolicy
 import jakarta.persistence.EntityManager
 import jakarta.persistence.LockModeType
 import org.springframework.dao.ConcurrencyFailureException
@@ -42,11 +45,11 @@ class ScheduleTravelPlanService(
     private val scheduleShareRepository: ScheduleShareRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val memberRepository: MemberRepository,
-    private val subscriptionPolicyService: SubscriptionPolicyService,
     private val objectMapper: ObjectMapper,
     private val entityManager: EntityManager,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
     private val routeSetupReminderPolicy: RouteSetupReminderPolicy? = null,
+    private val schedulePushJobRepository: SchedulePushJobRepository? = null,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val seoulZone: ZoneId = ZoneId.of("Asia/Seoul")
@@ -90,7 +93,7 @@ class ScheduleTravelPlanService(
             memberId = memberId,
             schedule = schedule,
             command = command,
-            validateSubscription = true,
+
             requireCompleteRoute = true,
         )
     }
@@ -104,8 +107,18 @@ class ScheduleTravelPlanService(
     fun syncOwnerTravelPlan(memberId: Long, scheduleDto: ScheduleDto): ScheduleTravelPlanDto? {
         val scheduleId = scheduleDto.id ?: return null
         val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
-            ?.takeIf { it.memberId == memberId }
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        val access = scheduleAccessPolicy?.resolve(memberId, schedule)
+        if (access != null) {
+            if (!access.canView) throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+            if (!access.travelEnabled) {
+                // SCHEDULE_ONLY temporarily hides private travel state. A common-content PUT must
+                // not destroy the actor's saved plan; the use case only cancels the active job.
+                return null
+            }
+        } else if (schedule.memberId != memberId) {
+            throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        }
 
         if (!hasPersonalRoute(scheduleDto)) {
             // 기존 평탄형 경로를 삭제한 경우 호환 row도 함께 비활성화해야 다음 조회에서
@@ -136,7 +149,7 @@ class ScheduleTravelPlanService(
             memberId = memberId,
             schedule = schedule,
             command = command,
-            validateSubscription = false,
+
             requireCompleteRoute = false,
         )
     }
@@ -156,17 +169,59 @@ class ScheduleTravelPlanService(
     fun findStaleNotificationMemberIds(scheduleId: Long): Set<Long> {
         val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
-        return travelPlanRepository.findAllByScheduleIdAndDeletedFalse(scheduleId)
+        val plans = travelPlanRepository.findAllByScheduleIdAndDeletedFalse(scheduleId)
+        val staleMemberIds = plans
             .asSequence()
             .filter { it.notificationEnabled }
             .filterNot { ScheduleTravelPlanFingerprint.matches(it, schedule) }
             .map { it.memberId }
-            .toSet()
+            .toCollection(linkedSetOf())
+
+        // Before per-member plans existed, the raw schedule author could own a canonical-route job.
+        // A different editor can legitimately change common notification inputs (title/start/destination).
+        // The old job is already inside the edit fence, but without this fingerprint check it could
+        // still fire at its previous time because there is no plan row for the normal stale-plan scan.
+        val legacyAuthorMemberId = schedule.memberId
+        if (plans.none { it.memberId == legacyAuthorMemberId }) {
+            val legacyJob = schedulePushJobRepository
+                ?.findByScheduleIdAndMemberId(scheduleId, legacyAuthorMemberId)
+                ?.takeIf {
+                    it.status == SchedulePushJobStatus.ACTIVE ||
+                        it.status == SchedulePushJobStatus.PROCESSING
+                }
+            if (legacyJob != null) {
+                val accessStillAllowsTravel = scheduleAccessPolicy
+                    ?.resolve(legacyAuthorMemberId, schedule)
+                    ?.travelEnabled
+                    ?: true
+                val canonicalDto = schedule.toDto(objectMapper)
+                val expectedFingerprint = if (
+                    accessStillAllowsTravel && canonicalDto.notificationEnabled == true
+                ) {
+                    ScheduleNotificationInputFingerprint.fromSchedule(
+                        legacyAuthorMemberId,
+                        canonicalDto,
+                    )
+                } else {
+                    null
+                }
+                if (expectedFingerprint == null ||
+                    legacyJob.notificationInputFingerprint != expectedFingerprint
+                ) {
+                    staleMemberIds += legacyAuthorMemberId
+                }
+            }
+        }
+        return staleMemberIds
     }
 
     @Transactional
     fun findNotificationEnabledMemberIds(scheduleId: Long): Set<Long> =
         travelPlanRepository.findNotificationEnabledMemberIdsByScheduleId(scheduleId).toSet()
+
+    @Transactional(readOnly = true)
+    fun findAllTravelPlanMemberIds(scheduleId: Long): Set<Long> =
+        travelPlanRepository.findDistinctMemberIdsByScheduleIdIn(listOf(scheduleId)).toSet()
 
     @Transactional
     fun findActiveCalendarAudienceMemberIds(calendarId: Long): Set<Long> =
@@ -248,6 +303,9 @@ class ScheduleTravelPlanService(
         }
         val canManage = canViewAllTravelPlans(requesterMemberId, schedule)
         val participantIds = participantIds(schedule)
+        val resourceOwnerMemberId = scheduleAccessPolicy
+            ?.currentResourceOwnerMemberId(schedule)
+            ?: schedule.memberId
         val plansByMemberId = travelPlanRepository.findAllByScheduleIdAndDeletedFalse(scheduleId)
             .filter { it.memberId in participantIds }
             .associateBy { it.memberId }
@@ -290,7 +348,7 @@ class ScheduleTravelPlanService(
             ScheduleTravelPlanParticipantDto(
                 memberId = memberId,
                 email = membersById[memberId]?.email.takeIf { canManage || requesterMemberId == memberId },
-                role = if (memberId == schedule.memberId) {
+                role = if (memberId == resourceOwnerMemberId) {
                     ScheduleDepartureParticipantRole.OWNER
                 } else {
                     ScheduleDepartureParticipantRole.SHARED
@@ -432,19 +490,13 @@ class ScheduleTravelPlanService(
         memberId: Long,
         schedule: Schedule,
         command: ScheduleTravelPlanUpsertCommand,
-        validateSubscription: Boolean,
+
         requireCompleteRoute: Boolean,
     ): ScheduleTravelPlanDto {
         validateCommand(command, schedule, requireCompleteRoute)
         val scheduleId = requireNotNull(schedule.id)
         val existing = travelPlanRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
-        val wasNotificationEnabled = existing?.takeUnless { it.deleted }?.notificationEnabled == true
-        val normalizedNotification = normalizeNotification(
-            memberId = memberId,
-            command = command,
-            wasNotificationEnabled = wasNotificationEnabled,
-            validateSubscription = validateSubscription,
-        )
+        val normalizedNotification = normalizeNotification(command)
         val departAt = command.departAt?.let { parseInstant(it, "departAt") }
         val routeJson = normalizeRouteJson(command.routeJson)
         val plan = existing ?: ScheduleTravelPlan(scheduleId = scheduleId, memberId = memberId)
@@ -631,30 +683,11 @@ class ScheduleTravelPlanService(
         )
     }
 
-    private fun normalizeNotification(
-        memberId: Long,
-        command: ScheduleTravelPlanUpsertCommand,
-        wasNotificationEnabled: Boolean,
-        validateSubscription: Boolean,
-    ): NormalizedNotification {
+    private fun normalizeNotification(command: ScheduleTravelPlanUpsertCommand): NormalizedNotification {
         if (!command.notificationEnabled) return NormalizedNotification(null, null)
-        if (!validateSubscription) {
-            return NormalizedNotification(
-                leadMinutes = command.notificationLeadMinutes,
-                intervalMinutes = command.notificationIntervalMinutes,
-            )
-        }
-
-        val policy = subscriptionPolicyService.getPolicy(memberId)
-        val leadMinutes = command.notificationLeadMinutes ?: policy.maxNotificationLeadMinutes
-        val intervalMinutes = command.notificationIntervalMinutes ?: policy.minEtaRefreshIntervalMinutes
-        subscriptionPolicyService.validateNotificationSettings(
-            memberId = memberId,
-            notificationEnabled = true,
-            leadMinutes = leadMinutes,
-            intervalMinutes = intervalMinutes,
-            consumesNewQuota = !wasNotificationEnabled,
-        )
+        val leadMinutes = command.notificationLeadMinutes ?: ScheduleNotificationPolicy.DEFAULT_LEAD_MINUTES
+        val intervalMinutes = command.notificationIntervalMinutes ?: ScheduleNotificationPolicy.DEFAULT_INTERVAL_MINUTES
+        ScheduleNotificationPolicy.validate(true, leadMinutes, intervalMinutes)
         return NormalizedNotification(leadMinutes, intervalMinutes)
     }
 

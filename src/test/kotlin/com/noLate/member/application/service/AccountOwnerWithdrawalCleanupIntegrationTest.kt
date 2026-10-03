@@ -123,6 +123,7 @@ import org.springframework.transaction.support.TransactionTemplate
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
     private val cleanupService: AccountCleanupService,
+    private val accessPolicy: ScheduleAccessPolicy,
     private val memberRepository: MemberRepository,
     private val scheduleRepository: ScheduleRepository,
     private val jobRepository: SchedulePushJobRepository,
@@ -705,6 +706,144 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
         assertTrue(scheduleRepository.findScheduleDetail(scheduleId, viewerId) == null)
         assertNoScheduleArtifacts(scheduleId, editorId)
         assertNoScheduleArtifacts(scheduleId, viewerId)
+    }
+
+    @Test
+    fun `calendar editor withdrawal preserves categories and schedules they authored`() {
+        val owner = member("calendar-editor-content-owner")
+        val editor = member("calendar-editor-content-editor", sessionGeneration = 4L)
+        val ownerId = requireNotNull(owner.id)
+        val editorId = requireNotNull(editor.id)
+        val calendar = calendar(ownerId, "editor-content")
+        val calendarId = requireNotNull(calendar.id)
+        val editorMembership = calendarMemberRepository.saveAndFlush(
+            ScheduleCalendarMember(
+                calendarId = calendarId,
+                memberId = editorId,
+                role = ScheduleCalendarRole.EDITOR,
+            ),
+        )
+        val category = categoryRepository.saveAndFlush(
+            ScheduleCategory(
+                memberId = editorId,
+                calendarId = calendarId,
+                title = "editor-created category",
+            ),
+        )
+        val categoryId = requireNotNull(category.id)
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = editorId,
+                calendarId = calendarId,
+                title = "editor-created schedule",
+                startAt = Instant.parse("2099-09-01T01:00:00Z"),
+                endAt = Instant.parse("2099-09-01T02:00:00Z"),
+            ).apply {
+                updateCategorySnapshot(categoryId.toString(), category.title, category.color)
+            },
+        )
+
+        cleanupService.withdraw(editor)
+
+        assertTrue(memberRepository.findById(editorId).orElseThrow().deleted)
+        assertFalse(categoryRepository.findById(categoryId).orElseThrow().deleted)
+        assertFalse(scheduleRepository.findById(requireNotNull(schedule.id)).orElseThrow().deleted)
+        assertEquals(
+            ScheduleCalendarMemberStatus.LEFT,
+            calendarMemberRepository.findById(requireNotNull(editorMembership.id)).orElseThrow().status,
+        )
+        assertTrue(scheduleRepository.findScheduleDetail(requireNotNull(schedule.id), ownerId) != null)
+    }
+
+    @Test
+    fun `direct category editor withdrawal preserves authored content for category owner`() {
+        val owner = member("direct-category-content-owner")
+        val editor = member("direct-category-content-editor", sessionGeneration = 5L)
+        val ownerId = requireNotNull(owner.id)
+        val editorId = requireNotNull(editor.id)
+        val category = categoryRepository.saveAndFlush(
+            ScheduleCategory(memberId = ownerId, title = "owner category"),
+        )
+        val categoryId = requireNotNull(category.id)
+        categoryShareRepository.saveAndFlush(
+            ScheduleCategoryShare(
+                categoryId = categoryId,
+                ownerMemberId = ownerId,
+                targetMemberId = editorId,
+                permission = ScheduleSharePermission.EDITOR,
+            ),
+        )
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = editorId,
+                title = "category editor content",
+                startAt = Instant.parse("2099-09-02T01:00:00Z"),
+                endAt = Instant.parse("2099-09-02T02:00:00Z"),
+            ).apply {
+                updateCategorySnapshot(categoryId.toString(), category.title, category.color)
+            },
+        )
+        val scheduleId = requireNotNull(schedule.id)
+
+        cleanupService.withdraw(editor)
+
+        assertTrue(memberRepository.findById(editorId).orElseThrow().deleted)
+        assertFalse(categoryRepository.findById(categoryId).orElseThrow().deleted)
+        assertFalse(scheduleRepository.findById(scheduleId).orElseThrow().deleted)
+        assertTrue(categoryShareRepository.findByCategoryIdAndTargetMemberId(categoryId, editorId) == null)
+        assertTrue(scheduleRepository.findScheduleDetail(scheduleId, ownerId) != null)
+        assertFalse(accessPolicy.resolve(editorId, scheduleRepository.findById(scheduleId).orElseThrow()).canView)
+    }
+
+    @Test
+    fun `previous calendar owner withdrawal after transfer preserves calendar content`() {
+        val previousOwner = member("transferred-calendar-old-owner", sessionGeneration = 7L)
+        val nextOwner = member("transferred-calendar-new-owner")
+        val previousOwnerId = requireNotNull(previousOwner.id)
+        val nextOwnerId = requireNotNull(nextOwner.id)
+        val calendar = calendar(previousOwnerId, "transferred")
+        val calendarId = requireNotNull(calendar.id)
+        val previousMembership = calendarMemberRepository
+            .findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(calendarId, previousOwnerId)
+            ?: error("owner membership missing")
+        previousMembership.changeRole(ScheduleCalendarRole.EDITOR)
+        calendarMemberRepository.saveAndFlush(previousMembership)
+        calendarMemberRepository.saveAndFlush(
+            ScheduleCalendarMember(
+                calendarId = calendarId,
+                memberId = nextOwnerId,
+                role = ScheduleCalendarRole.OWNER,
+            ),
+        )
+        calendar.transferOwnership(nextOwnerId)
+        calendarRepository.saveAndFlush(calendar)
+        val category = categoryRepository.saveAndFlush(
+            ScheduleCategory(
+                memberId = previousOwnerId,
+                calendarId = calendarId,
+                title = "content before transfer",
+            ),
+        )
+        val categoryId = requireNotNull(category.id)
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = previousOwnerId,
+                calendarId = calendarId,
+                title = "schedule before transfer",
+                startAt = Instant.parse("2099-09-03T01:00:00Z"),
+                endAt = Instant.parse("2099-09-03T02:00:00Z"),
+            ).apply {
+                updateCategorySnapshot(categoryId.toString(), category.title, category.color)
+            },
+        )
+
+        cleanupService.withdraw(previousOwner)
+
+        assertTrue(memberRepository.findById(previousOwnerId).orElseThrow().deleted)
+        assertFalse(categoryRepository.findById(categoryId).orElseThrow().deleted)
+        assertFalse(scheduleRepository.findById(requireNotNull(schedule.id)).orElseThrow().deleted)
+        assertEquals(nextOwnerId, calendarRepository.findById(calendarId).orElseThrow().ownerMemberId)
+        assertTrue(scheduleRepository.findScheduleDetail(requireNotNull(schedule.id), nextOwnerId) != null)
     }
 
     @Test

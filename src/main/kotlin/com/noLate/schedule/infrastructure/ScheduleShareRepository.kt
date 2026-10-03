@@ -20,6 +20,10 @@ interface ScheduleShareRepository : JpaRepository<ScheduleShare, Long> {
         status: ScheduleShareStatus,
     ): List<ScheduleShare>
 
+    fun findAllByScheduleIdInAndDeletedFalseOrderByScheduleIdAscIdAsc(
+        scheduleIds: Collection<Long>,
+    ): List<ScheduleShare>
+
     fun findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(
         targetMemberId: Long,
         status: ScheduleShareStatus,

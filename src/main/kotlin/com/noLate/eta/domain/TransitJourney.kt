@@ -64,15 +64,22 @@ data class TransitJourneyLeg(
     val line: TransitLine? = null,
     val directionName: String? = null,
     val directionCode: String? = null,
-    /** ODsay의 rps 시각은 시간표이며 실시간 차량 관측값이 아니다. */
     val timingBasis: TransitLegTimingBasis = TransitLegTimingBasis.UNKNOWN,
 ) {
     val isRide: Boolean
         get() = mode == TransitLegMode.BUS || mode == TransitLegMode.SUBWAY
 }
 
+/**
+ * 구간 출발·도착시각의 근거다.
+ *
+ * TIMETABLE은 실제 운행 시간표,
+ * ROUTE_ESTIMATE는 경로 소요시간을 기준으로 계산한 표시용 시각,
+ * UNKNOWN은 시각 근거를 확인할 수 없는 경우다.
+ */
 enum class TransitLegTimingBasis {
     TIMETABLE,
+    ROUTE_ESTIMATE,
     UNKNOWN,
 }
 

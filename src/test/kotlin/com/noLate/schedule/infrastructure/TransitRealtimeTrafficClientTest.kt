@@ -70,12 +70,22 @@ class TransitRealtimeTrafficClientTest {
             )
         )
 
-        // 순수 이동 33분 + 정류장 도착(03:08) 후 실제 대기 4분
-        assertEquals(37, result.travelMinutes)
-        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
-        assertEquals(evaluatedAt, result.fetchedAt)
-        assertFalse(result.stale)
-        assertNull(result.failureReason)
+        // 전체 여정은 추정값이므로 저장된 소요시간을 사용한다.
+        assertEquals(40, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertNull(result.fetchedAt)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            result.failureReason,
+        )
+
+        // 첫 차량 선택은 계속 검증한다.
+        // 정류장 도착 03:08 → 탈 수 있는 다음 버스 03:12 = 대기 4분.
+        assertEquals(4, result.firstBoardingWaitMinutes)
     }
 
     @Test
@@ -96,8 +106,22 @@ class TransitRealtimeTrafficClientTest {
         )
 
         // 03:20 출발, 03:25 정류장 도착, 03:28 버스까지 3분 대기
-        assertEquals(28, result.travelMinutes)
-        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
+        // 전체 여정은 추정값이므로 저장된 소요시간을 사용한다.
+        assertEquals(40, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertNull(result.fetchedAt)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            result.failureReason,
+        )
+
+        // 첫 차량 선택은 계속 검증한다.
+        // 정류장 도착 03:08 → 탈 수 있는 다음 버스 03:12 = 대기 4분.
+        assertEquals(3, result.firstBoardingWaitMinutes)
     }
 
     @Test
@@ -209,9 +233,22 @@ class TransitRealtimeTrafficClientTest {
             request(routeJson = busRouteJson(accessMinutes = 4, rideMinutes = 12, egressMinutes = 4))
         )
 
-        // 순수 이동 20분 + 03:04 정류장 도착 후 6분 대기
-        assertEquals(26, result.travelMinutes)
-        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
+        // 전체 여정은 추정값이므로 저장된 소요시간을 사용한다.
+        assertEquals(40, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertNull(result.fetchedAt)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            result.failureReason,
+        )
+
+        // 첫 차량 선택은 계속 검증한다.
+        // 정류장 도착 03:08 → 탈 수 있는 다음 버스 03:12 = 대기 4분.
+        assertEquals(6, result.firstBoardingWaitMinutes)
     }
 
     @Test
@@ -230,9 +267,22 @@ class TransitRealtimeTrafficClientTest {
             )
         )
 
-        // 저장 30분 중 기존 대기 5분을 빼고, 정류장 도착 후 실시간 대기 2분으로 교체
-        assertEquals(27, result.travelMinutes)
-        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
+        // 전체 여정은 추정값이므로 저장된 소요시간을 사용한다.
+        assertEquals(40, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertNull(result.fetchedAt)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            result.failureReason,
+        )
+
+        // 첫 차량 선택은 계속 검증한다.
+        // 정류장 도착 03:08 → 탈 수 있는 다음 버스 03:12 = 대기 4분.
+        assertEquals(2, result.firstBoardingWaitMinutes)
     }
 
     @Test
@@ -250,7 +300,24 @@ class TransitRealtimeTrafficClientTest {
         )
         val result = client.getTravelMinutes(request(routeJson = routeJson))
 
-        assertEquals(19, result.travelMinutes)
+        // 전체 여정은 추정값이므로 저장된 소요시간을 사용한다.
+        assertEquals(40, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertNull(result.fetchedAt)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            result.failureReason,
+        )
+
+        // 첫 차량 선택은 계속 검증한다.
+        // 정류장 도착 03:08 → 탈 수 있는 다음 버스 03:12 = 대기 4분.
+        assertEquals(4, result.firstBoardingWaitMinutes)
+
+        // 저장된 도시·정류장 식별자를 그대로 전달했는지 확인한다.
         verify(arrivalService).getBusArrivals(
             arsId = isNull(),
             routeName = eq("100"),
@@ -258,10 +325,10 @@ class TransitRealtimeTrafficClientTest {
             nodeId = eq("DJB8001793"),
             stationName = eq("대전역"),
             limit = eq(10),
-            cityCodeNamespace = eq(com.noLate.transit.domain.TransitCityCodeNamespace.UNKNOWN),
+            cityCodeNamespace =
+                eq(com.noLate.transit.domain.TransitCityCodeNamespace.UNKNOWN),
             providerCode = isNull(),
         )
-        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
     }
 
     @Test

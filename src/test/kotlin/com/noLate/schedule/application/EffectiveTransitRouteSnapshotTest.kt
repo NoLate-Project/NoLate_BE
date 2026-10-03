@@ -8,6 +8,8 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.EnumSource
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -184,6 +186,31 @@ class EffectiveTransitRouteSnapshotTest {
         assertEquals("b".repeat(64), restored?.lastAcceptedRouteIdentity)
         assertNull(EffectiveTransitRouteSnapshot.parse(objectMapper, "{not-json"))
         assertNull(EffectiveTransitRouteSnapshot.parse(objectMapper, "{\"version\":99}"))
+    }
+
+    @ParameterizedTest
+    @EnumSource(TransitTimingBasis::class, names = ["FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE", "ROUTE_ESTIMATE_ONLY"])
+    fun `추정 기반 스냅샷은 JSON 왕복 후에도 미채택 상태와 근거를 보존한다`(basis: TransitTimingBasis) {
+        val result = TrafficResult(
+            travelMinutes = 55,
+            source = TrafficSource.SELECTED_ROUTE,
+            stale = true,
+            failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            transitTimingBasis = basis,
+            effectiveTransitRoute = effectiveRoute("d".repeat(64)),
+        )
+        val snapshot = requireNotNull(
+            EffectiveTransitRouteSnapshot.from(result, previous = null, evaluationCheckCount = 0)
+        )
+
+        val restored = requireNotNull(
+            EffectiveTransitRouteSnapshot.parse(objectMapper, objectMapper.writeValueAsString(snapshot))
+        )
+
+        assertEquals(basis, restored.transitTimingBasis)
+        assertFalse(restored.accepted)
+        assertNull(restored.lastAcceptedRouteIdentity)
+        assertNull(restored.acceptedRoute())
     }
 
     @Test

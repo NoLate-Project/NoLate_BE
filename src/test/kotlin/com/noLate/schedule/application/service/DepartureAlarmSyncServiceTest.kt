@@ -8,7 +8,9 @@ import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
 import com.noLate.schedule.domain.DepartureAlarmPlanCodec
 import com.noLate.schedule.domain.DepartureAlarmSyncState
 import com.noLate.schedule.domain.ScheduleAlertMode
+import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
+import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.notification.domain.withPushAccountBinding
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
@@ -26,6 +28,7 @@ import org.springframework.context.ApplicationEventPublisher
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.Optional
 
 @ExtendWith(MockitoExtension::class)
 class DepartureAlarmSyncServiceTest {
@@ -34,6 +37,12 @@ class DepartureAlarmSyncServiceTest {
 
     @Mock
     lateinit var memberRepository: MemberRepository
+
+    @Mock
+    lateinit var scheduleRepository: ScheduleRepository
+
+    @Mock
+    lateinit var scheduleAccessPolicy: ScheduleAccessPolicy
 
     @Mock
     lateinit var eventPublisher: ApplicationEventPublisher
@@ -46,6 +55,8 @@ class DepartureAlarmSyncServiceTest {
         service = DepartureAlarmSyncService(
             repository = repository,
             memberRepository = memberRepository,
+            scheduleRepository = scheduleRepository,
+            scheduleAccessPolicy = scheduleAccessPolicy,
             eventPublisher = eventPublisher,
             clock = Clock.fixed(now, ZoneOffset.UTC),
             snoozeMinutes = 5,
@@ -310,10 +321,22 @@ class DepartureAlarmSyncServiceTest {
     }
 
     @Test
-    fun `snapshot returns the current member desired state without taking mutation locks`() {
+    fun `snapshot returns an authorized current desired state`() {
         val state = state(triggerAt = now.plusSeconds(600))
+        val schedule = schedule()
         whenever(repository.findAllByMemberIdOrderByScheduleIdAsc(7L))
             .thenReturn(listOf(state))
+        whenever(scheduleRepository.findById(41L)).thenReturn(Optional.of(schedule))
+        whenever(scheduleAccessPolicy.resolve(7L, schedule)).thenReturn(
+            ScheduleAccessDecision(
+                canView = true,
+                canEdit = true,
+                travelEnabled = true,
+                canViewAllTravelPlans = true,
+                resourceOwnerMemberId = 7L,
+                canManageAudience = true,
+            )
+        )
 
         val result = service.snapshot(7L)
 
@@ -325,8 +348,33 @@ class DepartureAlarmSyncServiceTest {
         assertThat(command.operation).isEqualTo(DepartureAlarmSyncOperation.UPSERT)
         assertThat(command.toClientData()["alarmGeneration"]).isEqualTo("0")
         verify(repository).findAllByMemberIdOrderByScheduleIdAsc(7L)
-        verify(memberRepository, never()).findByIdForUpdate(any())
+        verify(memberRepository).findByIdForUpdate(7L)
         verify(eventPublisher, never()).publishEvent(any<Any>())
+    }
+
+    @Test
+    fun `snapshot converts a revoked participant upsert into a newer cancel generation`() {
+        val state = state(triggerAt = now.plusSeconds(600))
+        val schedule = schedule()
+        whenever(repository.findAllByMemberIdOrderByScheduleIdAsc(7L)).thenReturn(listOf(state))
+        whenever(repository.findByMemberIdAndScheduleIdForUpdate(7L, 41L)).thenReturn(state)
+        whenever(scheduleRepository.findById(41L)).thenReturn(Optional.of(schedule))
+        whenever(scheduleAccessPolicy.resolve(7L, schedule)).thenReturn(
+            ScheduleAccessDecision(
+                canView = false,
+                canEdit = false,
+                travelEnabled = false,
+                canViewAllTravelPlans = false,
+            )
+        )
+
+        val result = service.snapshot(7L)
+
+        assertThat(result.single().operation).isEqualTo(DepartureAlarmSyncOperation.CANCEL)
+        assertThat(result.single().generation).isEqualTo(1L)
+        assertThat(result.single().title).isNull()
+        verify(repository).saveAndFlush(state)
+        verify(eventPublisher).publishEvent(any<DepartureAlarmSyncStateChangedEvent>())
     }
 
     private fun state(triggerAt: Instant): DepartureAlarmSyncState =
@@ -342,6 +390,14 @@ class DepartureAlarmSyncServiceTest {
                 set(it, 99L)
             }
         }
+
+    private fun schedule() = Schedule(
+        id = 41L,
+        memberId = 99L,
+        title = "공유 일정",
+        startAt = now.plusSeconds(3_600),
+        endAt = now.plusSeconds(7_200),
+    )
 
     private fun planState(
         departureAt: Instant,

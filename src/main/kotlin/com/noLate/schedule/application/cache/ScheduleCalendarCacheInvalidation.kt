@@ -117,25 +117,58 @@ class ScheduleCalendarCacheAudienceResolver(
     private val scheduleShareRepository: ScheduleShareRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val categoryRepository: com.noLate.schedule.infrastructure.ScheduleCategoryRepository? = null,
+    private val calendarRepository: com.noLate.schedule.infrastructure.ScheduleCalendarRepository? = null,
 ) {
-    fun resolve(schedule: Schedule): Set<Long> = resolve(
-        ownerMemberId = schedule.memberId,
-        scheduleId = schedule.id,
-        categoryId = schedule.categoryId,
-        calendarId = schedule.calendarId,
-    )
+    fun resolve(schedule: Schedule): Set<Long> {
+        val rawCategoryId = schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+        val storedCategory = rawCategoryId
+            ?.let { categoryRepository?.findById(it)?.orElse(null) }
+        val category = if (schedule.categoryId == null) {
+            storedCategory?.takeUnless { it.deleted }
+        } else {
+            storedCategory
+        }
+        val calendarId = schedule.calendarId ?: category?.calendarId
+        val calendar = calendarId
+            ?.let { calendarRepository?.findByIdAndStatusAndDeletedFalse(it) }
+            ?.takeUnless { it.deleted }
+        val resourceOwnerMemberId = when {
+            calendarId != null -> calendar?.ownerMemberId
+            schedule.categoryId != null -> category?.takeIf { it.calendarId == null }?.memberId
+            category != null -> category.takeIf { it.calendarId == null }?.memberId
+            else -> schedule.memberId
+        }
+        return resolve(
+            ownerMemberId = resourceOwnerMemberId,
+            scheduleId = schedule.id,
+            categoryId = category?.id?.takeIf { !category.deleted },
+            calendarId = calendar?.id,
+        )
+    }
 
     /**
      * 개인 이동 계획 저장 뒤에는 개인화된 상세 DTO만 남아 있어도 같은 visibility audience를
      * 계산할 수 있어야 한다. travelPlanParticipants는 해당 조회 경로에서 채워지지 않으므로
      * DTO의 공통 식별자에서 공유 저장소를 직접 조회한다.
      */
-    fun resolve(schedule: ScheduleDto): Set<Long> = resolve(
-        ownerMemberId = schedule.ownerMemberId,
-        scheduleId = schedule.id,
-        categoryId = schedule.category.id?.toLongOrNull(),
-        calendarId = schedule.calendarId,
-    )
+    fun resolve(schedule: ScheduleDto): Set<Long> {
+        val categoryId = schedule.category.id?.toLongOrNull()
+        val categoryActive = categoryId?.let { id ->
+            categoryRepository?.findById(id)?.orElse(null)?.takeUnless { it.deleted }
+        }
+        val activeCalendarId = schedule.calendarId?.let { id ->
+            calendarRepository?.findByIdAndStatusAndDeletedFalse(id)
+                ?.takeUnless { it.deleted }
+                ?.id
+        }
+        return resolve(
+            ownerMemberId = schedule.ownerMemberId,
+            scheduleId = schedule.id,
+            categoryId = categoryActive?.id,
+            calendarId = activeCalendarId,
+        )
+    }
 
     private fun resolve(
         ownerMemberId: Long?,
@@ -148,19 +181,19 @@ class ScheduleCalendarCacheAudienceResolver(
         scheduleId?.let {
             scheduleShareRepository
                 .findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(it, ScheduleShareStatus.ACTIVE)
-                .forEach { add(it.targetMemberId) }
+                .forEach { it -> add(it.targetMemberId) }
         }
 
         categoryId?.let {
             categoryShareRepository
                 .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(it, ScheduleShareStatus.ACTIVE)
-                .forEach { add(it.targetMemberId) }
+                .forEach { it -> add(it.targetMemberId) }
         }
 
         calendarId?.let {
             calendarMemberRepository
                 .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(it)
-                .forEach { add(it.memberId) }
+                .forEach { it -> add(it.memberId) }
         }
     }
 }

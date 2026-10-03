@@ -268,4 +268,136 @@ class ScheduleSharingDisabledPersistenceIntegrationTest @Autowired constructor(
         assertEquals(ScheduleCalendarMemberStatus.ACTIVE, persistedMembership?.status)
         assertFalse(requireNotNull(persistedMembership).deleted)
     }
+
+    @Test
+    fun `global off owner queries use calendar owner rather than editor author`() {
+        val owner = memberRepository.saveAndFlush(
+            Member(
+                name = "Container owner",
+                password = "Password1!",
+                email = "sharing-off-container-owner-${System.nanoTime()}@example.com",
+            ),
+        )
+        val author = memberRepository.saveAndFlush(
+            Member(
+                name = "Editor author",
+                password = "Password1!",
+                email = "sharing-off-editor-author-${System.nanoTime()}@example.com",
+            ),
+        )
+        val ownerId = requireNotNull(owner.id)
+        val authorId = requireNotNull(author.id)
+        val calendar = calendarRepository.saveAndFlush(
+            ScheduleCalendar(ownerMemberId = ownerId, title = "off owner calendar"),
+        )
+        val calendarId = requireNotNull(calendar.id)
+        calendarMemberRepository.saveAllAndFlush(
+            listOf(
+                ScheduleCalendarMember(calendarId = calendarId, memberId = ownerId, role = ScheduleCalendarRole.OWNER),
+                ScheduleCalendarMember(calendarId = calendarId, memberId = authorId, role = ScheduleCalendarRole.EDITOR),
+            ),
+        )
+        val category = categoryRepository.saveAndFlush(
+            ScheduleCategory(
+                memberId = authorId,
+                calendarId = calendarId,
+                title = "editor category",
+                color = "#339AF0",
+            ),
+        )
+        val startAt = Instant.parse("2099-08-10T01:00:00Z")
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = authorId,
+                categoryId = category.id,
+                calendarId = calendarId,
+                scheduleType = ScheduleType.ROUTE,
+                title = "editor authored owner content",
+                startAt = startAt,
+                endAt = startAt.plusSeconds(3600),
+            ).apply {
+                updateCategorySnapshot(requireNotNull(category.id).toString(), category.title, category.color)
+                updateRoute(
+                    travelMinutes = 20,
+                    departAt = startAt.minusSeconds(1200),
+                    departedAt = null,
+                    travelMode = ScheduleTravelMode.WALK,
+                    locationName = "destination",
+                    originName = "origin",
+                    originAddress = null,
+                    originLat = 37.5,
+                    originLng = 127.0,
+                    destinationName = "destination",
+                    destinationAddress = null,
+                    destinationLat = 37.6,
+                    destinationLng = 127.1,
+                    routeJson = null,
+                    notificationEnabled = true,
+                    notificationLeadMinutes = 10,
+                    notificationIntervalMinutes = 5,
+                )
+            },
+        )
+        val scheduleId = requireNotNull(schedule.id)
+        entityManager.flush()
+        entityManager.clear()
+
+        assertEquals(listOf(scheduleId), scheduleRepository.findOwnedScheduleList(ownerId).map { it.id })
+        assertEquals(scheduleId, scheduleRepository.findOwnedScheduleDetail(scheduleId, ownerId)?.id)
+        assertEquals(
+            listOf(scheduleId),
+            scheduleRepository.findOwnedOverlappingScheduleList(
+                ownerId,
+                startAt.minusSeconds(60),
+                startAt.plusSeconds(7200),
+            ).map { it.id },
+        )
+        assertEquals(
+            listOf(scheduleId),
+            scheduleRepository.findOwnedUpcomingScheduleList(
+                ownerId,
+                startAt.minusSeconds(60),
+                PageRequest.of(0, 10),
+            ).map { it.id },
+        )
+        assertEquals(
+            listOf(scheduleId),
+            scheduleRepository.searchOwnedScheduleList(
+                ownerId,
+                "editor authored",
+                null,
+                null,
+                null,
+                PageRequest.of(0, 10),
+            ).map { it.id },
+        )
+        assertEquals(
+            listOf(scheduleId),
+            scheduleRepository.findOwnedDepartureReadyScheduleList(
+                ownerId,
+                startAt.minusSeconds(60),
+                startAt.plusSeconds(7200),
+            ).map { it.id },
+        )
+
+        assertTrue(scheduleRepository.findOwnedScheduleList(authorId).isEmpty())
+        assertNull(scheduleRepository.findOwnedScheduleDetail(scheduleId, authorId))
+        assertTrue(
+            scheduleRepository.findOwnedUpcomingScheduleList(
+                authorId,
+                startAt.minusSeconds(60),
+                PageRequest.of(0, 10),
+            ).isEmpty(),
+        )
+        assertTrue(
+            scheduleRepository.searchOwnedScheduleList(
+                authorId,
+                "editor authored",
+                null,
+                null,
+                null,
+                PageRequest.of(0, 10),
+            ).isEmpty(),
+        )
+    }
 }

@@ -89,7 +89,7 @@ class SchedulePushJobUpdateTest {
         assertEquals(updatedDepartureAt, job.departureAt)
         assertEquals(updatedMonitorStartAt, job.monitorStartAt)
         assertEquals(job.monitorStartAt, job.nextCheckAt)
-        assertEquals(30, job.intervalMinutes)
+        assertEquals(10, job.intervalMinutes)
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(0, job.checkCount)
         assertEquals(0, job.retryCount)

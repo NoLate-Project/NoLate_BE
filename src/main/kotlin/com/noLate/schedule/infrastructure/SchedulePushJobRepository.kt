@@ -23,6 +23,17 @@ interface SchedulePushJobAlarmBackfillCandidate {
 }
 
 interface SchedulePushJobRepository : JpaRepository<SchedulePushJob, Long> {
+    @Query("""
+        select job.id as id, job.memberId as memberId from SchedulePushJob job
+        where job.status = :status and job.intervalMinutes <> :intervalMinutes
+        order by job.memberId, job.id
+    """)
+    fun findCadenceCandidates(
+        @Param("status") status: SchedulePushJobStatus,
+        @Param("intervalMinutes") intervalMinutes: Int,
+        pageable: Pageable,
+    ): List<SchedulePushJobCandidate>
+
     fun deleteAllByMemberId(memberId: Long)
     fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)
 

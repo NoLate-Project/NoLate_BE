@@ -12,6 +12,9 @@ enum class TransitRouteProvenance {
 enum class TransitTimingBasis {
     FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
     FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
+    /** 첫 차량 도착만 실시간이며 나머지 구간은 경로 추정값이다. */
+    FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
+    ROUTE_ESTIMATE_ONLY,
     TIMETABLE_ONLY,
     TIMETABLE_TRANSFER_UNKNOWN,
 }
@@ -93,7 +96,7 @@ data class TrafficResult(
     val predictedArrivalAt: Instant? = null,
     /** 선택 경로를 보존했는지, 같은 ODsay 응답의 대체 여정으로 전환했는지 나타낸다. */
     val transitRouteProvenance: TransitRouteProvenance? = null,
-    /** 첫 승차만 실시간이고 미래 환승은 시간표임을 숨기지 않는 계산 근거다. */
+    /** 첫 승차 실시간 정보와 나머지 구간의 시간표·추정값을 구분하는 계산 근거다. */
     val transitTimingBasis: TransitTimingBasis? = null,
     /**
      * 첫 탑승 대기시간의 설명용 구성요소. [travelMinutes]에 이미 포함되어 있으므로 호출자는
@@ -219,6 +222,8 @@ object TrafficFailureReasons {
         "TRANSIT_TRANSFER_MISSED: 첫 승차 지연으로 선택 여정의 환승 차량을 탈 수 없습니다."
     const val TRANSIT_TRANSFER_TIMING_UNKNOWN =
         "TRANSIT_TRANSFER_TIMING_UNKNOWN: 환승 시간표 또는 안전 여유가 불충분해 환승 가능 여부를 확정할 수 없습니다."
+    const val TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY =
+        "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY: 경로 추정시각만 있어 전체 여정의 도착시각을 확정할 수 없습니다."
     const val UNSUPPORTED_TRAVEL_MODE =
         "UNSUPPORTED_TRAVEL_MODE: 선택한 이동 수단은 실시간 ETA 조회를 지원하지 않습니다."
     const val ROUTE_STALE =
@@ -264,6 +269,8 @@ fun sanitizeTrafficFailureReason(reason: String?): String? {
         "TRANSIT_TRANSFER_MISSED" -> TrafficFailureReasons.TRANSIT_TRANSFER_MISSED
         "TRANSIT_TRANSFER_TIMING_UNKNOWN" ->
             TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN
+        "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY" ->
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY
         "UNSUPPORTED_TRAVEL_MODE" -> TrafficFailureReasons.UNSUPPORTED_TRAVEL_MODE
         "ROUTE_STALE" -> TrafficFailureReasons.ROUTE_STALE
         else -> TrafficFailureReasons.ETA_FALLBACK

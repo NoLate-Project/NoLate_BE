@@ -72,6 +72,22 @@ interface ScheduleShareInvitationRepository : JpaRepository<ScheduleShareInvitat
         @Param("status") status: ScheduleShareInvitationStatus = ScheduleShareInvitationStatus.PENDING,
     ): List<ScheduleShareInvitation>
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query(
+        """
+        select i
+        from ScheduleShareInvitation i
+        where i.resourceType = :resourceType
+          and i.resourceId = :resourceId
+          and i.deleted = false
+        order by i.id asc
+        """
+    )
+    fun findAllByResourceForUpdate(
+        @Param("resourceType") resourceType: ScheduleShareResourceType,
+        @Param("resourceId") resourceId: Long,
+    ): List<ScheduleShareInvitation>
+
     fun findAllByOwnerMemberIdAndResourceTypeAndResourceIdAndDeletedFalseOrderByIdDesc(
         ownerMemberId: Long,
         resourceType: ScheduleShareResourceType,

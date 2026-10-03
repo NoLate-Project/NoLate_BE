@@ -5,6 +5,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
+import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
@@ -25,6 +26,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -43,6 +45,7 @@ class SharingSafetyServiceTest {
     private val calendarRepository = mock<ScheduleCalendarRepository>()
     private val calendarMemberRepository = mock<ScheduleCalendarMemberRepository>()
     private val eventPublisher = mock<ApplicationEventPublisher>()
+    private val travelAccessCleanupService = mock<ScheduleTravelAccessCleanupService>()
     private val service = SharingSafetyService(
         memberRepository = memberRepository,
         blockRepository = blockRepository,
@@ -54,6 +57,7 @@ class SharingSafetyServiceTest {
         eventPublisher = eventPublisher,
         clock = Clock.fixed(Instant.parse("2026-08-01T00:00:00Z"), ZoneOffset.UTC),
         moderatorAccessPolicy = SharingModeratorAccessPolicy("1"),
+        travelAccessCleanupService = travelAccessCleanupService,
     )
 
     @Test
@@ -72,6 +76,10 @@ class SharingSafetyServiceTest {
         verify(eventPublisher).publishEvent(event.capture())
         assertEquals(setOf(1L, 2L), event.firstValue.memberIds)
         assertEquals("sharing-member-blocked", event.firstValue.reason)
+        inOrder(blockRepository, travelAccessCleanupService) {
+            verify(blockRepository).saveAndFlush(any())
+            verify(travelAccessCleanupService).suspendBlockedPair(1L, 2L)
+        }
     }
 
     @Test

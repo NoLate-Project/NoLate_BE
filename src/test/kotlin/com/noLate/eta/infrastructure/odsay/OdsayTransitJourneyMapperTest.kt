@@ -18,7 +18,7 @@ class OdsayTransitJourneyMapperTest {
     private val fetchedAt = Instant.parse("2026-07-29T02:59:30Z")
 
     @Test
-    fun `maasRP의 시간 대기 노선과 지역 정류장 식별자를 canonical 여정으로 보존한다`() {
+    fun `maasRP의 표시용 시각과 대기 노선 및 정류장 식별자를 canonical 여정으로 보존한다`() {
         val response = objectMapper.readTree(
             """
                 {
@@ -115,7 +115,7 @@ class OdsayTransitJourneyMapperTest {
         assertEquals(4, bus.waitingMinutes)
         assertEquals(Instant.parse("2026-07-29T03:05:00Z"), bus.scheduledDepartureAt)
         assertEquals(Instant.parse("2026-07-29T03:25:00Z"), bus.scheduledArrivalAt)
-        assertEquals(TransitLegTimingBasis.TIMETABLE, bus.timingBasis)
+        assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, bus.timingBasis)
         assertEquals(TransitCityCodeNamespace.ODSAY_CID, bus.from?.cityCodeNamespace)
         assertEquals("12018", bus.line?.providerRouteId)
         assertEquals("100100057", bus.line?.localRouteId)
@@ -133,6 +133,7 @@ class OdsayTransitJourneyMapperTest {
 
         val subway = journey.legs[3]
         assertEquals(TransitLegMode.SUBWAY, subway.mode)
+        assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, subway.timingBasis)
         assertEquals("1000:2", subway.line?.providerRouteId)
         assertEquals("수도권 2호선", subway.line?.name)
         assertEquals(TransitServiceClass.LOCAL, subway.line?.serviceClass)

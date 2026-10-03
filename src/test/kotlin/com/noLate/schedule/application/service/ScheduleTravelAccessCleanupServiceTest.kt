@@ -25,6 +25,8 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleRouteSetupReminderRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
@@ -50,6 +52,7 @@ class ScheduleTravelAccessCleanupServiceTest {
     @Mock lateinit var accessPolicy: ScheduleAccessPolicy
     @Mock lateinit var calendarRepository: ScheduleCalendarRepository
     @Mock lateinit var calendarMemberRepository: ScheduleCalendarMemberRepository
+    @Mock lateinit var departureAlarmSyncService: DepartureAlarmSyncService
 
     @Test
     fun `content mode reduction cancels an active member push job`() {
@@ -67,6 +70,98 @@ class ScheduleTravelAccessCleanupServiceTest {
 
         assertEquals(SchedulePushJobStatus.CANCELED, job.status)
         verify(lifecyclePublisher).endMemberSchedule(2L, 10L, "TRAVEL_ACCESS_REVOKED")
+    }
+
+    @Test
+    fun `blocking a shared pair cancels push and native alarm while preserving personal plan`() {
+        val schedule = schedule()
+        val job = pushJob()
+        val plan = ScheduleTravelPlan(
+            id = 30L,
+            scheduleId = 10L,
+            memberId = 2L,
+            notificationEnabled = true,
+            scheduleFingerprint = "fingerprint",
+        )
+        whenever(scheduleRepository.findScheduleList(1L)).thenReturn(listOf(schedule))
+        whenever(scheduleRepository.findScheduleList(2L)).thenReturn(listOf(schedule))
+        whenever(accessPolicy.currentResourceOwnerMemberId(schedule)).thenReturn(1L)
+        whenever(accessPolicy.resolveAll(1L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(travelEnabled = true))
+        )
+        whenever(accessPolicy.resolveAll(2L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(canView = false, travelEnabled = false))
+        )
+        whenever(accessPolicy.resolveAllIgnoringOwnerBlock(1L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(travelEnabled = true))
+        )
+        whenever(accessPolicy.resolveAllIgnoringOwnerBlock(2L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(travelEnabled = true))
+        )
+        whenever(pushJobRepository.findAllByScheduleIdInAndMemberIdIn(listOf(10L), listOf(1L, 2L)))
+            .thenReturn(listOf(job))
+        whenever(
+            travelPlanRepository.findAllByScheduleIdInAndMemberIdInAndDeletedFalse(
+                listOf(10L),
+                listOf(1L, 2L),
+            )
+        ).thenReturn(listOf(plan))
+
+        service(departureAlarmService = departureAlarmSyncService)
+            .suspendBlockedPair(1L, 2L)
+
+        assertEquals(SchedulePushJobStatus.CANCELED, job.status)
+        verify(departureAlarmSyncService).cancel(2L, 10L)
+        assertFalse(plan.deleted)
+    }
+
+    @Test
+    fun `owner change preserves only blocked recipients plans while retiring genuinely revoked plans`() {
+        val schedule = schedule()
+        val blockedPlan = ScheduleTravelPlan(
+            id = 30L,
+            scheduleId = 10L,
+            memberId = 2L,
+            notificationEnabled = true,
+            scheduleFingerprint = "blocked",
+        )
+        val revokedPlan = ScheduleTravelPlan(
+            id = 31L,
+            scheduleId = 10L,
+            memberId = 3L,
+            notificationEnabled = true,
+            scheduleFingerprint = "revoked",
+        )
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(accessPolicy.resolveAll(2L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(canView = false, travelEnabled = false))
+        )
+        whenever(accessPolicy.resolveAll(3L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(canView = false, travelEnabled = false))
+        )
+        whenever(accessPolicy.resolveAllIgnoringOwnerBlock(2L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(travelEnabled = true))
+        )
+        whenever(accessPolicy.resolveAllIgnoringOwnerBlock(3L, listOf(schedule))).thenReturn(
+            mapOf(10L to decision(canView = false, travelEnabled = false))
+        )
+        whenever(
+            travelPlanRepository.findAllByScheduleIdInAndMemberIdInAndDeletedFalse(
+                listOf(10L),
+                listOf(2L, 3L),
+            )
+        ).thenReturn(listOf(blockedPlan, revokedPlan))
+
+        service(departureAlarmService = departureAlarmSyncService).cancelRevokedForSchedule(
+            scheduleId = 10L,
+            memberIds = listOf(2L, 3L),
+            preserveTravelPlanMemberIds = listOf(2L, 3L),
+        )
+
+        assertFalse(blockedPlan.deleted)
+        assertTrue(revokedPlan.deleted)
+        verify(departureAlarmSyncService).cancel(2L, 10L)
+        verify(departureAlarmSyncService).cancel(3L, 10L)
     }
 
     @Test
@@ -419,6 +514,7 @@ class ScheduleTravelAccessCleanupServiceTest {
 
     private fun service(
         lifecyclePublisher: LiveActivityLifecyclePublisher? = null,
+        departureAlarmService: DepartureAlarmSyncService? = null,
     ) = ScheduleTravelAccessCleanupService(
         scheduleRepository = scheduleRepository,
         pushJobRepository = pushJobRepository,
@@ -430,6 +526,7 @@ class ScheduleTravelAccessCleanupServiceTest {
         accessPolicy = accessPolicy,
         calendarRepository = calendarRepository,
         calendarMemberRepository = calendarMemberRepository,
+        departureAlarmSyncService = departureAlarmService,
         liveActivityLifecyclePublisher = lifecyclePublisher,
     )
 

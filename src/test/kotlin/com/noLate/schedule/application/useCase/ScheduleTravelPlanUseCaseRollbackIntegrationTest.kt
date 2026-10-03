@@ -132,7 +132,6 @@ class ScheduleTravelPlanUseCaseRollbackIntegrationTest @Autowired constructor(
                 startAt = Instant.parse("2026-08-05T01:00:00Z"),
                 endAt = Instant.parse("2026-08-05T02:00:00Z"),
             ).apply {
-                updateCategorySnapshot("1", "개인", "#2979FF")
                 updateRoute(
                     travelMinutes = null,
                     departAt = null,
@@ -181,11 +180,6 @@ class ScheduleTravelPlanUseCaseRollbackIntegrationTest @Autowired constructor(
     private fun freePolicy() = SubscriptionPolicyDto(
         plan = SubscriptionPlan.FREE,
         adsEnabled = false,
-        maxSmartSchedulesPerMonth = SubscriptionPlan.FREE.maxSmartSchedulesPerMonth,
-        usedSmartSchedulesThisMonth = 0,
-        maxNotificationLeadMinutes = SubscriptionPlan.FREE.maxNotificationLeadMinutes,
-        minNotificationIntervalMinutes = SubscriptionPlan.FREE.minNotificationIntervalMinutes,
-        minEtaRefreshIntervalMinutes = SubscriptionPlan.FREE.minEtaRefreshIntervalMinutes,
     )
 
     private fun scheduleDto(fixture: RollbackFixture) = ScheduleDto(
@@ -194,7 +188,7 @@ class ScheduleTravelPlanUseCaseRollbackIntegrationTest @Autowired constructor(
         title = "강남역 이름만 저장된 일정",
         startAt = "2026-08-05T01:00:00Z",
         endAt = "2026-08-05T02:00:00Z",
-        category = ScheduleCategoryDto(id = "1", title = "개인", color = "#2979FF"),
+        category = ScheduleCategoryDto(),
     )
 
     private fun assertDestinationSupplementAndPlanWereRolledBack(fixture: RollbackFixture) {

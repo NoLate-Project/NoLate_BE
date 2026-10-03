@@ -1,5 +1,7 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicy
+
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
@@ -28,11 +30,20 @@ import java.time.temporal.ChronoUnit
 
 data class ScheduleEditMemberFence(
     val lockedMemberIds: Set<Long>,
+    val activeLockedMemberIds: Set<Long> = lockedMemberIds,
 ) {
     fun requireContains(memberIds: Collection<Long>) {
         if (memberIds.any { it !in lockedMemberIds }) {
             throw ConcurrencyFailureException(
                 "Schedule notification participants changed while the edit fence was being acquired.",
+            )
+        }
+    }
+
+    fun requireActive(memberIds: Collection<Long>) {
+        if (memberIds.any { it !in activeLockedMemberIds }) {
+            throw ConcurrencyFailureException(
+                "A required schedule assignment owner disappeared while the edit fence was being acquired.",
             )
         }
     }
@@ -133,7 +144,14 @@ class SchedulePushJobService private constructor(
             presentedSessionGeneration,
         )
         schedulePushJobRepository.findAllByScheduleIdOrderByIdAsc(scheduleId)
-        val fence = ScheduleEditMemberFence(memberIds.toSet())
+        val fence = ScheduleEditMemberFence(
+            lockedMemberIds = memberIds.toSet(),
+            activeLockedMemberIds = lockedMembers
+                .asSequence()
+                .filterNot { it.deleted }
+                .mapNotNull { it.id }
+                .toSet(),
+        )
         fence.requireContains(schedulePushJobRepository.findMemberIdsByScheduleId(scheduleId))
         return fence
     }
@@ -196,7 +214,7 @@ class SchedulePushJobService private constructor(
         val departureAt = route.departAt ?: schedule.startAt.minusSeconds(travelMinutes.toLong() * 60)
         val leadMinutes = route.notificationLeadMinutes ?: 60
         val monitorStartAt = departureAt.minusSeconds(leadMinutes.toLong() * 60)
-        val intervalMinutes = route.notificationIntervalMinutes ?: 20
+        val intervalMinutes = EtaRefreshCadencePolicy.INTERVAL_MINUTES
 
         return register(
             memberId = memberId,
@@ -242,7 +260,7 @@ class SchedulePushJobService private constructor(
         val departureAt = plan.departAt?.let(::parseInstant)
             ?: scheduleAt.minusSeconds(travelMinutes.toLong() * 60)
         val leadMinutes = plan.notificationLeadMinutes ?: 60
-        val intervalMinutes = plan.notificationIntervalMinutes ?: 20
+        val intervalMinutes = EtaRefreshCadencePolicy.INTERVAL_MINUTES
         return register(
             memberId = memberId,
             scheduleId = scheduleId,

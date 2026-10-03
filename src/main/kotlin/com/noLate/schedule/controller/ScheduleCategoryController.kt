@@ -81,7 +81,7 @@ class ScheduleCategoryController(
         return ApiResponse.success(result)
     }
 
-    @Operation(summary = "개인 카테고리 공유 캘린더 이동 미리보기")
+    @Operation(summary = "카테고리 캘린더 이동 미리보기")
     @GetMapping("/{categoryId}/move-preview")
     fun previewCategoryMove(
         @AuthenticationPrincipal principal: MemberPrincipal?,
@@ -99,7 +99,7 @@ class ScheduleCategoryController(
         )
     }
 
-    @Operation(summary = "개인 카테고리를 공유 캘린더로 이동")
+    @Operation(summary = "카테고리를 다른 캘린더로 이동")
     @PostMapping("/{categoryId}/move")
     fun moveCategory(
         @AuthenticationPrincipal principal: MemberPrincipal?,

@@ -15,11 +15,11 @@ import org.springframework.web.bind.annotation.RestController
 
 @RestController
 @RequestMapping("/api/subscriptions")
-@Tag(name = "Subscription", description = "회원 요금제와 사용 제한 API")
+@Tag(name = "Subscription", description = "회원 광고 구독 정책 API")
 class SubscriptionController(
     private val subscriptionPolicyService: SubscriptionPolicyService,
 ) {
-    @Operation(summary = "내 요금제 정책과 이번 달 사용량 조회")
+    @Operation(summary = "내 광고 구독 정책 조회")
     @GetMapping("/me")
     fun getMyPolicy(
         @AuthenticationPrincipal principal: MemberPrincipal?,

@@ -36,7 +36,7 @@ import java.time.Instant
  * 대중교통 ETA 계산의 단일 진입점.
  *
  * 저장된 경로의 providerId와 일치하는 TransitJourneyProvider를 선택해 전체 여정을 다시 조회한다.
- * 재조회한 시간표에 첫 승차 실시간 도착정보를 결합하고, 선택 경로가 안전하지 않을 때만
+ * 재조회한 여정의 시간 근거와 첫 승차 실시간 도착정보를 확인하고, 선택 경로가 안전하지 않을 때만
  * 동일 공급자 응답 안의 검증된 대체 여정을 평가한다.
  *
  * 공급자별 HTTP·JSON 차이는 adapter에서 끝내고, 이 서비스는 공통 TransitJourney만 사용한다.
@@ -87,7 +87,7 @@ class TransitEtaCalculationService(
                 return transferDiagnosticResult(
                     projected = it,
                     request = request,
-                    reason = TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN,
+                    reason = it.projection.transfer.diagnosticFailureReason(),
                 )
             }
             resolution?.bestMissedTransfer?.let {
@@ -330,11 +330,7 @@ class TransitEtaCalculationService(
             return transferDiagnosticResult(
                 projected = projected,
                 request = request,
-                reason = if (transfer.status == TransitTransferStatus.UNKNOWN) {
-                    TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN
-                } else {
-                    TrafficFailureReasons.TRANSIT_TRANSFER_MISSED
-                },
+                reason = transfer.diagnosticFailureReason(),
             )
         }
         val travelMinutes = transfer.travelMinutes
@@ -399,22 +395,17 @@ class TransitEtaCalculationService(
             resolution.failureReason
                 ?: TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE
         )
-        if (request.targetArrivalAt?.let(overlay.predictedArrivalAt::isAfter) == true) {
-            return onTimeUnavailableResult(
-                predictedArrivalAt = overlay.predictedArrivalAt,
-                fetchedAt = overlay.observedAt,
-                source = TrafficSource.LIVE_PROVIDER,
-                request = request,
-            )
-        }
 
-        return TrafficResult(
-            travelMinutes = overlay.travelMinutes,
-            source = TrafficSource.LIVE_PROVIDER,
-            fetchedAt = overlay.observedAt,
-            stale = false,
-            recommendedDepartureAt = departureAt,
-            predictedArrivalAt = overlay.predictedArrivalAt,
+        // 구형 저장 경로는 전체 구간의 실제 시간표를 확인할 수 없다.
+        // 첫 차량 대기만 보정한 값으로 최종 도착이나 지각 여부를 확정하지 않는다.
+        return request.fallbackResult(
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+        ).copy(
+            // 첫 차량은 실시간이지만 나머지 이동시간은 추정값임을 기록한다.
+            transitTimingBasis =
+                TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
+
+            // 확인된 첫 차량 대기시간은 진단용으로 보존한다.
             firstBoardingWaitMinutes = overlay.firstBoardingWaitMinutes,
         )
     }
@@ -499,9 +490,8 @@ class TransitEtaCalculationService(
         reason: String,
     ): TrafficResult {
         return request.fallbackResult(reason).copy(
-            // MISSED는 실제로 다음 차량을 타지 못한 경로이고 UNKNOWN은 다음 차량의
-            // 시간표 자체가 없다. 둘 다 원래 시간표 도착시각을 사용자 도착 예측으로
-            // 노출하면 worker가 거짓 정시 가능 판정을 만들 수 있으므로 진단 계산에만 쓴다.
+            // MISSED는 승차 불가가 확인된 경로, UNKNOWN은 시각 근거 또는 여유가 부족한 경로다.
+            // 추정 도착시각은 정시 도착·알람 재예약에 사용하지 않고 진단 스냅샷에만 남긴다.
             predictedArrivalAt = null,
             transitRouteProvenance = projected.projection.routeProvenance,
             transitTimingBasis = projected.projection.transfer.timingBasis.toTrafficTimingBasis(),
@@ -679,11 +669,23 @@ class TransitEtaCalculationService(
         }
     }
 
+    private fun TransitTransferEvaluation.diagnosticFailureReason(): String = when {
+        // 실제 승차 실패가 확인된 경우는 추정값 포함 여부보다 우선한다.
+        status == TransitTransferStatus.MISSED -> TrafficFailureReasons.TRANSIT_TRANSFER_MISSED
+        timingBasis == TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE ||
+            timingBasis == TransitJourneyTimingBasis.ROUTE_ESTIMATE_ONLY ->
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY
+        else -> TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN
+    }
+
     private fun TransitJourneyTimingBasis.toTrafficTimingBasis(): TransitTimingBasis = when (this) {
         TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE ->
             TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE
         TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN ->
             TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN
+        TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE ->
+            TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE
+        TransitJourneyTimingBasis.ROUTE_ESTIMATE_ONLY -> TransitTimingBasis.ROUTE_ESTIMATE_ONLY
         TransitJourneyTimingBasis.TIMETABLE_ONLY -> TransitTimingBasis.TIMETABLE_ONLY
         TransitJourneyTimingBasis.TIMETABLE_TRANSFER_UNKNOWN ->
             TransitTimingBasis.TIMETABLE_TRANSFER_UNKNOWN

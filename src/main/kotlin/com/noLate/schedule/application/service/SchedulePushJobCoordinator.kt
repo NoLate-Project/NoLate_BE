@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicy
 import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.schedule.domain.ScheduleEtaEvaluationHistory
 import com.noLate.schedule.domain.SchedulePushJob
@@ -104,6 +105,25 @@ class SchedulePushJobCoordinator private constructor(
         dueJob.startProcessing(workerId, now)
         repository.flush()
         return detachClaimedJob(dueJob)
+    }
+
+    /** Bounded, repeatable rollout of existing jobs using the same member -> job lock order. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun alignLegacyEtaCadences(now: Instant, batchSize: Int): Int {
+        val candidates = repository.findCadenceCandidates(
+            SchedulePushJobStatus.ACTIVE,
+            EtaRefreshCadencePolicy.INTERVAL_MINUTES,
+            PageRequest.of(0, batchSize.coerceIn(1, 200)),
+        )
+        for (candidate in candidates) {
+            // Lock even deleted members so historical rows cannot starve later candidates.
+            memberRepository?.findByIdForUpdate(candidate.memberId)
+            val job = repository.findByIdForUpdate(candidate.id) ?: continue
+            if (job.memberId != candidate.memberId) continue
+            job.alignEtaCadence(EtaRefreshCadencePolicy.INTERVAL_MINUTES, now)
+        }
+        repository.flush()
+        return candidates.size
     }
 
     /**

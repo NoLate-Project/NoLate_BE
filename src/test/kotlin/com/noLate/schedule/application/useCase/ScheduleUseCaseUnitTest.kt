@@ -34,7 +34,9 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.Mock
+import org.mockito.Mockito.lenient
 import org.mockito.junit.jupiter.MockitoExtension
+import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.never
@@ -99,6 +101,13 @@ class ScheduleUseCaseUnitTest {
             scheduleTravelAccessCleanupService = scheduleTravelAccessCleanupService,
             scheduleTrustTelemetryCleanupService = scheduleTrustTelemetryCleanupService,
         )
+        // Nullable scalar methods on a Java mock otherwise return primitive 0 through Kotlin's
+        // bridge.  A missing assignment means no extra owner, while collection preflights have an
+        // empty audience unless a test explicitly supplies one.
+        lenient().`when`(scheduleService.assignmentOwnerMemberId(any())).thenReturn(null)
+        lenient().`when`(scheduleService.accessAudienceMemberIds(any())).thenReturn(emptySet())
+        lenient().`when`(scheduleService.assignmentAudienceMemberIds(any())).thenReturn(emptySet())
+        lenient().`when`(scheduleTravelPlanService.findAllTravelPlanMemberIds(any())).thenReturn(emptySet())
     }
 
     @Test
@@ -439,7 +448,7 @@ class ScheduleUseCaseUnitTest {
             sessionGeneration,
         )
         verify(scheduleTravelAccessCleanupService)
-            .cancelRevokedForSchedule(scheduleId, setOf(calendarMemberId))
+            .cancelRevokedForSchedule(scheduleId, lockedIds)
     }
 
     @Test
@@ -468,7 +477,7 @@ class ScheduleUseCaseUnitTest {
     }
 
     @Test
-    fun `공유 편집자의 개인화 응답이 아닌 canonical alarm mode로 오너 경로와 push job을 갱신한다`() {
+    fun `공유 편집자는 자신의 개인 경로와 push job만 갱신한다`() {
         val ownerMemberId = 1L
         val editorMemberId = 2L
         val scheduleId = 10L
@@ -509,9 +518,9 @@ class ScheduleUseCaseUnitTest {
             verify(scheduleService).updateSchedule(editorMemberId, scheduleId, request)
             verify(scheduleService).getScheduleDetail(editorMemberId, scheduleId)
         }
-        verify(scheduleTravelPlanService).syncOwnerTravelPlan(ownerMemberId, canonical)
-        verify(schedulePushJobService).registerFromScheduleDto(ownerMemberId, canonical)
-        verify(schedulePushJobService, never()).cancelByScheduleIdAndMemberId(scheduleId, editorMemberId)
+        verify(scheduleTravelPlanService).syncOwnerTravelPlan(editorMemberId, canonical)
+        verify(schedulePushJobService).registerFromScheduleDto(editorMemberId, canonical)
+        verify(schedulePushJobService, never()).registerFromScheduleDto(ownerMemberId, canonical)
         assertEquals(ScheduleAlertMode.STANDARD, result.alertMode)
     }
 
@@ -702,6 +711,7 @@ class ScheduleUseCaseUnitTest {
         )
             .thenReturn(ScheduleDepartureStatus(scheduleId = scheduleId, memberId = sharedMemberId, departedAt = Instant.parse("2026-06-01T00:00:00Z")))
         whenever(scheduleDepartureStatusService.attachDepartureParticipants(sharedMemberId, detail)).thenReturn(decorated)
+        whenever(scheduleService.markDeparted(sharedMemberId, scheduleId)).thenReturn(detail)
 
         val result = scheduleUseCase.markDeparted(
             sharedMemberId,
@@ -719,7 +729,9 @@ class ScheduleUseCaseUnitTest {
             scheduleId,
             departureMemberFence,
         )
-        verify(scheduleService, never()).markDeparted(sharedMemberId, scheduleId)
+        // The central service performs the authoritative access check for every actor. For a
+        // non-author participant this call intentionally leaves the canonical author route intact.
+        verify(scheduleService).markDeparted(sharedMemberId, scheduleId)
         verify(schedulePushJobService).cancelByScheduleIdAndMemberId(
             scheduleId,
             sharedMemberId,

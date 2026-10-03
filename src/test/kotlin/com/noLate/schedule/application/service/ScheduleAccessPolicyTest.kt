@@ -5,6 +5,7 @@ import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCalendarMember
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCategoryShare
+import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleSharePermission
@@ -13,6 +14,7 @@ import com.noLate.schedule.domain.ScheduleType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.sharing.application.SharingBlockPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -25,12 +27,14 @@ import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.mock.env.MockEnvironment
+import java.util.Optional
 
 class ScheduleAccessPolicyTest {
     private val directShares = mock<ScheduleShareRepository>()
     private val categoryShares = mock<ScheduleCategoryShareRepository>()
     private val calendars = mock<ScheduleCalendarRepository>()
     private val calendarMembers = mock<ScheduleCalendarMemberRepository>()
+    private val categories = mock<ScheduleCategoryRepository>()
     private lateinit var policy: ScheduleAccessPolicy
 
     @BeforeEach
@@ -40,6 +44,7 @@ class ScheduleAccessPolicyTest {
             categoryShares,
             calendars,
             calendarMembers,
+            categoryRepository = categories,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
             ),
@@ -118,6 +123,9 @@ class ScheduleAccessPolicyTest {
                 permission = ScheduleSharePermission.EDITOR,
             )
         )
+        whenever(categories.findById(20L)).thenReturn(
+            Optional.of(ScheduleCategory(id = 20L, memberId = 1L, title = "업무")),
+        )
 
         val access = policy.resolve(memberId = 2L, schedule = schedule)
 
@@ -191,6 +199,9 @@ class ScheduleAccessPolicyTest {
     @Test
     fun `owner always keeps route management regardless of share rows`() {
         val schedule = routeSchedule(ownerId = 1L, calendarId = 30L)
+        whenever(calendars.findByIdAndStatusAndDeletedFalse(30L)).thenReturn(
+            ScheduleCalendar(id = 30L, ownerMemberId = 1L, title = "가족")
+        )
 
         val access = policy.resolve(memberId = 1L, schedule = schedule)
 
@@ -213,6 +224,9 @@ class ScheduleAccessPolicyTest {
             ),
         )
         val schedule = routeSchedule(ownerId = 1L, calendarId = 30L)
+        whenever(calendars.findByIdAndStatusAndDeletedFalse(30L)).thenReturn(
+            ScheduleCalendar(id = 30L, ownerMemberId = 1L, title = "가족")
+        )
 
         val ownerAccess = disabledPolicy.resolve(memberId = 1L, schedule = schedule)
         val retainedRecipientAccess = disabledPolicy.resolve(memberId = 2L, schedule = schedule)

@@ -1,7 +1,10 @@
 package com.noLate.schedule.application.cache
 
+import com.noLate.schedule.domain.ScheduleCalendar
 import com.noLate.schedule.domain.ScheduleCalendarMember
 import com.noLate.schedule.domain.ScheduleCalendarRole
+import com.noLate.schedule.domain.ScheduleCalendarStatus
+import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleDto
@@ -11,7 +14,9 @@ import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleType
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -20,6 +25,7 @@ import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import java.util.Optional
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleCalendarCacheAudienceResolverTest {
@@ -32,12 +38,20 @@ class ScheduleCalendarCacheAudienceResolverTest {
     @Mock
     lateinit var calendarMemberRepository: ScheduleCalendarMemberRepository
 
+    @Mock
+    lateinit var categoryRepository: ScheduleCategoryRepository
+
+    @Mock
+    lateinit var calendarRepository: ScheduleCalendarRepository
+
     @Test
     fun `ScheduleDto는 이동 기능이 비활성이어도 일정 가시성 전체 audience를 합친다`() {
         val resolver = ScheduleCalendarCacheAudienceResolver(
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             calendarMemberRepository = calendarMemberRepository,
+            categoryRepository = categoryRepository,
+            calendarRepository = calendarRepository,
         )
         val schedule = ScheduleDto(
             id = 303L,
@@ -108,6 +122,28 @@ class ScheduleCalendarCacheAudienceResolverTest {
                     memberId = 105L,
                     role = ScheduleCalendarRole.EDITOR,
                 ),
+            )
+        )
+        whenever(categoryRepository.findById(202L)).thenReturn(
+            Optional.of(
+                ScheduleCategory(
+                    id = 202L,
+                    memberId = 101L,
+                    calendarId = 404L,
+                    title = "공유 카테고리",
+                )
+            )
+        )
+        whenever(
+            calendarRepository.findByIdAndStatusAndDeletedFalse(
+                404L,
+                ScheduleCalendarStatus.ACTIVE,
+            )
+        ).thenReturn(
+            ScheduleCalendar(
+                id = 404L,
+                ownerMemberId = 101L,
+                title = "공유 캘린더",
             )
         )
 

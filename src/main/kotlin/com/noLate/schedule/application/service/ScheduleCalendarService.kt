@@ -21,6 +21,9 @@ import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.sharing.application.SharingBlockPolicy
 import com.noLate.sharing.application.SharingMutationRateLimiter
 import com.noLate.sharing.application.SharingMutationScope
@@ -42,6 +45,9 @@ class ScheduleCalendarService(
     private val sharingBlockPolicy: SharingBlockPolicy? = null,
     private val sharingMutationRateLimiter: SharingMutationRateLimiter? = null,
     private val categoryRepository: ScheduleCategoryRepository? = null,
+    private val categoryShareRepository: ScheduleCategoryShareRepository? = null,
+    private val scheduleRepository: ScheduleRepository? = null,
+    private val scheduleShareRepository: ScheduleShareRepository? = null,
 ) {
 
     @Transactional
@@ -387,14 +393,66 @@ class ScheduleCalendarService(
         presentedSessionGeneration: Long,
     ): ScheduleCalendarDto {
         sharingAvailabilityPolicy.requireEnabled()
-        lockCalendarMembers(
-            memberIds = listOf(ownerMemberId, targetMemberId),
+        val scheduleIds = scheduleRepository
+            ?.findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId)
+            ?.mapNotNull { it.id }
+            .orEmpty()
+        val categoryIds = categoryRepository
+            ?.findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId)
+            ?.mapNotNull { it.id }
+            .orEmpty()
+        val previewCalendarMemberIds = calendarMemberRepository
+            .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+            .map { it.memberId }
+        val previewCategoryRecipients = categoryShareRepository
+            ?.findAllByCategoryIdInAndStatusAndDeletedFalseOrderByCategoryIdAscIdAsc(
+                categoryIds,
+                com.noLate.schedule.domain.ScheduleShareStatus.ACTIVE,
+            )
+            ?.map { it.targetMemberId }
+            .orEmpty()
+        val previewScheduleRecipients = scheduleShareRepository
+            ?.findAllByScheduleIdInAndStatusAndDeletedFalseOrderByScheduleIdAscIdAsc(
+                scheduleIds,
+                com.noLate.schedule.domain.ScheduleShareStatus.ACTIVE,
+            )
+            ?.map { it.targetMemberId }
+            .orEmpty()
+        val lockedMembers = lockCalendarMembers(
+            memberIds = listOf(ownerMemberId, targetMemberId) + previewCalendarMemberIds +
+                previewCategoryRecipients + previewScheduleRecipients,
             actorMemberId = ownerMemberId,
             presentedSessionGeneration = presentedSessionGeneration,
         ).takeIf { targetMemberId in it }
             ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
+        if (scheduleIds.isNotEmpty()) {
+            scheduleRepository?.findAllActiveByIdsForUpdate(scheduleIds)
+        }
         val calendar = lockOwnedCalendar(calendarId, ownerMemberId)
-        val pendingInvitations = lockPendingCalendarInvitations(calendarId)
+        if (categoryIds.isNotEmpty()) {
+            categoryRepository?.findAllActiveByCalendarIdForUpdate(calendarId)
+        }
+        val calendarInvitations = invitationRepository
+            ?.findAllByResourceForUpdate(ScheduleShareResourceType.CALENDAR, calendarId)
+            .orEmpty()
+        val ownedResourceInvitations = buildList {
+            categoryIds.sorted().forEach { categoryId ->
+                addAll(
+                    invitationRepository?.findAllByResourceForUpdate(
+                        ScheduleShareResourceType.CATEGORY,
+                        categoryId,
+                    ).orEmpty()
+                )
+            }
+            scheduleIds.sorted().forEach { scheduleId ->
+                addAll(
+                    invitationRepository?.findAllByResourceForUpdate(
+                        ScheduleShareResourceType.SCHEDULE,
+                        scheduleId,
+                    ).orEmpty()
+                )
+            }
+        }
         if (targetMemberId == ownerMemberId) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "현재 소유자에게 소유권을 이전할 수 없습니다.")
         }
@@ -415,11 +473,53 @@ class ScheduleCalendarService(
         calendar.transferOwnership(targetMemberId)
         calendarMemberRepository.saveAll(listOf(currentOwner, nextOwner))
         calendarMemberRepository.flush()
+        val categoryShares = categoryShareRepository
+            ?.findAllByCategoryIdInAndDeletedFalseOrderByCategoryIdAscIdAsc(categoryIds)
+            .orEmpty()
+        val scheduleShares = scheduleShareRepository
+            ?.findAllByScheduleIdInAndDeletedFalseOrderByScheduleIdAscIdAsc(scheduleIds)
+            .orEmpty()
+        val currentAudienceMemberIds = (
+            calendarMemberRepository
+                .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+                .map { it.memberId } +
+                categoryShares.filter { it.status == com.noLate.schedule.domain.ScheduleShareStatus.ACTIVE }
+                    .map { it.targetMemberId } +
+                scheduleShares.filter { it.status == com.noLate.schedule.domain.ScheduleShareStatus.ACTIVE }
+                    .map { it.targetMemberId }
+            ).toSet()
+        if (currentAudienceMemberIds.any { it !in lockedMembers }) {
+            throw org.springframework.dao.ConcurrencyFailureException(
+                "Calendar audience changed while acquiring the ownership-transfer fence.",
+            )
+        }
+        categoryShares.forEach { it.ownerMemberId = targetMemberId }
+        categoryShareRepository?.saveAllAndFlush(categoryShares)
+        scheduleShares.forEach { it.ownerMemberId = targetMemberId }
+        scheduleShareRepository?.saveAllAndFlush(scheduleShares)
         calendarRepository.saveAndFlush(calendar)
-        revokePendingCalendarInvitations(pendingInvitations)
+        (calendarInvitations + ownedResourceInvitations).forEach { invitation ->
+            if (invitation.status == ScheduleShareInvitationStatus.PENDING) {
+                invitation.revoke()
+            } else if (invitation.status == ScheduleShareInvitationStatus.ACCEPTED) {
+                // Accepted-token retries remain idempotent after ownership transfer. The active
+                // grant owner is reassigned above, so the invitation authority must follow it.
+                invitation.ownerMemberId = targetMemberId
+            }
+        }
+        invitationRepository?.saveAllAndFlush(calendarInvitations + ownedResourceInvitations)
         publishCalendarCacheInvalidation(
-            listOf(ownerMemberId, targetMemberId),
+            currentAudienceMemberIds + ownerMemberId + targetMemberId,
             "calendar-ownership-transferred",
+        )
+        val cleanupMemberIds = currentAudienceMemberIds + ownerMemberId + targetMemberId
+        val blockedByNewOwner = sharingBlockPolicy
+            ?.blockedCounterpartIds(targetMemberId, cleanupMemberIds)
+            .orEmpty()
+        travelAccessCleanupService?.cancelRevokedForCalendar(
+            calendarId = calendarId,
+            memberIds = cleanupMemberIds,
+            preserveTravelPlanMemberIds = blockedByNewOwner,
         )
 
         return calendar.toDto(

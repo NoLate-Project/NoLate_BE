@@ -14,6 +14,7 @@ import com.noLate.schedule.domain.DepartureAlarmSyncOperation
 import com.noLate.schedule.domain.DepartureAlarmSyncState
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
+import com.noLate.schedule.infrastructure.ScheduleRepository
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.core.Ordered
@@ -107,6 +108,8 @@ data class DepartureAlarmSyncStateChangedEvent(
 class DepartureAlarmSyncService(
     private val repository: DepartureAlarmSyncStateRepository,
     private val memberRepository: MemberRepository,
+    private val scheduleRepository: ScheduleRepository,
+    private val scheduleAccessPolicy: ScheduleAccessPolicy,
     private val eventPublisher: ApplicationEventPublisher,
     private val clock: Clock,
     @Value("\${schedule.push.departure-snooze-minutes:5}")
@@ -299,9 +302,36 @@ class DepartureAlarmSyncService(
         }
     }
 
-    @Transactional(readOnly = true)
-    fun snapshot(memberId: Long): List<DepartureAlarmSyncCommand> =
-        repository.findAllByMemberIdOrderByScheduleIdAsc(memberId).map(::toCommand)
+    @Transactional
+    fun snapshot(memberId: Long): List<DepartureAlarmSyncCommand> {
+        if (!lockActiveMember(memberId)) return emptyList()
+        return repository.findAllByMemberIdOrderByScheduleIdAsc(memberId).mapNotNull { preview ->
+            if (preview.operation == DepartureAlarmSyncOperation.CANCEL) {
+                return@mapNotNull toCommand(preview)
+            }
+            val schedule = scheduleRepository.findById(preview.scheduleId)
+                .orElse(null)
+                ?.takeUnless { it.deleted }
+            val stillAuthorized = schedule != null &&
+                scheduleAccessPolicy.resolve(memberId, schedule).travelEnabled
+            if (stillAuthorized) {
+                return@mapNotNull toCommand(preview)
+            }
+
+            // Snapshot is also the recovery boundary for commands queued before a grant revoke or
+            // sharing feature toggle. Persist a newer CANCEL generation instead of merely hiding
+            // the UPSERT; otherwise a fresh installation could keep/recreate the old OS alarm.
+            val locked = repository.findByMemberIdAndScheduleIdForUpdate(
+                preview.memberId,
+                preview.scheduleId,
+            ) ?: return@mapNotNull null
+            if (locked.operation == DepartureAlarmSyncOperation.CANCEL) {
+                toCommand(locked)
+            } else {
+                transition(locked) { it.cancel() } ?: toCommand(locked)
+            }
+        }
+    }
 
     @Transactional(readOnly = true)
     fun findMemberIdsForSchedule(scheduleId: Long): List<Long> =

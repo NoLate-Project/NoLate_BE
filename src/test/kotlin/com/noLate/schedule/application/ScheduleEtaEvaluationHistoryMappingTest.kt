@@ -105,6 +105,26 @@ class ScheduleEtaEvaluationHistoryMappingTest {
     }
 
     @Test
+    fun `경로 추정값 사유는 원문을 제거하고 이력에 별도 코드로 보존한다`() {
+        val result = TrafficResult(
+            travelMinutes = 40,
+            source = TrafficSource.SELECTED_ROUTE,
+            stale = true,
+            failureReason = "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY: token=test-secret",
+            transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
+            firstBoardingWaitMinutes = 5,
+        )
+
+        val history = map(result)
+
+        assertEquals(TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY, history.failureReason)
+        assertEquals(TrafficSource.SELECTED_ROUTE, history.source)
+        assertTrue(history.stale)
+        assertNull(history.recommendedDepartureAt)
+        assertNull(history.predictedArrivalAt)
+    }
+
+    @Test
     fun `요청에 목표 도착시각이 없으면 예외가 발생한다`() {
         // copy는 기존 요청의 나머지 값을 유지하면서 지정한 값만 바꾼다.
         val requestWithoutTarget = baseRequest.copy(targetArrivalAt = null)

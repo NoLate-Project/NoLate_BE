@@ -167,13 +167,20 @@ class OdsayTransitJourneyMapper {
             ?: if (node.hasNonNull("waitingTime")) return null else null
         val lane = node.path("lane").arrayLike().firstOrNull()
 
+        // maasRP 시각은 실제 운행 시간표가 아니라 SearchTime과
+        // 구간별 이동시간으로 만들어진 경로 표시용 예상시각이다.
+        val providerDepartureAt =
+            parseOdsayDateTime(node.text("startDateTime"))
+        val providerArrivalAt =
+            parseOdsayDateTime(node.text("endDateTime"))
+
         return TransitJourneyLeg(
             sequence = index,
             mode = mode,
             durationMinutes = durationMinutes,
             waitingMinutes = waitingMinutes,
-            scheduledDepartureAt = parseOdsayDateTime(node.text("startDateTime")),
-            scheduledArrivalAt = parseOdsayDateTime(node.text("endDateTime")),
+            scheduledDepartureAt = providerDepartureAt,
+            scheduledArrivalAt = providerArrivalAt,
             from = stop(node, "start"),
             to = stop(node, "end"),
             line = when (mode) {
@@ -204,14 +211,13 @@ class OdsayTransitJourneyMapper {
                 else -> null
             },
             timingBasis = if (
-                parseOdsayDateTime(node.text("startDateTime")) != null &&
-                parseOdsayDateTime(node.text("endDateTime")) != null
+                providerDepartureAt != null &&
+                providerArrivalAt != null
             ) {
-                TransitLegTimingBasis.TIMETABLE
+                TransitLegTimingBasis.ROUTE_ESTIMATE
             } else {
                 TransitLegTimingBasis.UNKNOWN
-            },
-        )
+            },)
     }
 
     private fun stop(node: JsonNode, prefix: String): TransitStop? {

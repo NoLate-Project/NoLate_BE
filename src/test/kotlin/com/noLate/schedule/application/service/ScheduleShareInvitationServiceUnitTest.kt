@@ -5,6 +5,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleShareInvitation
@@ -36,6 +37,7 @@ import org.springframework.mock.env.MockEnvironment
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.Optional
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleShareInvitationServiceUnitTest {
@@ -87,7 +89,7 @@ class ScheduleShareInvitationServiceUnitTest {
 
     @Test
     fun `createScheduleInvitation returns raw token once and stores only token hash`() {
-        whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, 1L))
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L))
             .thenReturn(schedule(10L, 1L))
         whenever(invitationRepository.saveAndFlush(any<ScheduleShareInvitation>()))
             .thenAnswer { invocation ->
@@ -136,8 +138,10 @@ class ScheduleShareInvitationServiceUnitTest {
             .thenReturn(null)
         whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
-        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L))
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L))
             .thenReturn(schedule(10L, 1L))
+        whenever(scheduleRepository.findById(10L))
+            .thenReturn(Optional.of(schedule(10L, 1L)))
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L))
             .thenReturn(null)
         whenever(scheduleShareRepository.saveAndFlush(any<ScheduleShare>()))
@@ -182,14 +186,24 @@ class ScheduleShareInvitationServiceUnitTest {
             .thenReturn(null)
         whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
+        val category = ScheduleCategory(
+            id = 7L,
+            memberId = 1L,
+            title = "팀",
+        )
+        val scope = org.mockito.kotlin.mock<com.noLate.schedule.infrastructure.ScheduleCategoryScope>()
+        whenever(scope.getCalendarId()).thenReturn(null)
+        whenever(categoryRepository.findActiveScope(7L)).thenReturn(scope)
+        whenever(categoryRepository.findActiveForScheduleAssignment(7L)).thenReturn(category)
 
-        assertThrows<BusinessException> {
+        val error = assertThrows<BusinessException> {
             service.acceptInvitation(
                 currentMemberId = 2L,
                 token = "plain-token",
                 presentedSessionGeneration = 0L,
             )
         }
+        assertEquals(ErrorCode.INVALID_STATE, error.errorCode)
         assertEquals(ScheduleShareInvitationStatus.PENDING, invitation.status)
         assertEquals(ScheduleShareInvitationStatus.EXPIRED, invitation.effectiveStatus(clock.instant()))
         assertEquals(
@@ -219,6 +233,8 @@ class ScheduleShareInvitationServiceUnitTest {
             .thenReturn(null)
         whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", password = "Password1!", email = "target@example.com"))
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L))
+            .thenReturn(schedule(10L, 1L))
 
         val error = assertThrows<BusinessException> {
             service.acceptInvitation(
@@ -271,6 +287,10 @@ class ScheduleShareInvitationServiceUnitTest {
             )
         whenever(memberRepository.findByIdForUpdate(2L))
             .thenReturn(Member(id = 2L, name = "Target", email = "target@example.com"))
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L))
+            .thenReturn(schedule(10L, 1L))
+        whenever(scheduleRepository.findById(10L))
+            .thenReturn(Optional.of(schedule(10L, 1L)))
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L))
             .thenReturn(share)
 
@@ -306,7 +326,7 @@ class ScheduleShareInvitationServiceUnitTest {
         }
 
         assertEquals(ErrorCode.INVALID_TOKEN, error.errorCode)
-        verify(scheduleRepository, org.mockito.kotlin.never()).findOwnedActiveForShareUpdate(any(), any())
+        verify(scheduleRepository, org.mockito.kotlin.never()).findActiveForTravelPlanUpdate(any())
         verify(invitationRepository, org.mockito.kotlin.never()).saveAndFlush(any())
     }
 

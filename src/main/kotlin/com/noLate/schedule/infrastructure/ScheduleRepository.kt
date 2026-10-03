@@ -90,6 +90,24 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
     ): List<Long>
 
     @Query(
+        value = """
+        select distinct s.member_id
+        from schedules s
+        left join schedule_category_snapshots snapshot on snapshot.schedule_id = s.id
+        where s.deleted = false
+          and (
+            s.category_id = :categoryId
+            or snapshot.category_id = concat('', :categoryId)
+          )
+        order by s.member_id asc
+        """,
+        nativeQuery = true,
+    )
+    fun findActiveOwnerMemberIdsByCategoryIdIncludingSnapshotOrderByMemberIdAsc(
+        @Param("categoryId") categoryId: Long,
+    ): List<Long>
+
+    @Query(
         """
         select distinct s
         from Schedule s
@@ -123,7 +141,32 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         from schedules s
         where s.deleted = false
           and (
-            s.member_id = :memberId
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
             or exists (
               select 1
               from schedule_shares ss
@@ -177,7 +220,59 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         select s.*
         from schedules s
         where s.deleted = false
-          and s.member_id = :memberId
+          and (
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
+            or exists (
+              select 1
+              from schedule_calendars owned_calendar
+              where owned_calendar.owner_member_id = :memberId
+                and owned_calendar.status = 'ACTIVE'
+                and owned_calendar.deleted = false
+                and (
+                  owned_calendar.id = s.calendar_id
+                  or exists (
+                    select 1
+                    from schedule_categories calendar_category
+                    where calendar_category.id = s.category_id
+                      and calendar_category.calendar_id = owned_calendar.id
+                  )
+                  or (s.category_id is null and exists (
+                    select 1
+                    from schedule_category_snapshots calendar_snapshot
+                    join schedule_categories snapshot_category
+                      on calendar_snapshot.category_id = concat('', snapshot_category.id)
+                    where calendar_snapshot.schedule_id = s.id
+                      and snapshot_category.calendar_id = owned_calendar.id
+                      and snapshot_category.deleted = false
+                  ))
+                )
+            )
+          )
         order by s.start_at asc
         """,
         nativeQuery = true
@@ -191,7 +286,32 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         where s.id = :scheduleId
           and s.deleted = false
           and (
-            s.member_id = :memberId
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
             or exists (
               select 1
               from schedule_shares ss
@@ -250,7 +370,32 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
           and s.start_at <= :rangeEnd
           and s.end_at >= :rangeStart
           and (
-            s.member_id = :memberId
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
             or exists (
               select 1
               from schedule_shares ss
@@ -308,7 +453,59 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         select s.*
         from schedules s
         where s.deleted = false
-          and s.member_id = :memberId
+          and (
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
+            or exists (
+              select 1
+              from schedule_calendars owned_calendar
+              where owned_calendar.owner_member_id = :memberId
+                and owned_calendar.status = 'ACTIVE'
+                and owned_calendar.deleted = false
+                and (
+                  owned_calendar.id = s.calendar_id
+                  or exists (
+                    select 1
+                    from schedule_categories calendar_category
+                    where calendar_category.id = s.category_id
+                      and calendar_category.calendar_id = owned_calendar.id
+                  )
+                  or (s.category_id is null and exists (
+                    select 1
+                    from schedule_category_snapshots calendar_snapshot
+                    join schedule_categories snapshot_category
+                      on calendar_snapshot.category_id = concat('', snapshot_category.id)
+                    where calendar_snapshot.schedule_id = s.id
+                      and snapshot_category.calendar_id = owned_calendar.id
+                      and snapshot_category.deleted = false
+                  ))
+                )
+            )
+          )
           and s.start_at <= :rangeEnd
           and s.end_at >= :rangeStart
         order by s.start_at asc
@@ -328,7 +525,32 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         where s.deleted = false
           and s.end_at >= :fromAt
           and (
-            s.member_id = :memberId
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
             or exists (
               select 1
               from schedule_shares ss
@@ -386,7 +608,59 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         select s.*
         from schedules s
         where s.deleted = false
-          and s.member_id = :memberId
+          and (
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
+            or exists (
+              select 1
+              from schedule_calendars owned_calendar
+              where owned_calendar.owner_member_id = :memberId
+                and owned_calendar.status = 'ACTIVE'
+                and owned_calendar.deleted = false
+                and (
+                  owned_calendar.id = s.calendar_id
+                  or exists (
+                    select 1
+                    from schedule_categories calendar_category
+                    where calendar_category.id = s.category_id
+                      and calendar_category.calendar_id = owned_calendar.id
+                  )
+                  or (s.category_id is null and exists (
+                    select 1
+                    from schedule_category_snapshots calendar_snapshot
+                    join schedule_categories snapshot_category
+                      on calendar_snapshot.category_id = concat('', snapshot_category.id)
+                    where calendar_snapshot.schedule_id = s.id
+                      and snapshot_category.calendar_id = owned_calendar.id
+                      and snapshot_category.deleted = false
+                  ))
+                )
+            )
+          )
           and s.end_at >= :fromAt
         order by s.start_at asc
         """,
@@ -406,7 +680,32 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         left join schedule_category_snapshots sc on sc.schedule_id = s.id
         where s.deleted = false
           and (
-            s.member_id = :memberId
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
             or exists (
               select 1
               from schedule_shares ss
@@ -476,7 +775,59 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         left join schedule_routes sr on sr.schedule_id = s.id
         left join schedule_category_snapshots sc on sc.schedule_id = s.id
         where s.deleted = false
-          and s.member_id = :memberId
+          and (
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
+            or exists (
+              select 1
+              from schedule_calendars owned_calendar
+              where owned_calendar.owner_member_id = :memberId
+                and owned_calendar.status = 'ACTIVE'
+                and owned_calendar.deleted = false
+                and (
+                  owned_calendar.id = s.calendar_id
+                  or exists (
+                    select 1
+                    from schedule_categories calendar_category
+                    where calendar_category.id = s.category_id
+                      and calendar_category.calendar_id = owned_calendar.id
+                  )
+                  or (s.category_id is null and exists (
+                    select 1
+                    from schedule_category_snapshots calendar_snapshot
+                    join schedule_categories snapshot_category
+                      on calendar_snapshot.category_id = concat('', snapshot_category.id)
+                    where calendar_snapshot.schedule_id = s.id
+                      and snapshot_category.calendar_id = owned_calendar.id
+                      and snapshot_category.deleted = false
+                  ))
+                )
+            )
+          )
           and (:keyword is null
                or lower(s.title) like lower(concat('%', :keyword, '%'))
                or lower(coalesce(sr.location_name, '')) like lower(concat('%', :keyword, '%'))
@@ -507,7 +858,32 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
           and s.start_at <= :toAt
           and (sr.depart_at is not null or sr.travel_minutes is not null or sr.route_json is not null)
           and (
-            s.member_id = :memberId
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
             or exists (
               select 1
               from schedule_shares ss
@@ -566,7 +942,59 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         from schedules s
         join schedule_routes sr on sr.schedule_id = s.id
         where s.deleted = false
-          and s.member_id = :memberId
+          and (
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
+            or exists (
+              select 1
+              from schedule_calendars owned_calendar
+              where owned_calendar.owner_member_id = :memberId
+                and owned_calendar.status = 'ACTIVE'
+                and owned_calendar.deleted = false
+                and (
+                  owned_calendar.id = s.calendar_id
+                  or exists (
+                    select 1
+                    from schedule_categories calendar_category
+                    where calendar_category.id = s.category_id
+                      and calendar_category.calendar_id = owned_calendar.id
+                  )
+                  or (s.category_id is null and exists (
+                    select 1
+                    from schedule_category_snapshots calendar_snapshot
+                    join schedule_categories snapshot_category
+                      on calendar_snapshot.category_id = concat('', snapshot_category.id)
+                    where calendar_snapshot.schedule_id = s.id
+                      and snapshot_category.calendar_id = owned_calendar.id
+                      and snapshot_category.deleted = false
+                  ))
+                )
+            )
+          )
           and s.start_at >= :fromAt
           and s.start_at <= :toAt
           and (sr.depart_at is not null or sr.travel_minutes is not null or sr.route_json is not null)
@@ -626,13 +1054,66 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
     ): Long
 
     @Query(
-        """
-        select s
-        from Schedule s
+        value = """
+        select s.*
+        from schedules s
         where s.id = :scheduleId
-          and s.memberId = :memberId
           and s.deleted = false
-        """
+          and (
+            (s.member_id = :memberId
+              and s.calendar_id is null
+              and s.category_id is null
+              and not exists (
+                select 1
+                from schedule_category_snapshots author_snapshot
+                join schedule_categories author_category
+                  on author_snapshot.category_id = concat('', author_category.id)
+                where author_snapshot.schedule_id = s.id
+                  and author_category.deleted = false
+              ))
+            or exists (
+              select 1
+              from schedule_categories owned_category
+              where owned_category.member_id = :memberId
+                and owned_category.calendar_id is null
+                and (
+                  owned_category.id = s.category_id
+                  or (s.category_id is null and owned_category.deleted = false and exists (
+                    select 1
+                    from schedule_category_snapshots owner_snapshot
+                    where owner_snapshot.schedule_id = s.id
+                      and owner_snapshot.category_id = concat('', owned_category.id)
+                  ))
+                )
+            )
+            or exists (
+              select 1
+              from schedule_calendars owned_calendar
+              where owned_calendar.owner_member_id = :memberId
+                and owned_calendar.status = 'ACTIVE'
+                and owned_calendar.deleted = false
+                and (
+                  owned_calendar.id = s.calendar_id
+                  or exists (
+                    select 1
+                    from schedule_categories calendar_category
+                    where calendar_category.id = s.category_id
+                      and calendar_category.calendar_id = owned_calendar.id
+                  )
+                  or (s.category_id is null and exists (
+                    select 1
+                    from schedule_category_snapshots calendar_snapshot
+                    join schedule_categories snapshot_category
+                      on calendar_snapshot.category_id = concat('', snapshot_category.id)
+                    where calendar_snapshot.schedule_id = s.id
+                      and snapshot_category.calendar_id = owned_calendar.id
+                      and snapshot_category.deleted = false
+                  ))
+                )
+            )
+          )
+        """,
+        nativeQuery = true,
     )
     fun findOwnedScheduleDetail(
         @Param("scheduleId") scheduleId: Long,

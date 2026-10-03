@@ -5,6 +5,8 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.notification.support.ensureActivePushMember
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleNotificationInputFingerprint
+import com.noLate.schedule.domain.ScheduleCategory
+import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleShareContentMode
@@ -15,6 +17,8 @@ import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
 import com.noLate.schedule.domain.ScheduleTravelPlanStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
@@ -60,6 +64,8 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
     private val scheduleRepository: ScheduleRepository,
     private val travelPlanRepository: ScheduleTravelPlanRepository,
     private val scheduleShareRepository: ScheduleShareRepository,
+    private val categoryRepository: ScheduleCategoryRepository,
+    private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val pushJobRepository: SchedulePushJobRepository,
     private val jdbcTemplate: JdbcTemplate,
     private val backfill: SchedulePushJobBackfill,
@@ -211,6 +217,48 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
         assertEquals(0, afterMeaningfulEdit.checkCount)
     }
 
+    @Test
+    fun `revoked category editor author canonical job is not rebuilt`() {
+        val categoryOwnerId = 30L
+        val editorAuthorId = 31L
+        ensureActivePushMember(jdbcTemplate, categoryOwnerId)
+        ensureActivePushMember(jdbcTemplate, editorAuthorId)
+        val category = categoryRepository.saveAndFlush(
+            ScheduleCategory(
+                memberId = categoryOwnerId,
+                title = "소유자에게 남는 분류",
+                color = "#845EF7",
+            ),
+        )
+        categoryShareRepository.saveAndFlush(
+            ScheduleCategoryShare(
+                categoryId = requireNotNull(category.id),
+                ownerMemberId = categoryOwnerId,
+                targetMemberId = editorAuthorId,
+                permission = ScheduleSharePermission.EDITOR,
+            ).apply { revoke() },
+        )
+        val authored = schedule(
+            ownerMemberId = editorAuthorId,
+            title = "해제 뒤에도 분류에 남는 일정",
+            startAt = now.plusSeconds(14_400),
+        ).apply {
+            updateCategorySnapshot(
+                requireNotNull(category.id).toString(),
+                category.title,
+                category.color,
+            )
+        }
+        scheduleRepository.saveAndFlush(authored)
+
+        backfill.registerMissingJobs()
+
+        assertEquals(
+            emptyList<SchedulePushJob>(),
+            pushJobRepository.findAllByScheduleId(requireNotNull(authored.id)),
+        )
+    }
+
     private fun schedule(
         ownerMemberId: Long,
         title: String,
@@ -222,7 +270,9 @@ class SchedulePushJobBackfillIntegrationTest @Autowired constructor(
             startAt = startAt,
             endAt = startAt.plusSeconds(3_600),
         ).apply {
-            updateCategorySnapshot("1", "업무", "#000000")
+            // A non-numeric legacy display snapshot must not accidentally bind this standalone
+            // fixture to an unrelated category row created by another test in the shared H2 DB.
+            updateCategorySnapshot("legacy-work", "업무", "#000000")
             updateRoute(
                 travelMinutes = 30,
                 departAt = startAt.minusSeconds(1_800),

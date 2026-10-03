@@ -84,7 +84,7 @@ class SchedulePushJob protected constructor() : BaseEntity() {
 
     @Column(name = "interval_minutes", nullable = false)
     @Comment("교통상황 체크 간격")
-    var intervalMinutes: Int = 20
+    var intervalMinutes: Int = 10
         protected set
 
     @Enumerated(EnumType.STRING)
@@ -292,9 +292,19 @@ class SchedulePushJob protected constructor() : BaseEntity() {
     var failureReason: String? = null
         protected set
 
-    /**
-     * Scheduler 또는 Worker가 작업을 처리하기 시작할 때 호출한다.
-     */
+    /** Preserve retries and delivery state while bringing a legacy active job onto shared cadence. */
+    fun alignEtaCadence(intervalMinutes: Int, now: Instant) {
+        validateInterval(intervalMinutes)
+        if (status != SchedulePushJobStatus.ACTIVE || this.intervalMinutes == intervalMinutes) return
+        this.intervalMinutes = intervalMinutes
+        if (retryCount == 0) {
+            val refreshAt = maxOf(monitorStartAt, (lastCheckedAt ?: now).plusSeconds(intervalMinutes * 60L))
+            nextCheckAt = minOf(nextCheckAt, refreshAt)
+            lastEtaRefreshDueAt = lastEtaRefreshDueAt?.let { minOf(it, refreshAt) }
+        }
+    }
+
+    /** Scheduler 또는 Worker가 작업을 처리하기 시작할 때 호출한다. */
     fun startProcessing(workerId: String, now: Instant = Instant.now()) {
         status = SchedulePushJobStatus.PROCESSING
         lockedBy = workerId

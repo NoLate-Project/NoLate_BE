@@ -7,6 +7,10 @@ import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryShare
+import com.noLate.schedule.domain.ScheduleCalendar
+import com.noLate.schedule.domain.ScheduleCalendarMember
+import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
+import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleShareInvitation
@@ -20,6 +24,9 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationAcceptanceRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
+import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryScope
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -68,6 +75,12 @@ class ScheduleShareServiceUnitTest {
     @Mock
     lateinit var travelAccessCleanupService: ScheduleTravelAccessCleanupService
 
+    @Mock
+    lateinit var calendarRepository: ScheduleCalendarRepository
+
+    @Mock
+    lateinit var calendarMemberRepository: ScheduleCalendarMemberRepository
+
     private val clock = Clock.fixed(Instant.parse("2026-07-15T00:00:00Z"), ZoneOffset.UTC)
     private lateinit var service: ScheduleShareService
 
@@ -84,6 +97,8 @@ class ScheduleShareServiceUnitTest {
             eventPublisher = eventPublisher,
             clock = clock,
             travelAccessCleanupService = travelAccessCleanupService,
+            calendarRepository = calendarRepository,
+            calendarMemberRepository = calendarMemberRepository,
             sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
                 MockEnvironment().withProperty("schedule.sharing.enabled", "true"),
             ),
@@ -97,7 +112,7 @@ class ScheduleShareServiceUnitTest {
         val ownerId = 1L
         val target = member(id = 2L, email = "friend@example.com")
 
-        whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
         whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com"))
             .thenReturn(2L)
@@ -140,7 +155,7 @@ class ScheduleShareServiceUnitTest {
         val ownerId = 1L
         val target = member(id = 2L, email = "friend@example.com")
 
-        whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
         whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(null)
@@ -174,7 +189,7 @@ class ScheduleShareServiceUnitTest {
             )
         }
 
-        verify(scheduleRepository, never()).findOwnedActiveForShareUpdate(any(), any())
+        verify(scheduleRepository, never()).findActiveForTravelPlanUpdate(any())
         verify(eventPublisher, never()).publishEvent(any())
     }
 
@@ -191,7 +206,7 @@ class ScheduleShareServiceUnitTest {
             status = ScheduleShareStatus.ACTIVE,
         )
 
-        whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L))
             .thenReturn(schedule(id = 10L, ownerId = ownerId))
         whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com")).thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
@@ -221,7 +236,7 @@ class ScheduleShareServiceUnitTest {
             permission = ScheduleSharePermission.VIEWER,
             contentMode = ScheduleShareContentMode.SCHEDULE_AND_TRAVEL,
         )
-        whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, 1L))
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L))
             .thenReturn(schedule(id = 10L, ownerId = 1L))
         whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com")).thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
@@ -246,8 +261,6 @@ class ScheduleShareServiceUnitTest {
     fun `shareSchedule rejects sharing a schedule with its owner`() {
         val ownerId = 1L
 
-        whenever(scheduleRepository.findOwnedActiveForShareUpdate(10L, ownerId))
-            .thenReturn(schedule(id = 10L, ownerId = ownerId))
         whenever(memberRepository.findIdByEmailAndDeletedFalse("owner@example.com"))
             .thenReturn(ownerId)
         whenever(memberRepository.findByIdForUpdate(ownerId))
@@ -279,8 +292,7 @@ class ScheduleShareServiceUnitTest {
             .thenReturn(member(id = 2L, email = "friend@example.com"))
         whenever(categoryShareRepository.findByIdAndCategoryIdAndDeletedFalse(41L, 7L))
             .thenReturn(share)
-        whenever(categoryRepository.findOwnedActiveForShareUpdate(7L, 1L))
-            .thenReturn(ScheduleCategory(id = 7L, memberId = 1L, title = "공유 카테고리"))
+        stubPersonalCategory(ScheduleCategory(id = 7L, memberId = 1L, title = "공유 카테고리"))
         whenever(categoryShareRepository.saveAndFlush(share)).thenReturn(share)
 
         service.revokeCategoryShare(
@@ -307,8 +319,7 @@ class ScheduleShareServiceUnitTest {
             status = ScheduleShareStatus.REVOKED,
         )
 
-        whenever(categoryRepository.findOwnedActiveForShareUpdate(7L, ownerId))
-            .thenReturn(ScheduleCategory(id = 7L, memberId = ownerId, title = "팀"))
+        stubPersonalCategory(ScheduleCategory(id = 7L, memberId = ownerId, title = "팀"))
         whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com"))
             .thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
@@ -337,34 +348,55 @@ class ScheduleShareServiceUnitTest {
     }
 
     @Test
-    fun `calendar-bound category cannot be shared through the legacy category grant`() {
+    fun `calendar owner can directly share one category without adding a calendar member`() {
         val ownerId = 1L
         val target = member(id = 2L, email = "friend@example.com")
         whenever(memberRepository.findIdByEmailAndDeletedFalse("friend@example.com"))
             .thenReturn(2L)
         whenever(memberRepository.findByIdForUpdate(2L)).thenReturn(target)
-        whenever(categoryRepository.findOwnedActiveForShareUpdate(7L, ownerId))
-            .thenReturn(
-                ScheduleCategory(
-                    id = 7L,
-                    memberId = ownerId,
-                    calendarId = 30L,
-                    title = "공유 캘린더 분류",
-                )
+        val category = ScheduleCategory(
+            id = 7L,
+            memberId = ownerId,
+            calendarId = 30L,
+            title = "공유 캘린더 분류",
+        )
+        val scope = org.mockito.kotlin.mock<ScheduleCategoryScope>()
+        whenever(scope.getMemberId()).thenReturn(ownerId)
+        whenever(scope.getCalendarId()).thenReturn(30L)
+        whenever(categoryRepository.findActiveScope(7L)).thenReturn(scope)
+        whenever(categoryRepository.findActiveForScheduleAssignment(7L)).thenReturn(category)
+        whenever(calendarRepository.findActiveForUpdate(30L)).thenReturn(
+            ScheduleCalendar(id = 30L, ownerMemberId = ownerId, title = "공유 캘린더")
+        )
+        whenever(
+            calendarMemberRepository.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                30L,
+                ownerId,
+                ScheduleCalendarMemberStatus.ACTIVE,
             )
-
-        val error = assertThrows<BusinessException> {
-            service.shareCategory(
-                ownerMemberId = ownerId,
-                categoryId = 7L,
-                targetEmail = "friend@example.com",
-                permission = ScheduleSharePermission.EDITOR,
-                presentedSessionGeneration = 0L,
+        ).thenReturn(
+            ScheduleCalendarMember(
+                id = 31L,
+                calendarId = 30L,
+                memberId = ownerId,
+                role = ScheduleCalendarRole.OWNER,
             )
+        )
+        whenever(categoryShareRepository.findByCategoryIdAndTargetMemberId(7L, 2L)).thenReturn(null)
+        whenever(categoryShareRepository.saveAndFlush(any<ScheduleCategoryShare>())).thenAnswer { invocation ->
+            invocation.getArgument<ScheduleCategoryShare>(0).apply { id = 32L }
         }
 
-        assertEquals(ErrorCode.INVALID_STATE, error.errorCode)
-        verify(categoryShareRepository, never()).saveAndFlush(any())
+        val result = service.shareCategory(
+            ownerMemberId = ownerId,
+            categoryId = 7L,
+            targetEmail = "friend@example.com",
+            permission = ScheduleSharePermission.EDITOR,
+            presentedSessionGeneration = 0L,
+        )
+
+        assertEquals("32", result.id)
+        assertEquals(ScheduleSharePermission.EDITOR, result.permission)
     }
 
     @Test
@@ -391,7 +423,7 @@ class ScheduleShareServiceUnitTest {
         val lockOrder = org.mockito.Mockito.inOrder(memberRepository)
         lockOrder.verify(memberRepository).findByIdForUpdate(2L)
         lockOrder.verify(memberRepository).findByIdForUpdate(5L)
-        verify(scheduleRepository, never()).findOwnedActiveForShareUpdate(any(), any())
+        verify(scheduleRepository, never()).findActiveForTravelPlanUpdate(any())
         verify(scheduleShareRepository, never()).saveAndFlush(any())
         verify(eventPublisher, never()).publishEvent(any())
     }
@@ -542,4 +574,13 @@ class ScheduleShareServiceUnitTest {
         ).apply {
             updateCategorySnapshot("7", "팀", "#2196f3")
         }
+
+    private fun stubPersonalCategory(category: ScheduleCategory) {
+        val categoryId = requireNotNull(category.id)
+        val scope = org.mockito.kotlin.mock<ScheduleCategoryScope>()
+        whenever(scope.getMemberId()).thenReturn(category.memberId)
+        whenever(scope.getCalendarId()).thenReturn(null)
+        whenever(categoryRepository.findActiveScope(categoryId)).thenReturn(scope)
+        whenever(categoryRepository.findActiveForScheduleAssignment(categoryId)).thenReturn(category)
+    }
 }
