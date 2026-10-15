@@ -20,6 +20,7 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
+import com.noLate.schedule.infrastructure.ScheduleCategoryScope
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -94,8 +95,6 @@ class ScheduleCategoryServiceUnitTest {
         )
         val owned = ScheduleCategory(id = 1L, memberId = memberId, title = "내 일정")
         val received = ScheduleCategory(id = 2L, memberId = 99L, title = "팀 일정")
-        whenever(categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId))
-            .thenReturn(listOf(owned))
         whenever(categoryRepository.findVisibleCategories(memberId))
             .thenReturn(listOf(owned, received))
         whenever(
@@ -137,7 +136,7 @@ class ScheduleCategoryServiceUnitTest {
             ),
         )
         val owned = ScheduleCategory(id = 1L, memberId = memberId, title = "내 일정")
-        whenever(categoryRepository.findByMemberIdAndDeletedFalseOrderBySortOrderAscIdAsc(memberId))
+        whenever(categoryRepository.findResourceOwnedCategories(memberId))
             .thenReturn(listOf(owned))
 
         val result = disabledService.getCategories(memberId, presentedSessionGeneration = 0L)
@@ -283,6 +282,7 @@ class ScheduleCategoryServiceUnitTest {
             scheduleRepository = scheduleRepository,
         )
         val source = ScheduleCategory(id = 4L, memberId = 7L, title = "개인")
+        val sourceScope = mock<ScheduleCategoryScope>()
         val calendar = ScheduleCalendar(id = 20L, ownerMemberId = 7L, title = "가족")
         val membership = ScheduleCalendarMember(
             id = 21L,
@@ -290,7 +290,11 @@ class ScheduleCategoryServiceUnitTest {
             memberId = 7L,
             role = ScheduleCalendarRole.OWNER,
         )
-        whenever(calendarRepository.findActiveForUpdate(20L)).thenReturn(calendar)
+        whenever(sourceScope.getMemberId()).thenReturn(7L)
+        whenever(sourceScope.getCalendarId()).thenReturn(null)
+        whenever(categoryRepository.findActiveScope(4L)).thenReturn(sourceScope)
+        whenever(calendarRepository.findAllForUpdate(listOf(20L))).thenReturn(listOf(calendar))
+        whenever(calendarRepository.findByIdAndStatusAndDeletedFalse(20L)).thenReturn(calendar)
         whenever(
             calendarMemberRepository.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
                 20L,
@@ -298,7 +302,7 @@ class ScheduleCategoryServiceUnitTest {
                 ScheduleCalendarMemberStatus.ACTIVE,
             )
         ).thenReturn(membership)
-        whenever(categoryRepository.findOwnedActiveForShareUpdate(4L, 7L)).thenReturn(source)
+        whenever(categoryRepository.findActiveForScheduleAssignment(4L)).thenReturn(source)
         whenever(scheduleRepository.findAllByCategoryIdIncludingSnapshotAndDeletedFalseOrderByIdAsc(4L))
             .thenReturn(emptyList())
 
@@ -311,8 +315,8 @@ class ScheduleCategoryServiceUnitTest {
 
         inOrder(memberRepository, calendarRepository, categoryRepository) {
             verify(memberRepository).findByIdForUpdate(7L)
-            verify(calendarRepository).findActiveForUpdate(20L)
-            verify(categoryRepository).findOwnedActiveForShareUpdate(4L, 7L)
+            verify(calendarRepository).findAllForUpdate(listOf(20L))
+            verify(categoryRepository).findActiveForScheduleAssignment(4L)
         }
     }
 
@@ -336,6 +340,7 @@ class ScheduleCategoryServiceUnitTest {
             scheduleRepository = scheduleRepository,
         )
         val source = ScheduleCategory(id = 4L, memberId = 7L, title = "개인")
+        val sourceScope = mock<ScheduleCategoryScope>()
         val personalFallback = ScheduleCategory(id = 5L, memberId = 7L, title = "기타")
         val calendar = ScheduleCalendar(id = 20L, ownerMemberId = 7L, title = "가족")
         val membership = ScheduleCalendarMember(
@@ -353,9 +358,9 @@ class ScheduleCategoryServiceUnitTest {
         ).apply {
             updateCategorySnapshot("4", source.title, source.color)
         }
-        whenever(
-            categoryRepository.existsByIdAndMemberIdAndCalendarIdIsNullAndDeletedFalse(4L, 7L)
-        ).thenReturn(true)
+        whenever(sourceScope.getMemberId()).thenReturn(7L)
+        whenever(sourceScope.getCalendarId()).thenReturn(null)
+        whenever(categoryRepository.findActiveScope(4L)).thenReturn(sourceScope)
         whenever(categoryShareRepository.findAllByCategoryIdAndDeletedFalse(4L)).thenReturn(emptyList())
         whenever(
             calendarMemberRepository.findActiveMemberIdsByCalendarId(
@@ -365,8 +370,10 @@ class ScheduleCategoryServiceUnitTest {
         ).thenReturn(listOf(7L))
         whenever(scheduleRepository.findActiveIdsByCategoryIdIncludingSnapshotOrderByIdAsc(4L))
             .thenReturn(listOf(30L))
+        whenever(scheduleRepository.findActiveOwnerMemberIdsByCategoryIdIncludingSnapshotOrderByMemberIdAsc(4L))
+            .thenReturn(listOf(7L))
         whenever(scheduleRepository.findAllActiveByIdsForUpdate(listOf(30L))).thenReturn(listOf(schedule))
-        whenever(calendarRepository.findActiveForUpdate(20L)).thenReturn(calendar)
+        whenever(calendarRepository.findAllForUpdate(listOf(20L))).thenReturn(listOf(calendar))
         whenever(
             calendarMemberRepository.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
                 20L,
@@ -375,14 +382,19 @@ class ScheduleCategoryServiceUnitTest {
             )
         ).thenReturn(membership)
         whenever(
-            invitationRepository.findAllPendingByResourceForUpdate(
+            invitationRepository.findAllByResourceForUpdate(
                 ScheduleShareResourceType.CATEGORY,
                 4L,
             )
         ).thenReturn(emptyList())
-        whenever(categoryRepository.findOwnedActiveForShareUpdate(4L, 7L)).thenReturn(source)
+        whenever(
+            invitationRepository.findAllByResourceForUpdate(
+                ScheduleShareResourceType.SCHEDULE,
+                30L,
+            )
+        ).thenReturn(emptyList())
+        whenever(categoryRepository.findActiveForScheduleAssignment(4L)).thenReturn(source)
         whenever(categoryShareRepository.findAllByCategoryIdForUpdate(4L)).thenReturn(emptyList())
-        whenever(categoryRepository.findAllActiveByCalendarIdForUpdate(20L)).thenReturn(emptyList())
         whenever(
             categoryRepository.findByMemberIdAndCalendarIdIsNullAndDeletedFalseOrderBySortOrderAscIdAsc(7L)
         ).thenReturn(listOf(personalFallback))
@@ -398,7 +410,7 @@ class ScheduleCategoryServiceUnitTest {
         inOrder(memberRepository, scheduleRepository, calendarRepository) {
             verify(memberRepository).findByIdForUpdate(7L)
             verify(scheduleRepository).findAllActiveByIdsForUpdate(listOf(30L))
-            verify(calendarRepository).findActiveForUpdate(20L)
+            verify(calendarRepository).findAllForUpdate(listOf(20L))
         }
     }
 

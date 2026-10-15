@@ -1,5 +1,7 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicy
+
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.observability.EtaJobMetricOutcome
 import com.noLate.global.observability.EtaWorkerMetricEvent
@@ -18,6 +20,9 @@ import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.TrafficResult
+import com.noLate.schedule.application.TransitTimingBasis
+import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
+import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
 import com.noLate.schedule.application.sanitizeTrafficFailureReason
 import com.noLate.schedule.application.toRouteDisplaySegments
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
@@ -43,6 +48,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
+import kotlin.time.Duration.Companion.minutes
 
 @Component
 class SchedulePushJobWorker(
@@ -76,8 +82,15 @@ class SchedulePushJobWorker(
     private val operationalMetrics: NoLateOperationalMetrics? = null,
     private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
     private val scheduleLiveActivityService: ScheduleLiveActivityService? = null,
+
+    // 출발 상태 API와 같은 유예시간 설정을 사용한다.
+    @Value("\${schedule.traffic.departure-status-snapshot-grace-minutes:5}")
+    private val departureStatusSnapshotGraceMinutes: Long = 5L,
+    @Value("\${eta.transit.arrival-source-max-age-seconds:120}")
+    private val arrivalSourceMaxAgeSeconds: Long = 120L,
 ) {
     init {
+        require(arrivalSourceMaxAgeSeconds in 1..900)
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
         require(
             liveComparatorMaxAgeMinutes in 1..SchedulePushJob.MAX_LIVE_COMPARATOR_AGE_MINUTES
@@ -88,6 +101,11 @@ class SchedulePushJobWorker(
         require(etaEventTtlSeconds in MIN_ETA_EVENT_TTL_SECONDS..MAX_ETA_EVENT_TTL_SECONDS) {
             "schedule.push.eta-event-ttl-seconds는 " +
                 "$MIN_ETA_EVENT_TTL_SECONDS~$MAX_ETA_EVENT_TTL_SECONDS 사이여야 합니다."
+        }
+
+        // 출발 상태 API와 동일한 범위로 유예시간을 제한한다.
+        require(departureStatusSnapshotGraceMinutes in 0L..60L) {
+            "schedule.traffic.departure-status-snapshot-grace-minutes는 0~60 사이여야 합니다."
         }
         require(retryDelayMinutes >= 1 && retryDelayMinutes * 60 < etaEventTtlSeconds) {
             "schedule.push.retry-delay-minutes는 ETA event TTL보다 짧아야 합니다."
@@ -104,6 +122,8 @@ class SchedulePushJobWorker(
 
     fun runDueJobs(now: Instant): Int {
         if (!enabled) return 0
+
+        pushJobCoordinator.alignLegacyEtaCadences(now, batchSize)
 
         val recoveryAt = currentAtOrAfter(now)
         val recoveredCount = pushJobCoordinator.recoverStaleProcessingJobs(
@@ -132,16 +152,35 @@ class SchedulePushJobWorker(
             val job = pushJobCoordinator.claimNextDueJob(claimAt, workerId)
                 ?: return claimedCount
             claimedCount += 1
-            operationalMetrics.recordSafely { recordEtaJob(EtaJobMetricOutcome.CLAIMED) }
-            log.info(
-                "Claimed schedule push job. jobId={}, workerId={}, checkedAt={}",
-                job.id,
-                workerId,
-                claimAt,
-            )
-            pushJobCoordinator.execute { process(job, claimAt) }
+            processClaimedJob(job, claimAt)
         }
         return claimedCount
+    }
+
+    /**
+     * 호출자가 지정한 회원·일정의 due 작업만 처리하는 내부 진입점이다. 공개 HTTP API가 아니며,
+     * 검증/복구 도구가 전역 scheduler를 실행하지 않고 기존 계산·저장·발송 경로를 재사용한다.
+     * due가 아닌 작업을 강제로 실행하거나 다른 회원의 cadence/lease를 변경하지 않는다.
+     */
+    fun runDueJobForSchedule(memberId: Long, scheduleId: Long, now: Instant): Int {
+        require(memberId > 0 && scheduleId > 0) { "Scoped ETA job IDs must be positive." }
+        if (!enabled) return 0
+        val claimAt = currentAtOrAfter(now)
+        val job = pushJobCoordinator.claimDueJobForSchedule(memberId, scheduleId, claimAt, workerId)
+            ?: return 0
+        processClaimedJob(job, claimAt)
+        return 1
+    }
+
+    private fun processClaimedJob(job: SchedulePushJob, claimAt: Instant) {
+        operationalMetrics.recordSafely { recordEtaJob(EtaJobMetricOutcome.CLAIMED) }
+        log.info(
+            "Claimed schedule push job. jobId={}, workerId={}, checkedAt={}",
+            job.id,
+            workerId,
+            claimAt,
+        )
+        pushJobCoordinator.execute { process(job, claimAt) }
     }
 
     private fun currentAtOrAfter(notBefore: Instant): Instant =
@@ -180,10 +219,7 @@ class SchedulePushJobWorker(
                 }
             // 공유 범위 축소와 이미 선점된 worker가 경합해도 발송 직전 유효 이동 권한을 다시
             // 확인한다. 일정 조회 권한만 남은 사용자는 기존 개인 계획이 있어도 알림을 받지 않는다.
-            if (
-                job.memberId != schedule.memberId &&
-                scheduleAccessPolicy?.resolve(job.memberId, schedule)?.travelEnabled == false
-            ) {
+            if (scheduleAccessPolicy?.resolve(job.memberId, schedule)?.travelEnabled == false) {
                 job.cancel()
                 persistMeasuredTransition(
                     job = job,
@@ -323,14 +359,24 @@ class SchedulePushJobWorker(
                         routeFingerprint = routeFingerprint,
                     )
                 }
-            val recommendedDepartureAt = trafficResult.actionableRecommendedDepartureAt()
-                ?.takeUnless { it.isAfter(schedule.startAt) }
-                // Provider timeout/degraded 결과는 직전 fresh 알람을 늦추거나 앞당기지 않는다.
-                // 첫 조회 실패에서도 사용자가 저장한 기준 출발시각을 그대로 유지한다.
-                ?: (job.lastRecommendedDepartureAt ?: job.departureAt)
-                    .takeIf { !trafficResult.accepted }
+            val previousRecommendedDepartureAt =
+                (job.lastRecommendedDepartureAt ?: job.departureAt)
+                    .takeUnless { it.isAfter(schedule.startAt) }
+
+            val candidateRecommendedDepartureAt =
+                selectedRoute.anchoredDepartureAt ?: trafficResult.actionableRecommendedDepartureAt()
                     ?.takeUnless { it.isAfter(schedule.startAt) }
-                ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+                // Provider timeout/degraded 결과는 직전 알림시각을 유지한다.
+                    ?: previousRecommendedDepartureAt
+                        ?.takeIf { !trafficResult.accepted }
+                    ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+
+            // 대중교통 재조회 결과가 기존 알림을 뒤로 미루지 못하게 수정
+            val recommendedDepartureAt = selectedRoute.anchoredDepartureAt ?: preventUnsafeTransitPostponement(
+                travelMode = request.travelMode,
+                previousRecommendedDepartureAt = previousRecommendedDepartureAt,
+                candidateRecommendedDepartureAt = candidateRecommendedDepartureAt,
+            )
             val degradedTransitPresentation =
                 route.travelMode == ScheduleTravelMode.TRANSIT && !trafficResult.accepted
             val preservedAcceptedRoute = effectiveRouteSnapshot
@@ -342,6 +388,7 @@ class SchedulePushJobWorker(
                 else -> travelMinutes
             }
             val liveActivityRecommendedDepartureAt = when {
+                selectedRoute.anchoredDepartureAt != null -> selectedRoute.anchoredDepartureAt
                 preservedAcceptedRoute != null -> preservedAcceptedRoute.departureAt
                 degradedTransitPresentation ->
                     schedule.startAt.minus(fallbackMinutes.toLong(), ChronoUnit.MINUTES)
@@ -391,26 +438,47 @@ class SchedulePushJobWorker(
                 // 실패/불확실 후보는 추천 경로처럼 표시하지 않는다. 검증된 여정이 없으면
                 // 마지막 검증 여정 전체 또는 저장 경로 전체로 ETA/대기/경로바를 함께 되돌린다.
                 routeSegments = liveActivityRouteSegments,
-                staleAt = minOf(
-                    schedule.startAt,
-                    maxOf(now, trafficResult.fetchedAt ?: now)
-                        .plus(job.intervalMinutes.toLong() + 5, ChronoUnit.MINUTES),
-                ),
+                // 다음 조회시각은 아직 확정되지 않았다. 실제 전이 상태를 저장한 뒤,
+                // Live Activity에 전달하기 직전에 유효시간을 반드시 채운다.
+                staleAt = null,
             )
-            val alarmIntent = departureAlarmSyncService?.let {
+            // 조회 실패·시간표 부족·stale 결과는 알람 변경의 근거가 아니다.
+            // 기존 알람은 그대로 두고, 채택 가능한 ETA 또는 확정 환승 실패만 동기화한다.
+            // 특히 첫 평가의 과거 fallback 출발시각으로 미래 알람을 취소하면 안 된다.
+            val canSynchronizeAlarm = trafficResult.accepted ||
+                etaFailureReason == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED
+            val alarmIntent = departureAlarmSyncService?.takeIf { canSynchronizeAlarm }?.let {
                 SchedulePushAlarmIntent.AutomaticEta(
                     memberId = job.memberId,
                     scheduleId = job.scheduleId,
-                    notificationEnabled = transferFailureReason == null,
+
+                    // UNKNOWN은 시간표 증거 부족일 뿐 확정 환승 실패가 아니다.
+                    // 실제 환승 실패가 확인된 MISSED에서만 기존 알람을 취소한다.
+                    notificationEnabled =
+                        etaFailureReason != TrafficFailureReasons.TRANSIT_TRANSFER_MISSED,
+
                     alertMode = route.alertMode,
                     recommendedDepartureAt = recommendedDepartureAt,
                     scheduleTitle = schedule.title,
+
+                    cancellationReason = if (etaFailureReason == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED)
+                        com.noLate.schedule.domain.DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE
+                    else com.noLate.schedule.domain.DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL,
+
+                    // 호환용 플래그는 취소 사유를 대체하지 않는다. 실제 복구 여부는 알람에
+                    // 저장한 사유로 판단하므로 MISSED → UNKNOWN → 정상도 안전하게 복구한다.
                     resumeCanceledAfterTransitTransferFailure =
-                        etaFailureReason == null && previousTransferFailureReason != null,
+                        etaFailureReason == null &&
+                                previousEtaFailureReason ==
+                                TrafficFailureReasons.TRANSIT_TRANSFER_MISSED,
                 )
             }
+
+            // 교통 API를 기다린 사이 출발 경계를 넘을 수 있다. 계산 요청 기준시각은 보존하되
+            // 사용자 알림은 발송 판단 시각으로 결정해 '지금 출발'을 다음 회차로 미루지 않는다.
+            val dispatchCheckedAt = currentAtOrAfter(now)
             val reminderDecision = departureReminderPolicy.decide(
-                now = now,
+                now = dispatchCheckedAt,
                 recommendedDepartureAt = recommendedDepartureAt,
                 scheduleAt = schedule.startAt,
                 lastNotifiedDepartureAt =
@@ -428,7 +496,7 @@ class SchedulePushJobWorker(
             )
             val reminderBoundaryAt = if (reminderDecision == DepartureReminderDecision.ADVANCE_NOTICE) {
                 departureReminderPolicy.reminderBoundaryAt(
-                    now = now,
+                    now = dispatchCheckedAt,
                     recommendedDepartureAt = recommendedDepartureAt,
                     alertLeadMinutes = departureAlertLeadMinutes,
                     reminderIntervalMinutes = departureReminderIntervalMinutes,
@@ -458,12 +526,11 @@ class SchedulePushJobWorker(
             val showDepartureActions = reminderDecision.departNowAction ||
                 (
                     (job.handledDepartureNoticeAt ?: job.departureNoticeSentAt) != null &&
-                        !now.isBefore(recommendedDepartureAt)
+                        !dispatchCheckedAt.isBefore(recommendedDepartureAt)
                     )
             // 이동 시간이 늘어난 경우만 즉시 보낸다. 줄어든 경우는 다음 경계 시각만 재계산해 불필요한 알림을 줄인다.
             val deduplicationKey = schedulePushInboxDeduplicationKey(job)
             val persistedEvent = notificationUseCase.findPersistedEvent(job.memberId, deduplicationKey)
-            val dispatchCheckedAt = currentAtOrAfter(now)
             val persistedEventExpiresAt = persistedEvent?.data
                 ?.get(SCHEDULE_ETA_EVENT_EXPIRES_AT)
                 ?.let { raw -> runCatching { Instant.parse(raw) }.getOrNull() }
@@ -853,6 +920,20 @@ class SchedulePushJobWorker(
                     now = transitionAt,
                     recommendedDepartureAt = recommendedDepartureAt,
                     scheduleAt = schedule.startAt,
+                    observedBoardingAt = trafficResult.firstBoardingObservation
+                        ?.takeIf { trafficResult.accepted &&
+                            it.isFreshAt(transitionAt, arrivalSourceMaxAgeSeconds) }
+                        ?.expectedBoardingAt,
+                    // 미관측 시간표는 조회 주기에만 사용한다. 정상 ETA/알람 시각은 그대로다.
+                    pendingTimetableBoardingAt = trafficResult.takeIf {
+                        it.source == TrafficSource.TIMETABLE_PROVIDER && it.stale &&
+                            it.failureReason == TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED &&
+                            it.transitTimingBasis == TransitTimingBasis.TIMETABLE_ONLY
+                    }?.effectiveTransitRoute?.segments
+                        ?.firstOrNull { it.kind != EffectiveTransitRouteSegmentKind.WALK }
+                        ?.rideTiming?.takeIf {
+                            it.basis == EffectiveTransitRideTimingBasis.TIMETABLE
+                        }?.predictedBoardingAt,
                     effectiveDepartureNoticeSentAt = if (
                         pushOutcome.notificationHandled &&
                         pushOutcome.decision == DepartureReminderDecision.DEPART_NOW &&
@@ -1007,7 +1088,19 @@ class SchedulePushJobWorker(
         // source transition transaction above.
         runCatching {
             if (liveActivityEndReason == null && liveActivityProjection != null) {
-                scheduleLiveActivityService?.projectEta(liveActivityProjection)
+                // 정상 처리·재시도에서 실제 저장한 ETA 갱신 경계를 사용한다.
+                // 이후 실행 재예약으로 바뀔 수 있는 job.nextCheckAt과 구분한다.
+                val etaRefreshDueAt = requireNotNull(job.lastEtaRefreshDueAt) {
+                    "Live Activity ETA에는 저장된 갱신 예정 시각이 필요합니다."
+                }
+                // 출발 상태 API와 같은 유예시간을 적용하되 일정 시작을 넘기지 않는다.
+                val staleAt = minOf(
+                    liveActivityProjection.scheduleStartAt,
+                    etaRefreshDueAt.plus(departureStatusSnapshotGraceMinutes, ChronoUnit.MINUTES),
+                )
+                scheduleLiveActivityService?.projectEta(
+                    liveActivityProjection.copy(staleAt = staleAt),
+                )
             }
             Unit
         }.onFailure { failure ->
@@ -1072,14 +1165,24 @@ class SchedulePushJobWorker(
         now: Instant,
         recommendedDepartureAt: Instant,
         scheduleAt: Instant,
+        observedBoardingAt: Instant?,
+        pendingTimetableBoardingAt: Instant?,
         effectiveDepartureNoticeSentAt: Instant?,
     ): Instant? {
         if (!now.isBefore(scheduleAt)) return null
 
+        // 출발까지 남은 시간에 따라 다음 ETA 조회시각을 계산한다.
+        val etaRefreshAt = EtaRefreshCadencePolicy.nextRefreshAt(
+            now = now,
+            recommendedDepartureAt = recommendedDepartureAt,
+            observedBoardingAt = observedBoardingAt,
+            pendingTimetableBoardingAt = pendingTimetableBoardingAt,
+        )
+
         val trafficCheckAt = periodicPushPolicy.nextCheckAt(
             now = now,
             recommendedDepartureAt = recommendedDepartureAt,
-            intervalMinutes = job.intervalMinutes,
+            intervalMinutes = EtaRefreshCadencePolicy.INTERVAL_MINUTES,
             alertLeadMinutes = departureAlertLeadMinutes,
             reminderIntervalMinutes = departureReminderIntervalMinutes,
         )
@@ -1097,7 +1200,7 @@ class SchedulePushJobWorker(
             alertLeadMinutes = departureAlertLeadMinutes,
         )
 
-        return listOfNotNull(trafficCheckAt, reminderCheckAt, scheduleAt)
+        return listOfNotNull(etaRefreshAt, trafficCheckAt, reminderCheckAt, scheduleAt)
             .filter { it.isAfter(now) }
             .minOrNull()
     }
@@ -1382,6 +1485,31 @@ class SchedulePushJobWorker(
             nextCheckAt = retryDueAt,
         )
         return EtaJobMetricOutcome.RETRY_SCHEDULED
+    }
+
+
+    /**
+     * 대중교통 provider의 시간 근거가 실제 시간표인지 완전히 구분되기 전에는
+     * 재조회 결과만으로 이미 예약된 출발 알림을 뒤로 미루지 않는다.
+     *
+     * 더 이른 후보는 지각 위험을 줄이므로 그대로 적용한다.
+     */
+    private fun preventUnsafeTransitPostponement(
+        travelMode: ScheduleTravelMode,
+        previousRecommendedDepartureAt: Instant?,
+        candidateRecommendedDepartureAt: Instant,
+    ): Instant {
+        if (
+            travelMode != ScheduleTravelMode.TRANSIT ||
+            previousRecommendedDepartureAt == null
+        ) {
+            return candidateRecommendedDepartureAt
+        }
+
+        return minOf(
+            previousRecommendedDepartureAt,
+            candidateRecommendedDepartureAt,
+        )
     }
 }
 

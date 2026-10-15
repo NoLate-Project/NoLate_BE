@@ -31,7 +31,7 @@ class ScheduleDepartureNotificationService(
     private val departureStatusRepository: ScheduleDepartureStatusRepository,
     private val pushEventOutboxService: PushEventOutboxService,
     private val sharingAvailability: ScheduleSharingAvailabilityPolicy,
-    private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
+    private val scheduleAccessPolicy: ScheduleAccessPolicy,
 ) {
 
     @Transactional
@@ -55,19 +55,22 @@ class ScheduleDepartureNotificationService(
             ?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.MEMBER_NOT_FOUND)
 
-        // 소유하지 않은 일정도 "존재하지만 권한 없음"으로 노출하지 않도록 기존 공유 API와
-        // 동일하게 SCHEDULE_NOT_FOUND로 응답한다.
-        val schedule = scheduleRepository.findOwnedScheduleDetail(scheduleId, ownerMemberId)
+        // schedules.member_id is the author/audit identity for category/calendar content. Nudge
+        // authority follows the current resource owner so a revoked author cannot keep sending
+        // participant notifications and a transferred owner can manage the resource immediately.
+        val schedule = scheduleRepository.findById(scheduleId).orElse(null)
+            ?.takeUnless { it.deleted }
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        if (!scheduleAccessPolicy.resolve(ownerMemberId, schedule).canManageAudience) {
+            // Match the other sharing APIs: do not reveal whether an unauthorized schedule exists.
+            throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        }
 
         if (targetMemberId == ownerMemberId) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "오너 본인에게 출발 확인 알림을 보낼 수 없습니다.")
         }
 
-        val isTravelParticipant = scheduleAccessPolicy
-            ?.travelMemberIds(schedule)
-            ?.contains(targetMemberId)
-            ?: isLegacyParticipant(schedule, targetMemberId)
+        val isTravelParticipant = scheduleAccessPolicy.travelMemberIds(schedule).contains(targetMemberId)
 
         if (!isTravelParticipant) {
             throw BusinessException(

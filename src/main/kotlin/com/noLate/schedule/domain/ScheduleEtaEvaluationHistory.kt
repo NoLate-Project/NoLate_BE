@@ -97,7 +97,10 @@ class ScheduleEtaEvaluationHistory(
     @Column(name = "target_arrival_at", nullable = false)
     var targetArrivalAt: Instant,
 
-    /** TrafficResult.fetchedAt 원값. fallback은 null이며 별도의 원천 관측시각으로 해석하지 않는다. */
+    /**
+     * TrafficResult.fetchedAt 원값. 저장값만 쓴 fallback은 null이지만, 재조회 성공 후
+     * 시각 근거 부족으로 채택하지 못한 진단은 취득 시각을 보존한다. 차량 원천 관측시각은 아니다.
+     */
     @Column(name = "provider_fetched_at")
     var fetchedAt: Instant?,
 ) {
@@ -115,8 +118,11 @@ class ScheduleEtaEvaluationHistory(
         }
         val providerSource = source == TrafficSource.LIVE_PROVIDER ||
             source == TrafficSource.TIMETABLE_PROVIDER
-        require(providerSource == (fetchedAt != null)) {
-            "공급자 결과에는 fetchedAt이 필요하고 저장 경로 fallback에는 fetchedAt이 없어야 합니다."
+        require(!providerSource || fetchedAt != null) {
+            "공급자 결과에는 fetchedAt이 필요합니다."
+        }
+        require(providerSource || fetchedAt == null || (stale && !reason.isNullOrBlank())) {
+            "fallback의 provider fetchedAt은 실패 사유가 있는 저신뢰도 조회 진단에만 기록합니다."
         }
         val departureAt = recommendedDepartureAt
         val arrivalAt = predictedArrivalAt

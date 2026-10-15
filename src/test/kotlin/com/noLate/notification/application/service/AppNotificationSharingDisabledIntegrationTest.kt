@@ -12,6 +12,7 @@ import com.noLate.schedule.application.service.SchedulePushRecipientAccessValida
 import com.noLate.schedule.application.service.ScheduleSharingAvailabilityPolicy
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.sharing.application.SharingBlockPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -33,6 +34,7 @@ import java.time.ZoneOffset
     AppNotificationWriter::class,
     SchedulePushRecipientAccessValidator::class,
     ScheduleAccessPolicy::class,
+    SharingBlockPolicy::class,
     ScheduleSharingAvailabilityPolicy::class,
     AppNotificationSharingDisabledTestConfig::class,
 )

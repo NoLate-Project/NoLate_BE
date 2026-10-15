@@ -60,7 +60,11 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 
-/** 실제 ETA 패키지 -> mode-aware client -> worker -> job/push 경계를 통과하는 결정적 시뮬레이션. */
+/**
+ * 실제 ETA 패키지 -> mode-aware client -> worker -> job/push 경계를 연결하는 컴포넌트 테스트.
+ * TIMETABLE 여정과 실시간 도착은 fixture, 저장소와 푸시는 mock이다. 실제 ODsay maasRP
+ * 응답·시뮬레이터 앱 UI·운영 DB·푸시 전달을 검증하는 E2E와 구분한다.
+ */
 class TransitTransferAlternativeWorkerSimulationTest {
     private val now = Instant.parse("2026-08-01T02:55:00Z")
     private val scheduleAt = Instant.parse("2026-08-01T04:00:00Z")

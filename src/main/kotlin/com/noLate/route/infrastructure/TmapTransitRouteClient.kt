@@ -8,18 +8,28 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
-import com.noLate.global.config.externalHttpRequestFactory
+import com.noLate.eta.resilience.EtaCalculationDeadline
+import com.noLate.eta.resilience.EtaDeadlineAwareClientHttpRequestFactory
+import org.springframework.http.client.ClientHttpRequestFactory
+import java.time.Duration
 
 @Component
 @ConditionalOnProperty(prefix = "routing.tmap", name = ["enabled"], havingValue = "true")
 class TmapTransitRouteClient(
     @Value("\${routing.tmap.app-key}") appKey: String,
     @Value("\${routing.tmap.base-url}") baseUrl: String,
+    calculationDeadline: EtaCalculationDeadline = EtaCalculationDeadline(),
+    requestFactory: ClientHttpRequestFactory = EtaDeadlineAwareClientHttpRequestFactory(
+        calculationDeadline = calculationDeadline,
+        // 일반 검색의 기존 timeout은 보존하고 ETA 재조회에서는 남은 계산 예산으로 제한한다.
+        configuredConnectTimeout = Duration.ofSeconds(3),
+        configuredReadTimeout = Duration.ofSeconds(8),
+    ),
 ) : TransitRouteProvider {
     private val restClient = RestClient.builder()
         .baseUrl(baseUrl)
         .defaultHeader("appKey", appKey)
-        .requestFactory(externalHttpRequestFactory())
+        .requestFactory(requestFactory)
         .build()
 
     override fun providerId(): String = "tmap"

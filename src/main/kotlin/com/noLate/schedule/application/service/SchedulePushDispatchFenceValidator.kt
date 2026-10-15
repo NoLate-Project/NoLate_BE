@@ -13,8 +13,11 @@ import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE
+import com.noLate.schedule.domain.DepartureAlarmSyncOperation
+import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.sharing.application.SharingBlockPolicy
 import org.springframework.stereotype.Service
 import java.time.Clock
 import java.time.Instant
@@ -95,7 +98,9 @@ class SchedulePushRecipientAccessValidator(
     private val categoryShareRepository: ScheduleCategoryShareRepository,
     private val calendarRepository: ScheduleCalendarRepository,
     private val calendarMemberRepository: ScheduleCalendarMemberRepository,
+    private val departureAlarmSyncStateRepository: DepartureAlarmSyncStateRepository,
     private val sharingAvailabilityPolicy: ScheduleSharingAvailabilityPolicy,
+    private val sharingBlockPolicy: SharingBlockPolicy,
 ) : PushRecipientAuthorizationValidator {
     fun canDispatch(memberId: Long, scheduleId: Long): Boolean {
         return canDispatch(
@@ -114,10 +119,9 @@ class SchedulePushRecipientAccessValidator(
         payloadType: String?,
         calendarId: Long?,
     ): Boolean {
-        // Schedule deletion/share revoke is exactly when the latest CANCEL tombstone must still
-        // cross the provider boundary. Its authority is the independent alarm-state freshness
-        // validator, not mutable schedule access.
-        if (payloadType == DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE) return true
+        if (payloadType == DEPARTURE_ALARM_SYNC_PAYLOAD_TYPE) {
+            return canDispatchDepartureAlarmSync(memberId, scheduleId)
+        }
         if (!sharingAvailabilityPolicy.enabled) {
             return canDispatchWhileSharingDisabled(
                 memberId = memberId,
@@ -134,18 +138,32 @@ class SchedulePushRecipientAccessValidator(
             return canDispatchSchedule(memberId, scheduleId, payloadType)
         }
         if (categoryId != null) {
-            val category = categoryRepository.findById(categoryId)
-                .orElse(null)
-                ?.takeUnless { it.deleted }
-                ?: return false
-            if (category.memberId == memberId) return true
-            return categoryShareRepository.findByCategoryIdAndTargetMemberId(categoryId, memberId)
-                ?.takeIf { !it.deleted && it.status == ScheduleShareStatus.ACTIVE } != null
+            return canDispatchCategory(memberId, categoryId)
         }
         if (calendarId != null) {
             return canDispatchCalendar(memberId, calendarId)
         }
         return true
+    }
+
+    /**
+     * A CANCEL tombstone must survive schedule deletion and grant revocation so a device can remove
+     * an already-installed alarm. UPSERT is different: the desired-state row is durable and can
+     * outlive its authorization, so the provider fence rechecks current travel access before the
+     * command leaves the server.
+     */
+    private fun canDispatchDepartureAlarmSync(memberId: Long, scheduleId: Long?): Boolean {
+        val frozenScheduleId = scheduleId ?: return false
+        val state = departureAlarmSyncStateRepository
+            .findByMemberIdAndScheduleId(memberId, frozenScheduleId)
+            ?: return false
+        if (state.operation == DepartureAlarmSyncOperation.CANCEL) return true
+
+        val schedule = scheduleRepository.findById(frozenScheduleId)
+            .orElse(null)
+            ?.takeUnless { it.deleted }
+            ?: return false
+        return accessPolicy.resolve(memberId, schedule).travelEnabled
     }
 
     /**
@@ -165,16 +183,25 @@ class SchedulePushRecipientAccessValidator(
         // Treating them as resource-free GENERAL would expose pre-deployment shared payloads.
         if (payloadType in SCHEDULE_ID_REQUIRED_PAYLOAD_TYPES && scheduleId == null) return false
         if (scheduleId != null) {
-            return scheduleRepository.findById(scheduleId)
+            val schedule = scheduleRepository.findById(scheduleId)
                 .orElse(null)
                 ?.takeUnless { it.deleted }
-                ?.memberId == memberId
+                ?: return false
+            return accessPolicy.resolve(memberId, schedule).canManageAudience
         }
         if (categoryId != null) {
-            return categoryRepository.findById(categoryId)
+            val category = categoryRepository.findById(categoryId)
                 .orElse(null)
                 ?.takeUnless { it.deleted }
-                ?.memberId == memberId
+                ?: return false
+            return if (category.calendarId == null) {
+                category.memberId == memberId
+            } else {
+                calendarRepository.findByIdAndStatusAndDeletedFalse(
+                    requireNotNull(category.calendarId),
+                    ScheduleCalendarStatus.ACTIVE,
+                )?.takeUnless { it.deleted }?.ownerMemberId == memberId
+            }
         }
         if (calendarId != null) {
             return calendarRepository.findByIdAndStatusAndDeletedFalse(
@@ -191,12 +218,45 @@ class SchedulePushRecipientAccessValidator(
             ScheduleCalendarStatus.ACTIVE,
         ) ?: return false
         if (calendar.deleted) return false
+        if (sharingBlockPolicy.isInteractionBlocked(memberId, calendar.ownerMemberId)) return false
         return calendarMemberRepository
             .findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
                 calendarId,
                 memberId,
                 ScheduleCalendarMemberStatus.ACTIVE,
             ) != null
+    }
+
+    private fun canDispatchCategory(memberId: Long, categoryId: Long): Boolean {
+        val category = categoryRepository.findById(categoryId)
+            .orElse(null)
+            ?.takeUnless { it.deleted }
+            ?: return false
+        val calendarId = category.calendarId
+        if (calendarId == null) {
+            if (category.memberId == memberId) return true
+            if (sharingBlockPolicy.isInteractionBlocked(memberId, category.memberId)) return false
+        }
+        if (calendarId != null) {
+            val calendar = calendarRepository.findByIdAndStatusAndDeletedFalse(
+                calendarId,
+                ScheduleCalendarStatus.ACTIVE,
+            )?.takeUnless { it.deleted } ?: return false
+            // A calendar category can be created by an editor. The calendar owner, rather than the
+            // category row's audit author, is the resource owner used by the sharing block fence.
+            if (sharingBlockPolicy.isInteractionBlocked(memberId, calendar.ownerMemberId)) return false
+            if (calendarMemberRepository
+                    .findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                        calendarId,
+                        memberId,
+                        ScheduleCalendarMemberStatus.ACTIVE,
+                    ) != null
+            ) {
+                return true
+            }
+        }
+        return categoryShareRepository.findByCategoryIdAndTargetMemberId(categoryId, memberId)
+            ?.takeIf { !it.deleted && it.status == ScheduleShareStatus.ACTIVE } != null
     }
 
     private fun canDispatchSchedule(
@@ -208,7 +268,6 @@ class SchedulePushRecipientAccessValidator(
             .orElse(null)
             ?.takeUnless { it.deleted }
             ?: return false
-        if (schedule.memberId == memberId) return true
         val access = accessPolicy.resolve(memberId, schedule)
         return SchedulePushPayloadAccessPolicy.canDispatch(access, payloadType)
     }

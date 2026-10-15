@@ -99,6 +99,64 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
     }
 
     @Test
+    fun `scoped claim leaves another schedule and another member untouched`() {
+        ensureActivePushMember(jdbcTemplate, 2L)
+        repository.saveAndFlush(createJob(scheduleId = 901))
+        repository.saveAndFlush(createJob(scheduleId = 902))
+        repository.saveAndFlush(createJob(scheduleId = 901, memberId = 2))
+
+        val claimed = requireNotNull(coordinator.claimDueJobForSchedule(MEMBER_ID, 901, now, "scoped-worker"))
+
+        assertEquals(MEMBER_ID, claimed.memberId)
+        assertEquals(901L, claimed.scheduleId)
+        val persisted = repository.findAll()
+        assertEquals(1, persisted.count { it.status == SchedulePushJobStatus.PROCESSING })
+        assertEquals(2, persisted.count { it.status == SchedulePushJobStatus.ACTIVE })
+        assertTrue(persisted.filter { it.id != claimed.id }.all { it.lockedBy == null })
+        assertNull(coordinator.claimDueJobForSchedule(MEMBER_ID, 901, now, "duplicate-worker"))
+    }
+
+    @Test
+    fun `scoped and global workers racing for the same job have one lease winner`() {
+        repository.saveAndFlush(createJob())
+        val claims = ConcurrentLinkedQueue<Int>()
+        val failures = ConcurrentLinkedQueue<Throwable>()
+        val ready = CountDownLatch(2)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(2)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            listOf<() -> SchedulePushJob?>(
+                { coordinator.claimDueJobForSchedule(MEMBER_ID, 901, now, "scoped-worker") },
+                { coordinator.claimNextDueJob(now, "global-worker") },
+            ).forEach { claim ->
+                executor.submit {
+                    ready.countDown()
+                    start.await()
+                    try {
+                        claims += if (claim() == null) 0 else 1
+                    } catch (error: Throwable) {
+                        failures += error
+                    } finally {
+                        done.countDown()
+                    }
+                }
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS))
+            start.countDown()
+            assertTrue(done.await(10, TimeUnit.SECONDS))
+            assertTrue(failures.isEmpty(), failures.joinToString { it.stackTraceToString() })
+            assertEquals(1, claims.sum())
+            assertEquals(setOf(0, 1), claims.toSet())
+            val persisted = repository.findAll().single()
+            assertEquals(SchedulePushJobStatus.PROCESSING, persisted.status)
+            assertTrue(persisted.lockedBy in setOf("scoped-worker", "global-worker"))
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun `timeout을 넘은 PROCESSING lease만 ACTIVE로 복구해 다음 worker가 다시 claim한다`() {
         repository.saveAndFlush(createJob())
         assertTrue(coordinator.claimNextDueJob(now, "worker-a") != null)
@@ -212,9 +270,9 @@ class SchedulePushJobCoordinatorConcurrencyIntegrationTest @Autowired constructo
         assertEquals(2, repository.findAll().count { it.status == SchedulePushJobStatus.PROCESSING })
     }
 
-    private fun createJob(scheduleId: Long = 901L): SchedulePushJob =
+    private fun createJob(scheduleId: Long = 901L, memberId: Long = MEMBER_ID): SchedulePushJob =
         SchedulePushJob.create(
-            memberId = MEMBER_ID,
+            memberId = memberId,
             scheduleId = scheduleId,
             scheduleAt = now.plus(3, ChronoUnit.HOURS),
             departureAt = now.plus(2, ChronoUnit.HOURS),

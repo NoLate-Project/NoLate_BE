@@ -64,7 +64,7 @@ class ScheduleCategory(
         this.sortOrder = sortOrder
     }
 
-    fun moveToCalendar(calendarId: Long, sortOrder: Int) {
+    fun moveToCalendar(calendarId: Long?, sortOrder: Int) {
         this.calendarId = calendarId
         this.sortOrder = sortOrder
     }
@@ -93,5 +93,9 @@ data class ScheduleCategorySettingDto(
     val calendarId: Long? = null,
     val shared: Boolean = false,
     val sharePermission: ScheduleSharePermission? = null,
+    /** 이름/색상/정렬 등 카테고리 자체를 편집할 수 있는지 여부. */
+    val canManageMetadata: Boolean = false,
+    /** 공유 대상과 이동으로 audience를 바꿀 수 있는 리소스 OWNER인지 여부. */
+    val canManageAudience: Boolean = false,
     val updatedAt: String? = null,
 )

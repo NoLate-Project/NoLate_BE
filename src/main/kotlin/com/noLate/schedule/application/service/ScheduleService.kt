@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.intercity.IntercityJourneyValidator
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheAudienceResolver
@@ -17,6 +18,7 @@ import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
+import com.noLate.schedule.infrastructure.ScheduleShareInvitationRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.domain.ScheduleCategoryDto
@@ -26,8 +28,9 @@ import com.noLate.schedule.domain.ScheduleCalendarStatus
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleType
-import com.noLate.subscription.application.SubscriptionPolicyService
+import com.noLate.schedule.application.service.policy.ScheduleNotificationPolicy
 import jakarta.transaction.Transactional
 import org.springframework.data.domain.PageRequest
 import org.springframework.context.ApplicationEventPublisher
@@ -48,10 +51,10 @@ import java.security.MessageDigest
 class ScheduleService(
     private val scheduleRepository: ScheduleRepository,
     private val objectMapper: ObjectMapper,
-    private val subscriptionPolicyService: SubscriptionPolicyService,
     private val categoryRepository: ScheduleCategoryRepository? = null,
     private val categoryShareRepository: ScheduleCategoryShareRepository? = null,
     private val scheduleShareRepository: ScheduleShareRepository? = null,
+    private val scheduleShareInvitationRepository: ScheduleShareInvitationRepository? = null,
     private val scheduleTravelPlanService: ScheduleTravelPlanService? = null,
     private val scheduleAccessPolicy: ScheduleAccessPolicy? = null,
     private val calendarRepository: ScheduleCalendarRepository? = null,
@@ -77,7 +80,22 @@ class ScheduleService(
 
     @Transactional
     fun addSchedule(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
-        return saveNewSchedule(memberId, scheduleDto, externalSourceKey = null)
+        val ticket = scheduleDto.route?.get("importedTicket")
+        val ticketKey = ticket?.let {
+            // Validate metadata before replay lookup; an unreviewed/corrupt import cannot claim a saved ticket.
+            IntercityJourneyValidator.validate(objectMapper.createObjectNode().set("importedTicket", it), null, null, null)
+            withAuthorizedCategory(memberId, withAuthorizedCalendar(memberId, scheduleDto, existingCalendarId = null))
+            val identity = listOf("kind", "departureName", "arrivalName", "departureAt", "arrivalAt", "trainNumber", "grade")
+                .map { field -> java.text.Normalizer.normalize(it.path(field).asText().trim(), java.text.Normalizer.Form.NFC) }
+            MessageDigest.getInstance("SHA-256").digest(
+                ("NOLATE_REVIEWED_TICKET_V1:" + objectMapper.writeValueAsString(identity)).toByteArray(StandardCharsets.UTF_8)
+            ).joinToString("") { byte -> "%02x".format(byte) }
+        }
+        if (ticketKey != null && scheduleRepository.findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, ticketKey) != null) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "이미 가져온 운행편입니다. 기존 일정에서 경로를 확인하세요. 변경된 표는 기존 일정을 삭제한 뒤 다시 공유해 주세요.")
+        }
+        // ScheduleUseCase fences member creation in one transaction; the member/source unique key also protects storage.
+        return saveNewSchedule(memberId, scheduleDto, externalSourceKey = ticketKey)
     }
 
     /**
@@ -95,13 +113,23 @@ class ScheduleService(
         val externalSourceKey = buildExternalSourceKey(source, scheduleDto.calendarId)
         val keyedForRequestedScope = scheduleRepository
             .findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, externalSourceKey)
+        // A source key proves only duplicate identity. Check a historical hit first so a revoked
+        // author receives the same non-disclosing not-found result, then validate that this actor
+        // can currently write the requested assignment before any legacy key repair can occur.
+        keyedForRequestedScope?.let { requireImportReplayAccess(memberId, it) }
+        withAuthorizedCategory(
+            memberId,
+            withAuthorizedCalendar(memberId, scheduleDto, existingCalendarId = null),
+        )
         if (keyedForRequestedScope != null && keyedForRequestedScope.calendarId == scheduleDto.calendarId) {
+            requireImportReplayAssignment(memberId, keyedForRequestedScope, scheduleDto)
             return ScheduleImportResultDto(
-                schedule = keyedForRequestedScope.toDto(objectMapper),
+                schedule = importReplayDto(memberId, keyedForRequestedScope),
                 created = false,
             )
         }
         if (keyedForRequestedScope != null) {
+            requireImportReplayAccess(memberId, keyedForRequestedScope)
             // A private imported schedule can later be moved into a shared calendar while its
             // one-way hash still names PERSONAL. The incoming source gives us enough information
             // to repair the old row to its actual current scope before the requested scope is used.
@@ -113,11 +141,15 @@ class ScheduleService(
             val formerlyPersonal = scheduleRepository
                 .findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, personalScopedKey)
             if (formerlyPersonal != null) {
+                requireImportReplayAccess(memberId, formerlyPersonal)
                 val sameDestination = formerlyPersonal.calendarId == scheduleDto.calendarId
+                if (sameDestination) {
+                    requireImportReplayAssignment(memberId, formerlyPersonal, scheduleDto)
+                }
                 repairMovedImportScope(memberId, formerlyPersonal, source)
                 if (sameDestination) {
                     return ScheduleImportResultDto(
-                        schedule = formerlyPersonal.toDto(objectMapper),
+                        schedule = importReplayDto(memberId, formerlyPersonal),
                         created = false,
                     )
                 }
@@ -130,11 +162,15 @@ class ScheduleService(
         val legacyScoped = scheduleRepository
             .findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, legacyKey)
         if (legacyScoped != null) {
+            requireImportReplayAccess(memberId, legacyScoped)
             val sameDestination = legacyScoped.calendarId == scheduleDto.calendarId
+            if (sameDestination) {
+                requireImportReplayAssignment(memberId, legacyScoped, scheduleDto)
+            }
             repairMovedImportScope(memberId, legacyScoped, source)
             if (sameDestination) {
                 return ScheduleImportResultDto(
-                    schedule = legacyScoped.toDto(objectMapper),
+                    schedule = importReplayDto(memberId, legacyScoped),
                     created = false,
                 )
             }
@@ -144,10 +180,11 @@ class ScheduleService(
         // 시간까지 일치할 때만 원본 키를 연결한다. 일반 수동 일정을 제목만으로 합치지 않는다.
         val legacyImport = findLegacyImportedSchedule(memberId, scheduleDto, source)
         if (legacyImport != null) {
+            requireImportReplayAssignment(memberId, legacyImport, scheduleDto)
             legacyImport.externalSourceKey = externalSourceKey
             val claimed = scheduleRepository.save(legacyImport)
             return ScheduleImportResultDto(
-                schedule = claimed.toDto(objectMapper),
+                schedule = importReplayDto(memberId, claimed),
                 created = false,
             )
         }
@@ -169,10 +206,10 @@ class ScheduleService(
             existingCalendarId = null,
         )
         val authorizedDto = withAuthorizedCategory(memberId, calendarAuthorizedDto)
-        val routeNormalizedDto = normalizeRouteSetupDto(authorizedDto, existingSchedule = null)
+        val newScheduleSafeDto = sanitizeNewSchedulePrivateRoute(memberId, authorizedDto)
+        val routeNormalizedDto = normalizeRouteSetupDto(newScheduleSafeDto, existingSchedule = null)
         validateScheduleCoordinates(routeNormalizedDto)
         val normalizedDto = normalizeNotificationDto(
-            memberId = memberId,
             scheduleDto = routeNormalizedDto,
             existingSchedule = null,
         )
@@ -188,7 +225,34 @@ class ScheduleService(
             reason = "schedule-created",
         )
 
-        return savedEntity.toDto(objectMapper)
+        return resourceAwareDto(memberId, savedEntity)
+    }
+
+    /**
+     * Calendar EDITOR may create common content, but a SCHEDULE_ONLY calendar does not authorize
+     * private origin/path/alarm state. Client-supplied content-mode overrides are OWNER-only.
+     * A direct category EDITOR remains an independent SCHEDULE_AND_TRAVEL grant.
+     */
+    private fun sanitizeNewSchedulePrivateRoute(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
+        val calendarId = scheduleDto.calendarId ?: return scheduleDto
+        val calendar = calendarRepository?.findByIdAndStatusAndDeletedFalse(calendarId)
+            ?: return scheduleDto
+        if (calendar.ownerMemberId == memberId) return scheduleDto
+
+        val withoutOwnerOverride = scheduleDto.copy(calendarContentModeOverride = null)
+        val categoryId = scheduleDto.category.id?.toLongOrNull()
+        val directCategoryEditor = categoryId?.let { id ->
+            categoryShareRepository?.findByCategoryIdAndTargetMemberId(id, memberId)
+                ?.let {
+                    !it.deleted &&
+                        it.status == ScheduleShareStatus.ACTIVE &&
+                        it.permission in setOf(ScheduleSharePermission.EDITOR, ScheduleSharePermission.OWNER)
+                }
+        } == true
+        if (directCategoryEditor || calendar.defaultContentMode == ScheduleShareContentMode.SCHEDULE_AND_TRAVEL) {
+            return withoutOwnerOverride
+        }
+        return clearPersonalRoute(withoutOwnerOverride)
     }
 
     @Transactional
@@ -198,13 +262,19 @@ class ScheduleService(
         scheduleDto: ScheduleDto,
     ): ScheduleDto {
         val existingSchedule = findEditableActive(memberId, scheduleId)
-        if (
-            existingSchedule.memberId != memberId &&
-            existingSchedule.calendarId != scheduleDto.calendarId
-        ) {
+        val existingCategoryId = existingSchedule.categoryId
+            ?: existingSchedule.categorySnapshot?.categoryId?.toLongOrNull()
+        val requestedCategoryId = scheduleDto.category.id?.toLongOrNull()
+        val changesAudienceScope = existingSchedule.calendarId != scheduleDto.calendarId ||
+            existingCategoryId != requestedCategoryId ||
+            existingSchedule.calendarContentModeOverride != scheduleDto.calendarContentModeOverride
+        val actorAccess = scheduleAccessPolicy?.resolve(memberId, existingSchedule)
+        val canManageAudienceScope = actorAccess?.canManageAudience == true ||
+            (scheduleAccessPolicy == null && existingSchedule.memberId == memberId)
+        if (changesAudienceScope && !canManageAudienceScope) {
             throw BusinessException(
                 ErrorCode.FORBIDDEN,
-                "일정 원작성자만 일정을 다른 캘린더로 이동할 수 있습니다.",
+                "일정 공유 범위는 리소스 소유자만 변경할 수 있습니다.",
             )
         }
         val previousAudience = cacheAudience(existingSchedule)
@@ -218,20 +288,64 @@ class ScheduleService(
             scheduleDto = authorizedDto,
             existingSchedule = existingSchedule,
         )
+        val actorRouteSafeDto = if (
+            actorAccess != null && !actorAccess.canManageAudience && !actorAccess.travelEnabled
+        ) {
+            clearPersonalRoute(destinationSafeDto)
+        } else {
+            destinationSafeDto
+        }
+
+        val actorPersonalBaseline = personalRouteBaseline(
+            memberId = memberId,
+            existingSchedule = existingSchedule,
+            access = actorAccess,
+        )
 
         val routeNormalizedDto = normalizeRouteSetupDto(
-            destinationSafeDto.copy(id = scheduleId),
-            existingSchedule,
+            actorRouteSafeDto.copy(id = scheduleId),
+            existingSchedule = existingSchedule,
+            personalBaseline = actorPersonalBaseline,
         )
         validateScheduleCoordinates(routeNormalizedDto)
         val normalizedDto = normalizeNotificationDto(
-            memberId = memberId,
             scheduleDto = routeNormalizedDto,
             existingSchedule = existingSchedule,
+            personalBaseline = actorPersonalBaseline,
         )
         validateScheduleRange(normalizedDto)
 
-        applyDto(existingSchedule, normalizedDto)
+        // The schedule row is the serialization parent for direct share mutations and invitation
+        // acceptance. Freeze every token before changing its category/calendar ownership scope.
+        val scheduleInvitations = if (changesAudienceScope) {
+            scheduleShareInvitationRepository
+                ?.findAllByResourceForUpdate(ScheduleShareResourceType.SCHEDULE, scheduleId)
+                .orEmpty()
+        } else {
+            emptyList()
+        }
+
+        val canWriteCanonicalPersonalRoute = existingSchedule.memberId == memberId &&
+            (actorAccess == null || actorAccess.canManageAudience || actorAccess.travelEnabled)
+        val canonicalDto = if (canWriteCanonicalPersonalRoute) {
+            normalizedDto
+        } else {
+            preserveCanonicalPersonalRoute(normalizedDto, existingSchedule)
+        }
+        applyDto(existingSchedule, canonicalDto)
+        if (changesAudienceScope) {
+            val destinationOwnerMemberId = scheduleAccessPolicy
+                ?.currentResourceOwnerMemberId(existingSchedule)
+                ?: existingSchedule.memberId.takeIf { scheduleAccessPolicy == null }
+                ?: throw BusinessException(ErrorCode.INVALID_STATE, "이동 대상 일정 소유자를 확인할 수 없습니다.")
+            val directShares = scheduleShareRepository
+                ?.findAllByScheduleIdInAndDeletedFalseOrderByScheduleIdAscIdAsc(listOf(scheduleId))
+                .orEmpty()
+            directShares.forEach { it.ownerMemberId = destinationOwnerMemberId }
+            scheduleInvitations.forEach { it.ownerMemberId = destinationOwnerMemberId }
+            scheduleShareRepository?.saveAllAndFlush(directShares)
+            scheduleShareInvitationRepository?.saveAllAndFlush(scheduleInvitations)
+        }
         val savedEntity = scheduleRepository.save(existingSchedule)
         publishCalendarCacheInvalidation(
             memberIds = previousAudience + cacheAudience(savedEntity),
@@ -240,7 +354,91 @@ class ScheduleService(
 
         // Mutation 후 owner mirror와 push job은 반드시 영속 route 원본으로 동기화한다.
         // 요청자별 travel plan 개인화는 UseCase가 owner 동기화 뒤 조회 응답에서 적용한다.
-        return savedEntity.toDto(objectMapper)
+        val resourceAware = resourceAwareDto(memberId, savedEntity)
+        return if (canWriteCanonicalPersonalRoute) {
+            resourceAware
+        } else {
+            overlayActorPersonalRoute(resourceAware, normalizedDto)
+        }
+    }
+
+    /** Scalar preflight used only to include the destination resource owner in the member fence. */
+    @Transactional
+    fun assignmentOwnerMemberId(scheduleDto: ScheduleDto): Long? {
+        val categoryId = scheduleDto.category.id?.toLongOrNull() ?: return null
+        val category = categoryRepository?.findActiveScope(categoryId) ?: return null
+        val calendarId = category.getCalendarId()
+        if (calendarId != scheduleDto.calendarId) return null
+        return if (calendarId == null) {
+            category.getMemberId()
+        } else {
+            calendarRepository?.findByIdAndStatusAndDeletedFalse(calendarId)?.ownerMemberId
+        }
+    }
+
+    /**
+     * Raw (pre-block) audience used to acquire member locks before an edit can change ownership.
+     * Final authorization still comes from [ScheduleAccessPolicy]; keeping blocked/revoked-edge
+     * candidates here is intentional so their jobs/alarms can be cancelled in the same mutation.
+     */
+    @Transactional
+    fun accessAudienceMemberIds(scheduleId: Long): Set<Long> {
+        val schedule = scheduleRepository.findById(scheduleId).orElse(null)
+            ?.takeUnless { it.deleted }
+            ?: return emptySet()
+        val category = schedule.categoryId
+            ?.let { categoryRepository?.findById(it)?.orElse(null) }
+            ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+                ?.let { categoryRepository?.findById(it)?.orElse(null)?.takeUnless { row -> row.deleted } }
+        val categoryId = category?.id?.takeIf { !category.deleted }
+        val calendarId = schedule.calendarId ?: category?.calendarId
+        return buildSet {
+            add(schedule.memberId)
+            scheduleAccessPolicy?.currentResourceOwnerMemberId(schedule)?.let(::add)
+            scheduleShareRepository
+                ?.findAllByScheduleIdAndStatusAndDeletedFalseOrderByIdAsc(
+                    scheduleId,
+                    ScheduleShareStatus.ACTIVE,
+                )
+                ?.mapTo(this) { it.targetMemberId }
+            categoryId?.let { activeCategoryId ->
+                categoryShareRepository
+                    ?.findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
+                        activeCategoryId,
+                        ScheduleShareStatus.ACTIVE,
+                    )
+                    ?.mapTo(this) { it.targetMemberId }
+            }
+            calendarId?.let { activeCalendarId ->
+                calendarMemberRepository
+                    ?.findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(activeCalendarId)
+                    ?.mapTo(this) { it.memberId }
+            }
+        }
+    }
+
+    @Transactional
+    fun assignmentAudienceMemberIds(scheduleDto: ScheduleDto): Set<Long> {
+        val categoryId = scheduleDto.category.id?.toLongOrNull() ?: return emptySet()
+        val category = categoryRepository?.findById(categoryId)?.orElse(null)
+            ?.takeUnless { it.deleted }
+            ?: return emptySet()
+        if (category.calendarId != scheduleDto.calendarId) return emptySet()
+        return buildSet {
+            if (category.calendarId == null) add(category.memberId)
+            categoryShareRepository
+                ?.findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(
+                    categoryId,
+                    ScheduleShareStatus.ACTIVE,
+                )
+                ?.mapTo(this) { it.targetMemberId }
+            category.calendarId?.let { calendarId ->
+                calendarRepository?.findByIdAndStatusAndDeletedFalse(calendarId)?.ownerMemberId?.let(::add)
+                calendarMemberRepository
+                    ?.findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
+                    ?.mapTo(this) { it.memberId }
+            }
+        }
     }
 
     /**
@@ -264,7 +462,7 @@ class ScheduleService(
 
     @Transactional
     fun deleteSchedule(memberId: Long, scheduleId: Long) {
-        val entity = findOwnedActive(memberId, scheduleId)
+        val entity = findEditableActive(memberId, scheduleId)
         val affectedMemberIds = cacheAudience(entity) + memberId
         // 삭제한 외부 일정은 사용자가 나중에 의도적으로 다시 가져올 수 있어야 한다.
         entity.externalSourceKey = null
@@ -275,7 +473,23 @@ class ScheduleService(
 
     @Transactional
     fun markDeparted(memberId: Long, scheduleId: Long): ScheduleDto {
-        val entity = findOwnedActive(memberId, scheduleId)
+        val entity = if (scheduleAccessPolicy == null) {
+            findOwnedActive(memberId, scheduleId)
+        } else {
+            scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
+                ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        }
+        val access = scheduleAccessPolicy?.resolve(memberId, entity)
+        if (access != null && (!access.canView || !access.travelEnabled)) {
+            throw BusinessException(ErrorCode.FORBIDDEN, "이 일정의 이동 기능을 사용할 권한이 없습니다.")
+        }
+        if (access == null && entity.memberId != memberId) {
+            throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        }
+        // The canonical route is the original author's legacy personal plan. A resource owner can
+        // own editor-authored shared content without owning that private route; their departure is
+        // already persisted in ScheduleDepartureStatus and their own travel plan above the service.
+        if (entity.memberId != memberId) return resourceAwareDto(memberId, entity)
         val affectedMemberIds = cacheAudience(entity) + memberId
         // 출발 완료는 알림 액션에서 중복 호출될 수 있으므로 최초 완료 시각을 보존한다.
         // 경로 정보는 남겨 두고 해당 일정의 남은 실시간 알림만 비활성화한다.
@@ -286,7 +500,7 @@ class ScheduleService(
 
         val saved = scheduleRepository.save(entity)
         publishCalendarCacheInvalidation(affectedMemberIds, "schedule-departed")
-        return saved.toDto(objectMapper)
+        return resourceAwareDto(memberId, saved)
     }
 
     @Transactional
@@ -502,33 +716,20 @@ class ScheduleService(
     private fun toVisibleDtos(memberId: Long, schedules: List<Schedule>): List<ScheduleDto> {
         if (schedules.isEmpty()) return emptyList()
 
-        val ownerScopedSchedules = if (sharingAvailabilityPolicy.enabled) {
+        val ownerScopedSchedules = if (sharingAvailabilityPolicy.enabled || scheduleAccessPolicy != null) {
             schedules
         } else {
             schedules.filter { it.memberId == memberId }
         }
         if (ownerScopedSchedules.isEmpty()) return emptyList()
 
-        // The repository has already enforced visibility, and an all-owned result
-        // needs no share/category/calendar grant lookup. This is the common calendar
-        // path and avoids four fixed DB reads on each cold monthly cache fill.
-        val allSchedulesOwned = ownerScopedSchedules.all { it.memberId == memberId }
-        val accessByScheduleId = if (allSchedulesOwned) {
-            if (scheduleAccessPolicy == null) {
-                emptyMap()
-            } else {
-                ownerScopedSchedules.mapNotNull { schedule ->
-                    schedule.id?.let { scheduleId ->
-                        scheduleId to ownerAccessDecision(schedule)
-                    }
-                }.toMap()
-            }
-        } else {
-            scheduleAccessPolicy
-                ?.resolveAll(memberId, ownerScopedSchedules)
-                .orEmpty()
-        }
-        val visibleSchedules = if (scheduleAccessPolicy == null || allSchedulesOwned) {
+        // `schedules.member_id` is the creator/audit identity for content created through a
+        // category or shared calendar. The central policy must therefore also evaluate rows whose
+        // creator equals the caller; otherwise a revoked editor would retain owner access forever.
+        val accessByScheduleId = scheduleAccessPolicy
+            ?.resolveAll(memberId, ownerScopedSchedules)
+            .orEmpty()
+        val visibleSchedules = if (scheduleAccessPolicy == null) {
             ownerScopedSchedules
         } else {
             ownerScopedSchedules.filter { schedule ->
@@ -542,7 +743,7 @@ class ScheduleService(
         fun personalizedDto(schedule: Schedule): ScheduleDto {
             val base = schedule.toDto(objectMapper)
             val access = schedule.id?.let(accessByScheduleId::get)
-            val received = schedule.memberId != memberId
+            val received = access?.canManageAudience != true
             val personalized = scheduleTravelPlanService?.personalizeScheduleDto(
                 memberId = memberId,
                 schedule = schedule,
@@ -551,6 +752,7 @@ class ScheduleService(
                 access = access,
             ) ?: base
             return personalized.copy(
+                ownerMemberId = access?.resourceOwnerMemberId ?: personalized.ownerMemberId,
                 sharePermission = access?.effectivePermission.takeIf { received },
                 shareContentMode = access?.effectiveContentMode.takeIf { received },
                 travelCollaborationEnabled = access?.travelEnabled,
@@ -634,6 +836,23 @@ class ScheduleService(
         )
     }
 
+    private fun resourceAwareDto(memberId: Long, schedule: Schedule): ScheduleDto {
+        val base = schedule.toDto(objectMapper)
+        val access = scheduleAccessPolicy?.resolve(memberId, schedule) ?: return base
+        val received = !access.canManageAudience
+        return base.copy(
+            ownerMemberId = access.resourceOwnerMemberId ?: base.ownerMemberId,
+            sharePermission = access.effectivePermission.takeIf { received },
+            shareContentMode = access.effectiveContentMode.takeIf { received },
+            travelCollaborationEnabled = access.travelEnabled,
+            canViewAllTravelPlans = access.canViewAllTravelPlans,
+            category = base.category.copy(
+                shared = access.categoryPermission != null || access.calendarRole != null,
+                sharePermission = access.categoryPermission,
+            ),
+        )
+    }
+
     private fun strongestPermission(
         first: ScheduleSharePermission?,
         second: ScheduleSharePermission?,
@@ -660,7 +879,10 @@ class ScheduleService(
         if (sharingAvailabilityPolicy.enabled) {
             calendarCacheAudienceResolver?.resolve(schedule).orEmpty()
         } else {
-            setOf(schedule.memberId)
+            val ownerMemberId = scheduleAccessPolicy
+                ?.currentResourceOwnerMemberId(schedule)
+                ?: schedule.memberId.takeIf { scheduleAccessPolicy == null }
+            setOfNotNull(ownerMemberId)
         }
 
     private fun calendarCacheScope(): ScheduleCalendarCacheScope =
@@ -682,8 +904,6 @@ class ScheduleService(
     }
 
     private fun findEditableActive(memberId: Long, scheduleId: Long): Schedule {
-        if (!sharingAvailabilityPolicy.enabled) return findOwnedActive(memberId, scheduleId)
-
         val policy = scheduleAccessPolicy ?: return findOwnedActive(memberId, scheduleId)
         val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
             ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
@@ -725,13 +945,33 @@ class ScheduleService(
         lockedById[calendarId]
             ?.takeIf { !it.deleted && it.status == ScheduleCalendarStatus.ACTIVE }
             ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
+        if (existingCalendarId == calendarId) {
+            // findEditableActive already established a direct schedule/category or calendar grant.
+            // Keeping the same calendar does not expand the audience; category selection is still
+            // checked below by withAuthorizedCategory.
+            return scheduleDto
+        }
         val membership = memberships.findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
             calendarId,
             memberId,
             ScheduleCalendarMemberStatus.ACTIVE,
-        ) ?: throw BusinessException(ErrorCode.FORBIDDEN, "공유 캘린더 멤버가 아닙니다.")
-        if (membership.role !in setOf(ScheduleCalendarRole.OWNER, ScheduleCalendarRole.EDITOR)) {
-            throw BusinessException(ErrorCode.FORBIDDEN, "공유 캘린더에 일정을 저장할 권한이 없습니다.")
+        )
+        val calendarWritable = membership?.role in setOf(ScheduleCalendarRole.OWNER, ScheduleCalendarRole.EDITOR)
+        if (!calendarWritable) {
+            val categoryId = scheduleDto.category.id?.toLongOrNull()
+                ?: throw BusinessException(ErrorCode.INVALID_INPUT, "일정을 저장할 카테고리를 선택해 주세요.")
+            val category = categoryRepository
+                ?.findActiveForScheduleAssignment(categoryId)
+                ?.takeIf { it.calendarId == calendarId }
+            val categoryWritable = category != null && categoryShareRepository
+                ?.findByCategoryIdAndTargetMemberId(categoryId, memberId)
+                ?.let {
+                    !it.deleted && it.status == ScheduleShareStatus.ACTIVE &&
+                        it.permission in setOf(ScheduleSharePermission.EDITOR, ScheduleSharePermission.OWNER)
+                } == true
+            if (!categoryWritable) {
+                throw BusinessException(ErrorCode.FORBIDDEN, "공유 캘린더 또는 카테고리에 일정을 저장할 권한이 없습니다.")
+            }
         }
         return scheduleDto
     }
@@ -869,13 +1109,100 @@ class ScheduleService(
     private fun normalizeRouteSetupDto(
         scheduleDto: ScheduleDto,
         existingSchedule: Schedule?,
+        personalBaseline: ScheduleDto? = null,
     ): ScheduleDto = scheduleDto.copy(
         routeSetupRequired = when {
             hasConfiguredRoute(scheduleDto) -> false
             scheduleDto.routeSetupRequired != null -> scheduleDto.routeSetupRequired
-            else -> existingSchedule?.routeSetupRequired ?: false
+            else -> personalBaseline?.routeSetupRequired ?: existingSchedule?.routeSetupRequired ?: false
         },
     )
+
+    /**
+     * `Schedule.route` still carries the original author's legacy personal route together with the
+     * shared destination. A different editor may change shared content and the common destination,
+     * but their origin/path/alarm belongs in `schedule_travel_plans`, never in that canonical row.
+     */
+    private fun preserveCanonicalPersonalRoute(
+        requested: ScheduleDto,
+        existingSchedule: Schedule,
+    ): ScheduleDto {
+        val canonical = existingSchedule.toDto(objectMapper)
+        return requested.copy(
+            travelMinutes = canonical.travelMinutes,
+            departAt = canonical.departAt,
+            departedAt = canonical.departedAt,
+            travelMode = canonical.travelMode,
+            origin = canonical.origin,
+            routeSetupRequired = canonical.routeSetupRequired,
+            route = canonical.route,
+            notificationEnabled = canonical.notificationEnabled,
+            notificationLeadMinutes = canonical.notificationLeadMinutes,
+            notificationIntervalMinutes = canonical.notificationIntervalMinutes,
+            alertMode = canonical.alertMode,
+        )
+    }
+
+    /** Return the actor's normalized route so the use case can persist only that actor's plan/job. */
+    private fun overlayActorPersonalRoute(base: ScheduleDto, actor: ScheduleDto): ScheduleDto =
+        base.copy(
+            travelMinutes = actor.travelMinutes,
+            departAt = actor.departAt,
+            departedAt = actor.departedAt,
+            travelMode = actor.travelMode,
+            origin = actor.origin,
+            routeSetupRequired = actor.routeSetupRequired,
+            route = actor.route,
+            notificationEnabled = actor.notificationEnabled,
+            notificationLeadMinutes = actor.notificationLeadMinutes,
+            notificationIntervalMinutes = actor.notificationIntervalMinutes,
+            alertMode = actor.alertMode,
+        )
+
+    private fun clearPersonalRoute(scheduleDto: ScheduleDto): ScheduleDto = scheduleDto.copy(
+        travelMinutes = null,
+        departAt = null,
+        departedAt = null,
+        travelMode = null,
+        origin = null,
+        routeSetupRequired = true,
+        route = null,
+        notificationEnabled = false,
+        notificationLeadMinutes = null,
+        notificationIntervalMinutes = null,
+        alertMode = ScheduleAlertMode.STANDARD,
+    )
+
+    private fun personalRouteBaseline(
+        memberId: Long,
+        existingSchedule: Schedule,
+        access: ScheduleAccessDecision?,
+    ): ScheduleDto? {
+        if (existingSchedule.memberId == memberId) return null
+        val base = existingSchedule.toDto(objectMapper)
+        val plan = existingSchedule.id?.let { scheduleId ->
+            scheduleTravelPlanService?.loadMyPlans(memberId, listOf(scheduleId))?.get(scheduleId)
+        }
+        return scheduleTravelPlanService?.personalizeScheduleDto(
+            memberId = memberId,
+            schedule = existingSchedule,
+            base = base,
+            plan = plan,
+            access = access,
+        ) ?: base.copy(
+            travelMinutes = null,
+            departAt = null,
+            departedAt = null,
+            travelMode = null,
+            origin = null,
+            routeSetupRequired = true,
+            route = null,
+            notificationEnabled = false,
+            notificationLeadMinutes = null,
+            notificationIntervalMinutes = null,
+            alertMode = ScheduleAlertMode.STANDARD,
+        )
+    }
 
     /**
      * 이름만 있던 공통 도착지는 개인 경로 저장 시 서버에서 좌표가 보강될 수 있다.
@@ -927,49 +1254,38 @@ class ScheduleService(
      * 알림 관련 값들을 정책 기준으로 보정하고 검증한다.
      *
      * ScheduleDto.toEntity()는 단순 변환만 담당하고,
-     * 구독 정책 검증은 Service에서 처리한다.
+     * 플랜 중립 입력 검증은 Service에서 처리한다.
      */
     private fun normalizeNotificationDto(
-        memberId: Long,
         scheduleDto: ScheduleDto,
         existingSchedule: Schedule?,
+        personalBaseline: ScheduleDto? = null,
     ): ScheduleDto {
-        val wasNotificationEnabled = existingSchedule?.route?.notificationEnabled == true
+        val wasNotificationEnabled = personalBaseline?.notificationEnabled
+            ?: (existingSchedule?.route?.notificationEnabled == true)
         val notificationEnabled = scheduleDto.notificationEnabled ?: wasNotificationEnabled
-
-        val policy = if (notificationEnabled) {
-            subscriptionPolicyService.getPolicy(memberId)
-        } else {
-            null
-        }
 
         val notificationLeadMinutes = if (notificationEnabled) {
             scheduleDto.notificationLeadMinutes
+                ?: personalBaseline?.notificationLeadMinutes
                 ?: existingSchedule?.route?.notificationLeadMinutes
-                ?: requireNotNull(policy).maxNotificationLeadMinutes
+                ?: ScheduleNotificationPolicy.DEFAULT_LEAD_MINUTES
         } else {
             null
         }
 
         val notificationIntervalMinutes = if (notificationEnabled) {
             scheduleDto.notificationIntervalMinutes
+                ?: personalBaseline?.notificationIntervalMinutes
                 ?: existingSchedule?.route?.notificationIntervalMinutes
-                ?: requireNotNull(policy).minEtaRefreshIntervalMinutes
+                ?: ScheduleNotificationPolicy.DEFAULT_INTERVAL_MINUTES
         } else {
             null
         }
-        val alertMode = if (
-            existingSchedule == null ||
-            existingSchedule.memberId == memberId
-        ) {
-            scheduleDto.alertMode
-                ?: existingSchedule?.route?.alertMode
-                ?: ScheduleAlertMode.STANDARD
-        } else {
-            // 알람 강도는 회원별 설정이다. 공유 편집 화면의 개인화 DTO가 owner route의
-            // 알람 선호를 덮지 않으며, 편집자 자신의 값은 travel-plan API로 저장한다.
-            existingSchedule.route?.alertMode ?: ScheduleAlertMode.STANDARD
-        }
+        val alertMode = scheduleDto.alertMode
+            ?: personalBaseline?.alertMode
+            ?: existingSchedule?.route?.alertMode
+            ?: ScheduleAlertMode.STANDARD
 
         if (
             notificationEnabled &&
@@ -987,12 +1303,10 @@ class ScheduleService(
             )
         }
 
-        subscriptionPolicyService.validateNotificationSettings(
-            memberId = memberId,
+        ScheduleNotificationPolicy.validate(
             notificationEnabled = notificationEnabled,
             leadMinutes = notificationLeadMinutes,
             intervalMinutes = notificationIntervalMinutes,
-            consumesNewQuota = notificationEnabled && !wasNotificationEnabled,
         )
 
         return scheduleDto.copy(
@@ -1040,6 +1354,47 @@ class ScheduleService(
 
     private fun buildLegacyExternalSourceKey(source: ScheduleImportSource): String =
         hashExternalSourceParts(buildExternalSourceParts(source))
+
+    /**
+     * An import key is only an idempotency index, never an authorization capability. Shared
+     * container authors remain queryable by the historical `(member_id, source_key)` index after
+     * their grant is revoked, so every hit must cross the current resource policy before it can be
+     * returned or re-keyed.
+     */
+    private fun requireImportReplayAccess(memberId: Long, schedule: Schedule) {
+        val access = scheduleAccessPolicy?.resolve(memberId, schedule)
+        if (access != null && !access.canView) {
+            throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        }
+        if (access == null && schedule.memberId != memberId) {
+            throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        }
+    }
+
+    private fun requireImportReplayAssignment(
+        memberId: Long,
+        schedule: Schedule,
+        requested: ScheduleDto,
+    ) {
+        requireImportReplayAccess(memberId, schedule)
+        if (schedule.calendarId != requested.calendarId) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "가져오기 대상 캘린더가 기존 일정과 다릅니다.")
+        }
+        val requestedCategoryId = requested.category.id?.toLongOrNull()
+        val currentCategoryId = schedule.categoryId
+            ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+        if (requestedCategoryId != null && currentCategoryId != null &&
+            requestedCategoryId != currentCategoryId
+        ) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "가져오기 대상 카테고리가 기존 일정과 다릅니다.")
+        }
+    }
+
+    private fun importReplayDto(memberId: Long, schedule: Schedule): ScheduleDto {
+        requireImportReplayAccess(memberId, schedule)
+        return toVisibleDtos(memberId, listOf(schedule)).singleOrNull()
+            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+    }
 
     private fun repairMovedImportScope(
         memberId: Long,

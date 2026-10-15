@@ -8,6 +8,16 @@ import java.time.Instant
 
 class ScheduleEtaEvaluationHistoryMappingTest {
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = ["TRANSIT_TRAIN_NOT_YET_OBSERVED", "TRANSIT_ARRIVAL_SOURCE_STALE",
+        "TRANSIT_ARRIVAL_SOURCE_UNVERIFIED", "TRANSIT_ARRIVAL_API_ERROR", "TRANSIT_ARRIVAL_RATE_LIMITED", "TRANSIT_ARRIVAL_API_TIMEOUT"])
+    fun `도착정보 진단 코드는 이력에 보존하고 공급자 원문은 제거한다`(code: String) {
+        val history = map(TrafficResult(travelMinutes = 40, source = TrafficSource.TIMETABLE_PROVIDER,
+            fetchedAt = evaluatedAt, stale = true, failureReason = "$code: private-secret"))
+        assertEquals(code, history.failureReason?.substringBefore(':'))
+        assertFalse(history.failureReason.orEmpty().contains("private-secret"))
+    }
+
     // 현재 시각 대신 고정값을 사용해 언제 실행해도 같은 결과가 나오게 한다.
     private val evaluatedAt = Instant.parse("2026-09-09T00:00:00Z")
     private val evaluationId = "12345678-1234-1234-1234-123456789abc"
@@ -102,6 +112,50 @@ class ScheduleEtaEvaluationHistoryMappingTest {
         assertEquals(result.fetchedAt, history.fetchedAt)
         assertEquals(lateArrivalAt, history.predictedArrivalAt)
         assertTrue(lateArrivalAt.isAfter(history.targetArrivalAt))
+    }
+
+    @Test
+    fun `경로 추정값 사유는 원문을 제거하고 이력에 별도 코드로 보존한다`() {
+        val result = TrafficResult(
+            travelMinutes = 40,
+            source = TrafficSource.SELECTED_ROUTE,
+            stale = true,
+            failureReason = "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY: token=test-secret",
+            transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
+            firstBoardingWaitMinutes = 5,
+        )
+
+        val history = map(result)
+
+        assertEquals(TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY, history.failureReason)
+        assertEquals(TrafficSource.SELECTED_ROUTE, history.source)
+        assertTrue(history.stale)
+        assertNull(history.recommendedDepartureAt)
+        assertNull(history.predictedArrivalAt)
+    }
+
+    @Test
+    fun `재조회 성공 후 추정값으로 남은 fallback도 조회 시각을 이력에 보존한다`() {
+        val fetchedAt = evaluatedAt.plusSeconds(2)
+        val result = TrafficResult(
+            travelMinutes = 40,
+            source = TrafficSource.SELECTED_ROUTE,
+            fetchedAt = fetchedAt,
+            stale = true,
+            failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
+            firstBoardingWaitMinutes = 5,
+        )
+
+        val history = map(result)
+
+        assertFalse(result.accepted)
+        assertEquals(TrafficSource.SELECTED_ROUTE, history.source)
+        assertTrue(history.stale)
+        assertEquals(result.failureReason, history.failureReason)
+        assertEquals(fetchedAt, history.fetchedAt)
+        assertNull(history.recommendedDepartureAt)
+        assertNull(history.predictedArrivalAt)
     }
 
     @Test

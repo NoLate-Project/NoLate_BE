@@ -276,10 +276,13 @@ class AccountCleanupService(
         invitationAcceptanceRepository.deleteAllByMemberId(memberId)
         invitationRepository.deleteAllByOwnerMemberId(memberId)
 
-        scheduleRepository.deleteAll(
-            scheduleRepository.findAllOwnedIncludingDeletedOrderByIdAsc(memberId)
+        // member_id is creator/audit identity for schedules and categories inside another
+        // member's category or shared calendar. Withdrawing an editor must remove only their
+        // personal state, not the container owner's content.
+        scheduleRepository.deleteAll(findResourceOwnedAuthoredSchedules(memberId))
+        categoryRepository.deleteAll(
+            categoryRepository.findAllByMemberId(memberId).filter { it.calendarId == null },
         )
-        categoryRepository.deleteAll(categoryRepository.findAllByMemberId(memberId))
         favoriteRepository.deleteAll(favoriteRepository.findAllByMemberId(memberId))
         favoriteCategoryRepository.deleteAll(favoriteCategoryRepository.findAllByMemberId(memberId))
         recentRoutePlaceRepository.deleteAll(recentRoutePlaceRepository.findAllByMemberId(memberId))
@@ -357,7 +360,9 @@ class AccountCleanupService(
     private fun snapshotOwnedNotificationScope(memberId: Long): OwnedNotificationScope {
         val ownedCategoryIds = categoryRepository.findAllByMemberId(memberId)
             .asSequence()
-            .filterNot { it.deleted }
+            // In a shared calendar member_id records who created the row; the calendar owner is
+            // the resource owner. Editor withdrawal must not delete or clean that category.
+            .filter { it.calendarId == null }
             .mapNotNull { it.id }
             .toSortedSet()
         val categorySchedules = ownedCategoryIds.flatMap { categoryId ->
@@ -374,8 +379,7 @@ class AccountCleanupService(
         // recipients are part of the frozen member fence and all dependent data is removed before
         // the owner schedule is physically deleted. Category-linked editor schedules keep the
         // existing active-only policy because their schedule row survives this withdrawal.
-        val ownedSchedules =
-            scheduleRepository.findAllOwnedIncludingDeletedOrderByIdAsc(memberId)
+        val ownedSchedules = findResourceOwnedAuthoredSchedules(memberId)
         val schedules = (ownedSchedules + categorySchedules)
             .distinctBy { it.id }
             .sortedBy { it.id }
@@ -452,6 +456,42 @@ class AccountCleanupService(
             affectedMemberIds = affectedMemberIds.toSortedSet(),
             ownedCategoryShareTargets = ownedCategoryShareTargets,
         )
+    }
+
+    /**
+     * Returns authored rows for which the withdrawing member is also the current resource owner.
+     * A populated container id is authoritative: missing/deleted parents do not silently turn an
+     * editor-authored row back into standalone author-owned content.
+     */
+    private fun findResourceOwnedAuthoredSchedules(memberId: Long): List<com.noLate.schedule.domain.Schedule> {
+        val authored = scheduleRepository.findAllOwnedIncludingDeletedOrderByIdAsc(memberId)
+        if (authored.isEmpty()) return emptyList()
+        val categoryIds = authored.mapNotNull {
+            it.categoryId ?: it.categorySnapshot?.categoryId?.toLongOrNull()
+        }.distinct()
+        val categoriesById = categoryRepository.findAllById(categoryIds)
+            .associateBy { requireNotNull(it.id) }
+        val effectiveCalendarIds = authored.mapNotNull { schedule ->
+            schedule.calendarId ?: (
+                schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+                )?.let(categoriesById::get)?.calendarId
+        }.distinct()
+        val calendarsById = calendarRepository.findAllById(effectiveCalendarIds)
+            .filterNot { it.deleted }
+            .associateBy { requireNotNull(it.id) }
+
+        return authored.filter { schedule ->
+            val rawCategoryId = schedule.categoryId
+                ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+            val category = rawCategoryId?.let(categoriesById::get)
+            val effectiveCalendarId = schedule.calendarId ?: category?.calendarId
+            when {
+                effectiveCalendarId != null ->
+                    calendarsById[effectiveCalendarId]?.ownerMemberId == memberId
+                rawCategoryId != null -> category?.memberId == memberId
+                else -> schedule.memberId == memberId
+            }
+        }
     }
 }
 

@@ -20,19 +20,28 @@ class TransitArrivalService(
         directionName: String?,
         directionCode: String?,
         limit: Int,
+    ): List<TransitArrivalDto> = runCatching {
+        getSubwayArrivalsForEta(stationName, lineName, directionName, directionCode, limit)
+    }.getOrDefault(emptyList())
+
+    /** 기존 목록 API는 fail-soft를 유지하되 ETA에서는 호출 실패와 정상 빈 목록을 구분한다. */
+    fun getSubwayArrivalsForEta(
+        stationName: String,
+        lineName: String?,
+        directionName: String?,
+        directionCode: String?,
+        limit: Int,
     ): List<TransitArrivalDto> {
         val normalizedStationName = stationName.trim()
         if (normalizedStationName.isBlank()) return emptyList()
 
-        return runCatching {
-            seoulTransitArrivalClient.getSubwayArrivals(
-                stationName = normalizedStationName,
-                lineName = lineName?.trim()?.takeIf { it.isNotBlank() },
-                directionName = directionName?.trim()?.takeIf { it.isNotBlank() },
-                directionCode = directionCode?.trim()?.uppercase()?.takeIf { it == "UP" || it == "DOWN" },
-                limit = limit.coerceIn(1, 10),
-            )
-        }.getOrDefault(emptyList())
+        return seoulTransitArrivalClient.getSubwayArrivals(
+            stationName = normalizedStationName,
+            lineName = lineName?.trim()?.takeIf { it.isNotBlank() },
+            directionName = directionName?.trim()?.takeIf { it.isNotBlank() },
+            directionCode = directionCode?.trim()?.uppercase()?.takeIf { it == "UP" || it == "DOWN" },
+            limit = limit.coerceIn(1, 10),
+        )
     }
 
     fun getBusArrivals(

@@ -140,7 +140,8 @@ allOpen {
 tasks.named('test') {
     // The full suite boots many distinct Spring/JPA contexts; Gradle's 512 MiB
     // default test-worker heap can exhaust during late classpath scans.
-    maxHeapSize = providers.gradleProperty('testMaxHeapSize').getOrElse('1024m')
+    // 312 Spring/JPA suites exhausted 1 GiB; 2 GiB completed all 2,194 tests.
+    maxHeapSize = providers.gradleProperty('testMaxHeapSize').getOrElse('2048m')
     // 테스트가 개발/운영 MySQL 및 스케줄러/외부 공급자를 절대 사용하지 않도록
     // 모든 Gradle test 실행에 전용 profile을 강제한다.
     systemProperty 'spring.profiles.active', 'test'
@@ -183,6 +184,32 @@ tasks.register('groqIntegrationTest', Test) {
         includeTags 'external'
     }
     shouldRunAfter tasks.named('test')
+}
+
+// 실제 공급자 호출 + 휴일 캐시 SELECT만 수행한다. 일반 test/CI에서는 실행하지 않는다.
+tasks.register('transitTimetableIntegrationTest', Test) {
+    description = 'Checks live Tmap/Seoul timetable ETA wiring without schedule writes or notifications.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    systemProperty 'spring.profiles.active', 'test'
+    systemProperty 'nolate.eta.live-probe', 'true'
+    // 지도와 같은 미래 출발시각으로 비교한다. 일반 test에는 적용하지 않는다.
+    ['etaProbeDepartureAt': 'nolate.eta.probe-departure-at',
+     'etaProbeTimetableOnly': 'nolate.eta.probe-timetable-only',
+     'etaProbeWalkSeconds': 'nolate.eta.probe-walk-seconds',
+     'etaProbeCoordinateSet': 'nolate.eta.probe-coordinate-set',
+     'etaProbeComparisonEvidence': 'nolate.eta.probe-comparison-evidence',
+     'etaProbeRequireRealtime': 'nolate.eta.probe-require-realtime'].each { propertyName, systemName ->
+        providers.gradleProperty(propertyName).orNull?.with { systemProperty systemName, it }
+    }
+    useJUnitPlatform { includeTags 'transit-timetable-live' }
+    outputs.upToDateWhen { false }
+    doFirst {
+        if (!providers.gradleProperty('allowTransitLiveProbe').map { it == 'true' }.getOrElse(false)) {
+            throw new GradleException('Real provider calls require -PallowTransitLiveProbe=true; no requests were sent.')
+        }
+    }
 }
 kapt {
     keepJavacAnnotationProcessors = true

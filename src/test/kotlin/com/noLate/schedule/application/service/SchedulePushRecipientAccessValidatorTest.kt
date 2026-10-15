@@ -6,11 +6,14 @@ import com.noLate.schedule.domain.ScheduleCalendarMember
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCategory
+import com.noLate.schedule.domain.DepartureAlarmSyncState
+import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.sharing.application.SharingBlockPolicy
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -34,6 +37,8 @@ class SchedulePushRecipientAccessValidatorTest {
     @Mock lateinit var categoryShareRepository: ScheduleCategoryShareRepository
     @Mock lateinit var calendarRepository: ScheduleCalendarRepository
     @Mock lateinit var calendarMemberRepository: ScheduleCalendarMemberRepository
+    @Mock lateinit var departureAlarmSyncStateRepository: DepartureAlarmSyncStateRepository
+    @Mock lateinit var sharingBlockPolicy: SharingBlockPolicy
 
     @Test
     fun `global off rejects every sharing-only payload even when frozen identity is missing`() {
@@ -70,6 +75,12 @@ class SchedulePushRecipientAccessValidatorTest {
     fun `global off preserves owner schedule push and rejects dormant shared recipient`() {
         val schedule = schedule()
         whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(accessPolicy.resolve(1L, schedule)).thenReturn(
+            access(canView = true, travelEnabled = true, canManageAudience = true)
+        )
+        whenever(accessPolicy.resolve(2L, schedule)).thenReturn(
+            access(canView = true, travelEnabled = true, canManageAudience = false)
+        )
         val validator = validator(sharingEnabled = false)
 
         assertTrue(
@@ -79,7 +90,7 @@ class SchedulePushRecipientAccessValidatorTest {
             validator.canDispatch(2L, 10L, null, "SCHEDULE_DEPARTURE_REMINDER")
         )
 
-        verify(accessPolicy, never()).resolve(2L, schedule)
+        verify(accessPolicy).resolve(2L, schedule)
     }
 
     @Test
@@ -119,6 +130,33 @@ class SchedulePushRecipientAccessValidatorTest {
             categoryShareRepository,
             calendarRepository,
             calendarMemberRepository,
+        )
+    }
+
+    @Test
+    fun `departure alarm upsert requires current travel access but cancel tombstone survives revoke`() {
+        val schedule = schedule()
+        val upsert = DepartureAlarmSyncState.createUpsert(
+            memberId = 2L,
+            scheduleId = 10L,
+            triggerAt = Instant.parse("2026-07-25T00:30:00Z"),
+            title = "shared",
+            snoozeMinutes = 5,
+        )
+        whenever(departureAlarmSyncStateRepository.findByMemberIdAndScheduleId(2L, 10L))
+            .thenReturn(upsert)
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(accessPolicy.resolve(2L, schedule)).thenReturn(
+            access(canView = false, travelEnabled = false)
+        )
+
+        assertFalse(
+            validator().canDispatch(2L, 10L, null, "DEPARTURE_ALARM_SYNC")
+        )
+
+        upsert.cancel()
+        assertTrue(
+            validator().canDispatch(2L, 10L, null, "DEPARTURE_ALARM_SYNC")
         )
     }
 
@@ -214,6 +252,71 @@ class SchedulePushRecipientAccessValidatorTest {
     }
 
     @Test
+    fun `calendar share created before a block is rejected at the final recipient fence`() {
+        val calendar = ScheduleCalendar(
+            id = 77L,
+            ownerMemberId = 1L,
+            title = "shared calendar",
+        )
+        whenever(calendarRepository.findByIdAndStatusAndDeletedFalse(77L))
+            .thenReturn(calendar)
+        whenever(sharingBlockPolicy.isInteractionBlocked(2L, 1L)).thenReturn(true)
+
+        assertFalse(
+            validator().canDispatch(
+                memberId = 2L,
+                scheduleId = null,
+                categoryId = null,
+                payloadType = "CALENDAR_SHARE_RECEIVED",
+                calendarId = 77L,
+            )
+        )
+        verify(calendarMemberRepository, never())
+            .findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                77L,
+                2L,
+                ScheduleCalendarMemberStatus.ACTIVE,
+            )
+    }
+
+    @Test
+    fun `calendar category share uses calendar owner rather than editor author for block fence`() {
+        val category = ScheduleCategory(
+            id = 9L,
+            memberId = 3L,
+            calendarId = 77L,
+            title = "editor category",
+        )
+        val calendar = ScheduleCalendar(
+            id = 77L,
+            ownerMemberId = 1L,
+            title = "shared calendar",
+        )
+        whenever(categoryRepository.findById(9L)).thenReturn(Optional.of(category))
+        whenever(calendarRepository.findByIdAndStatusAndDeletedFalse(77L))
+            .thenReturn(calendar)
+        whenever(sharingBlockPolicy.isInteractionBlocked(2L, 1L)).thenReturn(true)
+
+        assertFalse(
+            validator().canDispatch(
+                memberId = 2L,
+                scheduleId = null,
+                categoryId = 9L,
+                payloadType = "CATEGORY_SHARE_RECEIVED",
+                calendarId = null,
+            )
+        )
+        verify(sharingBlockPolicy).isInteractionBlocked(2L, 1L)
+        verify(sharingBlockPolicy, never()).isInteractionBlocked(2L, 3L)
+        verify(calendarMemberRepository, never())
+            .findByCalendarIdAndMemberIdAndStatusAndDeletedFalse(
+                77L,
+                2L,
+                ScheduleCalendarMemberStatus.ACTIVE,
+            )
+    }
+
+    @Test
     fun `calendar removal archive and missing frozen identity fail closed`() {
         whenever(calendarRepository.findByIdAndStatusAndDeletedFalse(77L))
             .thenReturn(null)
@@ -262,6 +365,7 @@ class SchedulePushRecipientAccessValidatorTest {
         categoryShareRepository = categoryShareRepository,
         calendarRepository = calendarRepository,
         calendarMemberRepository = calendarMemberRepository,
+        departureAlarmSyncStateRepository = departureAlarmSyncStateRepository,
         sharingAvailabilityPolicy = ScheduleSharingAvailabilityPolicy(
             MockEnvironment().apply {
                 if (sharingEnabled) {
@@ -269,6 +373,7 @@ class SchedulePushRecipientAccessValidatorTest {
                 }
             }
         ),
+        sharingBlockPolicy = sharingBlockPolicy,
     )
 
     private fun schedule() = Schedule(
@@ -283,10 +388,12 @@ class SchedulePushRecipientAccessValidatorTest {
     private fun access(
         canView: Boolean,
         travelEnabled: Boolean,
+        canManageAudience: Boolean = false,
     ) = ScheduleAccessDecision(
         canView = canView,
         canEdit = false,
         travelEnabled = travelEnabled,
         canViewAllTravelPlans = false,
+        canManageAudience = canManageAudience,
     )
 }

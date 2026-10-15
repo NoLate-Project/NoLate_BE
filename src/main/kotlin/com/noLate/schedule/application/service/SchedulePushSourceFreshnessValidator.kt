@@ -173,7 +173,7 @@ class SchedulePushSourceFreshnessValidator(
             source.memberId,
         )
         val now = Instant.now(clock)
-        return if (source.memberId == schedule.memberId) {
+        return if (schedule.memberId == source.memberId) {
             reminderPolicy.requiresOwnerSetup(schedule, true, plan, now)
         } else {
             reminderPolicy.requiresSetup(schedule, true, plan, now)
@@ -203,7 +203,7 @@ class SchedulePushSourceFreshnessValidator(
         }
         val schedule = scheduleRepository.findActiveForTravelPlanUpdate(identity.scheduleId)
             ?: return false
-        if (schedule.memberId != identity.requesterMemberId) return false
+        if (!accessPolicy.resolve(identity.requesterMemberId, schedule).canManageAudience) return false
         if (!accessPolicy.resolve(source.memberId, schedule).travelEnabled) return false
 
         return departureStatusRepository

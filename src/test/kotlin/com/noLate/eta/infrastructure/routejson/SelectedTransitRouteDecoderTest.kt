@@ -11,6 +11,28 @@ class SelectedTransitRouteDecoderTest {
     private val decoder = SelectedTransitRouteDecoder(jacksonObjectMapper())
 
     @Test
+    fun `Tmap의 raw 정류장 코드는 내부 ID이며 5자리여도 ARS로 추론하지 않는다`() {
+        val route = """{"provider":"tmap","transitLegs":[{
+          "kind":"BUS","lineName":"402","startName":"A","endName":"B",
+          "passStops":[{"code":"12345"},{"code":"197386"}]
+        }]}"""
+        val ride = requireNotNull(decoder.decode(route)).rides.single()
+        assertEquals(setOf("PROVIDER:tmap:12345"), ride.fromIds)
+        assertEquals(setOf("PROVIDER:tmap:197386"), ride.toIds)
+    }
+
+    @Test
+    fun `Tmap도 명시적인 ARS와 provider namespace는 중복 변경하지 않는다`() {
+        val route = """{"provider":"tmap","transitLegs":[{
+          "kind":"BUS","lineName":"402","startStopCode":"ARS:12345",
+          "endStopCode":"PROVIDER:tmap:197386"
+        }]}"""
+        val ride = requireNotNull(decoder.decode(route)).rides.single()
+        assertEquals(setOf("ARS:12345"), ride.fromIds)
+        assertEquals(setOf("PROVIDER:tmap:197386"), ride.toIds)
+    }
+
+    @Test
     fun `선택 경로 JSON의 명시된 지하철 종별을 서명에 보존한다`() {
         val selected = decoder.decode(routeJson(serviceClass = "express"))
 
@@ -34,6 +56,19 @@ class SelectedTransitRouteDecoderTest {
 
         assertNotNull(selected)
         assertEquals(TransitServiceClass.UNKNOWN, requireNotNull(selected).rides.single().serviceClass)
+    }
+
+    @Test
+    fun `시외 구간의 수단과 순서를 저장 JSON에서 복원한다`() {
+        val selected = requireNotNull(decoder.decode("""{"schemaVersion":2,"provider":"tmap","transitLegs":[
+          {"kind":"BUS","lineName":"시내"},
+          {"kind":"TRAIN","lineName":"SRT"},
+          {"kind":"EXPRESS_BUS","lineName":"고속"},
+          {"kind":"INTERCITY_BUS","lineName":"시외"},
+          {"kind":"COACH","lineName":"미분류 버스"}
+        ]}"""))
+        assertEquals(listOf(TransitLegMode.BUS, TransitLegMode.TRAIN, TransitLegMode.EXPRESS_BUS,
+            TransitLegMode.INTERCITY_BUS, TransitLegMode.COACH), selected.rides.map { it.mode })
     }
 
     private fun routeJson(serviceClass: String?): String {

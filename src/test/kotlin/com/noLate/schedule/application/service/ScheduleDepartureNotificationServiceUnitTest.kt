@@ -33,6 +33,7 @@ import org.mockito.kotlin.whenever
 import org.mockito.Mockito.lenient
 import org.springframework.mock.env.MockEnvironment
 import java.time.Instant
+import java.util.Optional
 
 @ExtendWith(MockitoExtension::class)
 class ScheduleDepartureNotificationServiceUnitTest {
@@ -73,6 +74,19 @@ class ScheduleDepartureNotificationServiceUnitTest {
                 email = "member-$memberId@example.com",
             )
         }
+        lenient().whenever(scheduleAccessPolicy.resolve(any(), any())).thenAnswer { invocation ->
+            val memberId = invocation.getArgument<Long>(0)
+            val schedule = invocation.getArgument<Schedule>(1)
+            ScheduleAccessDecision(
+                canView = memberId == schedule.memberId,
+                canEdit = memberId == schedule.memberId,
+                travelEnabled = memberId == schedule.memberId,
+                canViewAllTravelPlans = memberId == schedule.memberId,
+                effectivePermission = if (memberId == schedule.memberId) ScheduleSharePermission.OWNER else null,
+                resourceOwnerMemberId = schedule.memberId,
+                canManageAudience = memberId == schedule.memberId,
+            )
+        }
     }
 
     private fun service() = ScheduleDepartureNotificationService(
@@ -83,6 +97,7 @@ class ScheduleDepartureNotificationServiceUnitTest {
             departureStatusRepository = departureStatusRepository,
             pushEventOutboxService = pushEventOutboxService,
             sharingAvailability = sharingAvailability,
+            scheduleAccessPolicy = scheduleAccessPolicy,
         )
 
     @Test
@@ -95,6 +110,7 @@ class ScheduleDepartureNotificationServiceUnitTest {
             departureStatusRepository = departureStatusRepository,
             pushEventOutboxService = pushEventOutboxService,
             sharingAvailability = ScheduleSharingAvailabilityPolicy(MockEnvironment()),
+            scheduleAccessPolicy = scheduleAccessPolicy,
         )
 
         val failure = assertThrows(BusinessException::class.java) {
@@ -108,9 +124,8 @@ class ScheduleDepartureNotificationServiceUnitTest {
     @Test
     fun `owner can send a departure nudge to an active direct share participant`() {
         val schedule = schedule(ownerMemberId = 1L)
-        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L))
-            .thenReturn(scheduleShare(targetMemberId = 2L))
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L, 2L))
         whenever(departureStatusRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
             .thenReturn(null)
         whenever(
@@ -158,10 +173,8 @@ class ScheduleDepartureNotificationServiceUnitTest {
             // 배포 전 category_id backfill이 끝나지 않은 기존 일정도 snapshot으로 권한을 찾는다.
             categoryId = null
         }
-        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule)
-        whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 3L)).thenReturn(null)
-        whenever(categoryShareRepository.findByCategoryIdAndTargetMemberId(5L, 3L))
-            .thenReturn(categoryShare(targetMemberId = 3L))
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L, 3L))
         whenever(departureStatusRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 3L))
             .thenReturn(null)
         whenever(
@@ -189,7 +202,7 @@ class ScheduleDepartureNotificationServiceUnitTest {
     @Test
     fun `calendar travel member is a valid nudge target without a direct share row`() {
         val schedule = schedule(ownerMemberId = 1L)
-        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
         whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L, 4L))
         whenever(departureStatusRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 4L))
             .thenReturn(null)
@@ -223,7 +236,7 @@ class ScheduleDepartureNotificationServiceUnitTest {
     @Test
     fun `calendar schedule only member is not a valid nudge target`() {
         val schedule = schedule(ownerMemberId = 1L)
-        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
         whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L))
         val service = ScheduleDepartureNotificationService(
             memberRepository = memberRepository,
@@ -246,7 +259,8 @@ class ScheduleDepartureNotificationServiceUnitTest {
 
     @Test
     fun `non owner cannot send a nudge even when they are an editor`() {
-        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 2L)).thenReturn(null)
+        val schedule = schedule(ownerMemberId = 1L)
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
 
         val error = assertThrows(BusinessException::class.java) {
             service().sendDepartureNudge(2L, 10L, 3L, 0L)
@@ -258,9 +272,9 @@ class ScheduleDepartureNotificationServiceUnitTest {
 
     @Test
     fun `owner cannot nudge a member who is not an active participant`() {
-        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule(ownerMemberId = 1L))
-        whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 9L)).thenReturn(null)
-        whenever(categoryShareRepository.findByCategoryIdAndTargetMemberId(5L, 9L)).thenReturn(null)
+        val schedule = schedule(ownerMemberId = 1L)
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L))
 
         val error = assertThrows(BusinessException::class.java) {
             service().sendDepartureNudge(1L, 10L, 9L, 0L)
@@ -272,9 +286,9 @@ class ScheduleDepartureNotificationServiceUnitTest {
 
     @Test
     fun `owner cannot nudge a participant who already departed`() {
-        whenever(scheduleRepository.findOwnedScheduleDetail(10L, 1L)).thenReturn(schedule(ownerMemberId = 1L))
-        whenever(scheduleShareRepository.findByScheduleIdAndTargetMemberId(10L, 2L))
-            .thenReturn(scheduleShare(targetMemberId = 2L))
+        val schedule = schedule(ownerMemberId = 1L)
+        whenever(scheduleRepository.findById(10L)).thenReturn(Optional.of(schedule))
+        whenever(scheduleAccessPolicy.travelMemberIds(schedule)).thenReturn(listOf(1L, 2L))
         whenever(departureStatusRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L))
             .thenReturn(
                 ScheduleDepartureStatus(
@@ -314,7 +328,7 @@ class ScheduleDepartureNotificationServiceUnitTest {
         }
 
         assertEquals(ErrorCode.INVALID_TOKEN, error.errorCode)
-        verify(scheduleRepository, never()).findOwnedScheduleDetail(any(), any())
+        verify(scheduleRepository, never()).findById(any())
         verifyNoInteractions(pushEventOutboxService)
     }
 

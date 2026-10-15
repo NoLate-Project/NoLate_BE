@@ -1,0 +1,140 @@
+{
+  "classification": "TWO_PUBLIC_SERVICE_DAYS_COLLECTED_PROSPECTIVE_MODEL_VALIDATION_PENDING",
+  "accuracyImprovementCompleted": false,
+  "liveEtaPolicy": "timetable-shift-v1; original values preserved",
+  "newModelAutomaticallyAdopted": false,
+  "collector": {
+    "root": "/private/tmp/nolate-train-movement.ephDqk",
+    "pid": 19471,
+    "execSessionId": 68393,
+    "startedAt": "2026-10-13T15:27:38.997438+09:00",
+    "cycles": 60,
+    "intervalSeconds": 120,
+    "maximumPhysicalHttpCalls": 126,
+    "expectedEndAround": "2026-10-13T17:26:00+09:00",
+    "actualPublicTimetablesRecorded": 106,
+    "snapshotErrorsStopCollectionWithoutRetry": true,
+    "scope": "4-line public train positions and NoWon origin forecasts only",
+    "noProductionDatabaseOrServerOrSimulatorMutation": true
+  },
+  "initialProbes": [
+    {"root": "/private/tmp/nolate-train-movement.Cez3xG", "usablePositions": 0, "rejectedRows": 36, "includedInAccuracySamples": false},
+    {"root": "/private/tmp/nolate-train-movement.oiR232", "positions": 38, "freshPositions": 34, "originForecasts": 2, "accuracyProven": false}
+  ],
+  "regression": {
+    "backendSuites": 315,
+    "backendTests": 2205,
+    "backendFailures": 0,
+    "backendErrors": 0,
+    "backendSkipped": 0,
+    "backendDuration": "3m2s",
+    "offlineReplayTests": 10
+  },
+  "interimReplay": {
+    "path": "/private/tmp/nolate-train-movement.ephDqk/replay-progress-1540.json",
+    "capturedCycles": 7,
+    "completedIndependentRuns": 0,
+    "interpretation": "Observed trains had not yet reached Sadang; not an accuracy verdict"
+  },
+  "currentCollectionUpperBoundByVerifiedTerminal": {
+    "오이도": 7,
+    "사당": 4,
+    "explanation": "Only original numeric train numbers or timetable K-prefix rides with a verified realtimeTrainNumber that can finish NoWon-to-Sadang within 15:27-17:26 are counted. Unsupported K aliases are excluded. Min6 train-disjoint training plus min3 validation cannot be satisfied by this collection alone.",
+    "gateRelaxed": false
+  },
+  "replayAt1702": {
+    "path": "/private/tmp/nolate-train-movement.ephDqk/replay-progress-1702.json",
+    "capturedCycles": 48,
+    "boundedIndependentTrainRuns": 7,
+    "cohortRuns": {"오이도": 4, "사당": 3},
+    "baselineBeforeObservedTransitionWindow": 6,
+    "baselineInsideObservedTransitionWindow": 1,
+    "physicalArrivalTimeExact": false,
+    "newModelApplied": false
+  },
+  "completedCollection": {
+    "report": "/private/tmp/nolate-train-movement.ephDqk/collection-report.json",
+    "replay": "/private/tmp/nolate-train-movement.ephDqk/replay-final-1735.json",
+    "completedCycles": 60,
+    "actualPhysicalHttpCalls": 126,
+    "maximumPhysicalHttpCalls": 126,
+    "failureCode": null,
+    "independentTrainRuns": 11,
+    "cohortRuns": {"오이도": 7, "사당": 4},
+    "baselineBeforeObservedTransitionWindow": 10,
+    "baselineInsideObservedTransitionWindow": 1,
+    "meanDistanceToObservedWindowSeconds": 121.4,
+    "medianDistanceToObservedWindowSeconds": 88,
+    "maximumDistanceToObservedWindowSeconds": 427,
+    "pilotModelPass": false,
+    "reason": "INSUFFICIENT_INDEPENDENT_COMPLETED_RUNS_PER_TERMINAL",
+    "exactPhysicalArrivalTimeMeasured": false,
+    "newModelApplied": false
+  },
+  "nextServiceDayPreparation": {
+    "multiCollectionReplayTestsPassing": 11,
+    "collectorCompilesWithSameDayKasiHolidayVerification": true,
+    "newServiceDayPublicCallsAlreadyRun": true,
+    "secondCollectionRoot": "/private/tmp/nolate-train-movement.XiI4eJ",
+    "secondCollectionPid": 63231,
+    "secondCollectionExecSessionId": 36458,
+    "startedAt": "2026-10-14T15:21:16+09:00",
+    "verifiedCalendar": {"source": "KASI_VERIFIED_CURRENT_MONTH", "date": "2026-10-14", "weekTag": "1", "additionalKasiCalls": 1},
+    "actualPublicTimetables": 107,
+    "firstCycle": {"positions": 35, "freshPositions": 32, "rejectedRows": 0, "originForecasts": 2},
+    "requestedCycles": 60,
+    "intervalSeconds": 120,
+    "maximumPhysicalHttpCalls": 127,
+    "status": "COMPLETED",
+    "completedCycles": 60,
+    "actualPhysicalHttpCalls": 127,
+    "failureCode": null,
+    "report": "/private/tmp/nolate-train-movement.XiI4eJ/collection-report.json"
+  },
+  "twoServiceDayReplay": {
+    "report": "/private/tmp/nolate-train-movement.XiI4eJ/replay-combined-1730.json",
+    "capturedCycles": 120,
+    "independentTrainRuns": 21,
+    "cohortRuns": {"오이도": 13, "사당": 8},
+    "baselineBeforeObservedTransitionWindow": 19,
+    "baselineInsideObservedTransitionWindow": 2,
+    "originalUpperBoundCandidate": {
+      "trainingRuns": 7,
+      "validationRuns": 3,
+      "baselineWorstCaseMaeSeconds": 158.33333333333334,
+      "candidateWorstCaseMaeSeconds": 191.83312633333333,
+      "baselineMaxEarlyUnderpredictionSeconds": 236,
+      "candidateMaxEarlyUnderpredictionSeconds": 0,
+      "safeImprovement": false,
+      "reason": "NO_SAFE_HELD_OUT_IMPROVEMENT"
+    },
+    "newIntervalCenterCandidate": {
+      "report": "/private/tmp/nolate-train-movement.XiI4eJ/replay-center-exploratory-frozen-1745.json",
+      "selectionStatus": "POST_HOC_EXPLORATORY_NOT_INDEPENDENT_VALIDATION",
+      "baselineWorstCaseMaeSeconds": 158.33333333333334,
+      "candidateWorstCaseMaeSeconds": 136.33959933333333,
+      "baselineMaxEarlyUnderpredictionSeconds": 236,
+      "candidateMaxEarlyUnderpredictionSeconds": 19.854952,
+      "shadowPilotPassed": false,
+      "reason": "EXPLORATORY_NEEDS_NEW_SERVICE_DAY_HOLDOUT"
+    },
+    "physicalArrivalTimeExact": false,
+    "newModelApplied": false
+  },
+  "followUpPlannedAt": "2026-10-15T15:20:00+09:00",
+  "followUp": {
+    "automationId": "eta",
+    "statusConfirmed": "ACTIVE",
+    "configuredLocalTime": "2026-10-15 15:20 Asia/Seoul",
+    "sameThread": true,
+    "plannedAction": "Collect one separate actual weekday with the same public HTTP cap, then use that complete service day only for prospective shadow validation",
+    "maximumNewCollectionPhysicalHttpCalls": 127,
+    "calendarSource": "One KASI month holiday verification before Seoul timetable lookup",
+    "temporaryIdleSleepPrevention": "2026-10-14 caffeinate -i -t 8100 was temporary for the completed collection; automatically expires and does not change display or manual sleep settings",
+    "requiredIndependentHoldout": "2026-10-15 or later completed matching weekday, never reuse the inspected 2026-10-14 results as confirmation",
+    "offlineReplayTestsPassing": 15
+  },
+  "labelSemantics": "PROVIDER_POSITION_TRANSITION_WINDOW_NOT_PHYSICAL_EVENT_TIMESTAMP",
+  "neverUseFutureDestinationLabelsToTrainAPastForecast": true,
+  "physicalIphoneFcmAndAcousticScope": "DEFERRED_BY_USER"
+}

@@ -76,7 +76,6 @@ class ScheduleTravelPlanConcurrencyIntegrationTest @Autowired constructor(
                 startAt = Instant.parse("2026-08-05T01:00:00Z"),
                 endAt = Instant.parse("2026-08-05T02:00:00Z"),
             ).apply {
-                updateCategorySnapshot("1", "개인", "#2979FF")
                 updateRoute(
                     travelMinutes = null,
                     departAt = null,

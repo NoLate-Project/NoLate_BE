@@ -705,6 +705,7 @@ CREATE TABLE IF NOT EXISTS departure_alarm_sync_state (
     alarm_id VARCHAR(100) NOT NULL COMMENT 'Stable client alarm identifier',
     generation BIGINT NOT NULL DEFAULT 0 COMMENT 'Monotonic command generation per alarm id',
     operation VARCHAR(16) NOT NULL COMMENT 'UPSERT or CANCEL',
+    cancellation_reason VARCHAR(40) NULL COMMENT 'Server-only cancellation cause; NULL legacy reasons never auto-resume',
     trigger_at DATETIME(6) NULL COMMENT 'Native alarm trigger time for UPSERT',
     title VARCHAR(100) NULL COMMENT 'Native alarm title for UPSERT',
     snooze_minutes INT NULL COMMENT 'Native alarm default snooze minutes for UPSERT',
@@ -729,6 +730,10 @@ CREATE TABLE IF NOT EXISTS departure_alarm_sync_state (
         CHECK (validation_revision BETWEEN 0 AND 9007199254740991),
     CONSTRAINT chk_departure_alarm_sync_operation
         CHECK (operation IN ('UPSERT', 'CANCEL')),
+    CONSTRAINT chk_departure_alarm_cancellation_reason CHECK (
+        cancellation_reason IS NULL OR (operation = 'CANCEL' AND cancellation_reason IN
+            ('EXPLICIT_OR_TERMINAL', 'PAST_CONFIGURED_ESTIMATE', 'TRANSIT_TRANSFER_FAILURE'))
+    ),
     CONSTRAINT chk_departure_alarm_sync_plan CHECK (
         (alarm_plan_schema_version IS NULL AND alarm_occurrences_json IS NULL) OR
         (operation = 'UPSERT' AND alarm_plan_schema_version = '2' AND

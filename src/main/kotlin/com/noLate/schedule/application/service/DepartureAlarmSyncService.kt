@@ -11,9 +11,11 @@ import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
 import com.noLate.schedule.domain.DEFAULT_DEPARTURE_ALARM_TITLE
 import com.noLate.schedule.domain.DepartureAlarmPlanCodec
 import com.noLate.schedule.domain.DepartureAlarmSyncOperation
+import com.noLate.schedule.domain.DepartureAlarmCancellationReason
 import com.noLate.schedule.domain.DepartureAlarmSyncState
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.infrastructure.DepartureAlarmSyncStateRepository
+import com.noLate.schedule.infrastructure.ScheduleRepository
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.core.Ordered
@@ -107,6 +109,8 @@ data class DepartureAlarmSyncStateChangedEvent(
 class DepartureAlarmSyncService(
     private val repository: DepartureAlarmSyncStateRepository,
     private val memberRepository: MemberRepository,
+    private val scheduleRepository: ScheduleRepository,
+    private val scheduleAccessPolicy: ScheduleAccessPolicy,
     private val eventPublisher: ApplicationEventPublisher,
     private val clock: Clock,
     @Value("\${schedule.push.departure-snooze-minutes:5}")
@@ -150,16 +154,18 @@ class DepartureAlarmSyncService(
         ) {
             return upsert(memberId, scheduleId, triggerAt, scheduleTitle)
         }
-        return cancelLocked(memberId, scheduleId)
+        val reason = if (notificationEnabled && alertMode == ScheduleAlertMode.ALARM && triggerAt != null) {
+            DepartureAlarmCancellationReason.PAST_CONFIGURED_ESTIMATE
+        } else DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL
+        return cancelLocked(memberId, scheduleId, reason)
     }
 
     /**
      * 자동 ETA는 미래 알람만 갱신한다. 이미 울렸을 수 있는 세대는 로컬 snooze/dismiss를
      * 덮어쓰지 않고 grace cleanup에 맡기되, 아직 미래인 잘못된 알람은 즉시 취소한다.
      *
-     * CANCEL tombstone은 기본적으로 되살리지 않는다. 예외 플래그는 worker가 직전 persisted
-     * ETA 상태가 환승 실패였고 현재 정상으로 회복됐음을 확인한 경우에만 전달한다. 따라서
-     * 사용자 설정 비활성화·terminal 취소와 로컬 dismiss는 자동 ETA가 임의로 재개하지 않는다.
+     * 복구 판단은 저장된 취소 사유에 따른다. 직전 ETA가 UNKNOWN이었더라도 자동 취소 사유는
+     * 유지된다. 사용자·terminal 취소 및 사유가 없는 기존 CANCEL은 자동으로 되살리지 않는다.
      */
     @Transactional
     fun synchronizeAutomaticEta(
@@ -169,11 +175,19 @@ class DepartureAlarmSyncService(
         alertMode: ScheduleAlertMode,
         recommendedDepartureAt: Instant,
         scheduleTitle: String?,
-        resumeCanceledAfterTransitTransferFailure: Boolean = false,
+        @Suppress("UNUSED_PARAMETER") resumeCanceledAfterTransitTransferFailure: Boolean = false,
+        cancellationReason: DepartureAlarmCancellationReason = DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL,
     ): DepartureAlarmSyncCommand? {
         if (!lockActiveMember(memberId)) return null
         if (!notificationEnabled || alertMode != ScheduleAlertMode.ALARM) {
-            return cancelLocked(memberId, scheduleId)
+            val reason = if (alertMode == ScheduleAlertMode.ALARM) cancellationReason
+                else DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL
+            val existing = repository.findByMemberIdAndScheduleIdForUpdate(memberId, scheduleId) ?: return null
+            // 환승 실패가 사용자 취소/원인 불명 CANCEL을 자동 복구 가능한 상태로 바꾸지 못한다.
+            if (reason == DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE &&
+                existing.operation == DepartureAlarmSyncOperation.CANCEL &&
+                existing.cancellationReason !in AUTOMATIC_RECOVERABLE_CANCELLATIONS) return null
+            return transition(existing) { it.cancel(reason) }
         }
 
         val now = Instant.now(clock)
@@ -193,7 +207,7 @@ class DepartureAlarmSyncService(
             if (existing.operation != DepartureAlarmSyncOperation.UPSERT) {
                 return if (
                     existing.operation == DepartureAlarmSyncOperation.CANCEL &&
-                    resumeCanceledAfterTransitTransferFailure
+                    existing.cancellationReason in AUTOMATIC_RECOVERABLE_CANCELLATIONS
                 ) {
                     transition(existing) {
                         applyPlanUpsert(it, recommendedDepartureAt, scheduleTitle)
@@ -252,10 +266,13 @@ class DepartureAlarmSyncService(
         return cancelLocked(memberId, scheduleId)
     }
 
-    private fun cancelLocked(memberId: Long, scheduleId: Long): DepartureAlarmSyncCommand? {
+    private fun cancelLocked(
+        memberId: Long, scheduleId: Long,
+        reason: DepartureAlarmCancellationReason = DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL,
+    ): DepartureAlarmSyncCommand? {
         val existing = repository.findByMemberIdAndScheduleIdForUpdate(memberId, scheduleId)
             ?: return null
-        return transition(existing) { it.cancel() }
+        return transition(existing) { it.cancel(reason) }
     }
 
     @Transactional
@@ -299,9 +316,36 @@ class DepartureAlarmSyncService(
         }
     }
 
-    @Transactional(readOnly = true)
-    fun snapshot(memberId: Long): List<DepartureAlarmSyncCommand> =
-        repository.findAllByMemberIdOrderByScheduleIdAsc(memberId).map(::toCommand)
+    @Transactional
+    fun snapshot(memberId: Long): List<DepartureAlarmSyncCommand> {
+        if (!lockActiveMember(memberId)) return emptyList()
+        return repository.findAllByMemberIdOrderByScheduleIdAsc(memberId).mapNotNull { preview ->
+            if (preview.operation == DepartureAlarmSyncOperation.CANCEL) {
+                return@mapNotNull toCommand(preview)
+            }
+            val schedule = scheduleRepository.findById(preview.scheduleId)
+                .orElse(null)
+                ?.takeUnless { it.deleted }
+            val stillAuthorized = schedule != null &&
+                scheduleAccessPolicy.resolve(memberId, schedule).travelEnabled
+            if (stillAuthorized) {
+                return@mapNotNull toCommand(preview)
+            }
+
+            // Snapshot is also the recovery boundary for commands queued before a grant revoke or
+            // sharing feature toggle. Persist a newer CANCEL generation instead of merely hiding
+            // the UPSERT; otherwise a fresh installation could keep/recreate the old OS alarm.
+            val locked = repository.findByMemberIdAndScheduleIdForUpdate(
+                preview.memberId,
+                preview.scheduleId,
+            ) ?: return@mapNotNull null
+            if (locked.operation == DepartureAlarmSyncOperation.CANCEL) {
+                toCommand(locked)
+            } else {
+                transition(locked) { it.cancel() } ?: toCommand(locked)
+            }
+        }
+    }
 
     @Transactional(readOnly = true)
     fun findMemberIdsForSchedule(scheduleId: Long): List<Long> =
@@ -609,3 +653,7 @@ private const val MAX_DEPARTURE_ALARM_PROVIDER_JSON_BYTES = 3_200
 private const val MAX_LENGTH_DETERMINISTIC_LOGICAL_EVENT_KEY =
     "key:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 private val DEPARTURE_ALARM_PAYLOAD_MAPPER = jacksonObjectMapper()
+private val AUTOMATIC_RECOVERABLE_CANCELLATIONS = setOf(
+    DepartureAlarmCancellationReason.PAST_CONFIGURED_ESTIMATE,
+    DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE,
+)

@@ -6,12 +6,15 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleAlertMode
+import com.noLate.schedule.domain.ScheduleNotificationInputFingerprint
+import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlan
 import com.noLate.schedule.domain.ScheduleTravelPlanUpsertCommand
 import com.noLate.schedule.infrastructure.ScheduleCategoryShareRepository
+import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleShareRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
@@ -49,6 +52,7 @@ class ScheduleTravelPlanServiceUnitTest {
     @Mock lateinit var memberRepository: MemberRepository
     @Mock lateinit var subscriptionPolicyService: SubscriptionPolicyService
     @Mock lateinit var entityManager: EntityManager
+    @Mock lateinit var schedulePushJobRepository: SchedulePushJobRepository
 
     private lateinit var service: ScheduleTravelPlanService
 
@@ -60,10 +64,29 @@ class ScheduleTravelPlanServiceUnitTest {
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             memberRepository = memberRepository,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             objectMapper = jacksonObjectMapper(),
             entityManager = entityManager,
+            schedulePushJobRepository = schedulePushJobRepository,
         )
+    }
+
+    @Test
+    fun `personal travel notification uses common defaults without counting subscription usage`() {
+        val schedule = scheduleEntity()
+        whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.saveAndFlush(any<ScheduleTravelPlan>()))
+            .thenAnswer { it.getArgument(0) }
+        val result = service.upsertMyTravelPlan(
+            2L, 10L, routeCommand("참여자 집", 28).copy(
+                notificationEnabled = true, notificationLeadMinutes = null, notificationIntervalMinutes = null,
+            ),
+        )
+        assertEquals(120, result.notificationLeadMinutes)
+        assertEquals(10, result.notificationIntervalMinutes)
+        verify(travelPlanRepository, never()).countMonthlyNotificationEnabledPlans(any(), any(), any())
+        verify(scheduleRepository, never()).countMonthlySmartSchedules(any(), any(), any())
     }
 
     @Test
@@ -530,6 +553,31 @@ class ScheduleTravelPlanServiceUnitTest {
     }
 
     @Test
+    fun `other editor common change marks a planless legacy author job stale`() {
+        val schedule = scheduleEntity()
+        val beforeEdit = schedule.toDto(jacksonObjectMapper()).copy(title = "수정 전 회의")
+        val legacyJob = SchedulePushJob.create(
+            memberId = schedule.memberId,
+            scheduleId = requireNotNull(schedule.id),
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minusSeconds(1_800),
+            monitorStartAt = schedule.startAt.minusSeconds(5_400),
+            intervalMinutes = 20,
+            notificationInputFingerprint = ScheduleNotificationInputFingerprint.fromSchedule(
+                schedule.memberId,
+                beforeEdit,
+            ),
+        )
+        schedule.title = "다른 편집자가 바꾼 회의"
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.findAllByScheduleIdAndDeletedFalse(10L)).thenReturn(emptyList())
+        whenever(schedulePushJobRepository.findByScheduleIdAndMemberId(10L, schedule.memberId))
+            .thenReturn(legacyJob)
+
+        assertEquals(setOf(schedule.memberId), service.findStaleNotificationMemberIds(10L))
+    }
+
+    @Test
     fun `global off uses owner detail query and hides dormant participant overview`() {
         val accessPolicy = mock<ScheduleAccessPolicy>()
         val ownerOnlyService = ScheduleTravelPlanService(
@@ -538,7 +586,7 @@ class ScheduleTravelPlanServiceUnitTest {
             scheduleShareRepository = scheduleShareRepository,
             categoryShareRepository = categoryShareRepository,
             memberRepository = memberRepository,
-            subscriptionPolicyService = subscriptionPolicyService,
+
             objectMapper = jacksonObjectMapper(),
             entityManager = entityManager,
             scheduleAccessPolicy = accessPolicy,

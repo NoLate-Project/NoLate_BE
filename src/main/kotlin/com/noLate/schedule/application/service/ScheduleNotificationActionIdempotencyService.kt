@@ -183,7 +183,7 @@ class ScheduleNotificationActionIdempotencyWriter(
             )
         )
 
-        val detail = scheduleService.getScheduleDetail(memberId, scheduleId)
+        scheduleService.getScheduleDetail(memberId, scheduleId)
         val departureStatus = departureStatusService.markDeparted(
             memberId,
             scheduleId,
@@ -195,11 +195,7 @@ class ScheduleNotificationActionIdempotencyWriter(
             memberId,
             liveActivityEndReason = "DEPARTED",
         )
-        val updated = if (detail.ownerMemberId == memberId) {
-            scheduleService.markDeparted(memberId, scheduleId)
-        } else {
-            scheduleService.getScheduleDetail(memberId, scheduleId)
-        }
+        val updated = scheduleService.markDeparted(memberId, scheduleId)
         val result = departureStatusService.attachDepartureParticipants(memberId, updated)
         receipt.complete(
             completedAt = Instant.now(clock),

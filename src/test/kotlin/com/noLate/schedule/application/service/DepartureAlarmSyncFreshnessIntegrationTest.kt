@@ -43,6 +43,27 @@ class DepartureAlarmSyncFreshnessIntegrationTest @Autowired constructor(
     private val mapper = jacksonObjectMapper()
 
     @Test
+    fun `취소 사유는 DB 재조회 뒤에도 남고 사용자 취소는 새 세대로 이전 명령을 차단한다`() {
+        val state = stateRepository.saveAndFlush(DepartureAlarmSyncState.createUpsert(
+            7L, 41L, Instant.parse("2026-07-29T03:30:00Z"), "회의", 5,
+        ))
+        state.cancel(com.noLate.schedule.domain.DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE)
+        stateRepository.saveAndFlush(state)
+        val automaticGeneration = state.generation
+        entityManager.clear()
+        val reloaded = stateRepository.findById(requireNotNull(state.id)).orElseThrow()
+        assertThat(reloaded.cancellationReason)
+            .isEqualTo(com.noLate.schedule.domain.DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE)
+        reloaded.cancel()
+        stateRepository.saveAndFlush(reloaded)
+        entityManager.clear()
+        val terminal = stateRepository.findById(requireNotNull(state.id)).orElseThrow()
+        assertThat(terminal.cancellationReason)
+            .isEqualTo(com.noLate.schedule.domain.DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL)
+        assertThat(terminal.generation).isGreaterThan(automaticGeneration)
+    }
+
+    @Test
     fun `nanosecond trigger remains fresh after provider millisecond canonicalization and database round trip`() {
         val state = stateRepository.saveAndFlush(
             DepartureAlarmSyncState.createUpsert(

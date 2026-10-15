@@ -9,6 +9,7 @@ import com.noLate.transit.domain.TransitCityCodeNamespace
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import java.time.Instant
 
@@ -18,7 +19,7 @@ class OdsayTransitJourneyMapperTest {
     private val fetchedAt = Instant.parse("2026-07-29T02:59:30Z")
 
     @Test
-    fun `maasRP의 시간 대기 노선과 지역 정류장 식별자를 canonical 여정으로 보존한다`() {
+    fun `maasRP의 표시용 시각과 대기 노선 및 정류장 식별자를 canonical 여정으로 보존한다`() {
         val response = objectMapper.readTree(
             """
                 {
@@ -115,7 +116,7 @@ class OdsayTransitJourneyMapperTest {
         assertEquals(4, bus.waitingMinutes)
         assertEquals(Instant.parse("2026-07-29T03:05:00Z"), bus.scheduledDepartureAt)
         assertEquals(Instant.parse("2026-07-29T03:25:00Z"), bus.scheduledArrivalAt)
-        assertEquals(TransitLegTimingBasis.TIMETABLE, bus.timingBasis)
+        assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, bus.timingBasis)
         assertEquals(TransitCityCodeNamespace.ODSAY_CID, bus.from?.cityCodeNamespace)
         assertEquals("12018", bus.line?.providerRouteId)
         assertEquals("100100057", bus.line?.localRouteId)
@@ -133,11 +134,13 @@ class OdsayTransitJourneyMapperTest {
 
         val subway = journey.legs[3]
         assertEquals(TransitLegMode.SUBWAY, subway.mode)
+        assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, subway.timingBasis)
         assertEquals("1000:2", subway.line?.providerRouteId)
         assertEquals("수도권 2호선", subway.line?.name)
         assertEquals(TransitServiceClass.LOCAL, subway.line?.serviceClass)
         assertEquals("강남 방면", subway.directionName)
-        assertEquals("DOWN", subway.directionCode)
+        // 순환선의 공급자 상하행은 서울 시간표 방향 코드로 직접 복사하지 않는다.
+        assertNull(subway.directionCode)
     }
 
     @Test
@@ -477,6 +480,24 @@ class OdsayTransitJourneyMapperTest {
         assertEquals(Instant.parse("2026-07-29T15:15:00Z"), journey.arrivalAt)
         assertEquals(Instant.parse("2026-07-29T14:55:00Z"), journey.legs.single().scheduledDepartureAt)
         assertEquals(Instant.parse("2026-07-29T15:15:00Z"), journey.legs.single().scheduledArrivalAt)
+    }
+
+    @Test
+    fun `시외 trafficType은 도보와 구분하고 원본 예상시각을 유지한다`() {
+        listOf(4 to TransitLegMode.TRAIN, 5 to TransitLegMode.EXPRESS_BUS,
+            6 to TransitLegMode.INTERCITY_BUS).forEach { (type, expected) ->
+            val payload = objectMapper.readTree("""{"result":{"paths":[{
+              "pathType":2,"pathSubType":4,"totalTime":90,
+              "startDateTime":"202607291200","endDateTime":"202607291330",
+              "rps":[{"trafficType":$type,"duration":90,
+                "startDateTime":"202607291200","endDateTime":"202607291330",
+                "startName":"서울남부","endName":"공주","lane":{"name":"시외 운행"}}]
+            }]}}""")
+            val leg = mapper.map(payload, request(), fetchedAt).single().legs.single()
+            assertEquals(expected, leg.mode)
+            assertTrue(leg.isRide)
+            assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, leg.timingBasis)
+        }
     }
 
     private fun request() = TransitJourneySearchRequest(

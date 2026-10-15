@@ -9,6 +9,7 @@ import com.noLate.eta.resilience.StaticEtaProviderResiliencePolicyResolver
 import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.transit.domain.TransitArrivalDto
 import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
+import com.noLate.transit.application.TransitArrivalService
 import com.sun.net.httpserver.HttpServer
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.net.InetSocketAddress
@@ -22,8 +23,64 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import org.mockito.kotlin.mock
 
 class SeoulTransitArrivalClientTest {
+    @Test
+    fun `실제 HTTP 어댑터 오류는 service fallback 뒤에도 안전한 코드로 남고 정상 회복은 유지한다`() {
+        val body = AtomicReference("""{"code":"ERROR-337","message":"fixture-secret-message","total":0}""")
+        val calls = AtomicInteger()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { exchange ->
+                calls.incrementAndGet()
+                val bytes = body.get().toByteArray(StandardCharsets.UTF_8)
+                exchange.responseHeaders.add("Content-Type", "application/json")
+                exchange.sendResponseHeaders(200, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+            }
+            start()
+        }
+        try {
+            val registry = SimpleMeterRegistry()
+            val metrics = TransitProviderWireMetrics(registry)
+            val client = SeoulTransitArrivalClient("", "fixture-key", "",
+                "http://127.0.0.1:${server.address.port}", "http://127.0.0.1:${server.address.port}",
+                wireMetrics = metrics)
+            val service = TransitArrivalService(client, mock<TagoTransitArrivalClient>())
+            assertTrue(service.getSubwayArrivals("노원역", "4호선", null, "DOWN", 10).isEmpty())
+            assertEquals(1, calls.get(), "Application error is not a normal empty-station alias retry")
+            val failure = metrics.failureDiagnostics().single()
+            assertEquals("ERROR-337", failure.code)
+            assertEquals(1L, failure.failureCount)
+            body.set("""{"realtimeArrivalList":[{"subwayId":"1004","statnNm":"노원",
+                "statnId":"1004000411","btrainNo":"4012","btrainSttus":"일반","updnLine":"하행",
+                "barvlDt":"180","recptnDt":"2026-10-08 17:00:00"}]}""")
+            assertEquals("4012", service.getSubwayArrivals("노원", "4호선", null, "DOWN", 10).single().trainNumber)
+            assertEquals(2, calls.get())
+            assertEquals(listOf(failure), metrics.failureDiagnostics(), "Past error diagnostics are not a new failure")
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `서울 열차 종별은 명시된 일반 급행만 해석하고 식별자를 보존한다`() {
+        listOf("일반" to false, "급행" to true, "특급" to true, "ITX" to true, "미확인" to null, "" to null)
+            .forEach { (type, expectedExpress) ->
+                val response = jacksonObjectMapper().readTree("""
+                    {"realtimeArrivalList":[{"subwayId":"1004","statnNm":"서울역",
+                    "statnId":"1004000426","btrainNo":"4012","btrainSttus":"$type",
+                    "barvlDt":"180","recptnDt":"2026-10-04 15:00:00"}]}
+                """.trimIndent())
+
+                val arrival = createClient().parseSubwayArrivals(response, "4호선", null, null, 10).single()
+
+                assertEquals(expectedExpress, arrival.express, "종별=$type")
+                assertEquals("1004", arrival.subwayLineId)
+                assertEquals("1004000426", arrival.subwayStationId)
+                assertEquals("4012", arrival.trainNumber)
+            }
+    }
     @Test
     fun `서울 지하철 INFO-200은 빈 성공으로 다음 역명 후보를 조회하고 circuit을 열지 않는다`() {
         val calls = AtomicInteger()
@@ -158,6 +215,26 @@ class SeoulTransitArrivalClientTest {
         } finally {
             server.stop(0)
         }
+    }
+
+    @Test
+    fun `서울 지하철 일일 한도 초과는 빈 도착 성공이 아니며 오류 원문을 노출하지 않는다`() {
+        // 실제 공급자는 HTTP 200 안에 status 500과 ERROR-337을 반환한다.
+        // 이 응답을 정상적인 차량 없음으로 해석하거나 원문을 예외에 넣지 않는다.
+        val error = assertFailsWith<TransitProviderApplicationException> {
+            createClient().parseSubwayArrivals(
+                response = jacksonObjectMapper().readTree("""
+                    {"status":500,"code":"ERROR-337","message":"fixture-secret-provider-message",
+                     "link":"fixture-secret-link","developerMessage":"fixture-secret-detail","total":0}
+                """.trimIndent()),
+                lineName = "4호선",
+                directionName = null,
+                directionCode = "DOWN",
+                limit = 10,
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("ERROR-337"))
+        assertTrue(!error.message.orEmpty().contains("fixture-secret"))
     }
 
     @Test

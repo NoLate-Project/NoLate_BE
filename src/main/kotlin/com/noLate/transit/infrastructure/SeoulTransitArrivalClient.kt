@@ -22,6 +22,7 @@ import java.io.ByteArrayInputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.time.Clock
 import java.time.LocalDateTime
 import java.time.Duration
 import java.time.ZoneId
@@ -49,12 +50,19 @@ class SeoulTransitArrivalClient(
     ),
     private val wireMetrics: TransitProviderWireMetrics? = null,
     private val wireRateLimiter: TransitProviderWireRateLimiter = TransitProviderWireRateLimiter(),
+    private val clock: Clock = Clock.systemUTC(),
+    @Value("\${transit.seoul.subway-response-cache-ttl-seconds:15}")
+    private val subwayResponseCacheTtlSeconds: Long = 15,
+    @Value("\${transit.seoul.subway-response-cache-max-entries:512}")
+    private val subwayResponseCacheMaxEntries: Int = 512,
 ) {
     private val normalizedBusApiKey = normalizeDataPortalServiceKey(
         busApiKey.ifBlank { commonApiKey },
     )
 
     init {
+        require(subwayResponseCacheTtlSeconds in 1..60)
+        require(subwayResponseCacheMaxEntries in 1..2048)
         validateTransitProviderEndpoint(
             provider = TransitWireProvider.SEOUL_SUBWAY,
             baseUrl = subwayBaseUrl,
@@ -84,6 +92,11 @@ class SeoulTransitArrivalClient(
         .requestFactory(requestFactory)
         .build()
     private val stationArsCache = ConcurrentHashMap<String, List<String>>()
+    // The HTTP response is station-wide; line/direction/limit are local filters.
+    // Preserve its original receipt time and provider timestamps on every cache hit.
+    private val subwayResponseCache = LinkedHashMap<String, CachedSubwayResponse>(16, 0.75f, true)
+    private val subwayResponseLocks = Array(64) { Any() }
+    private data class CachedSubwayResponse(val body: JsonNode, val receivedAt: Instant)
 
     fun getSubwayArrivals(
         stationName: String,
@@ -269,25 +282,37 @@ class SeoulTransitArrivalClient(
         directionCode: String?,
         limit: Int,
     ): List<TransitArrivalDto> {
-        return observeWire(
-            provider = TransitWireProvider.SEOUL_SUBWAY,
-            operation = TransitWireOperation.ARRIVAL,
-            isEmpty = List<TransitArrivalDto>::isEmpty,
-        ) {
-            val response = subwayClient.get()
-                .uri("/{apiKey}/json/realtimeStationArrival/0/{endIndex}/{stationName}", apiKey, 40, stationName)
-                .retrieve()
-                .body(JsonNode::class.java)
-                ?: return@observeWire emptyList()
-
-            parseSubwayArrivals(
-                response = response,
-                lineName = lineName,
-                directionName = directionName,
-                directionCode = directionCode,
-                limit = limit,
-            )
+        fun cached(): CachedSubwayResponse? = synchronized(subwayResponseCache) {
+            subwayResponseCache[stationName]?.takeIf {
+                val now = clock.instant()
+                !now.isBefore(it.receivedAt) && now.isBefore(it.receivedAt.plusSeconds(subwayResponseCacheTtlSeconds))
+            }.also { if (it == null) subwayResponseCache.remove(stationName) }
         }
+        val response = cached() ?: synchronized(subwayResponseLocks[(stationName.hashCode() and Int.MAX_VALUE) % subwayResponseLocks.size]) {
+            // Coalesce simultaneous requests without holding the global LRU during HTTP.
+            cached() ?: observeWire(
+                provider = TransitWireProvider.SEOUL_SUBWAY,
+                operation = TransitWireOperation.ARRIVAL,
+                isEmpty = { value: CachedSubwayResponse -> !seoulSubwayResponseHasData(value.body) },
+            ) {
+                val body = subwayClient.get()
+                    .uri("/{apiKey}/json/realtimeStationArrival/0/{endIndex}/{stationName}", apiKey, 40, stationName)
+                    .retrieve().body(JsonNode::class.java)
+                    ?: throw IllegalStateException("서울 지하철 응답이 비어 있습니다.")
+                // Never cache application errors, malformed responses or transport failures.
+                seoulSubwayResponseHasData(body)
+                CachedSubwayResponse(body, clock.instant()).also { value ->
+                    synchronized(subwayResponseCache) {
+                        if (subwayResponseCache.size >= subwayResponseCacheMaxEntries) {
+                            subwayResponseCache.entries.iterator().let { if (it.hasNext()) { it.next(); it.remove() } }
+                        }
+                        subwayResponseCache[stationName] = value
+                    }
+                }
+            }
+        }
+        return parseSubwayArrivals(response.body, lineName, directionName, directionCode, limit,
+            observedAt = response.receivedAt)
     }
 
     internal fun parseSubwayArrivals(
@@ -352,6 +377,9 @@ class SeoulTransitArrivalClient(
         val waitMinutes = waitSeconds?.toWaitMinutes()
         val message = text("arvlMsg2") ?: text("arvlMsg3")
         val sourceUpdatedAt = parseSeoulTimestamp(text("recptnDt"))
+        // 공식 OA-12764 유의사항: recptnDt는 생성시각이며 수집 지연만큼 잔여시간을
+        // 줄여야 한다. HTTP 수신시각 + barvlDt로 바꾸면 그 지연을 다시 더하게 된다.
+        // https://data.seoul.go.kr/dataList/OA-12764/A/1/datasetView.do
         val expectedBase = sourceUpdatedAt
             ?.let { runCatching { Instant.parse(it) }.getOrNull() }
             ?: observedAt
@@ -380,9 +408,15 @@ class SeoulTransitArrivalClient(
                 TransitArrivalFreshnessEvidence.LOCAL_RECEIPT_TIMESTAMP_ONLY
             },
             vehicleType = trainType,
-            express = trainType?.let { type ->
-                type.contains("급행") || type.contains("특급") || type.contains("ITX", ignoreCase = true)
+            // 알 수 없는 종별은 일반열차(false)의 증거가 아니다.
+            express = when (trainType?.uppercase()) {
+                "일반" -> false
+                "급행", "특급", "ITX" -> true
+                else -> null
             },
+            subwayLineId = text("subwayId"),
+            subwayStationId = text("statnId"),
+            trainNumber = text("btrainNo"),
         )
     }
 
@@ -528,6 +562,9 @@ class SeoulTransitArrivalClient(
         val resultCode = (
             response.path("RESULT").path("CODE").asText(null)
                 ?: response.path("errorMessage").path("code").asText(null)
+                // 실제 quota 오류는 errorMessage 래퍼 없이 최상위 code로 내려온다.
+                // UNKNOWN으로 잃어버리지 않고 안전한 코드만 진단 예외에 보존한다.
+                ?: response.path("code").asText(null)
         )?.trim()
         if (resultCode == null) {
             val resultMessagePresent = response.path("RESULT").path("MESSAGE").asText(null) != null ||

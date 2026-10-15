@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component
 import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.CancellationException
 import kotlin.math.abs
 
 /**
@@ -89,9 +90,14 @@ class SafeDepartureResolver(
         evaluatedAt: Instant,
         select: (List<TransitJourney>) -> ProjectedTransitJourney<T>?,
     ): ProjectedTransitJourney<T>? {
-        val minimumSearchAt = evaluatedAt.ceilToMinute()
+        // 길찾기 HTTP의 분 해상도와 실제 접근 시작시각을 구분한다. Tmap은 원본 구간 초를
+        // 현재 출발에 재투영하므로 최대 59초의 가짜 지연을 넣지 않는다. 초 미만만 올림해
+        // 과거 출발은 막고, ODsay 등 분 단위 공급자는 기존 정수 분 검색을 그대로 유지한다.
+        fun Instant.ceilToDepartureResolution(): Instant =
+            if (provider.supportsSecondPrecisionDepartureProjection) ceilToSecond() else ceilToMinute()
+        val minimumSearchAt = evaluatedAt.ceilToDepartureResolution()
         var searchAt = request.departureAt
-            .ceilToMinute()
+            .ceilToDepartureResolution()
             .coerceAtLeast(minimumSearchAt)
         val latestAllowedSearch = targetArrivalAt
             ?.minusSeconds(MINIMUM_JOURNEY_SECONDS)
@@ -105,7 +111,18 @@ class SafeDepartureResolver(
         val visited = mutableSetOf<Instant>()
         repeat(maxSearches) search@{
             if (!visited.add(searchAt)) return feasible.latestFeasible()
-            val candidates = provider.search(request.copy(departureAt = searchAt))
+            val candidates = try {
+                provider.search(request.copy(departureAt = searchAt))
+            } catch (failure: Exception) {
+                // 같은 평가 안에서 실제 마감·승차 조건을 통과한 후보가 있으면 후속 최적화
+                // HTTP 실패 때문에 버리지 않는다. 이전 평가의 저장 경로나 미검증·늦은
+                // 후보를 가져오는 fallback이 아니며, 남은 예산으로 실패 요청을 반복하지 않는다.
+                // 실행 취소/인터럽트는 안전 후보가 있어도 정상 결과로 바꾸지 않는다.
+                if (failure is CancellationException || failure is InterruptedException ||
+                    Thread.currentThread().isInterrupted
+                ) throw failure
+                return feasible.latestFeasible() ?: throw failure
+            }
             val projected = select(candidates)
             if (projected == null) {
                 if (feasible.isNotEmpty()) {
@@ -171,9 +188,21 @@ class SafeDepartureResolver(
             }
 
             val adjustmentSeconds = projected.searchAdjustmentSeconds ?: arrivalDeltaSeconds
+            val proposed = searchAt.adjustForProviderMinute(adjustmentSeconds).let { next ->
+                // A confirmed train has an absolute boarding deadline. Jumping
+                // by all remaining arrival slack can skip that still-boardable
+                // train and spend the bounded budget on unobserved later ones.
+                // Probe the latest departure for this SAME observation first;
+                // floor to provider resolution, never round past its safety margin.
+                val observedLimit = projected.latestObservedVehicleDepartureAt?.let {
+                    if (provider.supportsSecondPrecisionDepartureProjection) it.truncatedTo(ChronoUnit.SECONDS)
+                    else it.truncatedTo(ChronoUnit.MINUTES)
+                }
+                if (onTime && observedLimit != null) next.coerceAtMost(observedLimit) else next
+            }
             val nextSearchAt = nextBoundedProbe(
                 current = searchAt,
-                proposed = searchAt.adjustForProviderMinute(adjustmentSeconds),
+                proposed = proposed,
                 primaryAdjustmentSeconds = adjustmentSeconds,
                 minimum = minimumSearchAt,
                 maximum = latestAllowedSearch,
@@ -232,6 +261,9 @@ class SafeDepartureResolver(
         return if (this == floor) floor else floor.plus(1, ChronoUnit.MINUTES)
     }
 
+    private fun Instant.ceilToSecond(): Instant =
+        if (nano == 0) this else truncatedTo(ChronoUnit.SECONDS).plusSeconds(1)
+
     /**
      * Positive probes round up so they never precede the requested instant. Negative probes round
      * down so a sub-minute late delta still moves to an earlier ODsay SearchTime minute.
@@ -266,6 +298,8 @@ data class ProjectedTransitJourney<T>(
     val eligible: Boolean = true,
     /** 불연속 환승 실패에서 다음 검색시각을 앞당길 공급자 검색 보정값이다. */
     val searchAdjustmentSeconds: Long? = null,
+    /** 같은 관측 차량의 접근·승차 여유를 모두 보존한 마지막 출발 경계. 미관측이면 null. */
+    val latestObservedVehicleDepartureAt: Instant? = null,
 ) {
     init {
         require(!predictedArrivalAt.isBefore(journey.departureAt)) {

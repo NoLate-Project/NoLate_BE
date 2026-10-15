@@ -28,7 +28,9 @@ object TransitRouteResponseQualityEvaluator {
             val duration = normalizeDurationMinutes(itinerary.path("totalTime")) ?: return@mapNotNull null
             val legs = itinerary.path("legs")
             if (!legs.isArray || legs.none(::isTransitLeg)) return@mapNotNull null
-            if (duration < minimumMinutes) return@mapNotNull null
+            val hasTrain = legs.any { it.path("mode").asText().uppercase() == "TRAIN" }
+            val minimumForModes = if (hasTrain) minimumMinutes * MAX_PLAUSIBLE_AVERAGE_SPEED_KPH / MAX_PLAUSIBLE_RAIL_SPEED_KPH else minimumMinutes
+            if (duration < minimumForModes) return@mapNotNull null
             CandidateGeometry(
                 durationMinutes = duration,
                 geometryComplete = isGeometryComplete(legs),
@@ -104,7 +106,7 @@ object TransitRouteResponseQualityEvaluator {
 
     private fun isTransitLeg(leg: JsonNode): Boolean {
         val mode = leg.path("mode").asText(leg.path("type").asText()).uppercase()
-        return mode == "BUS" || mode == "SUBWAY" || mode == "1" || mode == "2"
+        return mode in setOf("BUS", "SUBWAY", "TRAIN", "EXPRESSBUS", "1", "2")
     }
 
     private fun minimumPlausibleMinutes(request: TransitRouteRequest): Double {
@@ -124,6 +126,8 @@ object TransitRouteResponseQualityEvaluator {
         return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine))
     }
 
+    // Validation envelope for high-speed rail, not an estimated speed or a timetable.
+    private const val MAX_PLAUSIBLE_RAIL_SPEED_KPH = 350.0
     private const val MAX_PLAUSIBLE_AVERAGE_SPEED_KPH = 120.0
     private const val MIN_WALK_GEOMETRY_DISTANCE_METERS = 40.0
     private const val MIN_LINESTRING_LENGTH = 7

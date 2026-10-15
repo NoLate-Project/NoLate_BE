@@ -40,10 +40,14 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
+import org.junit.jupiter.params.provider.ValueSource
 import org.mockito.Mock
 import org.mockito.Mockito.lenient
 import org.mockito.junit.jupiter.MockitoExtension
@@ -56,6 +60,7 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
+import org.mockito.kotlin.verifyNoMoreInteractions
 import org.mockito.kotlin.whenever
 import org.springframework.test.util.ReflectionTestUtils
 import java.lang.reflect.Modifier
@@ -84,6 +89,106 @@ class SchedulePushJobWorkerTest {
         .ofPattern("HH:mm")
         .withZone(ZoneId.of("Asia/Seoul"))
     private val objectMapper = jacksonObjectMapper().findAndRegisterModules()
+
+    @ParameterizedTest
+    @ValueSource(strings = ["pending", "timeout", "late", "missingTiming", "expired"])
+    fun `출발 후 미관측 시간표 재확인은 주기만 앞당기고 실패를 정상 ETA로 만들지 않는다`(case: String) {
+        val schedule = schedule(shortScheduleStartAt, travelMode = ScheduleTravelMode.TRANSIT)
+        val baseline = testNow.minusSeconds(10)
+        val job = persistedJob(1L, 10L, schedule.startAt, baseline,
+            testNow.minusSeconds(600), notificationIntervalMinutes)
+        val boarding = testNow.plusSeconds(if (case == "expired") -1 else 240)
+        val table = com.noLate.eta.domain.TransitLegTimetable(
+            provider = "seoul-timetable", line = com.noLate.eta.domain.SeoulSubwayLine.LINE_4,
+            serviceDate = testNow.atZone(ZoneId.of("Asia/Seoul")).toLocalDate(),
+            trainNumber = "4012", directionCode = "DOWN",
+            serviceClass = com.noLate.eta.domain.TransitServiceClass.LOCAL,
+            fromStationCode = "0411", toStationCode = "0433", terminalName = "사당",
+            boardingAt = boarding, arrivalAt = boarding.plusSeconds(1800), fetchedAt = testNow,
+        )
+        val route = effectiveTransitRoute("a".repeat(64), testNow, table.arrivalAt, 34, "4호선")
+        val timedRoute = route.copy(segments = route.segments.map { it.copy(rideTiming =
+            if (case == "missingTiming") null else com.noLate.schedule.application.EffectiveTransitRideTiming(
+                table, table.boardingAt, table.arrivalAt,
+                com.noLate.schedule.application.EffectiveTransitRideTimingBasis.TIMETABLE)) })
+        val failure = when (case) {
+            "timeout" -> TrafficFailureReasons.TRANSIT_ARRIVAL_API_TIMEOUT
+            "late" -> TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE
+            else -> TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED
+        }
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(
+            travelMinutes = 60, source = TrafficSource.TIMETABLE_PROVIDER, fetchedAt = testNow,
+            stale = true, failureReason = failure, recommendedDepartureAt = baseline,
+            predictedArrivalAt = null, transitTimingBasis = TransitTimingBasis.TIMETABLE_ONLY,
+            effectiveTransitRoute = timedRoute,
+        ))
+        whenever(notificationUseCase.sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker().runDueJobs(testNow)
+
+        if (case == "pending") assertEquals(testNow.plusSeconds(60), job.nextCheckAt)
+        else assertTrue(requireNotNull(job.nextCheckAt).isAfter(testNow.plusSeconds(60)))
+        assertEquals(baseline, job.lastRecommendedDepartureAt)
+        assertEquals(true, job.lastEtaStale)
+        assertEquals(failure, job.lastEtaFailureReason)
+    }
+
+    @ParameterizedTest
+    @CsvSource("0, 240, 60", "121, 240, 180", "0, 3, 180")
+    fun `조회 중 출발 경계를 지나도 아직 탈 수 있는 신선한 첫 차량이면 1분 뒤 다시 확인한다`(
+        sourceAgeSeconds: Long,
+        boardingDelaySeconds: Long,
+        expectedDelaySeconds: Long,
+    ) {
+        val schedule = schedule(shortScheduleStartAt, travelMode = ScheduleTravelMode.TRANSIT)
+        val job = dueDepartureJob(schedule)
+        val departure = testNow.plusSeconds(1)
+        val transition = testNow.plusSeconds(4)
+        var wallTime = testNow
+        val advancingClock = object : Clock() {
+            override fun getZone() = ZoneOffset.UTC
+            override fun withZone(zone: ZoneId): Clock = this
+            override fun instant() = wallTime
+        }
+        whenever(pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
+            eq(SchedulePushJobStatus.ACTIVE), any(), eq(org.springframework.data.domain.PageRequest.of(0, 1)),
+        )).thenReturn(listOf(job), emptyList())
+        whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
+        val result = TrafficResult(
+            travelMinutes = 60, source = TrafficSource.LIVE_PROVIDER, fetchedAt = testNow,
+            stale = false, recommendedDepartureAt = departure, predictedArrivalAt = schedule.startAt,
+            firstBoardingObservation = com.noLate.eta.domain.TransitFirstBoardingObservation(
+                provider = "seoul-openapi", stationName = "노원", lineName = "4호선",
+                departureAt = departure, readyAt = departure.plusSeconds(1),
+                expectedBoardingAt = testNow.plusSeconds(boardingDelaySeconds),
+                sourceUpdatedAt = transition.minusSeconds(sourceAgeSeconds), evaluatedAt = testNow,
+                trainNumber = "4599",
+            ),
+        )
+        whenever(trafficClient.getTravelMinutes(any())).thenAnswer {
+            wallTime = transition // 실제 공급자 응답 대기 중 출발 경계를 지나는 상황.
+            result
+        }
+        whenever(notificationUseCase.sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker(clock = advancingClock).runDueJobs(testNow)
+
+        verify(notificationUseCase).sendToMemberFenced(
+            memberId = any(), title = any(), body = any(), data = check {
+                assertEquals("DEPART_NOW", it["departureReminderDecision"])
+                assertEquals("true", it["departNow"])
+            }, inboxDeduplicationKey = any(), persistInInbox = any(), dispatchFence = any(),
+        )
+
+        // 신선한 차량은 1분, 그 외에는 기존 출발 후 3분 리마인드가 먼저다.
+        // 일정 시작까지 건너뛰지 않고 API freshness와 같은 실제 갱신 경계를 저장한다.
+        assertEquals(transition.plusSeconds(expectedDelaySeconds), job.nextCheckAt)
+        assertEquals(job.nextCheckAt, job.lastEtaRefreshDueAt)
+        assertEquals(departure, job.lastRecommendedDepartureAt)
+    }
 
     private var nextJobId = 1_000L
     private val fixtureJobs = mutableListOf<SchedulePushJob>()
@@ -154,6 +259,86 @@ class SchedulePushJobWorkerTest {
             trafficClient,
             notificationUseCase,
         )
+    }
+
+    @Test
+    fun `disabled scoped worker does not touch coordinator or providers`() {
+        assertEquals(
+            0,
+            worker(enabled = false, coordinator = mockedPushJobCoordinator)
+                .runDueJobForSchedule(296, 363, testNow),
+        )
+        verifyNoInteractions(mockedPushJobCoordinator, scheduleRepository, trafficClient, notificationUseCase)
+    }
+
+    @ParameterizedTest
+    @CsvSource("0,363", "-1,363", "296,0", "296,-1")
+    fun `scoped worker rejects invalid IDs before claiming`(memberId: Long, scheduleId: Long) {
+        assertThrows(IllegalArgumentException::class.java) {
+            worker(coordinator = mockedPushJobCoordinator)
+                .runDueJobForSchedule(memberId, scheduleId, testNow)
+        }
+        verifyNoInteractions(mockedPushJobCoordinator, scheduleRepository, trafficClient, notificationUseCase)
+    }
+
+    @Test
+    fun `scoped worker without due job does not scan or repair other jobs`() {
+        assertEquals(
+            0,
+            worker(coordinator = mockedPushJobCoordinator)
+                .runDueJobForSchedule(296, 363, testNow),
+        )
+        verify(mockedPushJobCoordinator).claimDueJobForSchedule(eq(296), eq(363), eq(testNow), any())
+        verifyNoMoreInteractions(mockedPushJobCoordinator)
+        verifyNoInteractions(scheduleRepository, trafficClient, notificationUseCase)
+    }
+
+    @Test
+    fun `scoped worker runs existing ETA persistence and metrics for only the requested job`() {
+        val schedule = schedule()
+        val job = persistedJob(
+            memberId = 1,
+            scheduleId = 10,
+            scheduleAt = schedule.startAt,
+            departureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES),
+            monitorStartAt = testNow,
+            intervalMinutes = notificationIntervalMinutes,
+        )
+        whenever(mockedPushJobCoordinator.claimDueJobForSchedule(eq(1), eq(10), eq(testNow), any()))
+            .thenAnswer { invocation ->
+                job.startProcessing(invocation.getArgument(3), testNow)
+                job
+            }
+        whenever(mockedPushJobCoordinator.execute<Unit>(any())).thenAnswer { invocation ->
+            invocation.getArgument<() -> Unit>(0).invoke()
+        }
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull(), anyOrNull()))
+            .thenReturn(true)
+        whenever(scheduleRepository.findScheduleDetail(10, 1)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(47))
+        val registry = SimpleMeterRegistry()
+
+        assertEquals(
+            1,
+            worker(coordinator = mockedPushJobCoordinator, operationalMetrics = NoLateOperationalMetrics(registry))
+                .runDueJobForSchedule(1, 10, testNow),
+        )
+
+        verify(mockedPushJobCoordinator).claimDueJobForSchedule(eq(1), eq(10), eq(testNow), any())
+        verify(mockedPushJobCoordinator).execute<Unit>(any())
+        verify(mockedPushJobCoordinator).persist(eq(job), any(), anyOrNull(), anyOrNull(), check { history ->
+            assertNotNull(history)
+            assertEquals(10L, history?.scheduleId)
+            assertEquals(1L, history?.memberId)
+        })
+        // 전역 cadence 정리·stale 복구·due 검색은 이 진입점에서 한 번도 실행되지 않는다.
+        verifyNoMoreInteractions(mockedPushJobCoordinator)
+        verify(trafficClient).getTravelMinutes(any())
+        assertEquals(47, job.lastTravelMinutes)
+        assertEquals(1, job.checkCount)
+        assertEtaTransitionCount(registry, "claimed", 1.0)
+        assertEtaTransitionCount(registry, "processed", 1.0)
+        verify(notificationUseCase, never()).sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any())
     }
 
     @Test
@@ -235,10 +420,8 @@ class SchedulePushJobWorkerTest {
         assertEquals(testNow, job.lastCheckedAt)
         assertEquals(null, job.lastPushedAt)
         assertEquals(1, job.checkCount)
-        assertEquals(
-            testNow.plus(notificationIntervalMinutes.toLong(), ChronoUnit.MINUTES),
-            job.nextCheckAt,
-        )
+        // 출발까지 30분 넘게 남았으므로 5분 뒤 다시 조회한다.
+        assertEquals(testNow.plus(5, ChronoUnit.MINUTES), job.nextCheckAt)
         assertEquals(
             1.0,
             registry.get("nolate.eta.jobs").tag("outcome", "claimed").counter().count(),
@@ -387,13 +570,8 @@ class SchedulePushJobWorkerTest {
 
         verify(notificationUseCase, never()).sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any())
         verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
-        assertEquals(
-            currentRecommendedDepartureAt.minus(
-                departureAlertLeadMinutes.toLong(),
-                ChronoUnit.MINUTES,
-            ),
-            job.nextCheckAt,
-        )
+        // 출발까지 30분 넘게 남았으므로 5분 뒤 다시 조회한다.
+        assertEquals(testNow.plus(2, ChronoUnit.MINUTES), job.nextCheckAt)
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
     }
 
@@ -891,6 +1069,7 @@ class SchedulePushJobWorkerTest {
             recommendedDepartureAt = eq(job.departureAt),
             scheduleTitle = eq(schedule.title),
             resumeCanceledAfterTransitTransferFailure = eq(false),
+            cancellationReason = eq(com.noLate.schedule.domain.DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE),
         )
     }
 
@@ -935,6 +1114,7 @@ class SchedulePushJobWorkerTest {
             recommendedDepartureAt = eq(job.departureAt),
             scheduleTitle = eq(schedule.title),
             resumeCanceledAfterTransitTransferFailure = eq(false),
+            cancellationReason = eq(com.noLate.schedule.domain.DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE),
         )
     }
 
@@ -975,16 +1155,20 @@ class SchedulePushJobWorkerTest {
     }
 
     @Test
-    fun `환승 실패 뒤 정상 ETA가 회복되면 취소한 자동 알람만 다시 예약한다`() {
+    fun `환승 실패 뒤 정상 ETA가 회복되면 기존 안전 출발시각으로 취소 알람을 복구한다`() {
         val schedule = schedule(
             alertMode = ScheduleAlertMode.ALARM,
             travelMode = ScheduleTravelMode.TRANSIT,
         )
         val job = dueDepartureJob(schedule)
+
+        val previousSafeDepartureAt =
+            schedule.startAt.minus(45, ChronoUnit.MINUTES)
+
         job.startProcessing("previous-worker")
         job.finishCheck(
             travelMinutes = 45,
-            recommendedDepartureAt = schedule.startAt.minus(45, ChronoUnit.MINUTES),
+            recommendedDepartureAt = previousSafeDepartureAt,
             pushSent = false,
             notifiedDepartureAt = null,
             nextCheckAt = testNow,
@@ -995,15 +1179,20 @@ class SchedulePushJobWorkerTest {
             etaRouteFingerprint = routeFingerprint(schedule),
             now = testNow.minus(1, ChronoUnit.MINUTES),
         )
+
         stubDueJobLookup(job, schedule)
-        val recoveredDepartureAt = schedule.startAt.minus(30, ChronoUnit.MINUTES)
+
+        // Provider가 기존보다 늦은 출발시각을 반환한 상황이다.
+        val recoveredCandidateDepartureAt =
+            schedule.startAt.minus(30, ChronoUnit.MINUTES)
+
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(
             TrafficResult(
                 travelMinutes = 30,
                 source = TrafficSource.LIVE_PROVIDER,
                 fetchedAt = testNow,
                 stale = false,
-                recommendedDepartureAt = recoveredDepartureAt,
+                recommendedDepartureAt = recoveredCandidateDepartureAt,
                 predictedArrivalAt = schedule.startAt,
             )
         )
@@ -1015,13 +1204,103 @@ class SchedulePushJobWorkerTest {
             scheduleId = eq(job.scheduleId),
             notificationEnabled = eq(true),
             alertMode = eq(ScheduleAlertMode.ALARM),
-            recommendedDepartureAt = eq(recoveredDepartureAt),
+
+            // 정상 회복은 했지만 기존 알림보다 늦추지는 않는다.
+            recommendedDepartureAt = eq(previousSafeDepartureAt),
+
             scheduleTitle = eq(schedule.title),
+
+            // 이전 MISSED 때문에 취소된 자동 알람은 다시 활성화한다.
             resumeCanceledAfterTransitTransferFailure = eq(true),
+            cancellationReason = eq(com.noLate.schedule.domain.DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL),
         )
-        verify(notificationUseCase, never()).sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any())
-        verify(notificationUseCase, never()).sendToMember(any(), any(), any(), any(), any(), any())
+
+        assertEquals(previousSafeDepartureAt, job.lastRecommendedDepartureAt)
         assertNull(job.lastEtaFailureReason)
+
+        verify(notificationUseCase, never()).sendToMemberFenced(
+            any(), any(), any(), any(), any(), any(),
+            dispatchFence = any(),
+        )
+        verify(notificationUseCase, never()).sendToMember(
+            any(), any(), any(), any(), any(), any(),
+        )
+    }
+
+    @Test
+    fun `정상 상태에서 환승 시간 UNKNOWN이면 기존 자동 알람을 유지한다`() {
+        val schedule = schedule(
+            alertMode = ScheduleAlertMode.ALARM,
+            travelMode = ScheduleTravelMode.TRANSIT,
+        )
+        val job = dueDepartureJob(schedule)
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = 45,
+                source = TrafficSource.SELECTED_ROUTE,
+                stale = true,
+                failureReason = TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN,
+            )
+        )
+        whenever(
+            notificationUseCase.sendToMemberFenced(
+                any(), any(), any(), any(), any(), any(),
+                dispatchFence = any(),
+            )
+        ).thenReturn(
+            NotificationSendResult(requestedCount = 1, sentCount = 1)
+        )
+
+        worker(alarmSyncService = departureAlarmSyncService).runDueJobs(testNow)
+
+        // 불확실 결과로 서비스까지 호출하면 과거 fallback 시각이 미래 알람을
+        // 취소할 수 있으므로 알람 변경 자체를 요청하지 않는다.
+        verifyNoInteractions(departureAlarmSyncService)
+
+        assertEquals(
+            TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN,
+            job.lastEtaFailureReason,
+        )
+        assertEquals(job.departureAt, job.lastRecommendedDepartureAt)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["STALE_ONLY", "PROVIDER_TIMEOUT", "TRANSIT_TRANSFER_TIMING_UNKNOWN", "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY"])
+    fun `첫 저신뢰도 평가의 과거 출발시각으로 자동 알람을 변경하지 않는다`(diagnostic: String) {
+        val schedule = schedule(alertMode = ScheduleAlertMode.ALARM, travelMode = ScheduleTravelMode.TRANSIT)
+        val job = persistedJob(
+            memberId = schedule.memberId, scheduleId = requireNotNull(schedule.id), scheduleAt = schedule.startAt,
+            departureAt = testNow.minus(1, ChronoUnit.MINUTES),
+            monitorStartAt = testNow.minus(2, ChronoUnit.MINUTES), intervalMinutes = notificationIntervalMinutes,
+        )
+        val reason = when (diagnostic) {
+            "STALE_ONLY" -> null
+            "TRANSIT_TRANSFER_TIMING_UNKNOWN" -> TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN
+            "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY" -> TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY
+            else -> "PROVIDER_TIMEOUT: 실시간 ETA 공급자 응답 시간이 초과되었습니다."
+        }
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = 45, source = TrafficSource.LIVE_PROVIDER, fetchedAt = testNow,
+                stale = true, failureReason = reason,
+                recommendedDepartureAt = testNow.minus(1, ChronoUnit.MINUTES),
+            )
+        )
+        lenient().`when`(notificationUseCase.sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        lenient().`when`(notificationUseCase.sendToMemberFencedWithNativeAlarmCoverage(any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker(alarmSyncService = departureAlarmSyncService).runDueJobs(testNow)
+
+        verifyNoInteractions(departureAlarmSyncService)
+        assertEquals(reason, job.lastEtaFailureReason)
+        assertEquals(true, job.lastEtaStale)
+        assertEquals(0, job.retryCount)
     }
 
     @Test
@@ -1181,6 +1460,162 @@ class SchedulePushJobWorkerTest {
             objectMapper,
             job.lastEffectiveTransitRouteJson,
         )?.effectiveTransitRoute?.identity)
+    }
+
+    @ParameterizedTest
+    @CsvSource(
+        "60, 5, 300, 600",
+        "30, 5, 120, 420",
+        "15, 5, 60, 360",
+        "31, 5, 60, 360",
+        "60, 0, 300, 300",
+        "60, 2, 300, 420",
+        "60, 60, 300, 3900",
+        "-28, 5, 60, 120",
+    )
+    fun `Live Activity 유효시간은 저장한 갱신 경계와 설정된 유예시간을 따른다`(
+        minutesUntilDeparture: Long,
+        graceMinutes: Long,
+        expectedRefreshSeconds: Long,
+        expectedStaleSeconds: Long,
+    ) {
+        // 이동시간은 30분으로 고정하고 출발까지 남은 시간만 바꾼다.
+        // 마지막 행은 일정 2분 전이다. 1분 전 리마인드에 다시 조회하더라도
+        // 유효시간은 조회시각+5분이 아니라 일정 시작 시각에서 끝나야 한다.
+        val schedule = schedule(testNow.plus(minutesUntilDeparture + 30, ChronoUnit.MINUTES))
+        val job = dueDepartureJob(schedule)
+        stubDueJob(job, schedule, travelMinutes = 30)
+        if (minutesUntilDeparture <= departureAlertLeadMinutes) {
+            whenever(notificationUseCase.sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any()))
+                .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+        }
+
+        worker(
+            liveActivityService = scheduleLiveActivityService,
+            departureStatusSnapshotGraceMinutes = graceMinutes,
+        ).runDueJobs(testNow)
+
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        val expectedRefreshAt = testNow.plusSeconds(expectedRefreshSeconds)
+        assertEquals(expectedRefreshAt, job.lastEtaRefreshDueAt)
+        assertEquals(expectedRefreshAt, storedJobs[requireNotNull(job.id)]?.lastEtaRefreshDueAt)
+        assertEquals(testNow.plusSeconds(expectedStaleSeconds), projection.firstValue.staleAt)
+        assertFalse(requireNotNull(projection.firstValue.staleAt).isAfter(schedule.startAt))
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = [-1, 61])
+    fun `Live Activity 유예시간 설정이 허용 범위를 벗어나면 시작하지 않는다`(graceMinutes: Long) {
+        assertThrows(IllegalArgumentException::class.java) {
+            worker(departureStatusSnapshotGraceMinutes = graceMinutes)
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `푸시 실패 뒤 Live Activity 유효시간은 실제 ETA 재시도 경계를 사용한다`(retryable: Boolean) {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        stubDueJob(job, schedule, travelMinutes = 60)
+        whenever(notificationUseCase.sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any()))
+            .thenReturn(
+                NotificationSendResult(
+                    requestedCount = 1,
+                    attemptedCount = 1,
+                    failedCount = 1,
+                    retryableFailedCount = if (retryable) 1 else 0,
+                ),
+            )
+
+        worker(liveActivityService = scheduleLiveActivityService).runDueJobs(testNow)
+
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        assertEquals(1, job.retryCount)
+        assertEquals(0, job.checkCount)
+        assertEquals(testNow.plus(1, ChronoUnit.MINUTES), job.lastEtaRefreshDueAt)
+        assertEquals(testNow.plus(6, ChronoUnit.MINUTES), projection.firstValue.staleAt)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["REJECTED", "FAILED", "MISSING_DUE"])
+    fun `저장 실패 또는 ETA 갱신 경계 누락 시 Live Activity를 갱신하지 않는다`(scenario: String) {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        stubClaimedEtaJob(job, schedule, travelMinutes = 30)
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull(), anyOrNull()))
+            .thenAnswer {
+                when (scenario) {
+                    "REJECTED" -> false
+                    "FAILED" -> throw IllegalStateException("test persistence failure")
+                    else -> {
+                        // 잘못된 저장 결과에서도 유효시간 없는 projection을 보내면 안 된다.
+                        ReflectionTestUtils.setField(job, "lastEtaRefreshDueAt", null)
+                        true
+                    }
+                }
+            }
+
+        worker(
+            coordinator = mockedPushJobCoordinator,
+            liveActivityService = scheduleLiveActivityService,
+        ).runDueJobs(testNow)
+
+        verify(mockedPushJobCoordinator).persist(any(), any(), anyOrNull(), anyOrNull(), anyOrNull())
+        verifyNoInteractions(scheduleLiveActivityService)
+        // projection 실패가 외부 처리 catch로 전파되어 추가 재시도를 만들지 않는다.
+        assertEquals(0, job.retryCount)
+    }
+
+    @Test
+    fun `실행 재예약 시각이 바뀌어도 Live Activity는 저장한 ETA 갱신 경계를 유지한다`() {
+        val schedule = schedule(shortScheduleStartAt)
+        val job = dueDepartureJob(schedule)
+        stubClaimedEtaJob(job, schedule, travelMinutes = 30)
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull(), anyOrNull()))
+            .thenAnswer {
+                // 실행 예약의 변경만으로 이전 ETA의 유효기간을 연장해서는 안 된다.
+                ReflectionTestUtils.setField(job, "nextCheckAt", testNow.plus(20, ChronoUnit.MINUTES))
+                true
+            }
+
+        worker(
+            coordinator = mockedPushJobCoordinator,
+            liveActivityService = scheduleLiveActivityService,
+        ).runDueJobs(testNow)
+
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        assertEquals(testNow.plus(20, ChronoUnit.MINUTES), job.nextCheckAt)
+        assertEquals(testNow.plus(2, ChronoUnit.MINUTES), job.lastEtaRefreshDueAt)
+        assertEquals(testNow.plus(7, ChronoUnit.MINUTES), projection.firstValue.staleAt)
+    }
+
+    @Test
+    fun `intercity fallback keeps ticket departure in reminders and Live Activity despite later arrival deadline`() {
+        val fixed = testNow.plusSeconds(3600)
+        val journey = objectMapper.createObjectNode().put("version", 1).put("departureAt", fixed.toString()).put("arrivalAt", testNow.plusSeconds(5400).toString())
+        journey.set<com.fasterxml.jackson.databind.node.ObjectNode>("service", objectMapper.createObjectNode().put("kind", "INTERCITY_BUS").put("timingBasis", "TICKET"))
+        val root = objectMapper.createObjectNode().put("schemaVersion", 3).put("minutes", 30)
+        root.set<com.fasterxml.jackson.databind.node.ObjectNode>("intercityJourney", journey)
+        root.set<com.fasterxml.jackson.databind.node.ObjectNode>("routeInfo", objectMapper.createObjectNode().put("timeBasis", "anchored_journey").put("departureTime", fixed.toString()).set("intercityJourney", journey.deepCopy()))
+        val schedule = schedule(routeJson = root.toString(), travelMode = ScheduleTravelMode.TRANSIT)
+        val job = persistedJob(1, 10, schedule.startAt, fixed, testNow.minusSeconds(1), notificationIntervalMinutes)
+        ReflectionTestUtils.setField(job, "id", 322L)
+        job.startProcessing("mock-owner", testNow)
+        whenever(mockedPushJobCoordinator.claimNextDueJob(any(), any())).thenReturn(job, null)
+        whenever(mockedPushJobCoordinator.execute<Unit>(any())).thenAnswer { it.getArgument<() -> Unit>(0).invoke() }
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull(), anyOrNull())).thenReturn(true)
+        whenever(scheduleRepository.findScheduleDetail(10, 1)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(travelMinutes = 30, source = TrafficSource.SELECTED_ROUTE, stale = true, failureReason = TrafficFailureReasons.TRANSIT_INTERCITY_TIMETABLE_UNAVAILABLE))
+        worker(coordinator = mockedPushJobCoordinator, liveActivityService = scheduleLiveActivityService).runDueJobs(testNow)
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        assertEquals(fixed, job.lastRecommendedDepartureAt)
+        assertEquals(fixed, projection.firstValue.recommendedDepartureAt)
+        assertTrue(projection.firstValue.etaStale)
+        assertNull(projection.firstValue.predictedArrivalAt)
     }
 
     @Test
@@ -1380,13 +1815,17 @@ class SchedulePushJobWorkerTest {
                 )
             )
 
-        worker().runDueJobs(testNow)
+        worker(liveActivityService = scheduleLiveActivityService).runDueJobs(testNow)
 
         assertEquals(1, job.checkCount)
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(testNow.plusSeconds(1), job.nextCheckAt)
         assertEquals(testNow, job.lastPushedAt)
         assertEquals(testNow, job.departureNoticeSentAt)
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        assertEquals(testNow.plusSeconds(1), job.lastEtaRefreshDueAt)
+        assertEquals(testNow.plusSeconds(301), projection.firstValue.staleAt)
     }
 
     @Test
@@ -1826,8 +2265,8 @@ class SchedulePushJobWorkerTest {
         assertEquals(SchedulePushJobStatus.ACTIVE, job.status)
         assertEquals(recommendedDepartureAt, job.lastNotifiedDepartureAt)
         assertEquals(testNow, job.lastReminderBoundaryAt)
-        assertEquals(testNow.plus(departureReminderIntervalMinutes.toLong(), ChronoUnit.MINUTES), job.nextCheckAt)
-    }
+        // 출발까지 30분 넘게 남았으므로 5분 뒤 다시 조회한다.
+        assertEquals(testNow.plus(1, ChronoUnit.MINUTES), job.nextCheckAt)    }
 
     @Test
     fun `출발 준비 알림 후 5분 경계에 다시 리마인드 푸시를 보낸다`() {
@@ -1895,10 +2334,9 @@ class SchedulePushJobWorkerTest {
             dispatchFence = any(),
         )
         assertEquals(secondReminderAt, job.lastReminderBoundaryAt)
-        assertEquals(
-            secondReminderAt.plus(departureReminderIntervalMinutes.toLong(), ChronoUnit.MINUTES),
-            job.nextCheckAt,
-        )
+
+        // 두 번째 알림 시점에는 출발까지 10분 남았으므로 1분 뒤 다시 조회한다.
+        assertEquals(secondReminderAt.plus(1, ChronoUnit.MINUTES), job.nextCheckAt)
     }
 
     @Test
@@ -2532,6 +2970,7 @@ class SchedulePushJobWorkerTest {
             )
 
         worker(
+            liveActivityService = scheduleLiveActivityService,
             coordinator = SchedulePushJobCoordinator(
                 pushJobRepository,
                 liveActivityLifecyclePublisher = liveActivityLifecyclePublisher,
@@ -2545,6 +2984,9 @@ class SchedulePushJobWorkerTest {
             job.scheduleId,
             "JOB_TERMINAL_FAILURE",
         )
+        // 종료 전이는 ETA 갱신 경계가 없어도 END만 보내고 projection을 만들지 않는다.
+        assertNull(job.lastEtaRefreshDueAt)
+        verifyNoInteractions(scheduleLiveActivityService)
     }
 
     @Test
@@ -2564,7 +3006,7 @@ class SchedulePushJobWorkerTest {
         whenever(notificationUseCase.sendToMemberFenced(any(), any(), any(), any(), any(), any(), dispatchFence = any()))
             .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
 
-        worker().runDueJobs(testNow)
+        worker(liveActivityService = scheduleLiveActivityService).runDueJobs(testNow)
 
         verify(notificationUseCase).sendToMemberFenced(
             memberId = eq(1L),
@@ -2579,6 +3021,8 @@ class SchedulePushJobWorkerTest {
             dispatchFence = any(),
         )
         assertEquals(SchedulePushJobStatus.COMPLETED, job.status)
+        assertNull(job.lastEtaRefreshDueAt)
+        verifyNoInteractions(scheduleLiveActivityService)
     }
 
     @Test
@@ -2848,6 +3292,7 @@ class SchedulePushJobWorkerTest {
         alarmSyncService: DepartureAlarmSyncService? = null,
         coordinator: SchedulePushJobCoordinator? = null,
         liveActivityService: ScheduleLiveActivityService? = null,
+        departureStatusSnapshotGraceMinutes: Long = 5L,
     ) = SchedulePushJobWorker(
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -2875,6 +3320,7 @@ class SchedulePushJobWorkerTest {
         operationalMetrics = operationalMetrics,
         departureAlarmSyncService = alarmSyncService,
         scheduleLiveActivityService = liveActivityService,
+        departureStatusSnapshotGraceMinutes = departureStatusSnapshotGraceMinutes,
     )
 
     private fun assertEtaProcessingExceptionCount(
@@ -2959,6 +3405,17 @@ class SchedulePushJobWorkerTest {
      */
     private fun stubDueJob(job: SchedulePushJob, schedule: Schedule, travelMinutes: Int) {
         stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
+    }
+
+    // 저장 반환값을 조작하는 경계 테스트에서만 Coordinator를 대체한다.
+    private fun stubClaimedEtaJob(job: SchedulePushJob, schedule: Schedule, travelMinutes: Int) {
+        job.startProcessing("mock-owner", testNow)
+        whenever(mockedPushJobCoordinator.claimNextDueJob(any(), any())).thenReturn(job, null)
+        whenever(mockedPushJobCoordinator.execute<Unit>(any())).thenAnswer { invocation ->
+            invocation.getArgument<() -> Unit>(0).invoke()
+        }
+        whenever(scheduleRepository.findScheduleDetail(job.scheduleId, job.memberId)).thenReturn(schedule)
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
     }
 
@@ -3180,7 +3637,75 @@ class SchedulePushJobWorkerTest {
                 alertMode = alertMode,
             )
         }
+
+    @Test
+    fun `대중교통 ETA가 줄어도 기존 출발 알림을 늦추지 않는다`() {
+        val previousTravelMinutes = 40
+        val currentTravelMinutes = 30
+        val schedule = schedule(
+            startAt = shortScheduleStartAt,
+            travelMode = ScheduleTravelMode.TRANSIT,
+        )
+        val previousDepartureAt =
+            schedule.startAt.minus(previousTravelMinutes.toLong(), ChronoUnit.MINUTES)
+        val laterCandidateDepartureAt =
+            schedule.startAt.minus(currentTravelMinutes.toLong(), ChronoUnit.MINUTES)
+
+        val job = persistedJob(
+            memberId = schedule.memberId,
+            scheduleId = requireNotNull(schedule.id),
+            scheduleAt = schedule.startAt,
+            departureAt = previousDepartureAt,
+            monitorStartAt = previousDepartureAt.minus(60, ChronoUnit.MINUTES),
+            intervalMinutes = notificationIntervalMinutes,
+        )
+
+        job.startProcessing("previous-worker")
+        job.finishCheck(
+            travelMinutes = previousTravelMinutes,
+            recommendedDepartureAt = previousDepartureAt,
+            pushSent = false,
+            notifiedDepartureAt = null,
+            nextCheckAt = testNow,
+            completeAfterCheck = false,
+            etaSource = TrafficSource.LIVE_PROVIDER,
+            liveFetchedAt = testNow.minus(1, ChronoUnit.MINUTES),
+            etaStale = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
+            now = testNow.minus(1, ChronoUnit.MINUTES),
+        )
+
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(
+            TrafficResult(
+                travelMinutes = currentTravelMinutes,
+                source = TrafficSource.LIVE_PROVIDER,
+                fetchedAt = testNow,
+                stale = false,
+                recommendedDepartureAt = laterCandidateDepartureAt,
+                predictedArrivalAt = schedule.startAt,
+            )
+        )
+
+        worker(alarmSyncService = departureAlarmSyncService).runDueJobs(testNow)
+
+        // 대중교통 재조회 결과가 더 늦더라도 기존 안전 출발시각을 유지한다.
+        assertEquals(previousDepartureAt, job.lastRecommendedDepartureAt)
+        // 출발까지 30분 넘게 남았으므로 5분 뒤 다시 조회한다.
+        assertEquals(testNow.plus(2, ChronoUnit.MINUTES), job.nextCheckAt)
+        verify(departureAlarmSyncService).synchronizeAutomaticEta(
+            memberId = eq(job.memberId),
+            scheduleId = eq(job.scheduleId),
+            notificationEnabled = eq(true),
+            alertMode = eq(ScheduleAlertMode.STANDARD),
+            recommendedDepartureAt = eq(previousDepartureAt),
+            scheduleTitle = eq(schedule.title),
+            resumeCanceledAfterTransitTransferFailure = eq(false),
+            cancellationReason = eq(com.noLate.schedule.domain.DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL),
+        )
+    }
 }
+
 
 private class AdvancingTestClock(
     private var current: Instant,

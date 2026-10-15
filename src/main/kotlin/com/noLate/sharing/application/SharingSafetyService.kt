@@ -5,6 +5,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheInvalidationEvent
+import com.noLate.schedule.application.service.ScheduleTravelAccessCleanupService
 import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleShareStatus
@@ -41,6 +42,7 @@ class SharingSafetyService(
     private val eventPublisher: ApplicationEventPublisher = ApplicationEventPublisher { _ -> },
     private val clock: Clock = Clock.systemUTC(),
     private val moderatorAccessPolicy: SharingModeratorAccessPolicy? = null,
+    private val travelAccessCleanupService: ScheduleTravelAccessCleanupService? = null,
 ) {
     @Transactional
     fun blockMember(
@@ -59,6 +61,10 @@ class SharingSafetyService(
             blockedMemberId = blockedMemberId,
         )
         val saved = blockRepository.saveAndFlush(block)
+        // The block row is flushed before cleanup so the central access policy observes the new
+        // relationship while canceling already-created jobs and native alarm desired state.
+        // Personal travel plans intentionally remain dormant and can resume after an unblock.
+        travelAccessCleanupService?.suspendBlockedPair(blockerMemberId, blockedMemberId)
         invalidateMemberCalendars(
             setOf(blockerMemberId, blockedMemberId),
             "sharing-member-blocked",

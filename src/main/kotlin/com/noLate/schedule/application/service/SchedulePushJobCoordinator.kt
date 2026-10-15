@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicy
 import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.schedule.domain.ScheduleEtaEvaluationHistory
 import com.noLate.schedule.domain.SchedulePushJob
@@ -104,6 +105,50 @@ class SchedulePushJobCoordinator private constructor(
         dueJob.startProcessing(workerId, now)
         repository.flush()
         return detachClaimedJob(dueJob)
+    }
+
+    /**
+     * 명시한 회원·일정 한 건만 선점한다. 전역 due 검색이나 다른 작업의 lease 복구는 하지 않는다.
+     * 일반 worker와 같은 member -> job 잠금 순서 및 due 조건을 지켜 서로 중복 선점하지 않는다.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun claimDueJobForSchedule(
+        memberId: Long,
+        scheduleId: Long,
+        now: Instant,
+        workerId: String,
+    ): SchedulePushJob? {
+        require(memberId > 0 && scheduleId > 0) { "Scoped ETA job IDs must be positive." }
+        // 회원 확인을 생략하는 legacy 단위 테스트 경계에서도 이 진입점은 fail-closed한다.
+        if (memberRepository?.findByIdForUpdate(memberId)?.deleted != false) return null
+        val job = repository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
+            ?.takeIf {
+                it.memberId == memberId && it.scheduleId == scheduleId &&
+                    it.status == SchedulePushJobStatus.ACTIVE && !it.nextCheckAt.isAfter(now)
+            }
+            ?: return null
+        job.startProcessing(workerId, now)
+        repository.flush()
+        return detachClaimedJob(job)
+    }
+
+    /** Bounded, repeatable rollout of existing jobs using the same member -> job lock order. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun alignLegacyEtaCadences(now: Instant, batchSize: Int): Int {
+        val candidates = repository.findCadenceCandidates(
+            SchedulePushJobStatus.ACTIVE,
+            EtaRefreshCadencePolicy.INTERVAL_MINUTES,
+            PageRequest.of(0, batchSize.coerceIn(1, 200)),
+        )
+        for (candidate in candidates) {
+            // Lock even deleted members so historical rows cannot starve later candidates.
+            memberRepository?.findByIdForUpdate(candidate.memberId)
+            val job = repository.findByIdForUpdate(candidate.id) ?: continue
+            if (job.memberId != candidate.memberId) continue
+            job.alignEtaCadence(EtaRefreshCadencePolicy.INTERVAL_MINUTES, now)
+        }
+        repository.flush()
+        return candidates.size
     }
 
     /**
@@ -263,6 +308,7 @@ class SchedulePushJobCoordinator private constructor(
                 scheduleTitle = intent.scheduleTitle,
                 resumeCanceledAfterTransitTransferFailure =
                     intent.resumeCanceledAfterTransitTransferFailure,
+                cancellationReason = intent.cancellationReason,
             )
         }
     }
@@ -289,5 +335,7 @@ sealed interface SchedulePushAlarmIntent {
         val recommendedDepartureAt: Instant,
         val scheduleTitle: String?,
         val resumeCanceledAfterTransitTransferFailure: Boolean,
+        val cancellationReason: com.noLate.schedule.domain.DepartureAlarmCancellationReason =
+            com.noLate.schedule.domain.DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL,
     ) : SchedulePushAlarmIntent
 }

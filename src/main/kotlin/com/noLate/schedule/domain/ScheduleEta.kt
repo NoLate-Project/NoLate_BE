@@ -1,5 +1,7 @@
 package com.noLate.schedule.domain
 
+import com.noLate.eta.domain.TransitFirstBoardingObservation
+
 import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.TransitRouteProvenance
 import com.noLate.schedule.application.TransitTimingBasis
@@ -147,4 +149,8 @@ data class ScheduleDepartureEtaStatusDto(
     val effectiveTransitRoute: EffectiveTransitRoute? = null,
     /** 이 ETA 평가가 약속한 다음 갱신 시각. push retry용 [nextCheckAt]과 분리된다. */
     val etaRefreshDueAt: Instant? = null,
+    /** 첫 차량의 별도 관측. 이 값만으로 전체 도착시각이나 정시 도착을 확정하면 안 된다. */
+    val firstBoardingObservation: TransitFirstBoardingObservation? = null,
+    /** 실시간 채택 ETA가 아닌 미래 시간표 미리보기. 출발 알람/정시 도착 확정에 사용하지 않는다. */
+    val futureTimetablePrediction: EffectiveTransitRoute? = null,
 )

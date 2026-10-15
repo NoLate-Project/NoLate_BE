@@ -16,6 +16,9 @@ services:
       FIREBASE_CREDENTIALS_PATH: /config/firebase.json
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-nolate-local-redis}
+      # FREE 회원에게만 광고를 활성화한다. 긴급 차단은 host/Compose .env에서 false로
+      # 지정한 뒤 app 컨테이너를 재생성한다(컨테이너 환경변수가 env.properties보다 우선).
+      MONETIZATION_ADS_ENABLED: "${MONETIZATION_ADS_ENABLED:-true}"
       SCHEDULE_CALENDAR_CACHE_ENABLED: "true"
       SCHEDULE_SHARING_ENABLED: "${SCHEDULE_SHARING_ENABLED:-true}"
     volumes:

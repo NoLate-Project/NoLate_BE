@@ -66,7 +66,9 @@ class SchedulePushJobBackfillDisabledIntegrationTest @Autowired constructor(
             startAt = startAt,
             endAt = startAt.plusSeconds(3_600),
         ).apply {
-            updateCategorySnapshot("1", "owner", "#246BFE")
+            // A legacy display-only snapshot is not an ACL parent. Keep this route standalone so
+            // sharing-off backfill proves the raw author still owns the canonical private route.
+            updateCategorySnapshot("legacy-owner", "owner", "#246BFE")
             updateRoute(
                 travelMinutes = 30,
                 departAt = startAt.minusSeconds(1_800),

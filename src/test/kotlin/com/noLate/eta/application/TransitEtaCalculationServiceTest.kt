@@ -14,6 +14,7 @@ import com.noLate.eta.domain.TransitLegTimingBasis
 import com.noLate.eta.domain.TransitLine
 import com.noLate.eta.domain.TransitServiceClass
 import com.noLate.eta.domain.TransitStop
+import com.noLate.eta.infrastructure.odsay.OdsayTransitJourneyMapper
 import com.noLate.eta.infrastructure.routejson.SelectedTransitRouteDecoder
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
@@ -47,6 +48,51 @@ class TransitEtaCalculationServiceTest {
     private val evaluatedAt = Instant.parse("2026-07-29T00:00:00Z")
     private val clock = Clock.fixed(evaluatedAt, ZoneOffset.UTC)
     private val arrivalService = mock<TransitArrivalService>()
+
+    @Test
+    fun `실제 maasRP 스키마를 매핑한 경로는 첫 차량 실시간 보정이 성공해도 신뢰 가능한 전체 ETA가 아니다`() {
+        whenever(busArrivals()).thenReturn(
+            listOf(busArrival(expectedAt = evaluatedAt.plus(25, ChronoUnit.MINUTES)))
+        )
+        val fetchedAt = evaluatedAt.plusSeconds(3)
+        val provider = mappedMaasRpProvider(fetchedAt)
+
+        val result = service(listOf(provider)).calculate(request())
+
+        // 실제 매퍼를 통과하지만 HTTP/실시간 피드는 fixture다. 앱 UI E2E로 간주하지 않는다.
+        // 시간 근거 UNKNOWN을 해소하려고 앞선 출발 후보를 찾아도 maasRP는 계속 추정값이다.
+        assertEquals(3, provider.searchCount)
+        assertEquals(40, result.travelMinutes) // 채택하지 못한 60분 추정값으로 저장 ETA를 덮지 않는다.
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertEquals(TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY, result.failureReason)
+        assertEquals(fetchedAt, result.fetchedAt)
+        assertEquals(TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE, result.transitTimingBasis)
+        assertEquals(20, result.firstBoardingWaitMinutes)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals("odsay", result.effectiveTransitRoute?.provider)
+    }
+
+    @Test
+    fun `실제 maasRP 매핑 후 차량 정보가 없어도 경로 재조회 취득시각은 진단에 보존한다`() {
+        whenever(busArrivals()).thenReturn(emptyList())
+        val fetchedAt = evaluatedAt.plusSeconds(3)
+        val provider = mappedMaasRpProvider(fetchedAt)
+
+        val result = service(listOf(provider)).calculate(request())
+
+        assertEquals(3, provider.searchCount)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertEquals(fetchedAt, result.fetchedAt)
+        assertEquals(TransitTimingBasis.ROUTE_ESTIMATE_ONLY, result.transitTimingBasis)
+        assertEquals(TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY, result.failureReason)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+    }
 
     @Test
     fun `저장 ODsay 동일 경로를 재조회해 새 총43분의 대기7분을 실시간12분으로 교체하면 48분이다`() {
@@ -132,6 +178,78 @@ class TransitEtaCalculationServiceTest {
     }
 
     @Test
+    fun `단일 승차의 경로 추정값은 첫 차량 실시간 정보가 있어도 전체 ETA로 확정하지 않는다`() {
+        whenever(busArrivals()).thenReturn(
+            listOf(busArrival(expectedAt = evaluatedAt.plus(25, ChronoUnit.MINUTES)))
+        )
+        val odsay = RecordingProvider(
+            providerId = "odsay",
+            result = listOf(
+                journey(
+                    routeId = "bus-402",
+                    lineName = "402",
+                    totalMinutes = 45,
+                    scheduledWaitMinutes = 5,
+                    timingBasis = TransitLegTimingBasis.ROUTE_ESTIMATE,
+                )
+            ),
+        )
+
+        val result = service(listOf(odsay)).calculate(
+            request(targetArrivalAt = evaluatedAt.plus(60, ChronoUnit.MINUTES))
+        )
+
+        // 첫 차량 대기만 실시간으로 알아도 이후 이동시간의 추정값이 검증되지는 않는다.
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY, result.failureReason)
+        assertEquals(
+            TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
+            result.transitTimingBasis,
+        )
+        // 확인한 첫 차량 대기시간은 진단 증거로 남긴다: 도착 25분 - 접근 5분.
+        assertEquals(20, result.firstBoardingWaitMinutes)
+        assertEquals(TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, result.transitRouteProvenance)
+        assertNotNull(result.effectiveTransitRoute)
+    }
+
+    @Test
+    fun `단일 승차의 경로 추정값은 첫 차량 정보가 없을 때 시간표 ETA로 노출하지 않는다`() {
+        whenever(busArrivals()).thenReturn(emptyList())
+        val odsay = RecordingProvider(
+            providerId = "odsay",
+            result = listOf(
+                journey(
+                    routeId = "bus-402",
+                    lineName = "402",
+                    totalMinutes = 45,
+                    scheduledWaitMinutes = 5,
+                    timingBasis = TransitLegTimingBasis.ROUTE_ESTIMATE,
+                )
+            ),
+        )
+
+        val result = service(listOf(odsay)).calculate(
+            request(targetArrivalAt = evaluatedAt.plus(60, ChronoUnit.MINUTES))
+        )
+
+        // 경로 조회가 성공했더라도 추정 시각을 시간표 공급자의 확정 시각으로 취급하지 않는다.
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY, result.failureReason)
+        assertEquals(TransitTimingBasis.ROUTE_ESTIMATE_ONLY, result.transitTimingBasis)
+        assertEquals(TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, result.transitRouteProvenance)
+        assertNotNull(result.effectiveTransitRoute)
+        assertTrue(requireNotNull(result.effectiveTransitRoute).segments.all { it.rideTiming == null })
+    }
+
+    @Test
     fun `ODsay 경로가 성공해도 첫 승차 도착정보 실패는 degraded TIMETABLE로 보존한다`() {
         whenever(busArrivals()).thenReturn(emptyList())
         val fetchedAt = evaluatedAt.plusSeconds(3)
@@ -212,6 +330,8 @@ class TransitEtaCalculationServiceTest {
         assertEquals(0, tmap.searchCount)
         assertEquals(40, result.travelMinutes)
         assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        // 조회가 실제 실패했을 때는 평가 시각으로 fetchedAt을 채우지 않는다.
+        assertNull(result.fetchedAt)
         assertTrue(result.stale)
         assertEquals(
             TrafficFailureReasons.TRANSIT_JOURNEY_PROVIDER_UNAVAILABLE,
@@ -365,16 +485,21 @@ class TransitEtaCalculationServiceTest {
             )
         )
 
-        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
+        // 전체 여정은 검증하지 못했으므로 저장된 선택 경로를 사용한다.
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
         assertFalse(result.accepted)
         assertTrue(result.stale)
+
+        // 지각이 확정된 것이 아니라 전체 도착시각의 근거가 부족한 상태다.
         assertEquals(
-            TrafficFailureReasons.TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE,
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
             result.failureReason,
         )
-        assertEquals(evaluatedAt, result.recommendedDepartureAt)
-        assertEquals(evaluatedAt.plus(64, ChronoUnit.MINUTES), result.predictedArrivalAt)
-        assertEquals(64, result.travelMinutes)
+
+        // 확정할 수 없는 시각은 비워두고, 요청에 저장된 40분을 유지한다.
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(40, result.travelMinutes)
     }
 
     @Test
@@ -389,12 +514,21 @@ class TransitEtaCalculationServiceTest {
             )
         )
 
-        assertTrue(result.accepted)
-        assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
-        assertEquals(42, result.travelMinutes)
-        assertEquals(evaluatedAt, result.recommendedDepartureAt)
-        assertEquals(evaluatedAt.plus(42, ChronoUnit.MINUTES), result.predictedArrivalAt)
-    }
+        // 전체 여정은 검증하지 못했으므로 저장된 선택 경로를 사용한다.
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+
+        // 지각이 확정된 것이 아니라 전체 도착시각의 근거가 부족한 상태다.
+        assertEquals(
+            TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            result.failureReason,
+        )
+
+        // 확정할 수 없는 시각은 비워두고, 요청에 저장된 40분을 유지한다.
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(40, result.travelMinutes)    }
 
     @Test
     fun `비 ODsay 다중 ride legacy는 첫 승차 정보가 있어도 전체 환승 미검증 fallback으로 닫는다`() {
@@ -1011,6 +1145,59 @@ class TransitEtaCalculationServiceTest {
         assertEquals("kakao", result.effectiveTransitRoute?.provider)
     }
 
+    @Test
+    fun `확인된 환승 실패는 후속 후보의 시간표 누락으로 덮지 않는다`() {
+        stubBusArrivals("402", evaluatedAt.plus(15, ChronoUnit.MINUTES))
+        var searches = 0
+        val provider = FunctionalProvider { search ->
+            searches++
+            val candidate = transferJourney(
+                firstRouteId = "bus-402", firstLineName = "402",
+                secondRouteId = "subway-2", secondLineName = "2호선",
+                firstArrivalMinute = 20, transferWalkMinutes = 5,
+                secondDepartureMinute = 24, finalArrivalMinute = 50,
+                departureAt = search.departureAt,
+            )
+            listOf(if (searches == 1) candidate else candidate.copy(
+                legs = candidate.legs.map { leg ->
+                    if (leg.sequence == 2) leg.copy(
+                        scheduledDepartureAt = null, timingBasis = TransitLegTimingBasis.UNKNOWN,
+                    ) else leg
+                },
+            ))
+        }
+
+        val result = service(listOf(provider)).calculate(request(
+            plannedDepartureAt = evaluatedAt.plus(10, ChronoUnit.MINUTES),
+            selectedRouteJson = selectedTransferRouteJson(),
+        ))
+
+        // 정상 회복 후보 검색은 모두 수행하되, 불확실한 후속 후보로 실패 증거를 지우지 않는다.
+        assertEquals(3, searches)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_MISSED, result.failureReason)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+    }
+
+
+    @Test
+    fun `시외 시간표 미연결 상태는 저장 경로를 보존하고 시내 실시간 API를 호출하지 않는다`() {
+        val provider = mock<TransitJourneyProvider>()
+        val selected = """{"schemaVersion":2,"provider":"tmap","transitLegs":[
+          {"kind":"INTERCITY_BUS","lineName":"서울-공주","startName":"서울남부","endName":"공주"}
+        ]}"""
+        val result = service(listOf(provider)).calculate(request(selectedRouteJson = selected))
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertEquals(40, result.travelMinutes)
+        assertEquals(TrafficFailureReasons.TRANSIT_INTERCITY_TIMETABLE_UNAVAILABLE, result.failureReason)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        org.mockito.kotlin.verifyNoInteractions(provider, arrivalService)
+    }
 
     private fun service(providers: List<TransitJourneyProvider>): TransitEtaCalculationService {
         val matcher = TransitJourneyMatcher()
@@ -1052,6 +1239,8 @@ class TransitEtaCalculationServiceTest {
         maxTravelMinutes = 1_440,
     )
 
+    // 아래 TIMETABLE 기본값은 실제 시간표 공급자를 가정한 계산 fixture다.
+    // ODsay maasRP 운영 응답은 위 mappedMaasRpProvider처럼 실제 매퍼로 검증해야 한다.
     private fun journey(
         provider: String = "odsay",
         routeId: String,
@@ -1060,6 +1249,7 @@ class TransitEtaCalculationServiceTest {
         scheduledWaitMinutes: Int,
         fetchedAt: Instant = evaluatedAt,
         departureAt: Instant = evaluatedAt,
+        timingBasis: TransitLegTimingBasis = TransitLegTimingBasis.TIMETABLE,
     ): TransitJourney {
         val accessMinutes = 5
         val egressMinutes = 8
@@ -1105,7 +1295,7 @@ class TransitEtaCalculationServiceTest {
                     ),
                     directionName = "강남역 방면",
                     directionCode = "DOWN",
-                    timingBasis = TransitLegTimingBasis.TIMETABLE,
+                    timingBasis = timingBasis,
                 ),
                 TransitJourneyLeg(
                     sequence = 2,
@@ -1279,6 +1469,41 @@ class TransitEtaCalculationServiceTest {
               ]
             }
         """.trimIndent()
+
+    private fun mappedMaasRpProvider(fetchedAt: Instant): RecordingProvider {
+        val search = TransitJourneySearchRequest(
+            originLat = 37.5547,
+            originLng = 126.9706,
+            destinationLat = 37.4979,
+            destinationLng = 127.0276,
+            departureAt = evaluatedAt,
+            maxTravelMinutes = 1_440,
+        )
+        // ODsay 필드/단위 그대로 입력한다. canonical 여정을 직접 만들며 TIMETABLE을 주입하지 않는다.
+        val response = jacksonObjectMapper().readTree(
+            """
+                {"result":{"paths":{
+                  "pathType":2,"totalTime":45,
+                  "startDateTime":"202607290900","endDateTime":"202607290945",
+                  "rps":[
+                    {"trafficType":3,"duration":5,
+                     "startDateTime":"202607290900","endDateTime":"202607290905"},
+                    {"trafficType":2,"duration":32,"waitingTime":5,
+                     "startDateTime":"202607290905","endDateTime":"202607290937",
+                     "startID":"1001","startArsID":"02005","startName":"서울역버스환승센터",
+                     "endID":"2001","endArsID":"22009","endName":"강남역",
+                     "way":"강남역 방면","wayCode":2,
+                     "lane":{"busNo":"402","busID":"bus-402"}},
+                    {"trafficType":3,"duration":8,
+                     "startDateTime":"202607290937","endDateTime":"202607290945"}
+                  ]
+                }}}
+            """.trimIndent()
+        )
+        val journeys = OdsayTransitJourneyMapper().map(response, search, fetchedAt)
+        assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, journeys.single().rideLegs.single().timingBasis)
+        return RecordingProvider(providerId = "odsay", result = journeys)
+    }
 
     private class RecordingProvider(
         override val providerId: String,

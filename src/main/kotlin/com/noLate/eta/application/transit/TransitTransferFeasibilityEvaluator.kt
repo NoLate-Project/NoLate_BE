@@ -18,6 +18,8 @@ enum class TransitTransferStatus {
 enum class TransitJourneyTimingBasis {
     FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
     FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
+    FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
+    ROUTE_ESTIMATE_ONLY,
     TIMETABLE_ONLY,
     TIMETABLE_TRANSFER_UNKNOWN,
 }
@@ -39,8 +41,8 @@ data class TransitTransferEvaluation(
 /**
  * 첫 승차 실시간 지연을 환승 지점까지 전파하고 다음 시간표 차량을 실제로 탈 수 있는지 확인한다.
  *
- * 미래 환승 차량은 실시간으로 가장하지 않는다. ODsay가 제공한 시간표 시각만 사용하고,
- * 시각이 하나라도 없으면 성공으로 간주하지 않고 UNKNOWN 진단으로 남긴다. 시간표 차량을
+ * 미래 환승 차량은 실시간으로 가장하지 않는다. 실제 시간표로 확인된 구간 시각만 사용하고,
+ * 추정값이거나 시각이 없으면 성공으로 간주하지 않고 UNKNOWN 진단으로 남긴다. 시간표 차량을
  * 탈 수 있으면 첫 지연은 환승 대기에서 흡수되고 이후 구간은 시간표대로 운행한다고 본다.
  */
 @Component
@@ -49,6 +51,7 @@ class TransitTransferFeasibilityEvaluator(
     private val transferBufferSeconds: Long = DEFAULT_TRANSFER_BUFFER_SECONDS,
     @Value("\${eta.transit.transfer-confidence-margin-seconds:60}")
     private val transferConfidenceMarginSeconds: Long = DEFAULT_TRANSFER_CONFIDENCE_MARGIN_SECONDS,
+    private val rideArrivalPredictor: TransitRideArrivalPredictor = TransitRideArrivalPredictor(),
 ) {
     init {
         require(transferBufferSeconds in 0..MAX_TRANSFER_BUFFER_SECONDS) {
@@ -68,16 +71,24 @@ class TransitTransferFeasibilityEvaluator(
         require(rideIndexes.isNotEmpty()) { "대중교통 여정에는 승차 구간이 필요합니다." }
 
         var propagatedDelaySeconds = firstBoardingOverlay
-            ?.let { Duration.between(journey.arrivalAt, it.predictedArrivalAt).seconds }
+            ?.let { overlay ->
+                // 환승 차량을 재연결하면 전체 여정 도착시각이 바뀐다. 첫 열차 지연은 바뀐
+                // 전체 ETA 차이가 아니라 동일 열차의 원본 승차시각과 관측시각으로 계산한다.
+                journey.rideLegs.first().timetable?.let { first ->
+                    rideArrivalPredictor.predict(first, overlay.boardingAt).shiftSeconds
+                } ?: Duration.between(journey.arrivalAt, overlay.predictedArrivalAt).seconds
+            }
             ?: 0L
-        var unknown = false
+        // 첫 차량의 실시간 도착은 이후 운행시간의 정확성을 증명하지 않는다.
+        // 환승이 없는 경로와 마지막 승차도 시간 근거·도착시각을 반드시 확인한다.
+        var unknown = rideIndexes.any { journey.legs[it].timetableArrival() == null }
 
         val firstRideIndex = rideIndexes.first()
         val firstRide = journey.legs[firstRideIndex]
         val accessSeconds = journey.legs
             .take(firstRideIndex)
             .filterNot(TransitJourneyLeg::isRide)
-            .sumOf { it.durationMinutes.toLong() * SECONDS_PER_MINUTE }
+            .sumOf(TransitJourneyLeg::movementDurationSeconds)
         val firstReadyAt = maxOf(evaluatedAt, journey.departureAt)
             .plusSeconds(accessSeconds)
         val firstBoardingAt = firstBoardingOverlay?.boardingAt ?: firstRide.timetableBoardingAt()
@@ -91,7 +102,7 @@ class TransitTransferFeasibilityEvaluator(
                 status = TransitTransferStatus.MISSED,
                 predictedArrivalAt = predictedArrivalAt,
                 travelMinutes = journey.durationTo(predictedArrivalAt),
-                timingBasis = journey.timingBasis(firstBoardingOverlay != null, unknown = false),
+                timingBasis = journey.timingBasis(firstBoardingOverlay != null, unknown),
                 failedTransferSequence = 0,
                 missedBySeconds = missedBy,
             )
@@ -115,7 +126,7 @@ class TransitTransferFeasibilityEvaluator(
             val transferWalkSeconds = journey.legs
                 .subList(currentIndex + 1, nextIndex)
                 .filterNot(TransitJourneyLeg::isRide)
-                .sumOf { it.durationMinutes.toLong() * SECONDS_PER_MINUTE }
+                .sumOf(TransitJourneyLeg::movementDurationSeconds)
             val physicalReadyAt = scheduledArrival
                 .plusSeconds(propagatedDelaySeconds)
                 .plusSeconds(transferWalkSeconds)
@@ -125,7 +136,7 @@ class TransitTransferFeasibilityEvaluator(
                     status = TransitTransferStatus.MISSED,
                     predictedArrivalAt = journey.arrivalAt.plusSeconds(propagatedDelaySeconds),
                     travelMinutes = journey.durationTo(journey.arrivalAt.plusSeconds(propagatedDelaySeconds)),
-                    timingBasis = journey.timingBasis(firstBoardingOverlay != null, unknown = false),
+                    timingBasis = journey.timingBasis(firstBoardingOverlay != null, unknown),
                     failedTransferSequence = transferIndex + 1,
                     missedBySeconds = missedBy,
                 )
@@ -133,7 +144,7 @@ class TransitTransferFeasibilityEvaluator(
 
             val confidenceReadyAt = physicalReadyAt.plusSeconds(requiredTransferMarginSeconds)
             if (confidenceReadyAt.isAfter(boardingAt)) {
-                // ODsay exposes minute timestamps. An exact or sub-margin boundary is not proof
+                // Minute-resolution timetables need a margin. An exact or sub-margin boundary is not proof
                 // that doors can still be reached, but neither is it proof of a missed vehicle.
                 // Keep it explicitly degraded and let safe-departure spend its bounded budget on
                 // an earlier itinerary instead of returning a false-safe FEASIBLE result.
@@ -155,7 +166,12 @@ class TransitTransferFeasibilityEvaluator(
             propagatedDelaySeconds = 0L
         }
 
-        val predictedArrivalAt = journey.arrivalAt.plusSeconds(propagatedDelaySeconds)
+        // 단일 승차의 지연 후보는 시간축에 지연이 이미 들어 있다. 원본으로 되돌린 뒤
+        // 이번에 재검증한 지연만 적용한다. 환승에서는 앞 지연이 다음 열차 대기에 흡수된다.
+        val embeddedDelay = if (rideIndexes.size == 1) firstRide.firstBoardingObservation?.let {
+            Duration.between(requireNotNull(firstRide.timetable).boardingAt, it.expectedBoardingAt).seconds
+        } ?: 0L else 0L
+        val predictedArrivalAt = journey.arrivalAt.plusSeconds(propagatedDelaySeconds - embeddedDelay)
         return TransitTransferEvaluation(
             status = if (unknown) TransitTransferStatus.UNKNOWN else TransitTransferStatus.FEASIBLE,
             predictedArrivalAt = predictedArrivalAt,
@@ -164,16 +180,22 @@ class TransitTransferFeasibilityEvaluator(
         )
     }
 
+    /** 실제 평가와 같은 여유 설정을 이력/표시에도 사용한다. */
+    fun describeTransfer(previousArrivalAt: Instant, walkingSeconds: Long, boardingAt: Instant) =
+        com.noLate.eta.domain.TransitTransferTimingEvidence(previousArrivalAt, walkingSeconds,
+            transferBufferSeconds, transferConfidenceMarginSeconds, boardingAt)
+
     private fun TransitJourney.durationTo(arrivalAt: Instant): Int =
         ceil(Duration.between(departureAt, arrivalAt).toSeconds() / SECONDS_PER_MINUTE.toDouble())
             .toInt()
             .coerceAtLeast(1)
 
     private fun TransitJourneyLeg.timetableArrival(): Instant? =
-        scheduledArrivalAt.takeIf { timingBasis == TransitLegTimingBasis.TIMETABLE }
+        (timetable?.arrivalAt ?: scheduledArrivalAt).takeIf { timingBasis == TransitLegTimingBasis.TIMETABLE }
 
     private fun TransitJourneyLeg.timetableBoardingAt(): Instant? {
         if (timingBasis != TransitLegTimingBasis.TIMETABLE) return null
+        timetable?.let { return it.boardingAt }
         val segmentStart = scheduledDepartureAt ?: return null
         val wait = waitingMinutes ?: return null
         return segmentStart.plusSeconds(wait.toLong() * SECONDS_PER_MINUTE)
@@ -182,13 +204,20 @@ class TransitTransferFeasibilityEvaluator(
     private fun TransitJourney.timingBasis(
         hasFirstBoardingRealtime: Boolean,
         unknown: Boolean,
-    ): TransitJourneyTimingBasis = when {
-        hasFirstBoardingRealtime && unknown ->
-            TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN
-        hasFirstBoardingRealtime ->
-            TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE
-        unknown -> TransitJourneyTimingBasis.TIMETABLE_TRANSFER_UNKNOWN
-        else -> TransitJourneyTimingBasis.TIMETABLE_ONLY
+    ): TransitJourneyTimingBasis {
+        // 추정 구간이 섞인 결과를 시간표나 환승 실패로 설명하지 않도록 근거를 보존한다.
+        val hasRouteEstimate = rideLegs.any { it.timingBasis == TransitLegTimingBasis.ROUTE_ESTIMATE }
+        return when {
+            hasRouteEstimate && hasFirstBoardingRealtime ->
+                TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE
+            hasRouteEstimate -> TransitJourneyTimingBasis.ROUTE_ESTIMATE_ONLY
+            hasFirstBoardingRealtime && unknown ->
+                TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN
+            hasFirstBoardingRealtime ->
+                TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE
+            unknown -> TransitJourneyTimingBasis.TIMETABLE_TRANSFER_UNKNOWN
+            else -> TransitJourneyTimingBasis.TIMETABLE_ONLY
+        }
     }
 
     private companion object {

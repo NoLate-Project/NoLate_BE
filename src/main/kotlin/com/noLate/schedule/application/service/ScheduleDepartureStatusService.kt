@@ -299,7 +299,9 @@ class ScheduleDepartureStatusService(
         val participants = participantRoles.map { (memberId, role) ->
             val statusDepartedAt = statusesByMemberId[memberId]?.departedAt?.toString()
             val departedAt = statusDepartedAt
-                ?: scheduleDto.departedAt.takeIf { role == ScheduleDepartureParticipantRole.OWNER }
+                ?: scheduleDto.departedAt.takeIf {
+                    memberId == (schedule?.memberId ?: ownerMemberId)
+                }
 
             ScheduleDepartureParticipantDto(
                 memberId = memberId,

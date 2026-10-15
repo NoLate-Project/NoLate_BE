@@ -67,12 +67,14 @@ class SchedulePushJobBackfillCandidateReader(
                     )
                 }
             }
-        return (ownerCandidates + participantCandidates).sortedWith(
+        return (participantCandidates + ownerCandidates)
+            .distinctBy { it.memberId to it.scheduleId }
+            .sortedWith(
             compareBy<SchedulePushJobBackfillCandidate>(
                 SchedulePushJobBackfillCandidate::memberId,
                 SchedulePushJobBackfillCandidate::scheduleId,
             ).thenBy { it.travelPlanId ?: -1L },
-        )
+            )
     }
 
     @Transactional(readOnly = true)
@@ -115,7 +117,13 @@ class SchedulePushJobBackfillPairWriter(
             ?: return false
 
         if (candidate.ownerSchedule) {
-            if (schedule.memberId != candidate.memberId) return false
+            val access = scheduleAccessPolicy.resolve(candidate.memberId, schedule)
+            if (
+                schedule.memberId != candidate.memberId ||
+                !access.travelEnabled
+            ) {
+                return false
+            }
             schedule.route
                 ?.takeIf { it.notificationEnabled && it.travelMinutes != null }
                 ?: return false
@@ -138,7 +146,6 @@ class SchedulePushJobBackfillPairWriter(
             ?.takeIf {
                 it.memberId == candidate.memberId &&
                     it.scheduleId == candidate.scheduleId &&
-                    it.memberId != schedule.memberId &&
                     it.notificationEnabled &&
                     it.travelMinutes != null
             }
@@ -175,6 +182,12 @@ class SchedulePushJobBackfillPairWriter(
             ?.takeIf { it.startAt.isAfter(now) }
             ?: return false
 
+        // Alarm backfill only emits UPSERT. A retained personal plan/job is historical state, not
+        // an authorization grant: when sharing is disabled or a category/calendar grant has been
+        // revoked, the former editor/participant must not recreate an OS alarm at startup.
+        val access = scheduleAccessPolicy.resolve(job.memberId, schedule)
+        if (!access.travelEnabled) return false
+
         val personal = travelPlanRepository
             .findByScheduleIdAndMemberIdAndDeletedFalse(job.scheduleId, job.memberId)
             ?.takeIf {
@@ -192,6 +205,7 @@ class SchedulePushJobBackfillPairWriter(
             schedule.route
                 ?.takeIf {
                     schedule.memberId == job.memberId &&
+                        access.travelEnabled &&
                         it.notificationEnabled &&
                         it.travelMinutes != null
                 }

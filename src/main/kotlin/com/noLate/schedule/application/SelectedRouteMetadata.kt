@@ -3,6 +3,8 @@ package com.noLate.schedule.application
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.schedule.domain.ScheduleTravelMode
+import java.time.Instant
+import java.time.OffsetDateTime
 
 /**
  * 여러 FE 버전이 저장한 선택 경로 JSON에서 provider 재조회에 필요한 최소 메타데이터를
@@ -10,6 +12,7 @@ import com.noLate.schedule.domain.ScheduleTravelMode
  */
 data class SelectedRouteMetadata(
     val travelMinutes: Int? = null,
+    val anchoredDepartureAt: Instant? = null,
     val routeOption: String? = null,
     val transitItineraryJson: String? = null,
     val routeSegments: List<RouteDisplaySegment> = emptyList(),
@@ -30,6 +33,7 @@ data class SelectedRouteMetadata(
                 val root = objectMapper.readTree(routeJson)
                 SelectedRouteMetadata(
                     travelMinutes = extractTravelMinutes(root, maxTravelMinutes),
+                    anchoredDepartureAt = extractAnchoredDeparture(root),
                     routeOption = extractRouteOption(root),
                     transitItineraryJson = extractTransitItinerary(root, travelMode)?.toString(),
                     routeSegments = extractRouteSegments(root, travelMode),
@@ -38,6 +42,19 @@ data class SelectedRouteMetadata(
                 SelectedRouteMetadata(routeSegments = fallbackRouteSegments(travelMode))
             }
         }
+
+        private fun extractAnchoredDeparture(root: JsonNode): Instant? = runCatching {
+            val journey = root.path("intercityJourney")
+            val info = root.path("routeInfo")
+            if (root.path("schemaVersion").asInt() != 3 || journey.path("version").asInt() != 1 ||
+                info.path("timeBasis").asText() != "anchored_journey" || info.path("intercityJourney") != journey ||
+                info.path("departureTime").asText() != journey.path("departureAt").asText() ||
+                journey.path("service").path("kind").asText() !in setOf("TRAIN", "EXPRESS_BUS", "INTERCITY_BUS") ||
+                journey.path("service").path("timingBasis").asText() !in setOf("TIMETABLE", "TICKET")) return@runCatching null
+            val departure = OffsetDateTime.parse(journey.path("departureAt").asText()).toInstant()
+            val arrival = OffsetDateTime.parse(journey.path("arrivalAt").asText()).toInstant()
+            departure.takeIf { arrival.isAfter(it) }
+        }.getOrNull()
 
         private fun extractTravelMinutes(root: JsonNode, maxTravelMinutes: Int): Int? {
             val routeInfo = root.path("routeInfo")

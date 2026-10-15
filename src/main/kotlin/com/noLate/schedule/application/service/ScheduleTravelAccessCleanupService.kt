@@ -42,17 +42,33 @@ class ScheduleTravelAccessCleanupService(
 ) {
 
     @Transactional
-    fun cancelRevokedForSchedule(scheduleId: Long, memberIds: Collection<Long>) {
+    fun cancelRevokedForSchedule(
+        scheduleId: Long,
+        memberIds: Collection<Long>,
+        preserveTravelPlanMemberIds: Collection<Long> = emptyList(),
+    ) {
         val schedule = scheduleRepository.findById(scheduleId).orElse(null)
             ?.takeUnless { it.deleted }
             ?: return
-        cancelRevoked(listOf(schedule), memberIds)
+        cancelRevoked(
+            schedules = listOf(schedule),
+            memberIds = memberIds,
+            preserveTravelPlanMemberIds = preserveTravelPlanMemberIds,
+        )
     }
 
     @Transactional
-    fun cancelRevokedForCalendar(calendarId: Long, memberIds: Collection<Long>) {
+    fun cancelRevokedForCalendar(
+        calendarId: Long,
+        memberIds: Collection<Long>,
+        preserveTravelPlanMemberIds: Collection<Long> = emptyList(),
+    ) {
         val schedules = scheduleRepository.findAllByCalendarIdAndDeletedFalseOrderByIdAsc(calendarId)
-        cancelRevoked(schedules, memberIds)
+        cancelRevoked(
+            schedules = schedules,
+            memberIds = memberIds,
+            preserveTravelPlanMemberIds = preserveTravelPlanMemberIds,
+        )
 
         val normalizedMemberIds = memberIds.distinct().sorted()
         if (normalizedMemberIds.isEmpty()) return
@@ -135,11 +151,46 @@ class ScheduleTravelAccessCleanupService(
         if (revokedPairs.isEmpty()) return
     }
 
+    /**
+     * A directional block closes sharing in both directions without deleting the underlying grants.
+     * Discover both members' currently grant-visible schedules, retain only resources owned by the
+     * counterpart, and converge notification state under the member locks held by blockMember.
+     *
+     * Unlike a grant revoke, blocking is reversible. The member's personal travel plan is therefore
+     * preserved as dormant state; the push job and native alarm are canceled immediately and the
+     * central access fence prevents either from being rebuilt while the block remains active.
+     */
+    @Transactional
+    fun suspendBlockedPair(firstMemberId: Long, secondMemberId: Long) {
+        if (firstMemberId == secondMemberId) return
+        val pair = setOf(firstMemberId, secondMemberId)
+        val schedules = pair
+            .flatMap { audienceMemberId ->
+                scheduleRepository.findScheduleList(audienceMemberId).mapNotNull { schedule ->
+                    val resourceOwnerMemberId = accessPolicy.currentResourceOwnerMemberId(schedule)
+                    schedule.takeIf {
+                        !it.deleted &&
+                            resourceOwnerMemberId != null &&
+                            resourceOwnerMemberId in pair &&
+                            resourceOwnerMemberId != audienceMemberId
+                    }
+                }
+            }
+            .distinctBy { requireNotNull(it.id) }
+        cancelRevoked(
+            schedules = schedules,
+            memberIds = pair,
+            preserveTravelPlanMemberIds = pair,
+        )
+    }
+
     private fun cancelRevoked(
         schedules: List<Schedule>,
         memberIds: Collection<Long>,
+        preserveTravelPlanMemberIds: Collection<Long> = emptyList(),
     ): Set<Pair<Long, Long>> {
         val normalizedMemberIds = memberIds.distinct().sorted()
+        val preservedPlanMemberIds = preserveTravelPlanMemberIds.toSet()
         val scheduleIds = schedules.mapNotNull { it.id }
         if (scheduleIds.isEmpty() || normalizedMemberIds.isEmpty()) return emptySet()
 
@@ -163,6 +214,21 @@ class ScheduleTravelAccessCleanupService(
             .keys
             .toCollection(linkedSetOf())
         if (revokedPairs.isEmpty()) return emptySet()
+        // A block-related caller identifies candidates, but preservation is allowed only when
+        // removing that one block would restore travel access. This prevents a member who also
+        // lost their source membership or SCHEDULE_AND_TRAVEL grant during an owner/container
+        // change from retaining private route data indefinitely.
+        val preservedPlanPairs = preservedPlanMemberIds
+            .asSequence()
+            .filter { it in normalizedMemberIds }
+            .flatMap { memberId ->
+                accessPolicy.resolveAllIgnoringOwnerBlock(memberId, schedules)
+                    .asSequence()
+                    .filter { (_, decision) -> decision.canView && decision.travelEnabled }
+                    .map { (scheduleId, _) -> scheduleId to memberId }
+            }
+            .filter { it in revokedPairs }
+            .toSet()
 
         pushJobRepository.findAllByScheduleIdInAndMemberIdIn(scheduleIds, normalizedMemberIds)
             .filter { it.status == SchedulePushJobStatus.ACTIVE || it.status == SchedulePushJobStatus.PROCESSING }
@@ -187,6 +253,7 @@ class ScheduleTravelAccessCleanupService(
         travelPlanRepository
             .findAllByScheduleIdInAndMemberIdInAndDeletedFalse(scheduleIds, normalizedMemberIds)
             .filter { it.scheduleId to it.memberId in revokedPairs }
+            .filter { it.scheduleId to it.memberId !in preservedPlanPairs }
             .forEach { it.softDelete() }
 
         routeSetupReminderRepository

@@ -249,12 +249,21 @@ class ScheduleUseCase(
             .orEmpty()
         val previewNotificationMemberIds =
             scheduleTravelPlanService?.findNotificationEnabledMemberIds(scheduleId).orEmpty()
+        val previewTravelPlanMemberIds =
+            scheduleTravelPlanService?.findAllTravelPlanMemberIds(scheduleId).orEmpty()
+        val previewAccessAudienceMemberIds = scheduleService.accessAudienceMemberIds(scheduleId)
+        val previewAssignmentAudienceMemberIds = scheduleService.assignmentAudienceMemberIds(scheduleDto)
+        val previewAssignmentOwnerMemberId = scheduleService.assignmentOwnerMemberId(scheduleDto)
         val editFence = schedulePushJobService.lockForScheduleEdit(
             scheduleId = scheduleId,
             requiredMemberIds =
                 setOf(memberId, previousOwnerMemberId) +
                     previewCalendarAudienceMemberIds +
-                    previewNotificationMemberIds,
+                    previewNotificationMemberIds +
+                    previewTravelPlanMemberIds +
+                    previewAccessAudienceMemberIds +
+                    previewAssignmentAudienceMemberIds +
+                    listOfNotNull(previewAssignmentOwnerMemberId),
             actorMemberId = memberId,
             presentedSessionGeneration = presentedSessionGeneration,
         )
@@ -263,16 +272,19 @@ class ScheduleUseCase(
             scheduleId,
             editFence.lockedMemberIds,
         )
+        val currentAssignmentOwnerMemberId = scheduleService.assignmentOwnerMemberId(scheduleDto)
+        editFence.requireContains(listOfNotNull(currentAssignmentOwnerMemberId))
+        editFence.requireActive(listOfNotNull(currentAssignmentOwnerMemberId))
         val updated = scheduleService.updateSchedule(memberId, scheduleId, scheduleDto)
         val currentPreviousCalendarAudienceMemberIds = previousCalendarId
             ?.let { scheduleTravelPlanService?.findActiveCalendarAudienceMemberIds(it) }
             .orEmpty()
+        val currentAccessAudienceMemberIds = scheduleService.accessAudienceMemberIds(scheduleId)
+        val currentTravelPlanMemberIds =
+            scheduleTravelPlanService?.findAllTravelPlanMemberIds(scheduleId).orEmpty()
         editFence.requireContains(currentPreviousCalendarAudienceMemberIds)
-        val accessCleanupCandidates = (
-            previewCalendarAudienceMemberIds +
-                currentPreviousCalendarAudienceMemberIds +
-                previewNotificationMemberIds
-            ) - previousOwnerMemberId
+        editFence.requireContains(currentAccessAudienceMemberIds + currentTravelPlanMemberIds)
+        val accessCleanupCandidates = editFence.lockedMemberIds
         editFence.requireContains(accessCleanupCandidates)
         if (accessCleanupCandidates.isNotEmpty()) {
             scheduleTravelAccessCleanupService?.cancelRevokedForSchedule(
@@ -280,17 +292,17 @@ class ScheduleUseCase(
                 accessCleanupCandidates,
             )
         }
-        // 공유 EDITOR가 수정해도 평탄형 경로와 기존 오너 push job은 실제 일정 소유자 기준으로
-        // 동기화한다. 요청자를 오너로 간주하면 공유 편집 직후 SCHEDULE_NOT_FOUND로 롤백된다.
-        val ownerMemberId = updated.ownerMemberId ?: memberId
-        scheduleTravelPlanService?.syncOwnerTravelPlan(ownerMemberId, updated)
+        // 출발지/경로/알림은 공유 콘텐츠가 아니라 요청자 개인 계획이다. ScheduleService는
+        // non-author 편집자의 값을 canonical Schedule.route에 쓰지 않고 이 personalized DTO로
+        // 돌려주므로, 요청자의 plan/job만 동기화한다.
+        scheduleTravelPlanService?.syncOwnerTravelPlan(memberId, updated)
         val staleNotificationMemberIds =
             scheduleTravelPlanService?.findStaleNotificationMemberIds(scheduleId).orEmpty()
         editFence.requireContains(staleNotificationMemberIds)
         staleNotificationMemberIds.forEach { staleMemberId ->
                 schedulePushJobService.cancelByScheduleIdAndMemberId(scheduleId, staleMemberId)
         }
-        registerOrCancelPushJob(ownerMemberId, updated)
+        registerOrCancelPushJob(memberId, updated)
         // Owner plan 동기화 전의 개인화 DTO를 반환하면 방금 바꾼 route 설정이 이전 plan 값으로
         // 되돌아 보일 수 있다. 동기화 후 다시 읽어 owner/editor 모두 기존 응답 메타데이터와
         // 자신의 travel plan을 일관되게 돌려준다.
@@ -308,6 +320,7 @@ class ScheduleUseCase(
 
     private fun canCreatePushJob(scheduleDto: ScheduleDto): Boolean {
         return scheduleDto.notificationEnabled == true &&
+            scheduleDto.travelCollaborationEnabled != false &&
             parseInstant(scheduleDto.startAt).isAfter(Instant.now(clock))
     }
 
@@ -371,7 +384,7 @@ class ScheduleUseCase(
             scheduleId,
             presentedSessionGeneration,
         )
-        val detail = scheduleService.getScheduleDetail(memberId, scheduleId)
+        scheduleService.getScheduleDetail(memberId, scheduleId)
 
         scheduleDepartureStatusService.markDeparted(
             memberId,
@@ -385,11 +398,7 @@ class ScheduleUseCase(
             liveActivityEndReason = "DEPARTED",
         )
 
-        val updated = if (detail.ownerMemberId == memberId) {
-            scheduleService.markDeparted(memberId, scheduleId)
-        } else {
-            scheduleService.getScheduleDetail(memberId, scheduleId)
-        }
+        val updated = scheduleService.markDeparted(memberId, scheduleId)
 
         return scheduleDepartureStatusService.attachDepartureParticipants(memberId, updated)
     }

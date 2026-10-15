@@ -12,11 +12,16 @@ import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleType
+import com.noLate.schedule.domain.ScheduleTravelPlan
 import com.noLate.schedule.infrastructure.ScheduleCalendarMemberRepository
 import com.noLate.schedule.infrastructure.ScheduleCalendarRepository
 import com.noLate.schedule.infrastructure.ScheduleCategoryRepository
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
+import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
+import com.noLate.sharing.application.SharingBlockPolicy
+import com.noLate.sharing.domain.SharingMemberBlock
+import com.noLate.sharing.infrastructure.SharingMemberBlockRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -46,6 +51,7 @@ import java.time.Instant
     ScheduleTravelAccessCleanupService::class,
     ScheduleAccessPolicy::class,
     ScheduleSharingAvailabilityPolicy::class,
+    SharingBlockPolicy::class,
     ScheduleCalendarMemberFenceTestConfig::class,
 )
 @TestPropertySource(properties = ["schedule.sharing.enabled=true"])
@@ -58,6 +64,8 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
     private val categoryRepository: ScheduleCategoryRepository,
     private val scheduleRepository: ScheduleRepository,
     private val pushJobRepository: SchedulePushJobRepository,
+    private val travelPlanRepository: ScheduleTravelPlanRepository,
+    private val blockRepository: SharingMemberBlockRepository,
     private val mutationFenceObserver: BlockingScheduleCalendarMutationFenceObserver,
 ) {
 
@@ -230,6 +238,85 @@ class ScheduleCalendarServiceIntegrationTest @Autowired constructor(
         assertEquals(1, members.count { it.role == ScheduleCalendarRole.OWNER })
         assertEquals(ScheduleCalendarRole.EDITOR, members.single { it.memberId == owner.id }.role)
         assertEquals(ScheduleCalendarRole.OWNER, members.single { it.memberId == target.id }.role)
+    }
+
+    @Test
+    fun `ownership transfer cancels a recipient blocked by the new owner but preserves personal plan`() {
+        val owner = member("transfer-block-owner")
+        val nextOwner = member("transfer-block-next-owner")
+        val recipient = member("transfer-block-recipient")
+        val ownerId = requireNotNull(owner.id)
+        val nextOwnerId = requireNotNull(nextOwner.id)
+        val recipientId = requireNotNull(recipient.id)
+        val calendar = calendarServiceWithTravel(owner)
+        service.addMember(
+            ownerMemberId = ownerId,
+            calendarId = calendar.id,
+            targetEmail = nextOwner.email,
+            targetAppId = null,
+            role = ScheduleCalendarRole.EDITOR,
+            authenticatedActorMemberId = ownerId,
+            presentedSessionGeneration = owner.sessionGeneration,
+        )
+        service.addMember(
+            ownerMemberId = ownerId,
+            calendarId = calendar.id,
+            targetEmail = recipient.email,
+            targetAppId = null,
+            role = ScheduleCalendarRole.VIEWER,
+            authenticatedActorMemberId = ownerId,
+            presentedSessionGeneration = owner.sessionGeneration,
+        )
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = ownerId,
+                calendarId = calendar.id,
+                scheduleType = ScheduleType.ROUTE,
+                title = "새 소유자 차단 경계",
+                startAt = Instant.parse("2026-07-25T01:00:00Z"),
+                endAt = Instant.parse("2026-07-25T02:00:00Z"),
+            )
+        )
+        val plan = travelPlanRepository.saveAndFlush(
+            ScheduleTravelPlan(
+                scheduleId = requireNotNull(schedule.id),
+                memberId = recipientId,
+                notificationEnabled = true,
+                scheduleFingerprint = "blocked-new-owner",
+            )
+        )
+        val job = pushJobRepository.saveAndFlush(
+            SchedulePushJob.create(
+                memberId = recipientId,
+                scheduleId = requireNotNull(schedule.id),
+                scheduleAt = schedule.startAt,
+                departureAt = schedule.startAt.minusSeconds(1_800),
+                monitorStartAt = schedule.startAt.minusSeconds(5_400),
+                intervalMinutes = 20,
+            )
+        )
+        blockRepository.saveAndFlush(
+            SharingMemberBlock(
+                blockerMemberId = nextOwnerId,
+                blockedMemberId = recipientId,
+            )
+        )
+
+        service.transferOwnership(
+            ownerMemberId = ownerId,
+            calendarId = calendar.id,
+            targetMemberId = nextOwnerId,
+            presentedSessionGeneration = owner.sessionGeneration,
+        )
+
+        assertEquals(
+            SchedulePushJobStatus.CANCELED,
+            pushJobRepository.findById(requireNotNull(job.id)).orElseThrow().status,
+        )
+        assertFalse(
+            travelPlanRepository.findById(requireNotNull(plan.id)).orElseThrow().deleted,
+            "새 actual owner와의 차단은 개인 이동계획을 삭제하지 않아야 합니다.",
+        )
     }
 
     @Test

@@ -11,6 +11,7 @@ import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitJourneyLeg
 import com.noLate.eta.domain.TransitJourneySearchRequest
 import com.noLate.eta.domain.TransitLegMode
+import com.noLate.eta.domain.TransitLegTimingBasis
 import com.noLate.eta.domain.TransitLine
 import com.noLate.eta.domain.TransitStop
 import com.noLate.eta.infrastructure.routejson.SelectedTransitRouteDecoder
@@ -56,7 +57,9 @@ import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 
 /**
- * 외부 네트워크만 결정적 fixture로 대체하고 실제 ETA 패키지와 schedule worker를 모두 통과한다.
+ * 실제 ETA 패키지와 schedule worker를 연결하는 결정적 컴포넌트 시뮬레이션이다.
+ * 시간표 공급자·실시간 도착·저장소·푸시는 fixture/mock이며, 실제 ODsay maasRP 매퍼나
+ * 시뮬레이터 앱 UI·운영 DB·푸시 전달을 검증하는 E2E가 아니다.
  *
  * 첫 검색의 차량은 마감보다 늦게 도착하지만, 더 이른 동일 경로 검색에서 아직 탈 수 있는 앞
  * 차량을 찾아 마감 전 도착하는 출발시각이 worker/job/push payload에 보존되는지 검증한다.
@@ -351,6 +354,11 @@ class TransitEtaWorkerSimulationTest {
                             mode = TransitLegMode.BUS,
                             durationMinutes = 30,
                             waitingMinutes = 7,
+                            // 이 fixture는 실제 시간표가 있는 공급자를 가정한다. ODsay maasRP의
+                            // ROUTE_ESTIMATE 응답은 별도 mapper/계산 서비스 테스트에서 검증한다.
+                            scheduledDepartureAt = departureAt.plus(5, ChronoUnit.MINUTES),
+                            scheduledArrivalAt = departureAt.plus(35, ChronoUnit.MINUTES),
+                            timingBasis = TransitLegTimingBasis.TIMETABLE,
                             from = TransitStop(
                                 providerStopId = "1001",
                                 arsId = "02005",

@@ -7,6 +7,7 @@ import com.noLate.schedule.domain.ScheduleCalendarMemberStatus
 import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCalendarStatus
 import com.noLate.schedule.domain.ScheduleCategoryShare
+import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleShare
 import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleSharePermission
@@ -29,6 +30,9 @@ data class ScheduleAccessDecision(
     val effectiveContentMode: ScheduleShareContentMode? = null,
     val categoryPermission: ScheduleSharePermission? = null,
     val calendarRole: ScheduleCalendarRole? = null,
+    /** 현재 container 기준 소유자. schedules.memberId(작성자)와 다를 수 있다. */
+    val resourceOwnerMemberId: Long? = null,
+    val canManageAudience: Boolean = false,
 )
 
 /**
@@ -55,27 +59,49 @@ class ScheduleAccessPolicy(
      */
     fun isSharingDisabled(): Boolean = !sharingAvailabilityPolicy.enabled
 
-    fun resolve(memberId: Long, schedule: Schedule): ScheduleAccessDecision {
-        if (schedule.memberId == memberId) return ownerDecision(schedule)
+    fun resolve(memberId: Long, schedule: Schedule): ScheduleAccessDecision =
+        resolve(memberId, schedule, enforceOwnerBlock = true)
+
+    private fun resolve(
+        memberId: Long,
+        schedule: Schedule,
+        enforceOwnerBlock: Boolean,
+    ): ScheduleAccessDecision {
+        val category = categoryLineage(schedule)
+        if (schedule.categoryId != null && categoryRepository != null && category == null) return NO_ACCESS
+        val activeCategoryId = category?.id?.takeIf { !category.deleted }
+        val effectiveCalendarId = schedule.calendarId ?: category?.calendarId
+        val calendar = effectiveCalendarId
+            ?.let { calendarRepository.findByIdAndStatusAndDeletedFalse(it) }
+            ?.takeIf(::isActive)
+        if (effectiveCalendarId != null && calendar == null) return NO_ACCESS
+        val resourceOwnerMemberId = resourceOwnerMemberId(schedule, category, calendar)
+        if (resourceOwnerMemberId == memberId) return ownerDecision(schedule, resourceOwnerMemberId)
         if (!sharingAvailabilityPolicy.enabled) return NO_ACCESS
-        if (sharingBlockPolicy?.isInteractionBlocked(memberId, schedule.memberId) == true) {
+        if (enforceOwnerBlock &&
+            sharingBlockPolicy?.isInteractionBlocked(memberId, resourceOwnerMemberId) == true
+        ) {
             return NO_ACCESS
         }
 
         val scheduleId = requireNotNull(schedule.id)
         val direct = scheduleShareRepository.findByScheduleIdAndTargetMemberId(scheduleId, memberId)
             ?.takeIf(::isActive)
-        val category = categoryId(schedule)
+        val categoryShare = activeCategoryId
             ?.let { categoryShareRepository.findByCategoryIdAndTargetMemberId(it, memberId) }
             ?.takeIf(::isActive)
-        val calendarMember = schedule.calendarId
+        val calendarMember = effectiveCalendarId
             ?.let { calendarMemberRepository.findByCalendarIdAndMemberId(it, memberId) }
             ?.takeIf(::isActive)
-        val calendar = calendarMember
-            ?.let { calendarRepository.findByIdAndStatusAndDeletedFalse(it.calendarId) }
-            ?.takeIf(::isActive)
 
-        return decide(schedule, direct, category, calendarMember, calendar)
+        return decide(
+            schedule,
+            direct,
+            categoryShare,
+            calendarMember,
+            calendar,
+            resourceOwnerMemberId,
+        )
     }
 
     /**
@@ -83,16 +109,29 @@ class ScheduleAccessPolicy(
      * 읽는다. 캘린더에 일정이 100개 있어도 direct/category/member/calendar 조회 횟수는 일정
      * 개수에 비례하지 않는다.
      */
-    fun resolveAll(memberId: Long, schedules: Collection<Schedule>): Map<Long, ScheduleAccessDecision> {
+    fun resolveAll(memberId: Long, schedules: Collection<Schedule>): Map<Long, ScheduleAccessDecision> =
+        resolveAll(memberId, schedules, enforceOwnerBlock = true)
+
+    /**
+     * 차단으로 dormant 처리할 개인 이동계획을 판별할 때만 사용한다. 이 결과는 API 접근 허용에
+     * 쓰면 안 되며, 실제 접근 경계는 항상 [resolve] 또는 [resolveAll]로 다시 검사해야 한다.
+     */
+    internal fun resolveAllIgnoringOwnerBlock(
+        memberId: Long,
+        schedules: Collection<Schedule>,
+    ): Map<Long, ScheduleAccessDecision> =
+        resolveAll(memberId, schedules, enforceOwnerBlock = false)
+
+    private fun resolveAll(
+        memberId: Long,
+        schedules: Collection<Schedule>,
+        enforceOwnerBlock: Boolean,
+    ): Map<Long, ScheduleAccessDecision> {
         if (schedules.isEmpty()) return emptyMap()
         if (!sharingAvailabilityPolicy.enabled) {
             return schedules.mapNotNull { schedule ->
                 val scheduleId = schedule.id ?: return@mapNotNull null
-                scheduleId to if (schedule.memberId == memberId) {
-                    ownerDecision(schedule)
-                } else {
-                    NO_ACCESS
-                }
+                scheduleId to resolve(memberId, schedule, enforceOwnerBlock)
             }.toMap()
         }
 
@@ -102,30 +141,60 @@ class ScheduleAccessPolicy(
         val categoryById = categoryShareRepository
             .findAllByTargetMemberIdAndStatusAndDeletedFalseOrderByIdDesc(memberId, ScheduleShareStatus.ACTIVE)
             .associateBy { it.categoryId }
+        val categoryIds = schedules.mapNotNull(::rawCategoryId).distinct()
+        val categoriesById = categoryRepository
+            ?.findAllById(categoryIds)
+            ?.associateBy { requireNotNull(it.id) }
+            .orEmpty()
         val calendarMembershipById = calendarMemberRepository
             .findAllByMemberIdAndStatusAndDeletedFalseOrderByIdAsc(memberId)
             .associateBy { it.calendarId }
-        val calendarsById = calendarRepository.findAllById(calendarMembershipById.keys)
+        val effectiveCalendarIds = schedules.mapNotNull { schedule ->
+            schedule.calendarId ?: categoryLineage(schedule, categoriesById)?.calendarId
+        }
+        val calendarsById = calendarRepository.findAllById(
+            (calendarMembershipById.keys + effectiveCalendarIds).distinct(),
+        )
             .filter(::isActive)
             .associateBy { requireNotNull(it.id) }
-        val blockedOwnerIds = sharingBlockPolicy
-            ?.blockedCounterpartIds(memberId, schedules.map { it.memberId })
-            .orEmpty()
+        val resourceOwnerIds = schedules.map { schedule ->
+            val category = categoryLineage(schedule, categoriesById)
+            val calendar = (schedule.calendarId ?: category?.calendarId)?.let(calendarsById::get)
+            resourceOwnerMemberId(schedule, category, calendar)
+        }
+        val blockedOwnerIds = if (enforceOwnerBlock) {
+            sharingBlockPolicy
+                ?.blockedCounterpartIds(memberId, resourceOwnerIds)
+                .orEmpty()
+        } else {
+            emptySet()
+        }
 
         return schedules.mapNotNull { schedule ->
             val scheduleId = schedule.id ?: return@mapNotNull null
-            val decision = if (schedule.memberId == memberId) {
-                ownerDecision(schedule)
-            } else if (schedule.memberId in blockedOwnerIds) {
+            val category = categoryLineage(schedule, categoriesById)
+            val activeCategoryId = category?.id?.takeIf { !category.deleted }
+            val effectiveCalendarId = schedule.calendarId ?: category?.calendarId
+            val calendar = effectiveCalendarId?.let(calendarsById::get)
+            val resourceOwnerMemberId = resourceOwnerMemberId(schedule, category, calendar)
+            val parentUnavailable =
+                (schedule.categoryId != null && categoryRepository != null && category == null) ||
+                    (effectiveCalendarId != null && calendar == null)
+            val decision = if (parentUnavailable) {
+                NO_ACCESS
+            } else if (resourceOwnerMemberId == memberId) {
+                ownerDecision(schedule, resourceOwnerMemberId)
+            } else if (resourceOwnerMemberId in blockedOwnerIds) {
                 NO_ACCESS
             } else {
-                val membership = schedule.calendarId?.let(calendarMembershipById::get)
+                val membership = effectiveCalendarId?.let(calendarMembershipById::get)
                 decide(
                     schedule = schedule,
                     direct = directBySchedule[scheduleId],
-                    category = categoryId(schedule)?.let(categoryById::get),
+                    category = activeCategoryId?.let(categoryById::get),
                     calendarMember = membership,
-                    calendar = membership?.calendarId?.let(calendarsById::get),
+                    calendar = calendar,
+                    resourceOwnerMemberId = resourceOwnerMemberId,
                 )
             }
             scheduleId to decision
@@ -138,9 +207,20 @@ class ScheduleAccessPolicy(
      */
     fun travelMemberIds(schedule: Schedule): List<Long> {
         if (!isRouteSchedule(schedule)) return emptyList()
-        if (!sharingAvailabilityPolicy.enabled) return listOf(schedule.memberId)
+        if (!sharingAvailabilityPolicy.enabled) {
+            val ownerMemberId = currentResourceOwnerMemberId(schedule) ?: return emptyList()
+            return if (resolve(ownerMemberId, schedule).travelEnabled) {
+                listOf(ownerMemberId)
+            } else {
+                emptyList()
+            }
+        }
 
-        val ids = linkedSetOf(schedule.memberId)
+        val category = categoryLineage(schedule)
+        val calendar = (schedule.calendarId ?: category?.calendarId)
+            ?.let { calendarRepository.findByIdAndStatusAndDeletedFalse(it) }
+            ?.takeIf(::isActive)
+        val ids = linkedSetOf(resourceOwnerMemberId(schedule, category, calendar))
         val scheduleId = requireNotNull(schedule.id)
 
         scheduleShareRepository
@@ -150,7 +230,7 @@ class ScheduleAccessPolicy(
 
         // Legacy category sharing always behaved as travel collaboration. It remains in the union
         // until production backfill and the client migration have both been verified.
-        categoryId(schedule)?.let { categoryId ->
+        category?.id?.takeIf { !category.deleted }?.let { categoryId ->
             categoryShareRepository
                 .findAllByCategoryIdAndStatusAndDeletedFalseOrderByIdAsc(categoryId, ScheduleShareStatus.ACTIVE)
                 .mapTo(ids) { it.targetMemberId }
@@ -158,15 +238,20 @@ class ScheduleAccessPolicy(
 
         val calendarId = schedule.calendarId
         if (calendarId != null) {
-            val calendar = calendarRepository.findByIdAndStatusAndDeletedFalse(calendarId)
-            val effectiveMode = schedule.calendarContentModeOverride ?: calendar?.defaultContentMode
-            if (calendar != null && effectiveMode == ScheduleShareContentMode.SCHEDULE_AND_TRAVEL) {
+            val calendarForMode = calendarRepository.findByIdAndStatusAndDeletedFalse(calendarId)
+            val effectiveMode = schedule.calendarContentModeOverride ?: calendarForMode?.defaultContentMode
+            if (calendarForMode != null && effectiveMode == ScheduleShareContentMode.SCHEDULE_AND_TRAVEL) {
                 calendarMemberRepository
                     .findAllByCalendarIdAndStatusAndDeletedFalseOrderByIdAsc(calendarId)
                     .mapTo(ids) { it.memberId }
             }
         }
-        return filterBlockedAudience(schedule.memberId, ids)
+        // Creator ids are not privileged after a category/calendar grant is revoked. Reusing the
+        // central decision here prevents stale travel jobs from treating schedules.member_id as a
+        // permanent ownership grant.
+        return ids.filter { candidateMemberId ->
+            resolve(candidateMemberId, schedule).travelEnabled
+        }
     }
 
     /**
@@ -192,17 +277,8 @@ class ScheduleAccessPolicy(
      * 공유가 겹치면 그 grant에는 별도 opt-out이 없으므로 활성 경로 공유를 우선한다.
      */
     fun routeReminderEnabled(memberId: Long, schedule: Schedule): Boolean {
-        if (schedule.memberId == memberId) {
-            // 개인 일정에는 캘린더별 수신 설정이 없으므로 기존 동작대로 알림을 허용한다.
-            // 공유 캘린더 일정의 오너도 멤버이므로, 화면에서 끈 개인 설정을 동일하게 존중한다.
-            val calendarId = schedule.calendarId ?: return true
-            return calendarMemberRepository.findByCalendarIdAndMemberId(calendarId, memberId)
-                ?.takeIf(::isActive)
-                ?.routeReminderEnabled
-                ?: true
-        }
-        if (!sharingAvailabilityPolicy.enabled) return false
-        if (sharingBlockPolicy?.isInteractionBlocked(memberId, schedule.memberId) == true) return false
+        val access = resolve(memberId, schedule)
+        if (!access.travelEnabled) return false
 
         val scheduleId = requireNotNull(schedule.id)
         val directTravel = scheduleShareRepository
@@ -211,18 +287,21 @@ class ScheduleAccessPolicy(
             ?.contentMode == ScheduleShareContentMode.SCHEDULE_AND_TRAVEL
         if (directTravel) return true
 
-        val categoryTravel = categoryId(schedule)
+        val categoryTravel = rawCategoryId(schedule)
             ?.let { categoryShareRepository.findByCategoryIdAndTargetMemberId(it, memberId) }
             ?.let(::isActive) == true
         if (categoryTravel) return true
 
-        val calendarId = schedule.calendarId ?: return false
+        val category = categoryLineage(schedule)
+        val calendarId = schedule.calendarId ?: category?.calendarId
+            ?: return access.resourceOwnerMemberId == memberId
         val calendar = calendarRepository.findByIdAndStatusAndDeletedFalse(calendarId) ?: return false
         val effectiveMode = schedule.calendarContentModeOverride ?: calendar.defaultContentMode
         if (effectiveMode != ScheduleShareContentMode.SCHEDULE_AND_TRAVEL) return false
         return calendarMemberRepository.findByCalendarIdAndMemberId(calendarId, memberId)
             ?.takeIf(::isActive)
-            ?.routeReminderEnabled == true
+            ?.routeReminderEnabled
+            ?: (access.resourceOwnerMemberId == memberId)
     }
 
     /**
@@ -234,20 +313,12 @@ class ScheduleAccessPolicy(
         val routeSchedules = schedules.filter(::isRouteSchedule)
         if (routeSchedules.isEmpty()) return emptyMap()
         if (!sharingAvailabilityPolicy.enabled) {
-            val calendarIds = routeSchedules.mapNotNull { it.calendarId }.distinct()
-            val ownerMemberships = if (calendarIds.isEmpty()) {
-                emptyMap()
-            } else {
-                calendarMemberRepository
-                    .findAllByCalendarIdInAndStatusAndDeletedFalseOrderByCalendarIdAscIdAsc(calendarIds)
-                    .associateBy { it.calendarId to it.memberId }
-            }
             return routeSchedules.associate { schedule ->
-                val ownerReminderEnabled = schedule.calendarId
-                    ?.let { ownerMemberships[it to schedule.memberId]?.routeReminderEnabled }
-                    ?: true
-                requireNotNull(schedule.id) to if (ownerReminderEnabled) {
-                    listOf(schedule.memberId)
+                val ownerMemberId = currentResourceOwnerMemberId(schedule)
+                requireNotNull(schedule.id) to if (
+                    ownerMemberId != null && routeReminderEnabled(ownerMemberId, schedule)
+                ) {
+                    listOf(ownerMemberId)
                 } else {
                     emptyList()
                 }
@@ -255,8 +326,14 @@ class ScheduleAccessPolicy(
         }
 
         val scheduleIds = routeSchedules.mapNotNull { it.id }
-        val categoryIds = routeSchedules.mapNotNull(::categoryId).distinct()
-        val calendarIds = routeSchedules.mapNotNull { it.calendarId }.distinct()
+        val categoryIds = routeSchedules.mapNotNull(::rawCategoryId).distinct()
+        val categoriesById = categoryRepository
+            ?.findAllById(categoryIds)
+            ?.associateBy { requireNotNull(it.id) }
+            .orEmpty()
+        val calendarIds = routeSchedules.mapNotNull { schedule ->
+            schedule.calendarId ?: categoryLineage(schedule, categoriesById)?.calendarId
+        }.distinct()
 
         val directByScheduleId = scheduleShareRepository
             .findAllByScheduleIdInAndStatusAndDeletedFalseOrderByScheduleIdAscIdAsc(
@@ -289,8 +366,18 @@ class ScheduleAccessPolicy(
             directByScheduleId.values.flatten().forEach { add(it.targetMemberId) }
             categoryById.values.flatten().forEach { add(it.targetMemberId) }
             calendarMembersById.values.flatten().forEach { add(it.memberId) }
+            routeSchedules.forEach { schedule ->
+                val category = categoryLineage(schedule, categoriesById)
+                val calendar = (schedule.calendarId ?: category?.calendarId)?.let(calendarsById::get)
+                add(resourceOwnerMemberId(schedule, category, calendar))
+            }
         }
-        val blockedByOwner = routeSchedules.map { it.memberId }.distinct().associateWith { ownerMemberId ->
+        val ownerByScheduleId = routeSchedules.associate { schedule ->
+            val category = categoryLineage(schedule, categoriesById)
+            val calendar = (schedule.calendarId ?: category?.calendarId)?.let(calendarsById::get)
+            requireNotNull(schedule.id) to resourceOwnerMemberId(schedule, category, calendar)
+        }
+        val blockedByOwner = ownerByScheduleId.values.distinct().associateWith { ownerMemberId ->
             sharingBlockPolicy
                 ?.blockedCounterpartIds(ownerMemberId, allCandidateMemberIds)
                 .orEmpty()
@@ -299,19 +386,27 @@ class ScheduleAccessPolicy(
         return routeSchedules.associate { schedule ->
             val scheduleId = requireNotNull(schedule.id)
             val memberIds = linkedSetOf<Long>()
-            val calendarId = schedule.calendarId
+            val category = categoryLineage(schedule, categoriesById)
+            val calendarId = schedule.calendarId ?: category?.calendarId
+            val parentUnavailable =
+                (schedule.categoryId != null && category == null) ||
+                    (calendarId != null && calendarsById[calendarId] == null)
+            if (parentUnavailable) {
+                return@associate scheduleId to emptyList()
+            }
             val calendarMembers = calendarId?.let(calendarMembersById::get).orEmpty()
+            val resourceOwnerMemberId = ownerByScheduleId.getValue(scheduleId)
             val ownerReminderEnabled = if (calendarId == null) {
                 true
             } else {
                 calendarMembers
-                    .firstOrNull { it.memberId == schedule.memberId }
+                    .firstOrNull { it.memberId == resourceOwnerMemberId }
                     ?.routeReminderEnabled
                     ?: true
             }
-            if (ownerReminderEnabled) memberIds += schedule.memberId
+            if (ownerReminderEnabled) memberIds += resourceOwnerMemberId
             directByScheduleId[scheduleId].orEmpty().mapTo(memberIds) { it.targetMemberId }
-            categoryId(schedule)?.let { sharedCategoryId ->
+            category?.id?.takeIf { !category.deleted }?.let { sharedCategoryId ->
                 categoryById[sharedCategoryId].orEmpty().mapTo(memberIds) { it.targetMemberId }
             }
             calendarId?.let {
@@ -323,7 +418,7 @@ class ScheduleAccessPolicy(
                         .mapTo(memberIds) { it.memberId }
                 }
             }
-            memberIds.removeAll(blockedByOwner[schedule.memberId].orEmpty())
+            memberIds.removeAll(blockedByOwner[resourceOwnerMemberId].orEmpty())
             scheduleId to memberIds.toList()
         }
     }
@@ -344,6 +439,7 @@ class ScheduleAccessPolicy(
         category: ScheduleCategoryShare?,
         calendarMember: ScheduleCalendarMember?,
         calendar: ScheduleCalendar?,
+        resourceOwnerMemberId: Long,
     ): ScheduleAccessDecision {
         val calendarGrantActive = calendarMember != null && calendar != null
         val canView = direct != null || category != null || calendarGrantActive
@@ -376,10 +472,15 @@ class ScheduleAccessPolicy(
             effectiveContentMode = contentMode,
             categoryPermission = categoryPermission,
             calendarRole = calendarMember?.role,
+            resourceOwnerMemberId = resourceOwnerMemberId,
+            canManageAudience = false,
         )
     }
 
-    private fun ownerDecision(schedule: Schedule) = ScheduleAccessDecision(
+    private fun ownerDecision(
+        schedule: Schedule,
+        resourceOwnerMemberId: Long,
+    ) = ScheduleAccessDecision(
         canView = true,
         canEdit = true,
         travelEnabled = isRouteSchedule(schedule),
@@ -391,20 +492,63 @@ class ScheduleAccessPolicy(
             ScheduleShareContentMode.SCHEDULE_ONLY
         },
         calendarRole = ScheduleCalendarRole.OWNER,
+        resourceOwnerMemberId = resourceOwnerMemberId,
+        canManageAudience = true,
     )
 
     private fun isRouteSchedule(schedule: Schedule): Boolean =
         schedule.scheduleType == ScheduleType.ROUTE || schedule.route != null || schedule.routeSetupRequired
 
-    private fun categoryId(schedule: Schedule): Long? =
-        (schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull())
-            ?.takeIf { categoryId ->
-                categoryRepository
-                    ?.findById(categoryId)
-                    ?.orElse(null)
-                    ?.takeUnless { it.deleted } != null ||
-                    categoryRepository == null
-            }
+    private fun rawCategoryId(schedule: Schedule): Long? =
+        schedule.categoryId ?: schedule.categorySnapshot?.categoryId?.toLongOrNull()
+
+    /**
+     * A deleted category is closed for category-level grants and new assignments, but its row is
+     * retained as ownership/calendar lineage for existing schedules. This preserves the category
+     * owner's and calendar/direct-schedule audiences while preventing a tombstoned category share
+     * from remaining an access grant.
+     */
+    private fun categoryLineage(schedule: Schedule): ScheduleCategory? {
+        val categoryId = rawCategoryId(schedule) ?: return null
+        val category = categoryRepository
+            ?.findById(categoryId)
+            ?.orElse(null)
+        // categoryId=null means the canonical association was deliberately detached. A remaining
+        // deleted/missing snapshot is display history, not an ACL parent. Active snapshot fallback
+        // is retained only for legacy rows created before schedules.category_id was populated.
+        return if (schedule.categoryId == null) category?.takeUnless { it.deleted } else category
+    }
+
+    private fun categoryLineage(
+        schedule: Schedule,
+        categoriesById: Map<Long, ScheduleCategory>,
+    ): ScheduleCategory? {
+        val categoryId = rawCategoryId(schedule) ?: return null
+        val category = categoriesById[categoryId]
+        return if (schedule.categoryId == null) category?.takeUnless { it.deleted } else category
+    }
+
+    fun currentResourceOwnerMemberId(schedule: Schedule): Long? {
+        val category = categoryLineage(schedule)
+        if (schedule.categoryId != null && categoryRepository != null && category == null) return null
+        val calendarId = schedule.calendarId ?: category?.calendarId
+        val calendar = calendarId?.let {
+            calendarRepository.findByIdAndStatusAndDeletedFalse(it)
+                ?.takeIf(::isActive)
+                ?: return null
+        }
+        return resourceOwnerMemberId(schedule, category, calendar)
+    }
+
+    private fun resourceOwnerMemberId(
+        schedule: Schedule,
+        category: ScheduleCategory?,
+        calendar: ScheduleCalendar?,
+    ): Long = when {
+        calendar != null -> calendar.ownerMemberId
+        category != null && category.calendarId == null -> category.memberId
+        else -> schedule.memberId
+    }
 
     private fun isActive(share: ScheduleShare): Boolean =
         !share.deleted && share.status == ScheduleShareStatus.ACTIVE

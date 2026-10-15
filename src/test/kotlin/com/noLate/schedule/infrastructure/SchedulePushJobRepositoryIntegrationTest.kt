@@ -2,6 +2,7 @@ package com.noLate.schedule.infrastructure
 
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
+import com.noLate.schedule.application.service.SchedulePushJobCoordinator
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
@@ -23,6 +24,27 @@ import java.time.Instant
 class SchedulePushJobRepositoryIntegrationTest @Autowired constructor(
     private val repository: SchedulePushJobRepository,
 ) {
+    @Test
+    fun `legacy cadence rollout persists in bounded batches and skips processing jobs`() {
+        val now = Instant.parse("2026-09-25T01:00:00Z")
+        fun job(id: Long) = repository.saveAndFlush(SchedulePushJob.create(
+            memberId = 1L, scheduleId = id, scheduleAt = now.plusSeconds(7200),
+            departureAt = now.plusSeconds(3600), monitorStartAt = now, intervalMinutes = 20,
+        ))
+        val first = job(1001L)
+        val second = job(1002L)
+        val processing = job(1003L).apply { startProcessing("other-worker", now) }
+        repository.flush()
+        val coordinator = SchedulePushJobCoordinator(repository)
+        assertEquals(1, coordinator.alignLegacyEtaCadences(now, 1))
+        assertEquals(10, repository.findById(first.id!!).get().intervalMinutes)
+        assertEquals(20, repository.findById(second.id!!).get().intervalMinutes)
+        assertEquals(1, coordinator.alignLegacyEtaCadences(now, 1))
+        assertEquals(10, repository.findById(second.id!!).get().intervalMinutes)
+        assertEquals(20, processing.intervalMinutes)
+        assertEquals(0, coordinator.alignLegacyEtaCadences(now, 1))
+    }
+
 
     @Test
     fun `현재 시각 이전 ACTIVE job만 스케줄러 조회에 검출된다`() {

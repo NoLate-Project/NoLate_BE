@@ -2,13 +2,21 @@ package com.noLate.eta.domain
 
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import java.time.Instant
+import java.time.Duration
 import java.util.Locale
 
 enum class TransitLegMode {
     WALK,
     BUS,
     SUBWAY,
-    ETC,
+    TRAIN,
+    EXPRESS_BUS,
+    INTERCITY_BUS,
+    COACH,
+    ETC;
+
+    val isRide: Boolean get() = this in setOf(BUS, SUBWAY, TRAIN, EXPRESS_BUS, INTERCITY_BUS, COACH)
+    val isIntercity: Boolean get() = this in setOf(TRAIN, EXPRESS_BUS, INTERCITY_BUS, COACH)
 }
 
 data class TransitStop(
@@ -44,6 +52,8 @@ data class TransitLine(
      * 아니므로 기본값은 반드시 UNKNOWN이다.
      */
     val serviceClass: TransitServiceClass = TransitServiceClass.UNKNOWN,
+    /** 공식 mode별 코드와 노선명이 일치할 때만 연결한다. Tmap 내부 ID는 변환하지 않는다. */
+    val seoulSubwayLine: SeoulSubwayLine? = null,
 )
 
 enum class TransitServiceClass {
@@ -64,15 +74,63 @@ data class TransitJourneyLeg(
     val line: TransitLine? = null,
     val directionName: String? = null,
     val directionCode: String? = null,
-    /** ODsay의 rps 시각은 시간표이며 실시간 차량 관측값이 아니다. */
     val timingBasis: TransitLegTimingBasis = TransitLegTimingBasis.UNKNOWN,
+    /** 공급자가 초 단위로 준 구간 소요시간. 실제 열차 운행시각의 증거는 아니다. */
+    val durationSeconds: Long? = null,
+    /** 공급자가 순서대로 제공한 첫 다음 역. 이름으로 인접 관계를 추정하지 않는다. */
+    val nextStopName: String? = null,
+    val timetable: TransitLegTimetable? = null,
+    val walkingGeometry: TransitWalkingGeometry? = null,
+    /** 원본 시간표와 구분한 첫 열차 관측. 지연으로 되살린 후보의 시간축에만 적용한다. */
+    val firstBoardingObservation: TransitFirstBoardingObservation? = null,
+    val walkingTiming: TransitWalkingTimingEvidence? = null,
 ) {
+    init {
+        require(walkingGeometry == null || mode == TransitLegMode.WALK)
+        require(walkingTiming == null || (mode == TransitLegMode.WALK && walkingTiming.movementSeconds == movementDurationSeconds))
+        timetable?.let {
+            val observation = firstBoardingObservation
+            require(timingBasis == TransitLegTimingBasis.TIMETABLE)
+            if (observation == null) {
+                require(scheduledArrivalAt == it.arrivalAt)
+                require(scheduledDepartureAt != null && !scheduledDepartureAt.isAfter(it.boardingAt))
+            } else {
+                require(mode == TransitLegMode.SUBWAY && observation.provider == "seoul-openapi")
+                require(observation.trainNumber in setOfNotNull(it.trainNumber, it.realtimeTrainNumber))
+                require(observation.lineName == it.line.displayName)
+                require(observation.expectedBoardingAt >= it.boardingAt)
+                require(scheduledDepartureAt != null && scheduledDepartureAt <= observation.readyAt)
+                require(scheduledArrivalAt == it.arrivalAt.plus(
+                    Duration.between(it.boardingAt, observation.expectedBoardingAt)))
+            }
+        }
+        require(firstBoardingObservation == null || timetable != null)
+        // 초 값이 표시용 분 값과 충돌하면 서로 다른 길이로 승차·환승을 판단하지 않는다.
+        durationSeconds?.let { seconds ->
+            require(seconds >= 0 && (seconds / 60 + if (seconds % 60 == 0L) 0 else 1) == durationMinutes.toLong()) {
+                "구간 소요시간의 초 값과 올림한 분 값이 일치해야 합니다."
+            }
+        }
+    }
+
+    /** ODsay처럼 분만 제공하는 공급자는 기존 해상도를 유지한다. 시각값으로 초를 추정하지 않는다. */
+    val movementDurationSeconds: Long
+        get() = durationSeconds ?: durationMinutes.toLong() * 60
+
     val isRide: Boolean
-        get() = mode == TransitLegMode.BUS || mode == TransitLegMode.SUBWAY
+        get() = mode.isRide
 }
 
+/**
+ * 구간 출발·도착시각의 근거다.
+ *
+ * TIMETABLE은 실제 운행 시간표,
+ * ROUTE_ESTIMATE는 경로 소요시간을 기준으로 계산한 표시용 시각,
+ * UNKNOWN은 시각 근거를 확인할 수 없는 경우다.
+ */
 enum class TransitLegTimingBasis {
     TIMETABLE,
+    ROUTE_ESTIMATE,
     UNKNOWN,
 }
 
@@ -87,6 +145,19 @@ data class TransitJourney(
 ) {
     val rideLegs: List<TransitJourneyLeg>
         get() = legs.filter(TransitJourneyLeg::isRide)
+
+    /** 공급자와 무관하게 실제 승차 구간 앞·사이·뒤로 구분한다. 소요시간은 변경하지 않는다. */
+    fun walkingScopeAt(index: Int): TransitWalkingScope? {
+        if (legs[index].mode != TransitLegMode.WALK) return null
+        val firstRide = legs.indexOfFirst(TransitJourneyLeg::isRide)
+        val lastRide = legs.indexOfLast(TransitJourneyLeg::isRide)
+        return when {
+            firstRide < 0 -> TransitWalkingScope.UNKNOWN
+            index < firstRide -> TransitWalkingScope.ACCESS
+            index > lastRide -> TransitWalkingScope.EGRESS
+            else -> TransitWalkingScope.TRANSFER
+        }
+    }
 }
 
 data class TransitJourneySearchRequest(

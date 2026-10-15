@@ -205,6 +205,8 @@ class ProductionSchemaVersionGuard(
         /** ETA 이력 테이블과 중복 방지·시간순 조회 인덱스를 검증한 뒤 기록하는 marker. */
         const val ETA_EVALUATION_HISTORY_SCHEMA_VERSION =
             "2026-09-08-eta-evaluation-history-v1"
+        const val DEPARTURE_ALARM_CANCELLATION_REASON_SCHEMA_VERSION =
+            "2026-10-05-departure-alarm-cancellation-reason-v1"
 
         val REQUIRED_SCHEMA_VERSIONS = listOf(
             PUSH_RELIABILITY_SCHEMA_VERSION,
@@ -226,6 +228,7 @@ class ProductionSchemaVersionGuard(
             LIVE_ACTIVITY_APPEARANCE_SCHEMA_VERSION,
             EFFECTIVE_TRANSIT_ROUTE_SCHEMA_VERSION,
             ETA_EVALUATION_HISTORY_SCHEMA_VERSION,
+            DEPARTURE_ALARM_CANCELLATION_REASON_SCHEMA_VERSION,
         )
     }
 }

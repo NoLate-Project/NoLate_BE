@@ -1,0 +1,16 @@
+// Export only the compiled test runtime classpath; the explicit launcher owns server lifecycle.
+allprojects {
+    afterEvaluate {
+        tasks.register('etaSimulatorFixtureClasspath') {
+            dependsOn tasks.named('testClasses')
+            doLast {
+                def output = providers.gradleProperty('etaFixtureOutput').get()
+                if (!output.startsWith('/private/tmp/nolate-eta-mock-e2e.') &&
+                    !output.startsWith('/private/tmp/nolate-eta-real-e2e.')) {
+                    throw new GradleException('Fixture output must be a freshly created private temp directory')
+                }
+                new File(output, 'classpath.txt').text = sourceSets.test.runtimeClasspath.asPath
+            }
+        }
+    }
+}
