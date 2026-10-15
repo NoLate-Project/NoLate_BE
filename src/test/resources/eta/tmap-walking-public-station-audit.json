@@ -1,0 +1,133 @@
+{
+  "classification" : "PUBLIC_SYNTHETIC_WALK_GEOMETRY_AUDIT_NOT_ETA_ACCURACY",
+  "observedAt" : "2026-10-08T22:11:28.314600Z",
+  "searchDttm" : "202610090716",
+  "providerCalls" : 1,
+  "matches" : [ {
+    "totalTime" : 3888,
+    "legs" : [ {
+      "mode" : "WALK",
+      "sectionTime" : 111,
+      "distance" : 128,
+      "start" : {
+        "name" : "출발지",
+        "lat" : 37.65636195,
+        "lon" : 127.06342739
+      },
+      "end" : {
+        "name" : "노원",
+        "lat" : 37.65636388888889,
+        "lon" : 127.06340555555556
+      },
+      "steps" : [ {
+        "distance" : 17,
+        "streetName" : "",
+        "description" : "17m 이동",
+        "linestring" : "127.06343,37.65635 127.06344,37.656353 127.063614,37.65639"
+      }, {
+        "distance" : 52,
+        "streetName" : "",
+        "description" : "좌회전 후 52m 이동",
+        "linestring" : "127.063614,37.65639 127.063576,37.65649 127.064,37.656586 127.06401,37.656597"
+      }, {
+        "distance" : 59,
+        "streetName" : "상계로",
+        "description" : "노원역 10번출구에서 좌회전 후 상계로를 따라 59m 이동",
+        "linestring" : "127.06401,37.656597 127.064,37.656597 127.06347,37.65648 127.06337,37.656456"
+      } ]
+    }, {
+      "mode" : "SUBWAY",
+      "sectionTime" : 2882,
+      "distance" : 27475,
+      "route" : "수도권4호선",
+      "routeId" : "110041026",
+      "start" : {
+        "name" : "노원",
+        "lat" : 37.65636388888889,
+        "lon" : 127.06340555555556
+      },
+      "end" : {
+        "name" : "사당",
+        "lat" : 37.47680833333333,
+        "lon" : 126.98166666666667
+      }
+    }, {
+      "mode" : "WALK",
+      "sectionTime" : 243,
+      "distance" : 205,
+      "start" : {
+        "name" : "사당",
+        "lat" : 37.47680833333333,
+        "lon" : 126.98166666666667
+      },
+      "end" : {
+        "name" : "사당",
+        "lat" : 37.47656666666666,
+        "lon" : 126.981625
+      },
+      "steps" : [ ]
+    }, {
+      "mode" : "SUBWAY",
+      "sectionTime" : 481,
+      "distance" : 4867,
+      "route" : "수도권2호선",
+      "routeId" : "110021006",
+      "start" : {
+        "name" : "사당",
+        "lat" : 37.47656666666666,
+        "lon" : 126.981625
+      },
+      "end" : {
+        "name" : "신림",
+        "lat" : 37.48427222222222,
+        "lon" : 126.92962777777778
+      }
+    }, {
+      "mode" : "WALK",
+      "sectionTime" : 171,
+      "distance" : 126,
+      "start" : {
+        "name" : "신림",
+        "lat" : 37.48427222222222,
+        "lon" : 126.92962777777778
+      },
+      "end" : {
+        "name" : "도착지",
+        "lat" : 37.48426844,
+        "lon" : 126.92977778
+      },
+      "steps" : [ {
+        "distance" : 34,
+        "streetName" : "",
+        "description" : "34m 이동",
+        "linestring" : "126.929634,37.484234 126.929726,37.484245 126.930016,37.484287"
+      }, {
+        "distance" : 46,
+        "streetName" : "",
+        "description" : "우회전 후 46m 이동",
+        "linestring" : "126.930016,37.484287 126.930046,37.484146 126.93005,37.484108 126.92991,37.48394 126.92989,37.483917"
+      }, {
+        "distance" : 16,
+        "streetName" : "신림로",
+        "description" : "신림역 2번출구에서 직진 후 신림로를 따라 16m 이동",
+        "linestring" : "126.92989,37.483917 126.92994,37.48401 126.92997,37.48405"
+      }, {
+        "distance" : 9,
+        "streetName" : "",
+        "description" : "신림역 2번출구에서 좌측 횡단보도 후 9m 이동",
+        "linestring" : "126.92997,37.48405 126.92988,37.484104"
+      }, {
+        "distance" : 8,
+        "streetName" : "",
+        "description" : "직진 후 8m 이동",
+        "linestring" : "126.92988,37.484104 126.92985,37.484123 126.92986,37.484158"
+      }, {
+        "distance" : 13,
+        "streetName" : "보행자도로",
+        "description" : "횡단보도 후 보행자도로를 따라 13m 이동",
+        "linestring" : "126.92986,37.484158 126.92985,37.484276"
+      } ]
+    } ]
+  } ],
+  "productionValuesChanged" : false
+}

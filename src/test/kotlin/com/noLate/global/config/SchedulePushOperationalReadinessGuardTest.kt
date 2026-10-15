@@ -86,7 +86,7 @@ class SchedulePushOperationalReadinessGuardTest {
             missingTmap.message,
         )
 
-        val missingOdsay = assertThrows(IllegalStateException::class.java) {
+        val missingTransit = assertThrows(IllegalStateException::class.java) {
             guard(
                 "schedule.push.enabled" to "true",
                 "notification.push-outbox.enabled" to "true",
@@ -96,10 +96,72 @@ class SchedulePushOperationalReadinessGuardTest {
             ).afterSingletonsInstantiated()
         }
         assertEquals(
-            "Production startup blocked: schedule.push.enabled=true requires " +
-                "eta.transit.odsay.enabled=true for transit ETA.",
-            missingOdsay.message,
+            missingTransitProviderMessage,
+            missingTransit.message,
         )
+    }
+
+    @Test
+    fun `enabled schedule push accepts configured TMAP transit without ODsay`() {
+        assertDoesNotThrow {
+            guard(*completeTmapTransitProperties()).afterSingletonsInstantiated()
+        }
+    }
+
+    @Test
+    fun `enabled schedule push rejects both disabled transit providers`() {
+        val failure = assertThrows(IllegalStateException::class.java) {
+            guard(
+                *completeProviderProperties(),
+                "eta.transit.odsay.enabled" to "false",
+                "eta.transit.tmap.enabled" to "false",
+                "routing.tmap.enabled" to "true",
+                "routing.tmap.app-key" to "tmap-routing-key",
+            ).afterSingletonsInstantiated()
+        }
+
+        assertEquals(missingTransitProviderMessage, failure.message)
+    }
+
+    @Test
+    fun `enabled ODsay transit requires its own nonblank key`() {
+        listOf(null, "", "   ").forEach { apiKey ->
+            val properties = completeProviderProperties()
+                .filterNot { it.first == "eta.transit.odsay.api-key" }
+                .toMutableList()
+            apiKey?.let { properties += "eta.transit.odsay.api-key" to it }
+
+            val failure = assertThrows(IllegalStateException::class.java) {
+                guard(*properties.toTypedArray()).afterSingletonsInstantiated()
+            }
+
+            assertEquals(missingTransitProviderMessage, failure.message)
+        }
+    }
+
+    @Test
+    fun `TMAP transit requires its own flag and routing client with a nonblank routing key`() {
+        val incompleteProperties = listOf(
+            "eta.transit.tmap.enabled" to null,
+            "eta.transit.tmap.enabled" to "false",
+            "routing.tmap.enabled" to null,
+            "routing.tmap.enabled" to "false",
+            "routing.tmap.app-key" to null,
+            "routing.tmap.app-key" to "",
+            "routing.tmap.app-key" to "   ",
+        )
+        incompleteProperties.forEach { (name, value) ->
+            val properties = completeTmapTransitProperties()
+                .filterNot { it.first == name }
+                .toMutableList()
+            value?.let { properties += name to it }
+
+            val failure = assertThrows(IllegalStateException::class.java) {
+                guard(*properties.toTypedArray()).afterSingletonsInstantiated()
+            }
+
+            assertEquals(missingTransitProviderMessage, failure.message)
+        }
     }
 
     @Test
@@ -149,6 +211,24 @@ class SchedulePushOperationalReadinessGuardTest {
         "transit.seoul.api-key" to "seoul-key",
         "transit.tago.api-key" to "tago-key",
     )
+
+    private fun completeTmapTransitProperties(): Array<Pair<String, String>> =
+        completeProviderProperties()
+            .filterNot { it.first.startsWith("eta.transit.odsay.") }
+            .plus(
+                listOf(
+                    "eta.transit.tmap.enabled" to "true",
+                    "routing.tmap.enabled" to "true",
+                    "routing.tmap.app-key" to "tmap-routing-key",
+                )
+            )
+            .toTypedArray()
+
+    private val missingTransitProviderMessage =
+        "Production startup blocked: schedule.push.enabled=true requires " +
+            "a configured ODsay or TMAP transit ETA provider. " +
+            "Enable eta.transit.odsay with its api-key, or eta.transit.tmap and " +
+            "routing.tmap with its app-key."
 
     private fun guard(
         vararg properties: Pair<String, String>,

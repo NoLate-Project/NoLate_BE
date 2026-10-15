@@ -29,6 +29,13 @@ enum class DepartureAlarmSyncOperation {
     CANCEL,
 }
 
+/** null인 기존 CANCEL은 원인을 추정하지 않으며 자동으로 복구하지 않는다. */
+enum class DepartureAlarmCancellationReason {
+    EXPLICIT_OR_TERMINAL,
+    PAST_CONFIGURED_ESTIMATE,
+    TRANSIT_TRANSFER_FAILURE,
+}
+
 /**
  * 기기별 전달 성공 여부와 독립적인 서버의 출발 알람 desired state다.
  *
@@ -99,6 +106,11 @@ class DepartureAlarmSyncState protected constructor() : BaseEntity() {
     var operation: DepartureAlarmSyncOperation = DepartureAlarmSyncOperation.CANCEL
         protected set
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancellation_reason", length = 40)
+    var cancellationReason: DepartureAlarmCancellationReason? = null
+        protected set
+
     @Column(name = "trigger_at")
     var triggerAt: Instant? = null
         protected set
@@ -159,6 +171,7 @@ class DepartureAlarmSyncState protected constructor() : BaseEntity() {
 
         advanceGeneration()
         operation = DepartureAlarmSyncOperation.UPSERT
+        cancellationReason = null
         this.triggerAt = normalizedTriggerAt
         this.title = normalizedTitle
         this.snoozeMinutes = snoozeMinutes
@@ -192,7 +205,7 @@ class DepartureAlarmSyncState protected constructor() : BaseEntity() {
         return true
     }
 
-    fun cancel(): Boolean {
+    fun cancel(reason: DepartureAlarmCancellationReason = DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL): Boolean {
         val nextFingerprint = DepartureAlarmSyncFingerprint.calculate(
             operation = DepartureAlarmSyncOperation.CANCEL,
             alarmId = alarmId,
@@ -203,10 +216,12 @@ class DepartureAlarmSyncState protected constructor() : BaseEntity() {
             alarmPlanSchemaVersion = null,
             alarmOccurrencesJson = null,
         )
-        if (commandFingerprint == nextFingerprint) return false
+        // 자동 취소 뒤 사용자 취소가 발생하면 원인 변경도 새 세대로 fence한다.
+        if (commandFingerprint == nextFingerprint && cancellationReason == reason) return false
 
         advanceGeneration()
         operation = DepartureAlarmSyncOperation.CANCEL
+        cancellationReason = reason
         triggerAt = null
         title = null
         snoozeMinutes = null

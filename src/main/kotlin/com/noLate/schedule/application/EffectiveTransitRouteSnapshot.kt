@@ -1,6 +1,7 @@
 package com.noLate.schedule.application
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.eta.domain.TransitFirstBoardingObservation
 import com.noLate.schedule.domain.TrafficSource
 
 /**
@@ -29,6 +30,8 @@ data class EffectiveTransitRouteSnapshot(
     val lastAcceptedFirstBoardingWaitMinutes: Int? = null,
     val lastAcceptedEtaSource: TrafficSource? = null,
     val effectiveTransitRoute: EffectiveTransitRoute? = null,
+    /** 현재 평가 관측만 저장한다. 이전 정상 관측은 degraded 회차로 승계하지 않는다. */
+    val firstBoardingObservation: TransitFirstBoardingObservation? = null,
 ) {
     companion object {
         private const val CURRENT_VERSION = 1
@@ -56,7 +59,8 @@ data class EffectiveTransitRouteSnapshot(
             val hasTransitDetails = route != null ||
                 trafficResult.transitRouteProvenance != null ||
                 trafficResult.transitTimingBasis != null ||
-                trafficResult.firstBoardingWaitMinutes != null
+                trafficResult.firstBoardingWaitMinutes != null ||
+                trafficResult.firstBoardingObservation != null
             val previousAcceptedIdentity = previous?.acceptedRouteIdentity()
             val previousAcceptedProvenance = previous?.acceptedRouteProvenance()
             val previousAcceptedRoute = previous?.acceptedRoute()
@@ -120,6 +124,7 @@ data class EffectiveTransitRouteSnapshot(
                     previousAcceptedEtaSource
                 },
                 effectiveTransitRoute = route,
+                firstBoardingObservation = trafficResult.firstBoardingObservation,
             )
         }
     }
@@ -161,6 +166,12 @@ fun EffectiveTransitRoute.toRouteDisplaySegments(): List<RouteDisplaySegment> {
                         "#00B140",
                     )
 
+                EffectiveTransitRouteSegmentKind.TRAIN ->
+                    RouteDisplaySegment("subway", segment.lineName?.take(18) ?: "기차", "#2563EB")
+                EffectiveTransitRouteSegmentKind.EXPRESS_BUS, EffectiveTransitRouteSegmentKind.COACH ->
+                    RouteDisplaySegment("bus", segment.lineName?.take(18) ?: "고속·시외버스", "#7C3AED")
+                EffectiveTransitRouteSegmentKind.INTERCITY_BUS ->
+                    RouteDisplaySegment("bus", segment.lineName?.take(18) ?: "시외버스", "#0F766E")
                 EffectiveTransitRouteSegmentKind.ETC ->
                     RouteDisplaySegment("transfer", "환승", "#9CA3AF")
             }

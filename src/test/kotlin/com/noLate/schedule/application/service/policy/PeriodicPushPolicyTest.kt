@@ -23,6 +23,17 @@ class PeriodicPushPolicyTest {
     private val policy = PeriodicPushPolicy()
 
     @Test
+    fun `추천 출발 경계를 넘겨도 과거 예약 대신 실제 재조회 간격을 유지한다`() {
+        for (departure in listOf(testNow, testNow.minusSeconds(4))) {
+            assertEquals(testNow.plusSeconds(intervalMinutes * 60L), policy.nextCheckAt(
+                now = testNow, recommendedDepartureAt = departure,
+                intervalMinutes = intervalMinutes, alertLeadMinutes = alertLeadMinutes,
+                reminderIntervalMinutes = reminderIntervalMinutes,
+            ))
+        }
+    }
+
+    @Test
     fun `추천 출발 시각이 충분히 남으면 설정한 재알림 간격을 사용한다`() {
         val recommendedDepartureAt = testNow.plus(60, ChronoUnit.MINUTES)
         val next = policy.nextCheckAt(

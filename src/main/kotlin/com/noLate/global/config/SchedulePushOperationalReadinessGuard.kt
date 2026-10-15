@@ -40,12 +40,18 @@ class SchedulePushOperationalReadinessGuard(
         check(environment.hasTextProperty("schedule.traffic.tmap.app-key")) {
             "Production startup blocked: schedule.push.enabled=true requires a TMAP server key."
         }
-        check(environment.booleanProperty("eta.transit.odsay.enabled", false)) {
+        val odsayTransitConfigured =
+            environment.booleanProperty("eta.transit.odsay.enabled", false) &&
+                environment.hasTextProperty("eta.transit.odsay.api-key")
+        val tmapTransitConfigured =
+            environment.booleanProperty("eta.transit.tmap.enabled", false) &&
+                environment.booleanProperty("routing.tmap.enabled", false) &&
+                environment.hasTextProperty("routing.tmap.app-key")
+        check(odsayTransitConfigured || tmapTransitConfigured) {
             "Production startup blocked: schedule.push.enabled=true requires " +
-                "eta.transit.odsay.enabled=true for transit ETA."
-        }
-        check(environment.hasTextProperty("eta.transit.odsay.api-key")) {
-            "Production startup blocked: schedule.push.enabled=true requires an ODsay server key."
+                "a configured ODsay or TMAP transit ETA provider. " +
+                "Enable eta.transit.odsay with its api-key, or eta.transit.tmap and " +
+                "routing.tmap with its app-key."
         }
         check(
             environment.hasTextProperty("transit.seoul.api-key") ||

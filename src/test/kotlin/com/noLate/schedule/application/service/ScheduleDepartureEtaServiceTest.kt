@@ -30,6 +30,8 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.mockito.Mock
 import org.mockito.junit.jupiter.MockitoExtension
 import org.mockito.kotlin.any
@@ -46,6 +48,134 @@ class ScheduleDepartureEtaServiceTest {
     private val queryAt = Instant.parse("2026-07-24T03:00:00Z")
     private val clock = Clock.fixed(queryAt, ZoneOffset.UTC)
     private val objectMapper = jacksonObjectMapper().findAndRegisterModules()
+
+    @ParameterizedTest
+    @CsvSource("FRESH,true", "AGE_120,true", "AGE_121,false", "UNCATCHABLE,false", "MISSING,false", "WRONG_CHECK,false", "WRONG_GENERATION,false")
+    fun `실시간 여정은 API 조회 시점에도 첫 차량 관측이 유효해야 정상으로 제공한다`(boundary: String, fresh: Boolean) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val checkedAt = queryAt.minusSeconds(60)
+        val observation = com.noLate.eta.domain.TransitFirstBoardingObservation(
+            provider = "seoul-openapi", stationName = "노원", lineName = "4호선",
+            departureAt = checkedAt, readyAt = checkedAt.plusSeconds(120),
+            expectedBoardingAt = queryAt.plusSeconds(if (boundary == "UNCATCHABLE") 119 else 180),
+            sourceUpdatedAt = queryAt.minusSeconds(when (boundary) {
+                "AGE_120" -> 120
+                "AGE_121" -> 121
+                else -> 60
+            }),
+            evaluatedAt = checkedAt, trainNumber = "4695",
+        )
+        val route = EffectiveTransitRoute("odsay", "a".repeat(64), checkedAt,
+            queryAt.plusSeconds(600), 11, listOf(
+                EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.SUBWAY, 11)))
+        val snapshot = EffectiveTransitRouteSnapshot(
+            evaluationCheckCount = if (boundary == "WRONG_CHECK") 2 else job.checkCount,
+            evaluationNotificationGeneration = if (boundary == "WRONG_GENERATION") 1 else job.notificationGeneration,
+            accepted = true, transitTimingBasis = TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
+            effectiveTransitRoute = route,
+            firstBoardingObservation = observation.takeUnless { boundary == "MISSING" },
+        )
+        finish(job, 11, TrafficSource.LIVE_PROVIDER, checkedAt, liveFetchedAt = checkedAt,
+            snapshotSchedule = schedule, recommendedDepartureAt = checkedAt, predictedArrivalAt = route.arrivalAt,
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot))
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(!fresh, result.stale)
+        assertEquals(if (fresh) ScheduleEtaConfidence.HIGH else ScheduleEtaConfidence.LOW, result.confidence)
+        assertEquals(route.takeIf { fresh }, result.effectiveTransitRoute)
+        assertEquals(observation.takeIf { fresh }, result.firstBoardingObservation)
+        assertEquals(route.arrivalAt.takeIf { fresh }, result.predictedArrivalAt)
+        assertEquals(true.takeIf { fresh }, result.onTimeArrivalPossible)
+        assertEquals(if (fresh) null else if (boundary == "AGE_121")
+            TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_STALE else TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE,
+            result.failureReason)
+        // API 읽기는 알람 추천시각과 원본 평가 이력을 변경하지 않는다.
+        assertEquals(checkedAt, result.recommendedDepartureAt)
+        assertFalse(requireNotNull(job.lastEtaStale))
+        assertNull(job.lastEtaFailureReason)
+        assertEquals(route.arrivalAt, job.lastPredictedArrivalAt)
+        assertEquals(objectMapper.writeValueAsString(snapshot), job.lastEffectiveTransitRouteJson)
+    }
+
+    @ParameterizedTest
+    @CsvSource("CURRENT,true", "WRONG_CHECK,false", "WRONG_GENERATION,false", "INCOMPLETE,false", "PAST,false", "API_ERROR,false", "LATE,false")
+    fun `미래 시간표 미리보기는 정상 ETA 및 알람 시각과 분리하고 현재 완전한 평가만 제공한다`(boundary: String, expose: Boolean) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val checkedAt = queryAt.minusSeconds(60)
+        val departure = if (boundary == "PAST") queryAt.minusSeconds(1) else queryAt.plusSeconds(600)
+        val arrival = if (boundary == "LATE") schedule.startAt.plusSeconds(60) else departure.plusSeconds(1200)
+        val table = com.noLate.eta.domain.TransitLegTimetable("fixture", com.noLate.eta.domain.SeoulSubwayLine.LINE_4,
+            java.time.LocalDate.of(2026, 7, 24), "4012", "DOWN", com.noLate.eta.domain.TransitServiceClass.LOCAL,
+            "FROM", "TO", "오이도", departure.plusSeconds(120), arrival, checkedAt)
+        val route = EffectiveTransitRoute("fixture", "e".repeat(64), departure, arrival, 20, listOf(
+            EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.SUBWAY, 20,
+                rideTiming = if (boundary == "INCOMPLETE") null else com.noLate.schedule.application.EffectiveTransitRideTiming(
+                    table, table.boardingAt, table.arrivalAt, com.noLate.schedule.application.EffectiveTransitRideTimingBasis.TIMETABLE))))
+        val snapshot = EffectiveTransitRouteSnapshot(
+            evaluationCheckCount = if (boundary == "WRONG_CHECK") 2 else job.checkCount,
+            evaluationNotificationGeneration = if (boundary == "WRONG_GENERATION") 1 else job.notificationGeneration,
+            accepted = false, transitTimingBasis = TransitTimingBasis.TIMETABLE_ONLY, effectiveTransitRoute = route)
+        finish(job, 40, TrafficSource.TIMETABLE_PROVIDER, checkedAt, liveFetchedAt = checkedAt,
+            failureReason = if (boundary == "API_ERROR") TrafficFailureReasons.TRANSIT_ARRIVAL_API_ERROR
+                else TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED,
+            snapshotSchedule = schedule, etaStale = true,
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot))
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+        val result = service().getDepartureStatus(1L, 10L)
+        assertEquals(route.takeIf { expose }, result.futureTimetablePrediction)
+        assertTrue(result.stale)
+        assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
+        assertNull(result.effectiveTransitRoute)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.onTimeArrivalPossible)
+        assertEquals(job.lastRecommendedDepartureAt, result.recommendedDepartureAt)
+    }
+
+    @ParameterizedTest
+    @CsvSource("CURRENT,true", "STALE,false", "UNCATCHABLE,false", "FUTURE_SOURCE,false", "WRONG_CHECK,false", "WRONG_GENERATION,false")
+    fun `별도 첫 차량 관측을 노출해도 전체 ETA는 LOW이며 오래되거나 다른 평가의 관측은 숨긴다`(boundary: String, expose: Boolean) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val checkedAt = queryAt.minusSeconds(60)
+        val observation = com.noLate.eta.domain.TransitFirstBoardingObservation(
+            provider = "seoul-openapi", stationName = "서울역", lineName = "4호선",
+            departureAt = checkedAt, readyAt = checkedAt.plusSeconds(180),
+            expectedBoardingAt = checkedAt.plusSeconds(if (boundary == "UNCATCHABLE") 200 else 360),
+            sourceUpdatedAt = when (boundary) {
+                "STALE" -> queryAt.minusSeconds(121)
+                "FUTURE_SOURCE" -> queryAt.plusSeconds(61)
+                else -> checkedAt
+            },
+            evaluatedAt = checkedAt,
+        )
+        val snapshot = EffectiveTransitRouteSnapshot(
+            evaluationCheckCount = if (boundary == "WRONG_CHECK") 2 else job.checkCount,
+            evaluationNotificationGeneration = if (boundary == "WRONG_GENERATION") 1 else job.notificationGeneration,
+            firstBoardingObservation = observation,
+        )
+        finish(
+            job = job, travelMinutes = 40, source = TrafficSource.SELECTED_ROUTE,
+            checkedAt = checkedAt, failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            snapshotSchedule = schedule, effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot),
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val status = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(observation.takeIf { expose }, status.firstBoardingObservation)
+        assertEquals(ScheduleEtaConfidence.LOW, status.confidence)
+        assertTrue(status.stale)
+        assertNull(status.predictedArrivalAt)
+        assertNull(status.onTimeArrivalPossible)
+        assertNull(status.firstBoardingWaitMinutes)
+    }
 
     @Mock
     lateinit var scheduleRepository: ScheduleRepository
@@ -600,14 +730,269 @@ class ScheduleDepartureEtaServiceTest {
         assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_MISSED, result.failureReason)
     }
 
-    @Test
-    fun `정상 provider snapshot의 늦은 예측 도착은 계속 거부한다`() {
+    @ParameterizedTest
+    @CsvSource(
+        "SELECTED_ROUTE, 3841, 65",
+        "SELECTED_ROUTE, 3888, 65",
+        "SELECTED_ROUTE, 3899, 65",
+        "SELECTED_ROUTE, 3900, 65",
+        "SELECTED_ROUTE, 3901, 66",
+        "SAVED_FALLBACK, 3888, 65",
+    )
+    fun `초 단위 출발시각을 보존한 추정 snapshot은 최신 진단과 재조회 시각을 전달한다`(
+        source: TrafficSource,
+        durationSeconds: Long,
+        travelMinutes: Int,
+    ) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT, travelMinutes = travelMinutes)
+        val checkedAt = queryAt.minus(1, ChronoUnit.MINUTES)
+        val departureAt = schedule.startAt.minusSeconds(durationSeconds)
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = travelMinutes,
+            source = source,
+            checkedAt = checkedAt,
+            failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            snapshotSchedule = schedule,
+            recommendedDepartureAt = departureAt,
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(source, result.source)
+        assertEquals(departureAt, result.recommendedDepartureAt)
+        assertEquals(checkedAt, result.evaluatedAt)
+        assertEquals(job.nextCheckAt, result.nextCheckAt)
+        assertEquals(job.lastEtaRefreshDueAt, result.etaRefreshDueAt)
+        assertEquals(TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY, result.failureReason)
+        assertTrue(result.stale)
+        assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.onTimeArrivalPossible)
+        assertNull(result.effectiveTransitRoute)
+    }
+
+    @ParameterizedTest
+    @CsvSource("TIMETABLE_PROVIDER,ARRIVAL", "TIMETABLE_PROVIDER,HORIZON", "LIVE_PROVIDER,ARRIVAL")
+    fun `채택하지 못한 provider 진단도 보존한 출발시각과 LOW 상태로 전달한다`(
+        source: TrafficSource,
+        reason: String,
+    ) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT, travelMinutes = 65)
+        val checkedAt = queryAt.minusSeconds(60)
+        val preservedDeparture = schedule.startAt.minusSeconds(3888)
+        val job = job(schedule)
+        val failure = if (reason == "HORIZON") TrafficFailureReasons.TRANSIT_ARRIVAL_OUT_OF_HORIZON
+            else TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE
+        finish(
+            job = job, travelMinutes = 71, source = source, checkedAt = checkedAt,
+            liveFetchedAt = checkedAt.minusSeconds(2), failureReason = failure,
+            snapshotSchedule = schedule, recommendedDepartureAt = preservedDeparture, etaStale = true,
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(source, result.source)
+        assertEquals(failure, result.failureReason)
+        assertEquals(preservedDeparture, result.recommendedDepartureAt)
+        assertEquals(71, result.travelMinutes)
+        assertEquals(checkedAt, result.evaluatedAt)
+        assertEquals(job.nextCheckAt, result.nextCheckAt)
+        assertEquals(job.lastEtaRefreshDueAt, result.etaRefreshDueAt)
+        assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
+        assertTrue(result.stale)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.onTimeArrivalPossible)
+        assertNull(result.effectiveTransitRoute)
+    }
+
+    @ParameterizedTest
+    @CsvSource("MISSING_FETCH", "FUTURE_FETCH", "EXPIRED", "WRONG_ROUTE", "DISABLED", "LATE_ARRIVAL", "NO_REASON")
+    fun `provider 진단 전달도 취득시각과 경로 및 만료 안전 경계를 지킨다`(boundary: String) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT, travelMinutes = 65)
+        val checkedAt = if (boundary == "EXPIRED") queryAt.minusSeconds(1501) else queryAt.minusSeconds(60)
+        val job = job(schedule)
+        finish(
+            job = job, travelMinutes = 71, source = TrafficSource.TIMETABLE_PROVIDER,
+            checkedAt = checkedAt, liveFetchedAt = checkedAt.minusSeconds(2),
+            failureReason = TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE,
+            snapshotSchedule = schedule, recommendedDepartureAt = schedule.startAt.minusSeconds(3888), etaStale = true,
+        )
+        when (boundary) {
+            "MISSING_FETCH" -> setField(job, "lastEtaProviderFetchedAt", null)
+            "FUTURE_FETCH" -> setField(job, "lastEtaProviderFetchedAt", checkedAt.plusSeconds(1))
+            "WRONG_ROUTE" -> requireNotNull(schedule.route).destinationLat = 38.1
+            "DISABLED" -> requireNotNull(schedule.route).notificationEnabled = false
+            "LATE_ARRIVAL" -> setField(job, "lastPredictedArrivalAt", schedule.startAt.plusSeconds(1))
+            "NO_REASON" -> setField(job, "lastEtaFailureReason", null)
+        }
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertTrue(result.source != TrafficSource.TIMETABLE_PROVIDER)
+        assertNull(result.nextCheckAt)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.effectiveTransitRoute)
+    }
+
+    @ParameterizedTest
+    @CsvSource(
+        "LIVE_PROVIDER, 3841, 65",
+        "LIVE_PROVIDER, 3888, 65",
+        "LIVE_PROVIDER, 3899, 65",
+        "LIVE_PROVIDER, 3900, 65",
+        "LIVE_PROVIDER, 3901, 66",
+        "TIMETABLE_PROVIDER, 3888, 65",
+    )
+    fun `정상 snapshot의 정시 도착은 올림 분수가 아닌 계산된 도착시각으로 검증한다`(
+        source: TrafficSource,
+        durationSeconds: Long,
+        travelMinutes: Int,
+    ) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT, travelMinutes = travelMinutes)
+        val checkedAt = queryAt.minus(1, ChronoUnit.MINUTES)
+        val departureAt = schedule.startAt.minusSeconds(durationSeconds)
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = travelMinutes,
+            source = source,
+            checkedAt = checkedAt,
+            liveFetchedAt = checkedAt.minusSeconds(2),
+            snapshotSchedule = schedule,
+            recommendedDepartureAt = departureAt,
+            predictedArrivalAt = schedule.startAt,
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(source, result.source)
+        assertEquals(travelMinutes, result.travelMinutes)
+        assertEquals(departureAt, result.recommendedDepartureAt)
+        assertEquals(schedule.startAt, result.predictedArrivalAt)
+        assertEquals(true, result.onTimeArrivalPossible)
+        assertEquals(checkedAt, result.evaluatedAt)
+        assertFalse(result.stale)
+        assertNull(result.failureReason)
+    }
+
+    @ParameterizedTest
+    @CsvSource("LIVE_PROVIDER", "TIMETABLE_PROVIDER", "SELECTED_ROUTE")
+    fun `손상된 snapshot의 출발 이전 도착시각은 거부한다`(source: TrafficSource) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val checkedAt = queryAt.minus(1, ChronoUnit.MINUTES)
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 30,
+            source = source,
+            checkedAt = checkedAt,
+            liveFetchedAt = checkedAt.minusSeconds(2).takeIf { source != TrafficSource.SELECTED_ROUTE },
+            failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY
+                .takeIf { source == TrafficSource.SELECTED_ROUTE },
+            snapshotSchedule = schedule,
+        )
+        setField(job, "lastPredictedArrivalAt", requireNotNull(job.lastRecommendedDepartureAt).minusSeconds(1))
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.onTimeArrivalPossible)
+        assertNull(result.nextCheckAt)
+    }
+
+    @ParameterizedTest
+    @CsvSource("LIVE_PROVIDER", "TIMETABLE_PROVIDER")
+    fun `도착시각 없는 정상 snapshot에는 기존 분 단위 도착 검증을 유지한다`(source: TrafficSource) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT, travelMinutes = 65)
+        val checkedAt = queryAt.minus(1, ChronoUnit.MINUTES)
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 65,
+            source = source,
+            checkedAt = checkedAt,
+            liveFetchedAt = checkedAt.minusSeconds(2),
+            snapshotSchedule = schedule,
+            recommendedDepartureAt = schedule.startAt.minusSeconds(3888),
+        )
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.nextCheckAt)
+    }
+
+    @ParameterizedTest
+    @CsvSource("EXPIRED", "FINGERPRINT", "SCHEDULE", "NOTIFICATIONS_DISABLED", "LATE_PREDICTION")
+    fun `초 단위 추정 snapshot도 만료와 경로 및 도착 안전 경계를 지킨다`(invalidBoundary: String) {
+        val schedule = schedule(
+            travelMode = ScheduleTravelMode.TRANSIT,
+            travelMinutes = 65,
+            routeJson = """{"minutes":65,"totalDurationSeconds":3888}""",
+        )
+        val checkedAt = if (invalidBoundary == "EXPIRED") {
+            queryAt.minus(25, ChronoUnit.MINUTES).minusSeconds(1)
+        } else {
+            queryAt.minus(1, ChronoUnit.MINUTES)
+        }
+        val job = job(schedule)
+        finish(
+            job = job,
+            travelMinutes = 65,
+            source = TrafficSource.SELECTED_ROUTE,
+            checkedAt = checkedAt,
+            failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            snapshotSchedule = schedule,
+            recommendedDepartureAt = schedule.startAt.minusSeconds(3888),
+        )
+        when (invalidBoundary) {
+            "FINGERPRINT" -> requireNotNull(schedule.route).destinationLat = 38.1
+            "SCHEDULE" -> schedule.startAt = schedule.startAt.plus(1, ChronoUnit.HOURS)
+            "NOTIFICATIONS_DISABLED" -> requireNotNull(schedule.route).notificationEnabled = false
+            "LATE_PREDICTION" -> setField(job, "lastPredictedArrivalAt", schedule.startAt.plusSeconds(1))
+        }
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(queryAt, result.evaluatedAt)
+        assertNull(result.nextCheckAt)
+        assertNull(result.etaRefreshDueAt)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.onTimeArrivalPossible)
+        assertTrue(result.failureReason != TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY)
+        assertTrue(result.stale)
+    }
+
+    @ParameterizedTest
+    @CsvSource("LIVE_PROVIDER, 1", "TIMETABLE_PROVIDER, 1", "LIVE_PROVIDER, 300")
+    fun `정상 provider snapshot의 늦은 예측 도착은 계속 거부한다`(
+        source: TrafficSource,
+        latenessSeconds: Long,
+    ) {
         val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
         val job = job(schedule)
         finish(
             job = job,
             travelMinutes = 30,
-            source = TrafficSource.LIVE_PROVIDER,
+            source = source,
             checkedAt = queryAt.minus(5, ChronoUnit.MINUTES),
             liveFetchedAt = queryAt.minus(5, ChronoUnit.MINUTES).minusSeconds(2),
             snapshotSchedule = schedule,
@@ -617,7 +1002,7 @@ class ScheduleDepartureEtaServiceTest {
         setField(
             job,
             "lastPredictedArrivalAt",
-            schedule.startAt.plus(5, ChronoUnit.MINUTES),
+            schedule.startAt.plusSeconds(latenessSeconds),
         )
         stubVisible(schedule)
         whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
@@ -1179,20 +1564,22 @@ class ScheduleDepartureEtaServiceTest {
             ChronoUnit.MINUTES,
         ),
         effectiveTransitRouteJson: String? = null,
+        recommendedDepartureAt: Instant = job.scheduleAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES),
+        predictedArrivalAt: Instant? = null,
+        etaStale: Boolean = source != TrafficSource.LIVE_PROVIDER && source != TrafficSource.TIMETABLE_PROVIDER,
     ) {
         val route = requireNotNull(snapshotSchedule.route)
         job.startProcessing("eta-test")
         job.finishCheck(
             travelMinutes = travelMinutes,
-            recommendedDepartureAt = job.scheduleAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES),
+            recommendedDepartureAt = recommendedDepartureAt,
             pushSent = false,
             notifiedDepartureAt = null,
             nextCheckAt = etaRefreshDueAt,
             completeAfterCheck = false,
             etaSource = source,
             liveFetchedAt = liveFetchedAt,
-            etaStale = source != TrafficSource.LIVE_PROVIDER &&
-                source != TrafficSource.TIMETABLE_PROVIDER,
+            etaStale = etaStale,
             etaFailureReason = failureReason,
             etaRouteFingerprint = ScheduleEtaRouteFingerprint.calculate(
                 schedule = snapshotSchedule,
@@ -1203,6 +1590,7 @@ class ScheduleDepartureEtaServiceTest {
                 routeJson = route.routeJson,
             ),
             effectiveTransitRouteJson = effectiveTransitRouteJson,
+            predictedArrivalAt = predictedArrivalAt,
             now = checkedAt,
         )
     }
@@ -1250,6 +1638,23 @@ class ScheduleDepartureEtaServiceTest {
         monitorStartAt = queryAt.minus(30, ChronoUnit.MINUTES),
         intervalMinutes = intervalMinutes,
     )
+
+    @Test
+    fun `fixed intercity departure is preserved when arrival deadline is later than ticket arrival`() {
+        val fixed = queryAt.plusSeconds(600)
+        val journey = objectMapper.createObjectNode().put("version", 1).put("departureAt", fixed.toString()).put("arrivalAt", queryAt.plusSeconds(4200).toString())
+        journey.set<com.fasterxml.jackson.databind.node.ObjectNode>("service", objectMapper.createObjectNode().put("kind", "INTERCITY_BUS").put("timingBasis", "TICKET"))
+        val root = objectMapper.createObjectNode().put("schemaVersion", 3).put("minutes", 60)
+        root.set<com.fasterxml.jackson.databind.node.ObjectNode>("intercityJourney", journey)
+        root.set<com.fasterxml.jackson.databind.node.ObjectNode>("routeInfo", objectMapper.createObjectNode().put("timeBasis", "anchored_journey").put("departureTime", fixed.toString()).set("intercityJourney", journey.deepCopy()))
+        val schedule = schedule(routeJson = root.toString(), travelMinutes = 60, travelMode = ScheduleTravelMode.TRANSIT)
+        stubVisible(schedule)
+        val result = service().getDepartureStatus(1L, 10L)
+        assertEquals(fixed, result.recommendedDepartureAt)
+        assertTrue(result.stale)
+        assertEquals(TrafficFailureReasons.TRANSIT_INTERCITY_TIMETABLE_UNAVAILABLE, result.failureReason)
+        assertNull(result.effectiveTransitRoute)
+    }
 
     private fun schedule(
         memberId: Long = 1L,

@@ -216,6 +216,33 @@ def service_date(sample):
     return instant(sample['scheduledBoardingAt']).astimezone(dt.timezone(dt.timedelta(hours=9))).date().isoformat()
 
 
+def validation_quality(rows):
+    """Keep a small mean gain from hiding deterioration on most held-out trains."""
+    baseline_errors = [row['baseline']['worstCaseAbsoluteSeconds'] for row in rows]
+    candidate_errors = [row['candidate']['worstCaseAbsoluteSeconds'] for row in rows]
+    old_early = max(row['baseline']['worstCaseEarlyUnderpredictionSeconds'] for row in rows)
+    new_early = max(row['candidate']['worstCaseEarlyUnderpredictionSeconds'] for row in rows)
+    return {
+        'baselineWorstCaseMaeSeconds': statistics.mean(baseline_errors),
+        'candidateWorstCaseMaeSeconds': statistics.mean(candidate_errors),
+        'baselineMedianWorstCaseAbsoluteSeconds': statistics.median(baseline_errors),
+        'candidateMedianWorstCaseAbsoluteSeconds': statistics.median(candidate_errors),
+        'pairedImprovedRuns': sum(new < old for old, new in zip(baseline_errors, candidate_errors)),
+        'pairedWorsenedRuns': sum(new > old for old, new in zip(baseline_errors, candidate_errors)),
+        'baselineMaxEarlyUnderpredictionSeconds': old_early,
+        'candidateMaxEarlyUnderpredictionSeconds': new_early,
+    }
+
+
+def safe_pilot_improvement(quality):
+    mean_and_safety_improved = (quality['candidateWorstCaseMaeSeconds'] < quality['baselineWorstCaseMaeSeconds']
+                                and quality['candidateMaxEarlyUnderpredictionSeconds']
+                                <= quality['baselineMaxEarlyUnderpredictionSeconds'])
+    typical_run_improved = (quality['candidateMedianWorstCaseAbsoluteSeconds']
+                            <= quality['baselineMedianWorstCaseAbsoluteSeconds'])
+    return mean_and_safety_improved, typical_run_improved
+
+
 def evaluate(samples, min_training=6, min_validation=3, target='upper', prospective_holdout_date=None):
     groups = defaultdict(list)
     for sample in samples:
@@ -263,13 +290,13 @@ def evaluate(samples, min_training=6, min_validation=3, target='upper', prospect
         if len(supported) != len(rows):
             result['reason'] = 'HELD_OUT_INPUT_OUTSIDE_TRAINED_SUPPORT'
         else:
-            baseline = statistics.mean(row['baseline']['worstCaseAbsoluteSeconds'] for row in rows)
-            proposed = statistics.mean(row['candidate']['worstCaseAbsoluteSeconds'] for row in rows)
-            old_early = max(row['baseline']['worstCaseEarlyUnderpredictionSeconds'] for row in rows)
-            new_early = max(row['candidate']['worstCaseEarlyUnderpredictionSeconds'] for row in rows)
-            result.update(baselineWorstCaseMaeSeconds=baseline, candidateWorstCaseMaeSeconds=proposed,
-                          baselineMaxEarlyUnderpredictionSeconds=old_early, candidateMaxEarlyUnderpredictionSeconds=new_early)
-            improved = proposed < baseline and new_early <= old_early
+            quality = validation_quality(rows)
+            result.update(quality)
+            mean_and_safety_improved, typical_run_improved = safe_pilot_improvement(quality)
+            # A production ETA should improve a typical independent train too,
+            # not only offset two large outliers. This only tightens the shadow
+            # promotion gate; it does not change or refit any predictions.
+            improved = mean_and_safety_improved and typical_run_improved
             # The interval-center option was chosen after inspecting the 2-day
             # held-out errors. Those same samples are exploratory, not an
             # independent confirmation of the newly chosen method.
@@ -278,6 +305,7 @@ def evaluate(samples, min_training=6, min_validation=3, target='upper', prospect
             result['shadowPilotPassed'] = improved and not post_hoc
             result['reason'] = ('EXPLORATORY_NEEDS_NEW_SERVICE_DAY_HOLDOUT' if post_hoc else
                                 'SHADOW_IMPROVEMENT_REQUIRES_INTEGRATION_VALIDATION' if improved else
+                                'SHADOW_MEAN_GAIN_BUT_TYPICAL_TRAIN_WORSENS' if mean_and_safety_improved and not typical_run_improved else
                                 'NO_SAFE_HELD_OUT_IMPROVEMENT')
         results.append(result)
     return results

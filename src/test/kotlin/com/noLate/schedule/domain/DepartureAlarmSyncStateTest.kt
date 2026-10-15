@@ -9,6 +9,21 @@ import java.time.Instant
 class DepartureAlarmSyncStateTest {
 
     @Test
+    fun `자동 취소 후 사용자 취소는 별도 세대로 보호하고 복구는 사유를 지운다`() {
+        val at = Instant.parse("2026-07-29T03:30:00Z")
+        val state = DepartureAlarmSyncState.createUpsert(7L, 41L, at, "회의", 5)
+        assertThat(state.cancel(DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE)).isTrue()
+        assertThat(state.cancel(DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE)).isFalse()
+        val autoGeneration = state.generation
+        assertThat(state.cancel()).isTrue()
+        assertThat(state.generation).isGreaterThan(autoGeneration)
+        assertThat(state.cancellationReason).isEqualTo(DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL)
+        assertThat(state.cancel()).isFalse()
+        assertThat(state.upsert(at, "회의", 5)).isTrue()
+        assertThat(state.cancellationReason).isNull()
+    }
+
+    @Test
     fun `alarm id is deterministic and scoped by schedule and member`() {
         assertThat(departureAlarmId(memberId = 7L, scheduleId = 41L))
             .isEqualTo("schedule:41:member:7")

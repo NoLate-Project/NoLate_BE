@@ -9,6 +9,7 @@ import com.noLate.transit.domain.TransitCityCodeNamespace
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import java.time.Instant
 
@@ -138,7 +139,8 @@ class OdsayTransitJourneyMapperTest {
         assertEquals("수도권 2호선", subway.line?.name)
         assertEquals(TransitServiceClass.LOCAL, subway.line?.serviceClass)
         assertEquals("강남 방면", subway.directionName)
-        assertEquals("DOWN", subway.directionCode)
+        // 순환선의 공급자 상하행은 서울 시간표 방향 코드로 직접 복사하지 않는다.
+        assertNull(subway.directionCode)
     }
 
     @Test
@@ -478,6 +480,24 @@ class OdsayTransitJourneyMapperTest {
         assertEquals(Instant.parse("2026-07-29T15:15:00Z"), journey.arrivalAt)
         assertEquals(Instant.parse("2026-07-29T14:55:00Z"), journey.legs.single().scheduledDepartureAt)
         assertEquals(Instant.parse("2026-07-29T15:15:00Z"), journey.legs.single().scheduledArrivalAt)
+    }
+
+    @Test
+    fun `시외 trafficType은 도보와 구분하고 원본 예상시각을 유지한다`() {
+        listOf(4 to TransitLegMode.TRAIN, 5 to TransitLegMode.EXPRESS_BUS,
+            6 to TransitLegMode.INTERCITY_BUS).forEach { (type, expected) ->
+            val payload = objectMapper.readTree("""{"result":{"paths":[{
+              "pathType":2,"pathSubType":4,"totalTime":90,
+              "startDateTime":"202607291200","endDateTime":"202607291330",
+              "rps":[{"trafficType":$type,"duration":90,
+                "startDateTime":"202607291200","endDateTime":"202607291330",
+                "startName":"서울남부","endName":"공주","lane":{"name":"시외 운행"}}]
+            }]}}""")
+            val leg = mapper.map(payload, request(), fetchedAt).single().legs.single()
+            assertEquals(expected, leg.mode)
+            assertTrue(leg.isRide)
+            assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, leg.timingBasis)
+        }
     }
 
     private fun request() = TransitJourneySearchRequest(

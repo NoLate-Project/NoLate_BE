@@ -51,4 +51,8 @@ data class TransitArrivalDto(
     val cityCode: String? = null,
     val nodeId: String? = null,
     val arsId: String? = null,
+    /** 서울 실시간 응답의 고유 식별자. 다른 공급자 내부 ID와 동등 비교하지 않는다. */
+    val subwayLineId: String? = null,
+    val subwayStationId: String? = null,
+    val trainNumber: String? = null,
 )

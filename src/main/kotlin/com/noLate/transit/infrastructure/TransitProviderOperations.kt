@@ -11,7 +11,9 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClientResponseException
 import java.time.Duration
+import java.time.Instant
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /** Fixed provider identities used by wire-call telemetry and the process-wide quota guard. */
@@ -22,11 +24,14 @@ enum class TransitWireProvider(
     SEOUL_SUBWAY("seoul_subway", "seoul_subway"),
     SEOUL_BUS("seoul_bus", "seoul_bus"),
     TAGO_BUS("tago_bus", "tago_bus"),
+    SEOUL_TIMETABLE("seoul_timetable", "seoul_timetable"),
 }
 
 enum class TransitWireOperation(val metricTag: String) {
     ARRIVAL("arrival"),
+    POSITION("position"),
     STATION_LOOKUP("station_lookup"),
+    TIMETABLE("timetable"),
 }
 
 enum class TransitWireOutcome(val metricTag: String) {
@@ -43,10 +48,22 @@ enum class TransitWireOutcome(val metricTag: String) {
  * retained, so circuit failure and metrics never expose credentials or unbounded response text.
  */
 class TransitProviderApplicationException(
-    provider: TransitWireProvider,
+    val provider: TransitWireProvider,
     rawCode: String?,
 ) : IllegalStateException(
     "${provider.metricTag} returned an application-level error: " + boundedProviderCode(rawCode),
+) {
+    val code: String = boundedProviderCode(rawCode)
+}
+
+/** Last failure per fixed wire slot, not a request log or evidence of the current request. */
+data class TransitProviderWireFailureDiagnostic(
+    val provider: TransitWireProvider,
+    val operation: TransitWireOperation,
+    val outcome: TransitWireOutcome,
+    val code: String,
+    val observedAt: Instant,
+    val failureCount: Long,
 )
 
 /**
@@ -57,6 +74,9 @@ class TransitProviderApplicationException(
 class TransitProviderWireMetrics(
     registry: MeterRegistry,
 ) {
+    // At most provider-count × operation-count slots. Never key this map by a station,
+    // URL, user, exception message or provider-supplied string.
+    private val lastFailures = ConcurrentHashMap<Pair<TransitWireProvider, TransitWireOperation>, TransitProviderWireFailureDiagnostic>()
     private val timers = TransitWireProvider.entries.flatMap { provider ->
         TransitWireOperation.entries.flatMap { operation ->
             TransitWireOutcome.entries.map { outcome ->
@@ -100,15 +120,27 @@ class TransitProviderWireMetrics(
             )
             result
         } catch (failure: RuntimeException) {
+            val outcome = failure.toWireOutcome()
             record(
                 provider = provider,
                 operation = operation,
-                outcome = failure.toWireOutcome(),
+                outcome = outcome,
                 durationNanos = System.nanoTime() - startedAt,
             )
+            // Capture before TransitArrivalService safely converts provider failure to an
+            // empty list. Do not change fallback, retry, cache or circuit-breaker policy.
+            lastFailures.compute(provider to operation) { _, previous ->
+                TransitProviderWireFailureDiagnostic(provider, operation, outcome,
+                    failure.diagnosticCode(), Instant.now(), (previous?.failureCount ?: 0) + 1)
+            }
             throw failure
         }
     }
+
+    fun failureDiagnostics(): List<TransitProviderWireFailureDiagnostic> =
+        TransitWireProvider.entries.flatMap { provider ->
+            TransitWireOperation.entries.mapNotNull { operation -> lastFailures[provider to operation] }
+        }
 
     fun recordUnsupportedMapping(namespace: TransitCityCodeNamespace) {
         unsupportedMappings.getValue(namespace).increment()
@@ -151,11 +183,14 @@ class TransitProviderWireRateLimiter(
     @Value("\${transit.wire-rate-limit.tago-bus-per-second:20}")
     tagoBusPerSecond: Int = 20,
     private val ticker: EtaMonotonicTicker = EtaMonotonicTicker.SYSTEM,
+    @Value("\${transit.wire-rate-limit.seoul-timetable-per-second:20}")
+    seoulTimetablePerSecond: Int = 20,
 ) {
     private val limits = mapOf(
         TransitWireProvider.SEOUL_SUBWAY to validatedLimit(seoulSubwayPerSecond),
         TransitWireProvider.SEOUL_BUS to validatedLimit(seoulBusPerSecond),
         TransitWireProvider.TAGO_BUS to validatedLimit(tagoBusPerSecond),
+        TransitWireProvider.SEOUL_TIMETABLE to validatedLimit(seoulTimetablePerSecond),
     )
     private val windows = TransitWireProvider.entries.associateWith {
         FixedWindow(startedAtNanos = ticker.readNanos())
@@ -214,7 +249,7 @@ fun validateTransitProviderEndpoint(
 )
 
 private fun Throwable.toWireOutcome(): TransitWireOutcome {
-    if (this is TransitProviderApplicationException) return TransitWireOutcome.APPLICATION_ERROR
+    if (applicationFailure() != null) return TransitWireOutcome.APPLICATION_ERROR
     if (this is EtaProviderBulkheadRejectedException) return TransitWireOutcome.LOCAL_RATE_LIMITED
     val responseFailure = generateSequence(this as Throwable?) { it.cause }
         .take(MAX_CAUSE_DEPTH)
@@ -227,12 +262,27 @@ private fun Throwable.toWireOutcome(): TransitWireOutcome {
     }
 }
 
+private fun Throwable.applicationFailure(): TransitProviderApplicationException? =
+    generateSequence(this as Throwable?) { it.cause }
+        .take(MAX_CAUSE_DEPTH)
+        .filterIsInstance<TransitProviderApplicationException>()
+        .firstOrNull()
+
+private fun Throwable.diagnosticCode(): String {
+    applicationFailure()?.let { return it.code }
+    if (this is EtaProviderBulkheadRejectedException) return "LOCAL_RATE_LIMITED"
+    val http = generateSequence(this as Throwable?) { it.cause }
+        .take(MAX_CAUSE_DEPTH).filterIsInstance<RestClientResponseException>().firstOrNull()
+    return http?.statusCode?.value()?.takeIf { it in 100..599 }?.let { "HTTP_$it" } ?: "UNKNOWN"
+}
+
 private fun boundedProviderCode(rawCode: String?): String =
     rawCode
         ?.trim()
         ?.uppercase(Locale.ROOT)
-        ?.take(32)
-        ?.takeIf { it.matches(Regex("[A-Z0-9_-]+")) }
+        // Only finite numeric code formats, never arbitrary alphanumeric text or a
+        // truncated prefix that might contain credentials echoed by an upstream server.
+        ?.takeIf { it.matches(Regex("(?:ERROR|INFO)-[0-9]{3}|[0-9]{1,3}")) }
         ?: "UNKNOWN"
 
 private const val MAX_CAUSE_DEPTH = 16

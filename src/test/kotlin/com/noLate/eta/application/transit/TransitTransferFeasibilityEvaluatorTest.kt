@@ -15,6 +15,62 @@ class TransitTransferFeasibilityEvaluatorTest {
     private val departureAt = Instant.parse("2026-08-01T08:00:00Z")
     private val evaluator = TransitTransferFeasibilityEvaluator()
 
+    @Test
+    fun `첫 승차 접근 111초를 2분으로 올림해서 탈 수 있는 차량을 놓쳤다고 하지 않는다`() {
+        val original = singleRideJourney(TransitLegTimingBasis.ROUTE_ESTIMATE)
+        val journey = original.copy(legs = listOf(
+            TransitJourneyLeg(sequence = 0, mode = TransitLegMode.WALK, durationMinutes = 2, durationSeconds = 111),
+        ) + original.legs)
+        val overlay = TransitRealtimeOverlay(
+            travelMinutes = journey.totalMinutes,
+            predictedArrivalAt = journey.arrivalAt,
+            observedAt = departureAt,
+            boardingAt = departureAt.plusSeconds(115),
+        )
+
+        val result = evaluator.evaluate(journey, overlay, departureAt)
+
+        // 차량은 접근 가능하지만 실제 운행시각이 없는 나머지 여정은 여전히 미확정이다.
+        assertEquals(TransitTransferStatus.UNKNOWN, result.status)
+        assertEquals(null, result.failedTransferSequence)
+        assertFalse(result.eligible)
+    }
+
+    @Test
+    fun `환승 도보 243초는 분 올림 없이 계산하고 기존 60초 신뢰 여유는 유지한다`() {
+        val original = transferJourney(nextDepartureAt = departureAt.plusSeconds(20 * 60 + 243 + 60))
+        val journey = original.copy(legs = original.legs.map { leg ->
+            if (leg.mode == TransitLegMode.WALK) leg.copy(durationSeconds = 243) else leg
+        })
+
+        val result = evaluator.evaluate(journey, null, departureAt)
+
+        assertEquals(TransitTransferStatus.FEASIBLE, result.status)
+    }
+
+    @Test
+    fun `초 단위 도보라도 환승 여유가 59초뿐이면 성공으로 승격하지 않는다`() {
+        val original = transferJourney(nextDepartureAt = departureAt.plusSeconds(20 * 60 + 243 + 59))
+        val journey = original.copy(legs = original.legs.map { leg ->
+            if (leg.mode == TransitLegMode.WALK) leg.copy(durationSeconds = 243) else leg
+        })
+
+        val result = evaluator.evaluate(journey, null, departureAt)
+
+        assertEquals(TransitTransferStatus.UNKNOWN, result.status)
+        assertEquals(1L, result.searchEarlierBySeconds)
+    }
+
+    @Test
+    fun `원본 초 값이 없는 공급자의 환승 도보는 기존 분 단위를 유지한다`() {
+        val journey = transferJourney(nextDepartureAt = departureAt.plusSeconds(20 * 60 + 243 + 60))
+
+        val result = evaluator.evaluate(journey, null, departureAt)
+
+        assertEquals(TransitTransferStatus.UNKNOWN, result.status)
+        assertEquals(57L, result.searchEarlierBySeconds)
+    }
+
     @ParameterizedTest
     @EnumSource(TransitLegTimingBasis::class, names = ["ROUTE_ESTIMATE", "UNKNOWN"])
     fun `단일 승차도 구간 시각 근거가 없으면 첫 차량 실시간만으로 확정하지 않는다`(

@@ -11,6 +11,7 @@ import com.noLate.eta.domain.TransitRideSignature
 import com.noLate.eta.domain.TransitStop
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -33,6 +34,130 @@ class SafeDepartureResolverTest {
         ),
         legacyBoardingPlan = null,
     )
+
+    @Test
+    fun `관측 열차의 마지막 승차 가능 출발을 건너뛰지 않고 공급자 해상도 안에서 다시 검증한다`() {
+        // Recorded 11:20 observation: ready 11:22, train 11:23:35,
+        // arrival 12:27:30, deadline 12:35. Previous search jumped to
+        // 11:28 and then 11:23, skipping the still-safe 11:21 departure.
+        // This is a deterministic replay, not another live-provider sample.
+        val start = Instant.parse("2026-10-13T02:20:00Z")
+        val arrival = Instant.parse("2026-10-13T03:27:30Z")
+        val deadline = Instant.parse("2026-10-13T03:35:00Z")
+        val observedLimit = start.plusSeconds(95)
+        for (seconds in listOf(false, true)) {
+            val searched = mutableListOf<Instant>()
+            val provider = object : TransitJourneyProvider {
+                override val providerId = "odsay"
+                override val supportsSecondPrecisionDepartureProjection = seconds
+                override fun search(request: TransitJourneySearchRequest): List<TransitJourney> {
+                    searched += request.departureAt
+                    return listOf(journey(request, request.departureAt, arrival))
+                }
+            }
+            val result = SafeDepartureResolver(matcher).resolveProjectedCandidates(
+                provider, request(start), deadline, start,
+            ) { candidates ->
+                val candidate = candidates.single()
+                ProjectedTransitJourney(candidate, arrival, Unit,
+                    eligible = candidate.departureAt <= observedLimit,
+                    latestObservedVehicleDepartureAt = observedLimit)
+            }
+            val expected = start.plusSeconds(if (seconds) 95 else 60)
+            assertEquals(listOf(start, expected), searched)
+            assertEquals(expected, result?.journey?.departureAt)
+            assertEquals(arrival, result?.predictedArrivalAt)
+        }
+    }
+
+    @Test
+    fun `후속 최적화 조회가 실패해도 같은 평가에서 마감 전으로 검증한 가장 늦은 후보를 보존한다`() {
+        val eight = Instant.parse("2026-07-29T08:00:00Z")
+        val target = eight.plusSeconds(3600)
+        for (failure in listOf(java.net.SocketTimeoutException("synthetic timeout"), IllegalStateException("synthetic 503"))) {
+            val searches = mutableListOf<Instant>()
+            val provider = RecordingJourneyProvider { search ->
+                searches += search.departureAt
+                when (searches.size) {
+                    1 -> listOf(journey(search, search.departureAt, eight.plusSeconds(2700)))
+                    2 -> listOf(journey(search, search.departureAt, eight.plusSeconds(3300)))
+                    else -> throw failure
+                }
+            }
+            val result = SafeDepartureResolver(matcher, toleranceSeconds = 0).resolve(
+                provider, request(eight), selected, target, eight,
+            )
+            assertEquals(listOf(eight, eight.plusSeconds(900), eight.plusSeconds(1200)), searches)
+            assertEquals(eight.plusSeconds(900), result?.departureAt)
+            assertEquals(eight.plusSeconds(3300), result?.arrivalAt)
+        }
+    }
+
+    @Test
+    fun `마감 초과나 미검증 후보만 있으면 후속 조회 실패를 정상 후보로 덮지 않는다`() {
+        val eight = Instant.parse("2026-07-29T08:00:00Z")
+        for (eligible in listOf(true, false)) {
+            val failure = java.net.SocketTimeoutException("synthetic timeout")
+            var calls = 0
+            val provider = RecordingJourneyProvider { search ->
+                if (++calls > 1) throw failure
+                listOf(journey(search, search.departureAt, eight.plusSeconds(if (eligible) 3660 else 2700)))
+            }
+            val thrown = assertThrows(java.net.SocketTimeoutException::class.java) {
+                SafeDepartureResolver(matcher, toleranceSeconds = 0).resolveProjectedCandidates(
+                    provider, request(eight), eight.plusSeconds(3600), eight,
+                ) { candidates -> candidates.single().let { ProjectedTransitJourney(it, it.arrivalAt, Unit, eligible = eligible) } }
+            }
+            assertSame(failure, thrown)
+            assertEquals(2, calls)
+        }
+    }
+
+    @Test
+    fun `안전 후보가 있어도 취소 인터럽트와 치명적 오류는 삼키지 않는다`() {
+        val eight = Instant.parse("2026-07-29T08:00:00Z")
+        for (failure in listOf(java.util.concurrent.CancellationException("synthetic cancel"),
+            InterruptedException("synthetic interrupt"), AssertionError("synthetic fatal"))) {
+            var calls = 0
+            val provider = RecordingJourneyProvider { search ->
+                if (++calls > 1) throw failure
+                listOf(journey(search, search.departureAt, eight.plusSeconds(2700)))
+            }
+            val thrown = assertThrows(failure.javaClass) {
+                SafeDepartureResolver(matcher, toleranceSeconds = 0).resolve(
+                    provider, request(eight), selected, eight.plusSeconds(3600), eight,
+                )
+            }
+            assertSame(failure, thrown)
+            assertEquals(2, calls)
+        }
+    }
+
+    @Test
+    fun `초 투영은 공급자가 명시한 경우만 허용하고 현재와 미래 계획 출발을 앞당기지 않는다`() {
+        val base = Instant.parse("2026-10-12T03:16:00Z")
+        val evaluated = base.plusMillis(2649)
+        for (secondsSupported in listOf(false, true)) {
+            for (planned in listOf(base, base.plusMillis(42001))) {
+                val searches = mutableListOf<Instant>()
+                val provider = object : TransitJourneyProvider {
+                    override val providerId = if (secondsSupported) "tmap" else "odsay"
+                    override val supportsSecondPrecisionDepartureProjection = secondsSupported
+                    override fun search(request: TransitJourneySearchRequest): List<TransitJourney> {
+                        searches += request.departureAt
+                        return listOf(journey(request, request.departureAt, request.departureAt.plusSeconds(2400)))
+                    }
+                }
+                val result = SafeDepartureResolver(matcher, maxSearches = 1).resolveProjectedCandidates(
+                    provider, request(planned), null, evaluated,
+                ) { candidates -> candidates.single().let { ProjectedTransitJourney(it, it.arrivalAt, Unit) } }
+                val expected = if (!secondsSupported) base.plusSeconds(60)
+                    else base.plusSeconds(if (planned == base) 3 else 43)
+                assertEquals(listOf(expected), searches)
+                assertEquals(expected, result?.journey?.departureAt)
+            }
+        }
+    }
 
     @Test
     fun `ODsay 전체 탐색 예산은 세 회를 넘길 수 없다`() {

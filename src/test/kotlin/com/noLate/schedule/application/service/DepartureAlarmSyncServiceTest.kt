@@ -4,6 +4,7 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.DepartureAlarmSyncOperation
+import com.noLate.schedule.domain.DepartureAlarmCancellationReason
 import com.noLate.schedule.domain.DEPARTURE_ALARM_PLAN_SCHEMA_VERSION
 import com.noLate.schedule.domain.DepartureAlarmPlanCodec
 import com.noLate.schedule.domain.DepartureAlarmSyncState
@@ -136,6 +137,7 @@ class DepartureAlarmSyncServiceTest {
             memberId = 7L,
             scheduleId = 41L,
             notificationEnabled = false,
+            cancellationReason = DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE,
             alertMode = ScheduleAlertMode.ALARM,
             recommendedDepartureAt = now.plusSeconds(600),
             scheduleTitle = "회의",
@@ -144,6 +146,7 @@ class DepartureAlarmSyncServiceTest {
             memberId = 7L,
             scheduleId = 41L,
             notificationEnabled = false,
+            cancellationReason = DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE,
             alertMode = ScheduleAlertMode.ALARM,
             recommendedDepartureAt = now.plusSeconds(600),
             scheduleTitle = "회의",
@@ -196,6 +199,56 @@ class DepartureAlarmSyncServiceTest {
             verify(memberRepository).findByIdForUpdate(7L)
             verify(repository).findByMemberIdAndScheduleIdForUpdate(7L, 41L)
         }
+    }
+
+    @Test
+    fun `과거 설정 추정시각으로 취소된 알람은 정상 미래 ETA로 복구한다`() {
+        val state = state(triggerAt = now.plusSeconds(600))
+        whenever(repository.findByMemberIdAndScheduleIdForUpdate(7L, 41L)).thenReturn(state)
+        service.synchronizeConfigured(7L, 41L, true, ScheduleAlertMode.ALARM, now.minusSeconds(1), "회의")
+        assertThat(state.cancellationReason).isEqualTo(DepartureAlarmCancellationReason.PAST_CONFIGURED_ESTIMATE)
+        val result = service.synchronizeAutomaticEta(7L, 41L, true, ScheduleAlertMode.ALARM, now.plusSeconds(900), "회의")
+        assertThat(result?.generation).isEqualTo(2L)
+        assertThat(result?.operation).isEqualTo(DepartureAlarmSyncOperation.UPSERT)
+        assertThat(state.cancellationReason).isNull()
+    }
+
+    @Test
+    fun `직전 환승 실패 플래그가 없어도 저장된 자동 취소 사유로 복구한다`() {
+        val state = state(triggerAt = now.plusSeconds(600)).also {
+            it.cancel(DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE)
+        }
+        whenever(repository.findByMemberIdAndScheduleIdForUpdate(7L, 41L)).thenReturn(state)
+        val result = service.synchronizeAutomaticEta(7L, 41L, true, ScheduleAlertMode.ALARM, now.plusSeconds(900), "회의")
+        assertThat(result?.operation).isEqualTo(DepartureAlarmSyncOperation.UPSERT)
+        assertThat(result?.generation).isEqualTo(2L)
+    }
+
+    @Test
+    fun `사용자 취소는 뒤따른 환승 실패와 회복 플래그로도 되살리지 않는다`() {
+        val state = state(triggerAt = now.plusSeconds(600)).also { it.cancel() }
+        whenever(repository.findByMemberIdAndScheduleIdForUpdate(7L, 41L)).thenReturn(state)
+        service.synchronizeAutomaticEta(7L, 41L, false, ScheduleAlertMode.ALARM, now.plusSeconds(900), "회의",
+            cancellationReason = DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE)
+        val result = service.synchronizeAutomaticEta(7L, 41L, true, ScheduleAlertMode.ALARM, now.plusSeconds(900), "회의",
+            resumeCanceledAfterTransitTransferFailure = true)
+        assertThat(result).isNull()
+        assertThat(state.generation).isEqualTo(1L)
+        assertThat(state.cancellationReason).isEqualTo(DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL)
+    }
+
+    @Test
+    fun `사유가 없는 기존 CANCEL은 환승 실패 및 회복으로 원인을 추정하지 않는다`() {
+        val state = state(triggerAt = now.plusSeconds(600)).also { it.cancel() }
+        org.springframework.test.util.ReflectionTestUtils.setField(state, "cancellationReason", null)
+        whenever(repository.findByMemberIdAndScheduleIdForUpdate(7L, 41L)).thenReturn(state)
+        service.synchronizeAutomaticEta(7L, 41L, false, ScheduleAlertMode.ALARM, now.plusSeconds(900), "회의",
+            cancellationReason = DepartureAlarmCancellationReason.TRANSIT_TRANSFER_FAILURE)
+        val result = service.synchronizeAutomaticEta(7L, 41L, true, ScheduleAlertMode.ALARM, now.plusSeconds(900), "회의",
+            resumeCanceledAfterTransitTransferFailure = true)
+        assertThat(result).isNull()
+        assertThat(state.cancellationReason).isNull()
+        assertThat(state.generation).isEqualTo(1L)
     }
 
     @Test

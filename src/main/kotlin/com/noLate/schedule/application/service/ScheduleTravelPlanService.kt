@@ -1,5 +1,6 @@
 package com.noLate.schedule.application.service
 
+import com.noLate.intercity.IntercityJourneyValidator
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
@@ -499,6 +500,7 @@ class ScheduleTravelPlanService(
         val normalizedNotification = normalizeNotification(command)
         val departAt = command.departAt?.let { parseInstant(it, "departAt") }
         val routeJson = normalizeRouteJson(command.routeJson)
+        IntercityJourneyValidator.validate(routeJson?.let(objectMapper::readTree), departAt, command.travelMinutes, schedule.startAt)
         val plan = existing ?: ScheduleTravelPlan(scheduleId = scheduleId, memberId = memberId)
         val alertMode = command.alertMode
             ?: existing?.takeUnless { it.deleted }?.alertMode
@@ -787,12 +789,17 @@ class ScheduleTravelPlanService(
         )
     }
 
-    private fun ScheduleTravelPlan.statusFor(schedule: Schedule): ScheduleTravelPlanStatus =
-        if (ScheduleTravelPlanFingerprint.matches(this, schedule)) {
+    private fun ScheduleTravelPlan.statusFor(schedule: Schedule): ScheduleTravelPlanStatus {
+        val stored = parseRoute(routeJson)
+        if (stored?.has("importedTicket") == true && stored.has("intercityJourney") != true) {
+            return ScheduleTravelPlanStatus.NOT_CONFIGURED
+        }
+        return if (ScheduleTravelPlanFingerprint.matches(this, schedule)) {
             ScheduleTravelPlanStatus.READY
         } else {
             ScheduleTravelPlanStatus.STALE
         }
+    }
 
     private fun legacyOwnerPlanDto(schedule: Schedule, canManage: Boolean): ScheduleTravelPlanDto {
         val route = requireNotNull(schedule.route)

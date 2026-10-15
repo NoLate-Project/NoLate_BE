@@ -24,6 +24,16 @@ class TransitArrivalServiceTest {
     private val service = TransitArrivalService(seoulClient, tagoClient, TransitCityCodeResolver())
 
     @Test
+    fun `기존 목록 API는 빈 값으로 보호하지만 ETA 전용 조회는 같은 예외를 전달한다`() {
+        val failure = IllegalStateException("provider private response")
+        whenever(seoulClient.getSubwayArrivals("노원", "4호선", null, "DOWN", 10)).thenThrow(failure)
+        assertTrue(service.getSubwayArrivals("노원", "4호선", null, "DOWN", 10).isEmpty())
+        org.junit.jupiter.api.Assertions.assertSame(failure, org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException::class.java) {
+            service.getSubwayArrivalsForEta("노원", "4호선", null, "DOWN", 10)
+        })
+    }
+
+    @Test
     fun `direct TAGO namespace는 공식 2026 도시코드 34010을 허용하고 폐기된 29를 거부한다`() {
         val resolver = TransitCityCodeResolver()
 

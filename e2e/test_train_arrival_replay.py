@@ -101,6 +101,19 @@ class ReplayTest(unittest.TestCase):
         self.assertFalse(report['automaticAdoption'])
         self.assertLess(report['candidateWorstCaseMaeSeconds'], report['baselineWorstCaseMaeSeconds'])
 
+    def test_typical_train_deterioration_is_visible_beside_mean_gain(self):
+        pairs = [(10, 25), (20, 30), (100, 1)]
+        rows = [{'baseline': {'worstCaseAbsoluteSeconds': old, 'worstCaseEarlyUnderpredictionSeconds': old},
+                 'candidate': {'worstCaseAbsoluteSeconds': new, 'worstCaseEarlyUnderpredictionSeconds': new}}
+                for old, new in pairs]
+        quality = replay.validation_quality(rows)
+        self.assertLess(quality['candidateWorstCaseMaeSeconds'], quality['baselineWorstCaseMaeSeconds'])
+        self.assertGreater(quality['candidateMedianWorstCaseAbsoluteSeconds'],
+                           quality['baselineMedianWorstCaseAbsoluteSeconds'])
+        self.assertEqual(2, quality['pairedWorsenedRuns'])
+        self.assertEqual(1, quality['pairedImprovedRuns'])
+        self.assertEqual((True, False), replay.safe_pilot_improvement(quality))
+
     def test_training_labels_that_arrive_after_prediction_are_purged(self):
         values = [sample(index, index * 5) for index in range(9)]
         report, = replay.evaluate(values)

@@ -64,6 +64,22 @@ class ScheduleEtaEvaluationHistoryIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `재조회했으나 채택하지 못한 fallback의 취득시각은 DB 왕복 뒤에도 남는다`() {
+        val diagnostic = evaluation(fetchedAt = evaluatedAt.plusSeconds(2))
+        repository.saveAndFlush(diagnostic)
+        entityManager.clear()
+
+        val stored = requireNotNull(repository.findByEvaluationId(diagnostic.evaluationId))
+
+        assertEquals(TrafficSource.SELECTED_ROUTE, stored.source)
+        assertTrue(stored.stale)
+        assertEquals(diagnostic.failureReason, stored.failureReason)
+        assertEquals(diagnostic.fetchedAt, stored.fetchedAt)
+        assertNull(stored.recommendedDepartureAt)
+        assertNull(stored.predictedArrivalAt)
+    }
+
+    @Test
     fun `같은 평가 ID를 다시 저장하면 DB 고유 제약이 중복 이력을 막는다`() {
         val evaluationId = UUID.randomUUID().toString()
         repository.saveAndFlush(evaluation(evaluationId = evaluationId))

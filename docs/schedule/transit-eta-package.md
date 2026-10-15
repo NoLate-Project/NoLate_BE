@@ -6,10 +6,11 @@
 ## Package responsibilities
 
 - `eta.domain`: 공급자와 무관한 여정, 구간, 노선, 정류장 모델
-- `eta.application.port`: 전체 여정 공급자 계약
+- `eta.application.port`: 전체 여정·동일 도보 초 단위 시간·공식 환승 참조 자료 공급자 계약
 - `eta.application.transit`: 동일 경로 매칭, 안전 출발시각 탐색, 첫 승차 실시간 보정,
   환승 가능성 판정
-- `eta.infrastructure.odsay`: ODsay `maasRP` HTTP 요청과 canonical 변환
+- `eta.infrastructure.odsay`: ODsay `maasRP` 변환과 동일 전체 도보 V2 정밀화
+- `eta.infrastructure.seoul.SeoulTransferReferenceCatalog`: 버전이 있는 공식 환승 CSV 참조
 - `eta.infrastructure.routejson`: 여러 앱 버전이 저장한 선택 경로 JSON 복원
 - `schedule.infrastructure.TransitRealtimeTrafficClient`: 기존 schedule 호출자를 위한 얇은 delegate
 
@@ -25,7 +26,8 @@
    범위가 포함된 이름을 사용한다. 도보 구간과 ID가 있는 객체의 표시명 변경은 identity를
    바꾸지 않는다. 경로 전환의 retry latch는 `(notificationGeneration, checkCount)`에 묶어
    snooze가 check 번호를 0으로 초기화해도 이전 세대의 전환 푸시를 다시 재생하지 않는다.
-2. ODsay 시간은 분 단위로 정규화하고 구간 합계, 전체 timeline, 대기시간 범위를 검증한다.
+2. ODsay 경로의 분 값을 보존하고 구간 합계, 전체 timeline, 대기시간 범위를 검증한다.
+   전체 구간이 증명된 초 값만 이동시간 계산에 사용할 수 있으며 원래 분과 올림 정합을 확인한다.
 3. 시간표 불연속 탐색은 설정된 호출 상한을 넘지 않는다.
 4. 첫 승차 대기만 현재 도착정보로 교체한다. 실시간 첫 차량은 정류장 접근 뒤
    `boarding-buffer-seconds`까지 확보되는 후보만 고른다. 첫 지연은 환승 지점까지 전파해
@@ -33,7 +35,8 @@
    검사한다. 이를 넘으면 `MISSED`다. 물리적으로는 가능해도 기본 60초
    `transfer-confidence-margin-seconds`를 확보하지 못하면 분 단위 시간표 경계에서 거짓 성공을
    만들지 않도록 `UNKNOWN`으로 내리고, 기존 조회 예산 안에서 더 이른 여정을 재탐색한다.
-5. 미래 환승은 ODsay 시간표로만 판정하며 실시간으로 표시하지 않는다. 필요한 시간표 시각이
+5. 미래 환승은 경로 공급자가 증명한 운행 시간표나 별도로 연결한 서울 시간표로만 판정하며
+   실시간으로 표시하지 않는다. 서울 OA-101 연결은 현재 운행일 범위만 지원한다. 필요한 시간표 시각이
    없거나 위 안전 여유를 입증할 수 없으면 `TRANSIT_TRANSFER_TIMING_UNKNOWN` 저신뢰도 진단으로
    내린다. 단일 후보의 `MISSED`/`UNKNOWN`은 즉시 최종 경고가 아니며, 같은 노선의 다음 차량과
    검증 가능한 대체 여정 및 최대 3회의 시간표 탐색을 모두 소진한 뒤에만 경고로 확정한다.
@@ -79,6 +82,33 @@
     `ODSAY_ALLOW_CUSTOM_ENDPOINT=true`, 원격 HTTP까지 필요한 예외 환경은 별도로
     `ODSAY_ALLOW_INSECURE_HTTP=true`를 명시해야 한다. 서버 키는 URI template의 query
     parameter로만 인코딩한다.
+15. 서울 시간표로 전 구간을 확인한 지하철 여정은 첫 차량 실시간 지연 때문에 환승이
+    `MISSED`/`UNKNOWN`이 되면 `TransitTimetableProvider`를 통해 이후 환승을 다시 연결한다.
+    첫 열차의 원본 시간표와 관측을 유지하고, 지연을 전파한 하차시각에 환승 도보와 기존
+    안전 여유를 더해 다음 차량을 선택한다. 공급자·승하차 역코드·호선·방향·종별·운행일을
+    보존하며, 마지막 환승까지 확인하지 못하면 부분 회복을 버리고 기존 진단을 유지한다.
+    재연결 후에도 도착 마감과 최대 이동시간을 그대로 검사한다. 실제 도착 API의 추가 조회는
+    없으며 다음 환승 차량은 실시간이 아니라 시간표라는 근거를 유지한다.
+16. 환승 도보 정밀화는 시간표 연결 전에 수행한다. ODsay V2의 시작/끝·전체 거리·링크
+    순서/좌표가 원래 경로와 일치할 때만 전체 초를 적용하고 원래 분과 취득 시각을 보존한다.
+    한 평가의 새 도보 HTTP는 최대 1회이고 실패 시 기존 분을 사용한다. 서울교통공사 공식
+    환승 기준값은 역·이전/다음 호선으로 연결하되 방향/승강장 범위가 없으므로 참조 전용이다.
+    공식 거리/1.2m/s 산출 시간을 실측으로 표시하거나 다른 도보 경로에 자동 적용하지 않는다.
+    `walkingTiming`은 이동 근거, `transferTiming`은 현재 하차·도보·안전 여유·다음 승차 및
+    잔여 여유다. 여유는 기존 max(buffer, confidence) 규칙이며 도보에 포함하거나 재합산하지 않는다.
+17. 선택적 도보 정밀화 거절은 고정된 `WalkingRefinementFailure` 코드와 횟수,
+    마지막 관측시각·HTTP 상태·숫자 공급자 코드만 진단한다. 원문 메시지, 요청 URL,
+    인증키와 좌표는 진단에 넣지 않는다. 경로/거리/링크 불일치와 인증/한도/전송 오류를
+    구분하며, 경로 내부 `errorCode=401`만으로 HTTP 인증 오류라고 추정하지 않는다.
+    거절 시 원래 분 또는 동일 경로의 검증된 캐시값을 유지하고 재시도하지 않는다.
+    `unavailableCalls`는 HTTP 전 안전장치 거절도 포함할 수 있어 HTTP 실패율의 분모가 아니다.
+
+### 환승 재연결 검증 범위
+
+`TransitTimetableCalculationIntegrationTest`는 Tmap 매퍼, 시간표 연결, 첫 차량 보정,
+환승 평가와 ETA 반환을 고정 응답으로 연결한다. 지연 후 다음 차량 회복, 60초 여유 부족,
+다음 차량 부재, 회복 후 도착 마감 초과를 확인한다. 공급자 HTTP, 운영 DB, 시뮬레이터 UI,
+실제 이동 오차 2분 이내를 입증하는 E2E는 아니며 실시간 API 복구 후 별도로 검증해야 한다.
 
 서버 호출은 모바일 키와 분리된 `ODSAY_SERVER_API_KEY`가 있고 `ODSAY_ENABLED=true`인 환경에서만
 활성화된다.

@@ -11,6 +11,46 @@ import java.time.Instant
 
 class EtaRefreshCadencePolicyTest {
     private val now = Instant.parse("2026-09-25T01:00:00Z")
+
+    @ParameterizedTest
+    @CsvSource("1, 1", "60, 60", "300, 60", "1200, 60", "1201, -1", "0, -1", "-1, -1")
+    fun `미관측 시간표의 가까운 승차 전까지만 1분 관측 주기를 유지한다`(boardingDelay: Long, delay: Long) {
+        val result = EtaRefreshCadencePolicy.nextRefreshAt(
+            now, now.minusSeconds(30), pendingTimetableBoardingAt = now.plusSeconds(boardingDelay),
+        )
+        assertEquals(now.plusSeconds(delay).takeIf { delay > 0 }, result)
+    }
+
+    @ParameterizedTest
+    @CsvSource("899, 1", "900, -1", "901, -1", "1800, -1")
+    fun `미관측 후보가 계속 바뀌어도 출발 후 15분이면 고빈도 확인을 종료한다`(late: Long, delay: Long) {
+        val result = EtaRefreshCadencePolicy.nextRefreshAt(
+            now, now.minusSeconds(late), pendingTimetableBoardingAt = now.plusSeconds(300),
+        )
+        assertEquals(now.plusSeconds(delay).takeIf { delay > 0 }, result)
+    }
+
+    @Test
+    fun `미관측 확인 창이 끝나도 신선한 관측 차량의 기존 주기는 유지한다`() {
+        assertEquals(now.plusSeconds(60), EtaRefreshCadencePolicy.nextRefreshAt(
+            now, now.minusSeconds(901), observedBoardingAt = now.plusSeconds(180),
+            pendingTimetableBoardingAt = now.plusSeconds(300),
+        ))
+    }
+
+    @ParameterizedTest
+    @CsvSource("180, 60", "30, 30", "0, 0", "-1, 0")
+    fun `출발 경계를 지나도 아직 탈 수 있는 관측 차량까지만 짧게 재조회한다`(
+        boardingDelay: Long,
+        expectedDelay: Long,
+    ) {
+        val next = EtaRefreshCadencePolicy.nextRefreshAt(
+            now = now,
+            recommendedDepartureAt = now.minusSeconds(4),
+            observedBoardingAt = now.plusSeconds(boardingDelay),
+        )
+        assertEquals(now.plusSeconds(expectedDelay).takeIf { expectedDelay > 0 }, next)
+    }
     private fun legacyJob() = SchedulePushJob.create(
         memberId = 1L, scheduleId = 2L,
         scheduleAt = now.plusSeconds(7200), departureAt = now.plusSeconds(3600),

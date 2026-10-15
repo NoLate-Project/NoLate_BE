@@ -38,7 +38,9 @@ class PeriodicPushPolicy {
                 ),
                 recommendedDepartureAt,
             )
-            else -> recommendedDepartureAt
+            // 지난 출발시각을 반환하면 Worker가 이를 버리고 일정 시작까지 잠든다.
+            // 사용자 알림 경계는 별도로 처리하고 실제 교통 재조회 간격은 계속 보장한다.
+            else -> intervalCheckAt
         }
 
         return minOf(intervalCheckAt, nextNotificationBoundary)

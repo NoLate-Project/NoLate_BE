@@ -12,9 +12,24 @@ object EtaRefreshCadencePolicy {
     fun nextRefreshAt(
         now: Instant,
         recommendedDepartureAt: Instant,
+        observedBoardingAt: Instant? = null,
+        pendingTimetableBoardingAt: Instant? = null,
     ): Instant? {
-        // 추천 출발시각 이후의 알림 처리는 Worker의 기존 정책이 담당한다.
-        if (!now.isBefore(recommendedDepartureAt)) return null
+        // 시간표의 미관측 열차는 알람/ETA 채택 근거가 아니라 다음 관측의 조회 경계다.
+        // 출발 직후 15분까지만, 20분 안에 오는 후보를 1분 주기로 재확인한다.
+        // 후보가 매번 바뀌어도 고빈도 조회가 일정 시작까지 무한 연장되지 않는다.
+        val confirmationRefreshAt = pendingTimetableBoardingAt
+            ?.takeIf { now.isBefore(it) && !it.isAfter(now.plus(20, ChronoUnit.MINUTES)) }
+            ?.takeIf { now.isBefore(recommendedDepartureAt.plus(15, ChronoUnit.MINUTES)) }
+            ?.let { minOf(now.plus(1, ChronoUnit.MINUTES), it,
+                recommendedDepartureAt.plus(15, ChronoUnit.MINUTES)) }
+        // 조회 중 출발 경계를 넘겨도 아직 탈 수 있는 관측 차량이 있으면 승차 전까지
+        // 1분 주기로 확인한다. 출발 알림은 별도 정책이 담당하며 과거 경계를 재예약하지 않는다.
+        if (!now.isBefore(recommendedDepartureAt)) {
+            val observedRefreshAt = observedBoardingAt?.takeIf { it.isAfter(now) }
+                ?.let { minOf(now.plus(1, ChronoUnit.MINUTES), it) }
+            return listOfNotNull(observedRefreshAt, confirmationRefreshAt).minOrNull()
+        }
 
         val thirtyMinutesBefore =
             recommendedDepartureAt.minus(30, ChronoUnit.MINUTES)

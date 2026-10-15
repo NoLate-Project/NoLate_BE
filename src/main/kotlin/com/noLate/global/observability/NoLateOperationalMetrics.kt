@@ -138,6 +138,7 @@ enum class EtaProviderMetricOutcome {
  */
 enum class TransitEtaProviderMetricId {
     ODSAY_ROUTE,
+    TMAP_ROUTE,
     SEOUL_BUS,
     SEOUL_SUBWAY,
     TAGO_BUS,

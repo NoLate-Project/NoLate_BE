@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.noLate.intercity.IntercityJourneyValidator
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheAudienceResolver
@@ -79,7 +80,22 @@ class ScheduleService(
 
     @Transactional
     fun addSchedule(memberId: Long, scheduleDto: ScheduleDto): ScheduleDto {
-        return saveNewSchedule(memberId, scheduleDto, externalSourceKey = null)
+        val ticket = scheduleDto.route?.get("importedTicket")
+        val ticketKey = ticket?.let {
+            // Validate metadata before replay lookup; an unreviewed/corrupt import cannot claim a saved ticket.
+            IntercityJourneyValidator.validate(objectMapper.createObjectNode().set("importedTicket", it), null, null, null)
+            withAuthorizedCategory(memberId, withAuthorizedCalendar(memberId, scheduleDto, existingCalendarId = null))
+            val identity = listOf("kind", "departureName", "arrivalName", "departureAt", "arrivalAt", "trainNumber", "grade")
+                .map { field -> java.text.Normalizer.normalize(it.path(field).asText().trim(), java.text.Normalizer.Form.NFC) }
+            MessageDigest.getInstance("SHA-256").digest(
+                ("NOLATE_REVIEWED_TICKET_V1:" + objectMapper.writeValueAsString(identity)).toByteArray(StandardCharsets.UTF_8)
+            ).joinToString("") { byte -> "%02x".format(byte) }
+        }
+        if (ticketKey != null && scheduleRepository.findFirstByMemberIdAndExternalSourceKeyAndDeletedFalse(memberId, ticketKey) != null) {
+            throw BusinessException(ErrorCode.INVALID_INPUT, "이미 가져온 운행편입니다. 기존 일정에서 경로를 확인하세요. 변경된 표는 기존 일정을 삭제한 뒤 다시 공유해 주세요.")
+        }
+        // ScheduleUseCase fences member creation in one transaction; the member/source unique key also protects storage.
+        return saveNewSchedule(memberId, scheduleDto, externalSourceKey = ticketKey)
     }
 
     /**

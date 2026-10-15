@@ -51,6 +51,7 @@ class TransitTransferFeasibilityEvaluator(
     private val transferBufferSeconds: Long = DEFAULT_TRANSFER_BUFFER_SECONDS,
     @Value("\${eta.transit.transfer-confidence-margin-seconds:60}")
     private val transferConfidenceMarginSeconds: Long = DEFAULT_TRANSFER_CONFIDENCE_MARGIN_SECONDS,
+    private val rideArrivalPredictor: TransitRideArrivalPredictor = TransitRideArrivalPredictor(),
 ) {
     init {
         require(transferBufferSeconds in 0..MAX_TRANSFER_BUFFER_SECONDS) {
@@ -70,7 +71,13 @@ class TransitTransferFeasibilityEvaluator(
         require(rideIndexes.isNotEmpty()) { "대중교통 여정에는 승차 구간이 필요합니다." }
 
         var propagatedDelaySeconds = firstBoardingOverlay
-            ?.let { Duration.between(journey.arrivalAt, it.predictedArrivalAt).seconds }
+            ?.let { overlay ->
+                // 환승 차량을 재연결하면 전체 여정 도착시각이 바뀐다. 첫 열차 지연은 바뀐
+                // 전체 ETA 차이가 아니라 동일 열차의 원본 승차시각과 관측시각으로 계산한다.
+                journey.rideLegs.first().timetable?.let { first ->
+                    rideArrivalPredictor.predict(first, overlay.boardingAt).shiftSeconds
+                } ?: Duration.between(journey.arrivalAt, overlay.predictedArrivalAt).seconds
+            }
             ?: 0L
         // 첫 차량의 실시간 도착은 이후 운행시간의 정확성을 증명하지 않는다.
         // 환승이 없는 경로와 마지막 승차도 시간 근거·도착시각을 반드시 확인한다.
@@ -81,7 +88,7 @@ class TransitTransferFeasibilityEvaluator(
         val accessSeconds = journey.legs
             .take(firstRideIndex)
             .filterNot(TransitJourneyLeg::isRide)
-            .sumOf { it.durationMinutes.toLong() * SECONDS_PER_MINUTE }
+            .sumOf(TransitJourneyLeg::movementDurationSeconds)
         val firstReadyAt = maxOf(evaluatedAt, journey.departureAt)
             .plusSeconds(accessSeconds)
         val firstBoardingAt = firstBoardingOverlay?.boardingAt ?: firstRide.timetableBoardingAt()
@@ -119,7 +126,7 @@ class TransitTransferFeasibilityEvaluator(
             val transferWalkSeconds = journey.legs
                 .subList(currentIndex + 1, nextIndex)
                 .filterNot(TransitJourneyLeg::isRide)
-                .sumOf { it.durationMinutes.toLong() * SECONDS_PER_MINUTE }
+                .sumOf(TransitJourneyLeg::movementDurationSeconds)
             val physicalReadyAt = scheduledArrival
                 .plusSeconds(propagatedDelaySeconds)
                 .plusSeconds(transferWalkSeconds)
@@ -159,7 +166,12 @@ class TransitTransferFeasibilityEvaluator(
             propagatedDelaySeconds = 0L
         }
 
-        val predictedArrivalAt = journey.arrivalAt.plusSeconds(propagatedDelaySeconds)
+        // 단일 승차의 지연 후보는 시간축에 지연이 이미 들어 있다. 원본으로 되돌린 뒤
+        // 이번에 재검증한 지연만 적용한다. 환승에서는 앞 지연이 다음 열차 대기에 흡수된다.
+        val embeddedDelay = if (rideIndexes.size == 1) firstRide.firstBoardingObservation?.let {
+            Duration.between(requireNotNull(firstRide.timetable).boardingAt, it.expectedBoardingAt).seconds
+        } ?: 0L else 0L
+        val predictedArrivalAt = journey.arrivalAt.plusSeconds(propagatedDelaySeconds - embeddedDelay)
         return TransitTransferEvaluation(
             status = if (unknown) TransitTransferStatus.UNKNOWN else TransitTransferStatus.FEASIBLE,
             predictedArrivalAt = predictedArrivalAt,
@@ -168,16 +180,22 @@ class TransitTransferFeasibilityEvaluator(
         )
     }
 
+    /** 실제 평가와 같은 여유 설정을 이력/표시에도 사용한다. */
+    fun describeTransfer(previousArrivalAt: Instant, walkingSeconds: Long, boardingAt: Instant) =
+        com.noLate.eta.domain.TransitTransferTimingEvidence(previousArrivalAt, walkingSeconds,
+            transferBufferSeconds, transferConfidenceMarginSeconds, boardingAt)
+
     private fun TransitJourney.durationTo(arrivalAt: Instant): Int =
         ceil(Duration.between(departureAt, arrivalAt).toSeconds() / SECONDS_PER_MINUTE.toDouble())
             .toInt()
             .coerceAtLeast(1)
 
     private fun TransitJourneyLeg.timetableArrival(): Instant? =
-        scheduledArrivalAt.takeIf { timingBasis == TransitLegTimingBasis.TIMETABLE }
+        (timetable?.arrivalAt ?: scheduledArrivalAt).takeIf { timingBasis == TransitLegTimingBasis.TIMETABLE }
 
     private fun TransitJourneyLeg.timetableBoardingAt(): Instant? {
         if (timingBasis != TransitLegTimingBasis.TIMETABLE) return null
+        timetable?.let { return it.boardingAt }
         val segmentStart = scheduledDepartureAt ?: return null
         val wait = waitingMinutes ?: return null
         return segmentStart.plusSeconds(wait.toLong() * SECONDS_PER_MINUTE)

@@ -317,6 +317,12 @@ eta:
         failure-threshold: ${TAGO_BUS_ETA_FAILURE_THRESHOLD:5}
         open-duration: ${TAGO_BUS_ETA_OPEN_DURATION:30s}
   transit:
+    seoul-timetable:
+      # 실시간 지하철 키와 다른 일반 열린데이터 인증키다. 실제 API 검증 전에는 기본 비활성화한다.
+      enabled: ${SEOUL_TIMETABLE_ENABLED:false}
+      api-key: ${SEOUL_TIMETABLE_API_KEY:${SEOUL_OPENAPI_KEY:}}
+      base-url: ${SEOUL_TIMETABLE_BASE_URL:http://openapi.seoul.go.kr:8088}
+      allow-insecure-http: ${SEOUL_TIMETABLE_ALLOW_INSECURE_HTTP:false}
     # 정류장에 도착하자마자 떠나는 차량을 잡을 수 있다고 계산하지 않도록 하는 승차 여유다.
     boarding-buffer-seconds: ${SCHEDULE_TRANSIT_BOARDING_BUFFER_SECONDS:60}
     # 물리적으로 놓친 환승을 판정하는 명시적 운영 버퍼다.
@@ -343,6 +349,12 @@ eta:
       allow-insecure-http: ${ODSAY_ALLOW_INSECURE_HTTP:false}
       # 공식 host/loopback 이외의 egress proxy는 보안 검토 뒤 두 opt-in을 각각 명시한다.
       allow-custom-endpoint: ${ODSAY_ALLOW_CUSTOM_ENDPOINT:false}
+      # 같은 전체 환승 도보 경로만 초 단위로 정밀화한다. 실패 시 기존 분 값을 보존한다.
+      walking-refinement-enabled: ${ODSAY_WALKING_REFINEMENT_ENABLED:true}
+    tmap:
+      # 기존 routing.tmap 검색 구현을 ETA 포트에 연결한다. ODsay 설정/구현은 유지한다.
+      # 재조회 연결과 추정 ETA 채택 정책은 별개이며 운영에서는 명시적으로 활성화한다.
+      enabled: ${TMAP_ETA_ENABLED:false}
 
 calendar:
   metadata-cache:
@@ -364,6 +376,7 @@ transit:
     seoul-subway-per-second: ${SEOUL_SUBWAY_WIRE_CALLS_PER_SECOND:10}
     seoul-bus-per-second: ${SEOUL_BUS_WIRE_CALLS_PER_SECOND:20}
     tago-bus-per-second: ${TAGO_BUS_WIRE_CALLS_PER_SECOND:20}
+    seoul-timetable-per-second: ${SEOUL_TIMETABLE_WIRE_CALLS_PER_SECOND:20}
   seoul:
     api-key: ${SEOUL_OPENAPI_KEY:}
     subway-api-key: ${SEOUL_SUBWAY_API_KEY:}
@@ -374,6 +387,9 @@ transit:
     allow-insecure-http: ${SEOUL_ALLOW_INSECURE_HTTP:false}
   tago:
     api-key: ${TAGO_API_KEY:}
+    train-api-key: ${TAGO_TRAIN_API_KEY:${TAGO_API_KEY:}}
+    express-bus-api-key: ${TAGO_EXPRESS_BUS_API_KEY:${TAGO_API_KEY:}}
+    intercity-bus-api-key: ${TAGO_INTERCITY_BUS_API_KEY:${TAGO_API_KEY:}}
     bus-api-key: ${TAGO_BUS_API_KEY:${TAGO_API_KEY:}}
     base-url: ${TAGO_BASE_URL:https://apis.data.go.kr/1613000}
     city-codes: ${TAGO_BUS_CITY_CODES:}

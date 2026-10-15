@@ -146,7 +146,7 @@ class TransitRealtimeTrafficClientTest {
     @Test
     fun `legacy 지하철 경로에 권역 하차역 서비스유형 증거가 없으면 실시간 overlay를 적용하지 않는다`() {
         whenever(
-            arrivalService.getSubwayArrivals(
+            arrivalService.getSubwayArrivalsForEta(
                 stationName = "강남역",
                 lineName = "2호선",
                 directionName = "역삼 방면",
@@ -171,7 +171,7 @@ class TransitRealtimeTrafficClientTest {
         assertEquals(40, result.travelMinutes)
         assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
         assertEquals(TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE, result.failureReason)
-        verify(arrivalService, never()).getSubwayArrivals(
+        verify(arrivalService, never()).getSubwayArrivalsForEta(
             stationName = any(),
             lineName = anyOrNull(),
             directionName = anyOrNull(),
@@ -183,7 +183,7 @@ class TransitRealtimeTrafficClientTest {
     @Test
     fun `선택 경로와 반대 방향 지하철만 응답하면 live ETA로 사용하지 않는다`() {
         whenever(
-            arrivalService.getSubwayArrivals(
+            arrivalService.getSubwayArrivalsForEta(
                 stationName = "강남역",
                 lineName = "2호선",
                 directionName = "역삼 방면",
@@ -384,7 +384,7 @@ class TransitRealtimeTrafficClientTest {
             any(),
             anyOrNull(),
         )
-        verify(arrivalService, never()).getSubwayArrivals(
+        verify(arrivalService, never()).getSubwayArrivalsForEta(
             any(),
             anyOrNull(),
             anyOrNull(),

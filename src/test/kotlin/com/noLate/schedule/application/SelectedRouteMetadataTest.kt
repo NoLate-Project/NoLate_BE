@@ -153,5 +153,17 @@ class SelectedRouteMetadataTest {
         assertEquals("2구간 생략", metadata.routeSegments[2].label)
         assertEquals("#9CA3AF", metadata.routeSegments[2].colorHex)
         assertEquals("146", metadata.routeSegments[4].label)
+    }    @Test
+    fun `only coherent anchored journey supplies a fixed departure`() {
+        val journey = objectMapper.readTree("""{"version":1,"departureAt":"2026-10-14T12:00:00+09:00","arrivalAt":"2026-10-14T15:00:00+09:00","service":{"kind":"TRAIN","timingBasis":"TIMETABLE"}}""")
+        val root = objectMapper.createObjectNode().put("schemaVersion", 3)
+        root.set<com.fasterxml.jackson.databind.node.ObjectNode>("intercityJourney", journey)
+        val info = objectMapper.createObjectNode().put("timeBasis", "anchored_journey").put("departureTime", journey.path("departureAt").asText())
+        info.set<com.fasterxml.jackson.databind.node.ObjectNode>("intercityJourney", journey.deepCopy())
+        root.set<com.fasterxml.jackson.databind.node.ObjectNode>("routeInfo", info)
+        assertEquals(java.time.Instant.parse("2026-10-14T03:00:00Z"), SelectedRouteMetadata.parse(objectMapper, root.toString(), ScheduleTravelMode.TRANSIT).anchoredDepartureAt)
+        info.put("departureTime", "2026-10-14T12:01:00+09:00")
+        assertNull(SelectedRouteMetadata.parse(objectMapper, root.toString(), ScheduleTravelMode.TRANSIT).anchoredDepartureAt)
     }
+
 }

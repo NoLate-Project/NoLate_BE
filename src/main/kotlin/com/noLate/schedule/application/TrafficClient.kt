@@ -1,5 +1,10 @@
 package com.noLate.schedule.application
 
+import com.noLate.eta.domain.TransitFirstBoardingObservation
+import com.noLate.eta.domain.TransitLegTimetable
+import com.noLate.eta.domain.TransitWalkingGeometry
+import com.noLate.eta.domain.TransitWalkingScope
+
 import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.TrafficSource
 import java.time.Instant
@@ -53,7 +58,32 @@ enum class EffectiveTransitRouteSegmentKind {
     WALK,
     BUS,
     SUBWAY,
+    TRAIN,
+    EXPRESS_BUS,
+    INTERCITY_BUS,
+    COACH,
     ETC,
+}
+
+enum class EffectiveTransitRideTimingBasis {
+    TIMETABLE,
+    FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+}
+
+/** 비교용 원본 시간표와 이번 계산의 승하차 예측을 분리한다. 미래 환승은 실시간이 아니다. */
+data class EffectiveTransitRideTiming(
+    val timetable: TransitLegTimetable,
+    val predictedBoardingAt: Instant,
+    val predictedArrivalAt: Instant,
+    val basis: EffectiveTransitRideTimingBasis,
+) {
+    init {
+        require(predictedArrivalAt.isAfter(predictedBoardingAt))
+        // 첫 열차의 관측 지연만 승하차 양쪽에 한 번 적용한다. 운행시간을 임의 보정하지 않는다.
+        val shift = java.time.Duration.between(timetable.boardingAt, predictedBoardingAt)
+        require(predictedArrivalAt == timetable.arrivalAt.plus(shift))
+        require(basis != EffectiveTransitRideTimingBasis.TIMETABLE || shift.isZero)
+    }
 }
 
 data class EffectiveTransitRouteSegment(
@@ -65,12 +95,30 @@ data class EffectiveTransitRouteSegment(
     val fromName: String? = null,
     val toName: String? = null,
     val directionName: String? = null,
+    /** 기존 스냅샷에는 없으므로 null을 유지한다. 임의로 접근/환승 경계를 추정하지 않는다. */
+    val walkingScope: TransitWalkingScope? = null,
+    /** 공급자가 초 단위로 제공한 WALK 값만 전달한다. 분 값에서 역으로 만들지 않는다. */
+    val durationSeconds: Long? = null,
+    val walkingGeometry: TransitWalkingGeometry? = null,
+    /** 기존/추정 경로에는 null. 반올림한 분 값으로 열차 시각을 역산하지 않는다. */
+    val rideTiming: EffectiveTransitRideTiming? = null,
+    val walkingTiming: com.noLate.eta.domain.TransitWalkingTimingEvidence? = null,
+    val transferTiming: com.noLate.eta.domain.TransitTransferTimingEvidence? = null,
 ) {
     init {
         require(sequence >= 0) { "effective transit segment sequence는 0 이상이어야 합니다." }
         require(durationMinutes >= 0) { "effective transit segment durationMinutes는 0 이상이어야 합니다." }
         require(waitingMinutes == null || waitingMinutes >= 0) {
             "effective transit segment waitingMinutes는 null 또는 0 이상이어야 합니다."
+        }
+        require(kind == EffectiveTransitRouteSegmentKind.WALK ||
+            (walkingScope == null && durationSeconds == null && walkingGeometry == null))
+        require(rideTiming == null || kind == EffectiveTransitRouteSegmentKind.SUBWAY)
+        require(walkingTiming == null || (kind == EffectiveTransitRouteSegmentKind.WALK &&
+            walkingTiming.movementSeconds == (durationSeconds ?: durationMinutes.toLong() * 60)))
+        require(transferTiming == null || kind == EffectiveTransitRouteSegmentKind.SUBWAY || kind == EffectiveTransitRouteSegmentKind.BUS)
+        durationSeconds?.let {
+            require(it >= 0 && it / 60 + (if (it % 60 == 0L) 0 else 1) == durationMinutes.toLong())
         }
     }
 }
@@ -80,6 +128,8 @@ data class EffectiveTransitRouteSegment(
  *
  * [fetchedAt]은 외부 provider가 실제 응답한 경우에만 존재한다. 애플리케이션이 계산을 시도한
  * 시각(lastCheckedAt/evaluatedAt)과 provider 데이터 취득 시각을 같다고 가정하지 않는다.
+ * 재조회는 성공했으나 시각 근거가 부족한 fallback도 이 시각을 보존한다. 조회 성공만으로
+ * [source]를 LIVE/TIMETABLE로 올리거나 [accepted]로 취급하지 않는다.
  */
 data class TrafficResult(
     val travelMinutes: Int,
@@ -105,6 +155,8 @@ data class TrafficResult(
     val firstBoardingWaitMinutes: Int? = null,
     /** 저장 경로가 아니라 이번 계산에서 실제 채택·진단한 여정이다. */
     val effectiveTransitRoute: EffectiveTransitRoute? = null,
+    /** 별도로 검증한 첫 차량. 전체 ETA 채택이나 총 소요시간에 합산된 대기를 의미하지 않는다. */
+    val firstBoardingObservation: TransitFirstBoardingObservation? = null,
 ) {
     /**
      * 추천 출발 판단에 정상 provider 결과로 채택할 수 있는지 나타낸다.
@@ -120,8 +172,8 @@ data class TrafficResult(
         require(!providerSource || fetchedAt != null) {
             "provider ETA 결과에는 fetchedAt이 필요합니다."
         }
-        require(providerSource || fetchedAt == null) {
-            "fallback 결과에는 provider fetchedAt을 기록할 수 없습니다."
+        require(providerSource || fetchedAt == null || (stale && !failureReason.isNullOrBlank())) {
+            "fallback의 provider fetchedAt은 실패 사유가 있는 저신뢰도 조회 진단에만 기록합니다."
         }
         require(
             recommendedDepartureAt == null ||
@@ -192,6 +244,8 @@ interface TrafficProviderClient {
 }
 
 object TrafficFailureReasons {
+    const val TRANSIT_INTERCITY_TIMETABLE_UNAVAILABLE =
+        "TRANSIT_INTERCITY_TIMETABLE_UNAVAILABLE: 시외 구간의 실제 운행시각을 확인해야 합니다."
     const val PROVIDER_DISABLED =
         "PROVIDER_DISABLED: 실시간 ETA 공급자가 비활성화되어 저장된 ETA를 사용합니다."
     const val PROVIDER_TIMEOUT =
@@ -210,6 +264,18 @@ object TrafficFailureReasons {
         "TRANSIT_ROUTE_METADATA_MISSING: 저장된 경로에서 첫 승차 구간을 식별할 수 없습니다."
     const val TRANSIT_ARRIVAL_UNAVAILABLE =
         "TRANSIT_ARRIVAL_UNAVAILABLE: 첫 승차 구간의 실시간 도착정보를 조회할 수 없습니다."
+    const val TRANSIT_TRAIN_NOT_YET_OBSERVED =
+        "TRANSIT_TRAIN_NOT_YET_OBSERVED: 시간표의 미래 열차가 현재 실시간 목록에서 아직 확인되지 않았습니다."
+    const val TRANSIT_ARRIVAL_SOURCE_STALE =
+        "TRANSIT_ARRIVAL_SOURCE_STALE: 실시간 차량의 원천 관측시각이 오래되어 보정에 사용할 수 없습니다."
+    const val TRANSIT_ARRIVAL_SOURCE_UNVERIFIED =
+        "TRANSIT_ARRIVAL_SOURCE_UNVERIFIED: 실시간 차량의 원천 관측시각을 검증할 수 없습니다."
+    const val TRANSIT_ARRIVAL_API_ERROR =
+        "TRANSIT_ARRIVAL_API_ERROR: 실시간 도착정보 API 요청이 실패했습니다."
+    const val TRANSIT_ARRIVAL_RATE_LIMITED =
+        "TRANSIT_ARRIVAL_RATE_LIMITED: 실시간 도착정보 API 호출 한도에 도달했습니다."
+    const val TRANSIT_ARRIVAL_API_TIMEOUT =
+        "TRANSIT_ARRIVAL_API_TIMEOUT: 실시간 도착정보 API 응답 시간이 초과되었습니다."
     const val TRANSIT_ARRIVAL_OUT_OF_HORIZON =
         "TRANSIT_ARRIVAL_OUT_OF_HORIZON: 계획한 승차 시각 이후의 도착 차량을 확인할 수 없습니다."
     const val TRANSIT_JOURNEY_PROVIDER_UNAVAILABLE =
@@ -258,6 +324,13 @@ fun sanitizeTrafficFailureReason(reason: String?): String? {
             TrafficFailureReasons.TRANSIT_ROUTE_METADATA_MISSING
         "TRANSIT_ARRIVAL_UNAVAILABLE" ->
             TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE
+        "TRANSIT_INTERCITY_TIMETABLE_UNAVAILABLE" -> TrafficFailureReasons.TRANSIT_INTERCITY_TIMETABLE_UNAVAILABLE
+        "TRANSIT_TRAIN_NOT_YET_OBSERVED" -> TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED
+        "TRANSIT_ARRIVAL_SOURCE_STALE" -> TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_STALE
+        "TRANSIT_ARRIVAL_SOURCE_UNVERIFIED" -> TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_UNVERIFIED
+        "TRANSIT_ARRIVAL_API_ERROR" -> TrafficFailureReasons.TRANSIT_ARRIVAL_API_ERROR
+        "TRANSIT_ARRIVAL_RATE_LIMITED" -> TrafficFailureReasons.TRANSIT_ARRIVAL_RATE_LIMITED
+        "TRANSIT_ARRIVAL_API_TIMEOUT" -> TrafficFailureReasons.TRANSIT_ARRIVAL_API_TIMEOUT
         "TRANSIT_ARRIVAL_OUT_OF_HORIZON" ->
             TrafficFailureReasons.TRANSIT_ARRIVAL_OUT_OF_HORIZON
         "TRANSIT_JOURNEY_PROVIDER_UNAVAILABLE" ->

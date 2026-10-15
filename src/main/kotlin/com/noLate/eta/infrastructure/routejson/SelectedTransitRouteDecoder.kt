@@ -39,7 +39,7 @@ class SelectedTransitRouteDecoder(
         val parsedSteps = steps.mapNotNull { parseStep(it, provider) }
 
         val rides = parsedSteps
-            .filter { it.mode == TransitLegMode.BUS || it.mode == TransitLegMode.SUBWAY }
+            .filter { it.mode.isRide }
             .map { step ->
                 TransitRideSignature(
                     mode = step.mode,
@@ -71,7 +71,7 @@ class SelectedTransitRouteDecoder(
 
     private fun legacyBoardingPlan(steps: List<ParsedStep>): LegacyTransitBoardingPlan? {
         val firstRideIndex = steps.indexOfFirst {
-            it.mode == TransitLegMode.BUS || it.mode == TransitLegMode.SUBWAY
+            it.mode.isRide
         }
         if (firstRideIndex < 0) return null
         val movementSteps = steps.filter(ParsedStep::countsTowardTravelTime)
@@ -210,8 +210,8 @@ class SelectedTransitRouteDecoder(
         owner: JsonNode,
         prefix: String,
     ): Set<String> = buildSet {
-        explicitCode?.normalizedStopCode()?.let(::add)
-        firstText(stop, "code")?.normalizedStopCode()?.let(::add)
+        explicitCode?.normalizedStopCode(provider)?.let(::add)
+        firstText(stop, "code")?.normalizedStopCode(provider)?.let(::add)
 
         val arsId = firstText(owner, "${prefix}ArsID", "${prefix}ArsId")
             ?: firstText(stop, "arsID", "arsId")
@@ -234,8 +234,16 @@ class SelectedTransitRouteDecoder(
         }
     }
 
-    private fun String.normalizedStopCode(): String? {
+    private fun String.normalizedStopCode(provider: String?): String? {
         val raw = trim().takeIf(String::isNotBlank) ?: return null
+        if (provider.equals("tmap", ignoreCase = true)) {
+            // 앱의 TMAP passStops.code는 내부 stationID다. 5자리라는 이유만으로
+            // ARS로 추론하면 재조회 응답의 PROVIDER:tmap ID와 서로 매칭되지 않는다.
+            if (raw.startsWith("PROVIDER:", ignoreCase = true)) return raw
+            ARS_CODE_PATTERN.matchEntire(raw)?.groupValues?.get(1)?.let { return "ARS:$it" }
+            if (raw.startsWith("CITY:", ignoreCase = true)) return raw
+            return providerScopedStopId(provider, raw)
+        }
         val ars = ARS_CODE_PATTERN.matchEntire(raw)?.groupValues?.get(1)
             ?: raw.filter(Char::isDigit).takeIf(LEGACY_ARS_PATTERN::matches)
         if (ars != null) return "ARS:$ars"
@@ -252,6 +260,10 @@ class SelectedTransitRouteDecoder(
                 "WALK", "TRANSFER" -> TransitLegMode.WALK
                 "BUS" -> TransitLegMode.BUS
                 "SUBWAY" -> TransitLegMode.SUBWAY
+                "TRAIN" -> TransitLegMode.TRAIN
+                "EXPRESS_BUS" -> TransitLegMode.EXPRESS_BUS
+                "INTERCITY_BUS" -> TransitLegMode.INTERCITY_BUS
+                "COACH", "EXPRESSBUS" -> TransitLegMode.COACH
                 else -> TransitLegMode.ETC
             }
         }
@@ -259,6 +271,9 @@ class SelectedTransitRouteDecoder(
             1 -> TransitLegMode.SUBWAY
             2 -> TransitLegMode.BUS
             3 -> TransitLegMode.WALK
+            4 -> TransitLegMode.TRAIN
+            5 -> TransitLegMode.EXPRESS_BUS
+            6 -> TransitLegMode.INTERCITY_BUS
             else -> null
         }
     }
