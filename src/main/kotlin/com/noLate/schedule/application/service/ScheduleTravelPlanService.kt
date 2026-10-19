@@ -285,6 +285,34 @@ class ScheduleTravelPlanService(
         }
     }
 
+    /** Background guidance revocation checks must commit STOPPED rather than mark a joined
+     * transaction rollback-only when access has disappeared. Catch within this transaction proxy. */
+    @Transactional
+    fun findMyJourneyTravelPlan(memberId: Long, scheduleId: Long): ScheduleTravelPlanDto? =
+        try { getTravelPlan(memberId, scheduleId, memberId) } catch (_: BusinessException) { null }
+
+    /** Departure's member-fence preview may already have attached a stale schedule entity. */
+    @Transactional
+    fun getMyJourneyTravelPlanForStart(memberId: Long, scheduleId: Long): ScheduleTravelPlanDto {
+        val schedule = scheduleRepository.findActiveForTravelPlanUpdate(scheduleId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        refreshLockedSchedule(schedule)
+        return getTravelPlan(memberId, scheduleId, memberId)
+    }
+
+    /** Walking check only: actor is already fenced by the caller. Lock/refresh schedule first,
+     * then the owned persisted plan, and reevaluate visibility after refreshing both. Legacy
+     * schedule-only routes have no personal revision and cannot acquire this new contract. */
+    @Transactional
+    fun getMyJourneyWalkingTravelPlanForStart(memberId: Long, scheduleId: Long): Pair<ScheduleTravelPlanDto, Long> {
+        getMyJourneyTravelPlanForStart(memberId, scheduleId)
+        val plan = travelPlanRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
+            ?: throw BusinessException(ErrorCode.SCHEDULE_TRAVEL_PLAN_NOT_FOUND)
+        entityManager.refresh(plan, LockModeType.PESSIMISTIC_WRITE)
+        if (plan.deleted || plan.version !in 0..9_007_199_254_740_990L) throw BusinessException(ErrorCode.INVALID_STATE)
+        return getTravelPlan(memberId, scheduleId, memberId) to (plan.version + 1)
+    }
+
     /**
      * 상세 화면의 참가자 목록을 구성한다. 오너/EDITOR에게는 저장된 출발지와 경로 요약을,
      * 일반 참여자에게는 설정 여부만 제공한다. routeJson은 목록 응답에 포함하지 않고 참가자를

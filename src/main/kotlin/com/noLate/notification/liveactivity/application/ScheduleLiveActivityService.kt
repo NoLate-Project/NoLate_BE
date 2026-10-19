@@ -21,6 +21,11 @@ import com.noLate.schedule.application.RouteDisplaySegment
 import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
+import com.noLate.journey.domain.JourneyGuidanceSession
+import com.noLate.journey.domain.JourneyLeg
+import com.noLate.journey.domain.JourneyPhase
+import com.noLate.journey.infrastructure.JourneyGuidanceSessionRepository
+import com.noLate.schedule.infrastructure.ScheduleRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.ApplicationEventPublisher
@@ -51,6 +56,23 @@ data class ScheduleLiveActivityEtaProjection(
     val etaStale: Boolean,
     val routeSegments: List<RouteDisplaySegment>,
     val staleAt: Instant?,
+    val journey: JourneyLiveActivityWire? = null,
+    val journeyExpiresAt: Instant? = null,
+)
+
+data class JourneyLiveActivityWire(
+    val sessionId: String,
+    val generation: Long,
+    val routeRevision: Long,
+    val sequence: Long,
+    val phase: String,
+    val activeLegIndex: Int,
+    val currentStopIndex: Int?,
+    val remainingStops: Int?,
+    val legProgress: Double,
+    val nextInstruction: String,
+    val observedAtEpochSeconds: Long,
+    val overallProgress: Double,
 )
 
 /** Exact Codable wire contract shared with NoLateDepartureActivityAttributes.swift. */
@@ -77,6 +99,8 @@ data class NoLateDepartureContentStateWire(
     val routeSegments: List<RouteDisplaySegment>,
     @get:JsonInclude(JsonInclude.Include.NON_NULL)
     val appearance: String? = null,
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
+    val journey: JourneyLiveActivityWire? = null,
 )
 
 /**
@@ -119,6 +143,8 @@ class ScheduleLiveActivityService(
     private val terminalRetentionHours: Long = 24,
     private val pushJobRepository: SchedulePushJobRepository? = null,
     private val applicationEventPublisher: ApplicationEventPublisher? = null,
+    private val journeyRepository: JourneyGuidanceSessionRepository? = null,
+    private val scheduleRepository: ScheduleRepository? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -144,6 +170,7 @@ class ScheduleLiveActivityService(
     fun projectEta(projection: ScheduleLiveActivityEtaProjection) {
         if (projection.memberId <= 0 || projection.scheduleId <= 0) return
         if (memberRepository.findByIdForUpdate(projection.memberId)?.deleted != false) return
+        if (journeyRepository?.findAllByMemberIdAndScheduleIdAndEndedAtIsNull(projection.memberId, projection.scheduleId)?.isNotEmpty() == true) return
         // The worker projects only after its independent source commit. Re-read that monotonic
         // source under the same member->job lock order so a later cancel/delete/permission END
         // cannot be followed by this stale projection resurrecting a remote Activity.
@@ -197,7 +224,7 @@ class ScheduleLiveActivityService(
         lockedActivity: ScheduleLiveActivity?,
     ) {
         val now = projection.evaluatedAt
-        val expiresAt = projection.scheduleStartAt.plus(deliveryGraceMinutes, ChronoUnit.MINUTES)
+        val expiresAt = projection.journeyExpiresAt ?: projection.scheduleStartAt.plus(deliveryGraceMinutes, ChronoUnit.MINUTES)
         if (!now.isBefore(expiresAt)) return
         var activity = lockedActivity
         // Provider I/O owns immutable state/token snapshots outside the DB transaction. A newer
@@ -207,6 +234,7 @@ class ScheduleLiveActivityService(
         if (activity?.dispatchLeaseId != null) return
         if (
             activity == null &&
+            projection.journey == null &&
             now.isBefore(projection.recommendedDepartureAt.minus(startLeadMinutes, ChronoUnit.MINUTES))
         ) {
             return
@@ -373,6 +401,84 @@ class ScheduleLiveActivityService(
         }
     }
 
+    /**
+     * The caller owns the member/session fence and has validated the frozen personal route.
+     * Journey starts reuse the normal credential/outbox/lease machinery, but do not depend on an
+     * ACTIVE predeparture job or its lead-time window. Only the opted-in requesting device is used.
+     */
+    @Transactional
+    fun projectJourney(session: JourneyGuidanceSession, legs: List<JourneyLeg>) {
+        val device = session.deviceFingerprint ?: return
+        if (memberRepository.findByIdForUpdate(session.memberId)?.deleted != false) return
+        val now = Instant.now(clock)
+        val wire = JourneyLiveActivityWire(
+            session.sessionId, session.generation, session.routeRevision, session.sequence, session.phase.name,
+            session.activeLegIndex, session.currentStopIndex, session.remainingStops, session.legProgress,
+            session.nextInstruction, session.observedAt.epochSecond,
+            if (session.phase == JourneyPhase.ARRIVED) 1.0 else
+                ((session.activeLegIndex + session.legProgress) / legs.size.coerceAtLeast(1)).coerceIn(0.0, 1.0),
+        )
+        if (session.phase.terminal) {
+            val activity = activityRepository.findByScheduleMemberDeviceForUpdate(session.scheduleId, session.memberId, device) ?: return
+            val previous = decodeContent(activity.contentStateJson)
+            // The first projection may still be deferred behind a predeparture provider lease.
+            // That same device/schedule Activity must still be ended when the user stops; only a
+            // different already-projected journey is protected from this terminal request.
+            if (previous.journey != null && previous.journey.sessionId != session.sessionId) return
+            // END already handles in-flight UPDATE snapshots and late update-token callbacks.
+            val content = previous.copy(journey = wire)
+            activity.contentStateJson = canonicalJson(content)
+            endActivity(activity, now, if (session.phase == JourneyPhase.ARRIVED) "JOURNEY_ARRIVED" else "JOURNEY_STOPPED")
+            return
+        }
+        val schedule = scheduleRepository?.findById(session.scheduleId)?.orElse(null)
+        val tokens = startTokenRepository.findAllByMemberIdAndActivityTypeAndActiveTrueAndRetirementRequestedFalseOrderByIdAsc(
+            session.memberId, NOLATE_LIVE_ACTIVITY_ATTRIBUTES_TYPE,
+        ).filter { it.deviceFingerprint == device }
+        tokens.forEach { snapshot ->
+            val activity = activityRepository.findByScheduleMemberDeviceForUpdate(session.scheduleId, session.memberId, device)
+            val priorJourney = activity?.let { decodeContent(it.contentStateJson).journey }
+            // An END in progress must finish before reusing the unique schedule/member/device row.
+            if (activity?.state == ScheduleLiveActivityState.END_PENDING) return@forEach
+            val fcm = deviceTokenRepository.findByIdForUpdate(snapshot.pushDeviceTokenId)
+                ?.takeIf { it.memberId == session.memberId && it.deviceFingerprint == device && it.platform == PushPlatform.IOS && !it.retirementRequested }
+                ?: return@forEach
+            val token = snapshot.id?.let(startTokenRepository::findByIdForUpdate)
+                ?.takeIf { it.pushDeviceTokenId == fcm.id && it.active && !it.retirementRequested }
+                ?: return@forEach
+            val restarting = activity?.state in setOf(ScheduleLiveActivityState.ENDED, ScheduleLiveActivityState.INVALID)
+            // Provider failure or an ended instance is not authorization to repeatedly create
+            // Activities. A fresh explicit session, not the periodic retry, can start a new one.
+            if (restarting && priorJourney?.sessionId == session.sessionId) return@forEach
+            val notificationGeneration = when {
+                activity == null -> 0L
+                restarting -> activity.sourceNotificationGeneration + 1
+                else -> activity.sourceNotificationGeneration
+            }
+            if (priorJourney != null && priorJourney.generation > session.generation) return@forEach
+            val segments = legs.mapIndexed { index, leg ->
+                RouteDisplaySegment(
+                    leg.kind.lowercase(), (leg.lineName ?: if (leg.kind == "WALK") "도보" else "대중교통").take(18),
+                    when (leg.kind) { "BUS" -> "#2979FF"; "SUBWAY" -> "#00B140"; else -> "#9CA3AF" }, index,
+                )
+            }.filterIndexed { index, _ -> index >= (session.activeLegIndex - 1).coerceAtLeast(0) }.take(5)
+            projectDevice(ScheduleLiveActivityEtaProjection(
+                memberId = session.memberId, scheduleId = session.scheduleId,
+                notificationGeneration = notificationGeneration,
+                checkCount = if (restarting) 0 else (activity?.sourceCheckCount ?: -1) + 1,
+                evaluatedAt = session.observedAt, scheduleTitle = schedule?.title,
+                destinationName = schedule?.route?.destinationName,
+                scheduleStartAt = schedule?.startAt ?: session.expiresAt,
+                travelMinutes = objectMapper.readTree(session.routeLegsJson)
+                    .sumOf { it.path("durationMinutes").asInt(0).coerceAtLeast(0) }.coerceAtLeast(1),
+                recommendedDepartureAt = session.startedAt, predictedArrivalAt = null,
+                firstBoardingWaitMinutes = null, etaSource = TrafficSource.SELECTED_ROUTE,
+                etaStale = false, routeSegments = segments,
+                staleAt = session.observedAt.plusSeconds(90), journey = wire, journeyExpiresAt = session.expiresAt,
+            ), token, fcm, activity)
+        }
+    }
+
     /** Joins token binding when called there, so the ActivityKit token and its delivery are atomic. */
     @Transactional
     fun enqueueCurrentUpdate(activityRowId: Long) {
@@ -536,6 +642,9 @@ class ScheduleLiveActivityService(
     @Transactional
     fun endForMemberSchedule(memberId: Long, scheduleId: Long, reason: String) {
         memberRepository.findByIdForUpdate(memberId) ?: return
+        if (reason == "DEPARTED" && journeyRepository?.findAllByMemberIdAndScheduleIdAndEndedAtIsNull(memberId, scheduleId)?.isNotEmpty() == true) return
+        journeyRepository?.findAllByMemberIdAndScheduleIdAndEndedAtIsNull(memberId, scheduleId)
+            ?.forEach { it.terminate(JourneyPhase.STOPPED, Instant.now(clock), reason) }
         activityRepository.findAllByMemberScheduleForUpdate(memberId, scheduleId)
             .forEach { endActivity(it, Instant.now(clock), reason) }
     }
@@ -551,6 +660,10 @@ class ScheduleLiveActivityService(
     fun endAllForSchedule(scheduleId: Long, reason: String) {
         val memberIds = activityRepository.findMemberIdsByScheduleId(scheduleId).sorted()
         if (memberIds.isNotEmpty()) memberRepository.findAllByIdsForUpdate(memberIds)
+        memberIds.forEach { memberId ->
+            journeyRepository?.findAllByMemberIdAndScheduleIdAndEndedAtIsNull(memberId, scheduleId)
+                ?.forEach { it.terminate(JourneyPhase.STOPPED, Instant.now(clock), reason) }
+        }
         activityRepository.findAllByScheduleIdForUpdate(scheduleId)
             .forEach { endActivity(it, Instant.now(clock), reason) }
     }
@@ -558,6 +671,8 @@ class ScheduleLiveActivityService(
     @Transactional
     fun endAllForMember(memberId: Long, reason: String) {
         memberRepository.findByIdForUpdate(memberId) ?: return
+        journeyRepository?.findAllByMemberIdAndEndedAtIsNull(memberId)
+            ?.forEach { it.terminate(JourneyPhase.STOPPED, Instant.now(clock), reason) }
         activityRepository.findAllByMemberIdForUpdate(memberId)
             .forEach { endActivity(it, Instant.now(clock), reason) }
     }
@@ -1146,6 +1261,12 @@ class ScheduleLiveActivityService(
             revision = activity.contentRevision,
             updatedAtEpochSeconds = now.epochSecond,
             status = terminalStatus(reason),
+            journey = decodeContent(activity.contentStateJson).journey?.let {
+                if (it.phase in setOf("ARRIVED", "STOPPED")) it else it.copy(
+                    phase = "STOPPED", sequence = it.sequence + 1,
+                    nextInstruction = "길안내를 종료했어요", observedAtEpochSeconds = now.epochSecond,
+                )
+            },
         )
         val terminalJson = canonicalJson(terminal)
         activity.replaceTerminalContent(
@@ -1455,12 +1576,14 @@ class ScheduleLiveActivityService(
         updatedAtEpochSeconds = projection.evaluatedAt.epochSecond,
         actionExpiresAtEpochSeconds = actionExpiresAt.epochSecond,
         status = when {
+            projection.journey != null -> "inTransit"
             projection.etaStale -> "delayed"
             !projection.evaluatedAt.isBefore(projection.recommendedDepartureAt) -> "leaveNow"
             else -> "preparing"
         },
         routeSegments = normalizedRouteSegments(projection.routeSegments),
         appearance = appearance?.wireValue,
+        journey = projection.journey,
     )
 
     private fun contentJson(content: NoLateDepartureContentStateWire, revision: Long): String =
@@ -1476,7 +1599,7 @@ class ScheduleLiveActivityService(
         objectMapper.readValue(json, NoLateDepartureContentStateWire::class.java)
 
     private fun terminalStatus(reason: String): String =
-        if (reason.contains("DEPART", ignoreCase = true)) "arrived" else "cancelled"
+        if (reason == "JOURNEY_ARRIVED" || reason.contains("DEPART", ignoreCase = true)) "arrived" else "cancelled"
 
     private fun String?.canonicalText(maxLength: Int, fallback: String): String =
         this?.trim()
@@ -1502,6 +1625,7 @@ class ScheduleLiveActivityService(
             kind = safeKind,
             label = label.canonicalText(18, fallbackRouteLabel(safeKind)),
             colorHex = colorHex.takeIf(HEX_COLOR::matches)?.uppercase() ?: fallbackColor,
+            legIndex = legIndex,
         )
     }
 

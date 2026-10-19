@@ -2,6 +2,12 @@ package com.noLate.transit.infrastructure
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.noLate.transit.domain.TransitArrivalDto
+import com.noLate.transit.domain.SeoulBusVehicleQuery
+import com.noLate.transit.domain.SeoulBusVehicleObservationBatch
+import com.noLate.transit.domain.SeoulBusVehicleObservationStatus
+import com.noLate.transit.domain.SeoulSubwayTrainQuery
+import com.noLate.transit.domain.SeoulSubwayTrainObservationBatch
+import com.noLate.transit.domain.SeoulSubwayTrainStatus
 import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
 import com.noLate.transit.domain.TransitArrivalStatus
 import com.noLate.transit.domain.estimatedTransitArrivalStatus
@@ -16,10 +22,14 @@ import com.noLate.eta.resilience.StaticEtaProviderResiliencePolicyResolver
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import org.springframework.http.client.SimpleClientHttpRequestFactory
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
 import java.net.URLDecoder
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.Clock
@@ -55,7 +65,7 @@ class SeoulTransitArrivalClient(
     private val subwayResponseCacheTtlSeconds: Long = 15,
     @Value("\${transit.seoul.subway-response-cache-max-entries:512}")
     private val subwayResponseCacheMaxEntries: Int = 512,
-) {
+) : AutoCloseable {
     private val normalizedBusApiKey = normalizeDataPortalServiceKey(
         busApiKey.ifBlank { commonApiKey },
     )
@@ -97,6 +107,118 @@ class SeoulTransitArrivalClient(
     private val subwayResponseCache = LinkedHashMap<String, CachedSubwayResponse>(16, 0.75f, true)
     private val subwayResponseLocks = Array(64) { Any() }
     private data class CachedSubwayResponse(val body: JsonNode, val receivedAt: Instant)
+
+    // A provider redirect must not forward the service key to a different endpoint.
+    // Kept separate from the existing arrival clients to avoid changing their transport policy.
+    private val vehicleClient = RestClient.builder().baseUrl(busBaseUrl).requestFactory(
+        EtaDeadlineAwareClientHttpRequestFactory(
+            calculationDeadline, Duration.ofSeconds(2), Duration.ofSeconds(4),
+        ) { connect, read ->
+            object : SimpleClientHttpRequestFactory() {
+                override fun prepareConnection(connection: HttpURLConnection, httpMethod: String) {
+                    super.prepareConnection(connection, httpMethod)
+                    connection.instanceFollowRedirects = false
+                }
+            }.apply { setConnectTimeout(connect); setReadTimeout(read) }
+        },
+    ).build()
+
+    // A separate strict transport: legacy screen arrivals retain their existing behavior.
+    // No call is scheduled here; the future owned-session consumer must opt in explicitly.
+    private val trainObservationOrigin = subwayBaseUrl.trimEnd('/')
+    private val trainObservationTransport = lazy { SeoulSubwayTrainHttpTransport() }
+    @jakarta.annotation.PreDestroy
+    override fun close() { if (trainObservationTransport.isInitialized()) trainObservationTransport.value.close() }
+
+    /** Internal train evidence only. Never certifies passenger boarding, a station order or GPS. */
+    fun getSubwayTrainObservations(query: SeoulSubwayTrainQuery): SeoulSubwayTrainObservationBatch {
+        val key = subwayKey()
+        if (key.isBlank()) return SeoulSubwayTrainObservationBatch(SeoulSubwayTrainStatus.CREDENTIAL_UNAVAILABLE)
+        return providerGuard.execute(SEOUL_SUBWAY_PROVIDER_ID) {
+            observeWire(TransitWireProvider.SEOUL_SUBWAY, TransitWireOperation.VEHICLE_POSITION,
+                { batch: SeoulSubwayTrainObservationBatch -> batch.observations.isEmpty() }) {
+                try {
+                    fun segment(value: String) = URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
+                    val uri = URI.create("$trainObservationOrigin/${segment(key)}/json/realtimePosition/0/${query.limit}/${segment(query.line.requestName)}")
+                    SeoulSubwayTrainObservationParser.parse(trainObservationTransport.value.fetch(uri), query, Instant.now())
+                } catch (failure: TransitProviderApplicationException) { throw failure }
+                catch (failure: org.springframework.web.client.RestClientResponseException) { throw failure }
+                catch (_: Exception) {
+                    // URI contains the key. Do not retain Spring's exception/cause/body.
+                    throw IllegalStateException("Subway observation unavailable")
+                }
+            }
+        }
+    }
+
+    /** Internal opt-in consumer only; not scheduled polling or an automatic boarding decision. */
+    fun getBusVehicleObservations(query: SeoulBusVehicleQuery): SeoulBusVehicleObservationBatch {
+        val apiKey = busKey()
+        if (apiKey.isBlank()) return SeoulBusVehicleObservationBatch(
+            SeoulBusVehicleObservationStatus.CREDENTIAL_UNAVAILABLE, emptyList(),
+        )
+        return providerGuard.execute(SEOUL_BUS_PROVIDER_ID) {
+            observeWire(
+                TransitWireProvider.SEOUL_BUS,
+                TransitWireOperation.VEHICLE_POSITION,
+                { batch: SeoulBusVehicleObservationBatch -> batch.observations.isEmpty() },
+            ) {
+                try {
+                    vehicleClient.get().uri { builder ->
+                        builder.path("/buspos/getBusPosByRouteSt")
+                            .queryParam("serviceKey", "{serviceKey}")
+                            .queryParam("busRouteId", query.routeId)
+                            .queryParam("startOrd", query.firstStopOrder)
+                            .queryParam("endOrd", query.lastStopOrder)
+                            .build(apiKey)
+                    }.exchange { _, response ->
+                        if (!response.statusCode.is2xxSuccessful) {
+                            throw org.springframework.web.client.RestClientResponseException(
+                                "Seoul vehicle HTTP failure", response.statusCode, "", null, byteArrayOf(), null,
+                            )
+                        }
+                        val bytes = response.body.readNBytes(SeoulBusVehicleObservationParser.MAX_RESPONSE_BYTES + 1)
+                        SeoulBusVehicleObservationParser.parse(bytes, query, Instant.now())
+                    } ?: throw IllegalStateException("Missing Seoul vehicle response")
+                } catch (_: org.springframework.web.client.ResourceAccessException) {
+                    // Spring's I/O exception includes the request URI (and serviceKey).
+                    throw SeoulBusVehicleTransportException()
+                }
+            }
+        }
+    }
+
+    /** Internal metadata only; no polling, passenger matching, or route admission side effects. */
+    fun getBusRouteStops(routeId: String) = busCatalogRequest(routeId, "/busRouteInfo/getStaionByRoute",
+        TransitWireOperation.STATION_LOOKUP) { SeoulBusRouteCatalogParser.stops(it, routeId) }
+
+    /** Diagnostic-only partial catalog. Invalid public numbers stay explicitly unusable; not route admission. */
+    internal fun getBusRouteDiagnosticStops(routeId: String) = busCatalogRequest(routeId, "/busRouteInfo/getStaionByRoute",
+        TransitWireOperation.STATION_LOOKUP) { SeoulBusRouteCatalogParser.stops(it, routeId, retainInvalidPublicNumbers = true) }
+
+    fun getBusRoutePath(routeId: String) = busCatalogRequest(routeId, "/busRouteInfo/getRoutePath",
+        TransitWireOperation.ROUTE_GEOMETRY, SeoulBusRouteCatalogParser::path)
+
+    private fun <T> busCatalogRequest(routeId: String, path: String, operation: TransitWireOperation,
+        parse: (ByteArray) -> List<T>): List<T> {
+        require(routeId.matches(Regex("[1-9][0-9]{8}"))) { "Invalid Seoul route identifier" }
+        val key = busKey()
+        if (key.isBlank()) return emptyList()
+        return providerGuard.execute(SEOUL_BUS_PROVIDER_ID) {
+            observeWire(TransitWireProvider.SEOUL_BUS, operation, { rows: List<T> -> rows.isEmpty() }) {
+                try {
+                    vehicleClient.get().uri { builder -> builder.path(path).queryParam("serviceKey", "{serviceKey}")
+                        .queryParam("busRouteId", routeId).build(key) }.exchange { _, response ->
+                        if (!response.statusCode.is2xxSuccessful) throw org.springframework.web.client.RestClientResponseException(
+                            "Seoul catalog HTTP failure", response.statusCode, "", null, byteArrayOf(), null)
+                        parse(response.body.readNBytes(SeoulBusRouteCatalogParser.MAX_RESPONSE_BYTES + 1))
+                    } ?: throw IllegalStateException("Missing Seoul catalog response")
+                } catch (_: org.springframework.web.client.ResourceAccessException) {
+                    throw IllegalStateException("Seoul catalog transport unavailable")
+                }
+            }
+        }
+    }
 
     fun getSubwayArrivals(
         stationName: String,
@@ -442,6 +564,8 @@ class SeoulTransitArrivalClient(
                 busTypeCode = text("busType1"),
                 observedAt = observedAt,
                 sourceUpdatedAt = sourceUpdatedAt,
+                providerRouteId = text("busRouteId"),
+                vehicleId = text("vehId1"),
             ),
             busArrivalFromSlot(
                 routeName = routeName,
@@ -455,6 +579,8 @@ class SeoulTransitArrivalClient(
                 busTypeCode = text("busType2"),
                 observedAt = observedAt,
                 sourceUpdatedAt = sourceUpdatedAt,
+                providerRouteId = text("busRouteId"),
+                vehicleId = text("vehId2"),
             ),
         )
             .filterNotNull()
@@ -473,6 +599,8 @@ class SeoulTransitArrivalClient(
         busTypeCode: String?,
         observedAt: Instant,
         sourceUpdatedAt: String?,
+        providerRouteId: String?,
+        vehicleId: String?,
     ): TransitArrivalDto? {
         if (message.isNullOrBlank() && waitSeconds == null) return null
         val resolvedWaitSeconds = waitSeconds ?: parseWaitSeconds(message)
@@ -509,6 +637,8 @@ class SeoulTransitArrivalClient(
             },
             vehicleType = vehicleType,
             lowFloor = busTypeCode == SEOUL_LOW_FLOOR_BUS_CODE,
+            providerRouteId = providerRouteId?.takeIf { it.matches(Regex("[1-9][0-9]{0,19}")) },
+            vehicleId = vehicleId?.takeIf { it.matches(Regex("[1-9][0-9]{0,19}")) },
         )
     }
 

@@ -55,4 +55,7 @@ data class TransitArrivalDto(
     val subwayLineId: String? = null,
     val subwayStationId: String? = null,
     val trainNumber: String? = null,
+    /** Opaque identifiers in the arrival provider's namespace, never TMAP/ODSAY IDs. */
+    val providerRouteId: String? = null,
+    val vehicleId: String? = null,
 )

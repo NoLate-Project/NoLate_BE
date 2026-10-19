@@ -316,6 +316,9 @@ class TagoTransitArrivalClient(
             remainingStops = previousStops,
             vehicleType = vehicleType,
             lowFloor = vehicleType?.contains("저상") == true,
+            providerRouteId = (text("routeid") ?: text("routeId"))?.takeIf {
+                it.matches(Regex("[A-Za-z0-9_-]{1,64}"))
+            },
         )
     }
 

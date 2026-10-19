@@ -102,6 +102,10 @@ class AccountCleanupService(
     private val interactionPerformanceService: InteractionPerformanceService? = null,
     private val scheduleLiveActivityRepository: ScheduleLiveActivityRepository? = null,
     private val liveActivityLifecyclePublisher: LiveActivityLifecyclePublisher? = null,
+    private val journeySessionRepository: com.noLate.journey.infrastructure.JourneyGuidanceSessionRepository? = null,
+    private val automaticJourneyRepository: com.noLate.journey.infrastructure.AutomaticJourneyPreparationRepository? = null,
+    private val journeyActivityRepository: com.noLate.journey.infrastructure.JourneyActivityLaneRepository? = null,
+    private val walkingSnapshotRepository: com.noLate.journey.infrastructure.JourneyWalkingSnapshotRepository? = null,
 ) {
     /**
      * Owner withdrawal and participant mutation share one member-row order. The first scan is only
@@ -194,6 +198,10 @@ class AccountCleanupService(
         // rows first guarantees that deleting the owner schedule cannot leave a live job/outbox
         // that a restarted worker redrives.
         if (fence.ownedScheduleIds.isNotEmpty()) {
+            journeySessionRepository?.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
+            automaticJourneyRepository?.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
+            journeyActivityRepository?.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
+            walkingSnapshotRepository?.deleteAllByScheduleIdIn(fence.ownedScheduleIds)
             fence.ownedScheduleIds.sorted().forEach {
                 // Persisted in this cleanup transaction before schedule-bound ETA/job sources are
                 // deleted. Recovery therefore ends every participant card after a process stop.
@@ -263,6 +271,10 @@ class AccountCleanupService(
         departureAlarmPresentationAssignmentRepository?.deleteAllByMemberId(memberId)
         departureStatusRepository.deleteAllByMemberId(memberId)
         travelPlanRepository.deleteAllByMemberId(memberId)
+        journeySessionRepository?.deleteAllByMemberId(memberId)
+        automaticJourneyRepository?.deleteAllByMemberId(memberId)
+        journeyActivityRepository?.deleteAllByMemberId(memberId)
+        walkingSnapshotRepository?.deleteAllByMemberId(memberId)
         departureAlarmSyncStateRepository.deleteAllByMemberId(memberId)
         quickScheduleReliabilityTelemetryService?.deleteForMember(memberId)
         navigationPerformanceService?.deleteForMember(memberId)

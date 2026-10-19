@@ -217,6 +217,7 @@ class TagoTransitArrivalClientTest {
                               "routeno": "30",
                               "nodenm": "대전역/역전시장",
                               "arrtime": 240,
+                              "routeid": "DJB_SYNTHETIC_ROUTE",
                               "arrprevstationcnt": 4
                             }]
                           }
@@ -259,6 +260,8 @@ class TagoTransitArrivalClientTest {
             assertEquals(1, arrivals.size)
             assertEquals("30", arrivals.single().routeName)
             assertEquals(null, arrivals.single().sourceUpdatedAt)
+            assertEquals("DJB_SYNTHETIC_ROUTE", arrivals.single().providerRouteId)
+            assertEquals(null, arrivals.single().vehicleId)
             assertEquals(
                 TransitArrivalFreshnessEvidence.LOCAL_RECEIPT_TIMESTAMP_ONLY,
                 arrivals.single().freshnessEvidence,

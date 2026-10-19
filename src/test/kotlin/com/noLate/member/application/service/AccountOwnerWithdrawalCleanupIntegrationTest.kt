@@ -146,6 +146,7 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
     private val actionReceiptRepository: ScheduleNotificationActionReceiptRepository,
     private val scheduleLiveActivityRepository: ScheduleLiveActivityRepository,
     private val lifecycleIntentRepository: LiveActivityLifecycleIntentRepository,
+    private val walkingRepository: com.noLate.journey.infrastructure.JourneyWalkingSnapshotRepository,
     private val transactionManager: PlatformTransactionManager,
     private val invalidationRecorder: AccountCleanupInvalidationRecorder,
 ) {
@@ -324,7 +325,10 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
             )
         )
 
+        walkingRepository.saveAndFlush(com.noLate.journey.domain.JourneyWalkingSnapshot(memberId = participantId,
+            scheduleId = scheduleId, snapshotId = java.util.UUID.randomUUID().toString(), expiresAtMs = Long.MAX_VALUE, contractJson = "synthetic-owned-path"))
         cleanupService.withdraw(owner)
+        assertTrue(walkingRepository.findAll().none { it.scheduleId == scheduleId })
 
         assertFalse(memberRepository.findById(participantId).orElseThrow().deleted)
         assertFalse(
@@ -565,7 +569,10 @@ class AccountOwnerWithdrawalCleanupIntegrationTest @Autowired constructor(
         val scheduleId = requireNotNull(schedule.id)
         seedScheduleArtifacts(scheduleId, participantId, "participant-withdrawal", startAt)
 
+        walkingRepository.saveAndFlush(com.noLate.journey.domain.JourneyWalkingSnapshot(memberId = participantId,
+            scheduleId = scheduleId, snapshotId = java.util.UUID.randomUUID().toString(), expiresAtMs = Long.MAX_VALUE, contractJson = "synthetic-personal-path"))
         cleanupService.withdraw(participant)
+        assertTrue(walkingRepository.findAll().none { it.memberId == participantId })
 
         assertTrue(memberRepository.findById(participantId).orElseThrow().deleted)
         assertFalse(memberRepository.findById(ownerId).orElseThrow().deleted)

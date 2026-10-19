@@ -207,8 +207,18 @@ class ProductionSchemaVersionGuard(
             "2026-09-08-eta-evaluation-history-v1"
         const val DEPARTURE_ALARM_CANCELLATION_REASON_SCHEMA_VERSION =
             "2026-10-05-departure-alarm-cancellation-reason-v1"
+        const val JOURNEY_GUIDANCE_SCHEMA_VERSION = "2026-10-03-journey-guidance-sessions-v1"
+        const val AUTOMATIC_JOURNEY_SCHEMA_VERSION = "2026-10-04-automatic-journey-preparations-v1"
+        const val JOURNEY_ACTIVITY_SCHEMA_VERSION = "2026-10-06-journey-activity-lanes-v1"
+        const val JOURNEY_WALKING_SCHEMA_VERSION = "2026-10-12-journey-walking-snapshots-v1"
+        const val MIXED_WALKING_SCHEMA_VERSION = "2026-10-12-mixed-walking-binding-v1"
 
         val REQUIRED_SCHEMA_VERSIONS = listOf(
+            MIXED_WALKING_SCHEMA_VERSION,
+            JOURNEY_WALKING_SCHEMA_VERSION,
+            JOURNEY_ACTIVITY_SCHEMA_VERSION,
+            AUTOMATIC_JOURNEY_SCHEMA_VERSION,
+            JOURNEY_GUIDANCE_SCHEMA_VERSION,
             PUSH_RELIABILITY_SCHEMA_VERSION,
             APPLE_TOKEN_LIFECYCLE_SCHEMA_VERSION,
             ACCOUNT_DELETION_SCHEMA_VERSION,

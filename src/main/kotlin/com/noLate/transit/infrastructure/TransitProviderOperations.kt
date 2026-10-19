@@ -32,6 +32,8 @@ enum class TransitWireOperation(val metricTag: String) {
     POSITION("position"),
     STATION_LOOKUP("station_lookup"),
     TIMETABLE("timetable"),
+    VEHICLE_POSITION("vehicle_position"),
+    ROUTE_GEOMETRY("route_geometry"),
 }
 
 enum class TransitWireOutcome(val metricTag: String) {
