@@ -72,6 +72,36 @@ class ScheduleTravelPlanServiceUnitTest {
     }
 
     @Test
+    fun `walking reader refreshes persisted personal plan before producing server revision`() {
+        val schedule = scheduleEntity().apply { memberId = 2 }
+        val existing = travelPlan(memberId = 2L, originName = "before")
+        whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L)).thenReturn(existing)
+        whenever(travelPlanRepository.findByScheduleIdAndMemberIdForUpdate(10L, 2L)).thenReturn(existing)
+        doAnswer { if (it.getArgument<Any>(0) === existing) { existing.version = 6; existing.originName = "after" }; null }
+            .whenever(entityManager).refresh(any<Any>(), any<LockModeType>())
+        val (result, revision) = service.getMyJourneyWalkingTravelPlanForStart(2, 10)
+        assertEquals(7L, revision); assertEquals("after", result.origin?.name)
+        inOrder(entityManager, travelPlanRepository).apply {
+            verify(entityManager).refresh(schedule, LockModeType.PESSIMISTIC_WRITE)
+            verify(travelPlanRepository).findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L)
+            verify(travelPlanRepository).findByScheduleIdAndMemberIdForUpdate(10L, 2L)
+            verify(entityManager).refresh(existing, LockModeType.PESSIMISTIC_WRITE)
+            verify(travelPlanRepository).findByScheduleIdAndMemberIdAndDeletedFalse(10L, 2L)
+        }
+    }
+
+    @Test
+    fun `walking reader rejects legacy routes without an owned persisted revision`() {
+        val schedule = scheduleEntity().apply { memberId = 2 }
+        whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.findByScheduleIdAndMemberIdForUpdate(10L, 2L)).thenReturn(null)
+        assertThrows(BusinessException::class.java) { service.getMyJourneyWalkingTravelPlanForStart(2, 10) }
+    }
+
+    @Test
     fun `personal travel notification uses common defaults without counting subscription usage`() {
         val schedule = scheduleEntity()
         whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)

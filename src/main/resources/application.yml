@@ -357,6 +357,14 @@ calendar:
     base-url: ${KASI_BASE_URL:https://apis.data.go.kr/B090041/openapi/service}
     cache-ttl-hours: ${KASI_CACHE_TTL_HOURS:168}
 
+journey:
+  subway-observation:
+    enabled: ${JOURNEY_SUBWAY_OBSERVATION_ENABLED:false}
+    # Actual official-data adapter stays off until the server owner explicitly opts in.
+    # The Seoul ALL-arrivals endpoint currently requires plain HTTP and also needs the
+    # separate transit.seoul.allow-insecure-http gate below.
+    official-live-enabled: ${JOURNEY_SUBWAY_OFFICIAL_LIVE_ENABLED:false}
+
 transit:
   # 한 logical 조회가 여러 station/arrival HTTP 요청으로 증폭될 때 replica 내부 burst를
   # fail-fast로 제한한다. 계정 전체 다중 replica quota는 운영의 외부 shared budget으로 둔다.

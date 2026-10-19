@@ -22,7 +22,13 @@ import java.nio.charset.StandardCharsets
 internal class FirebaseLiveActivityPushClient(
     private val firebaseMessaging: FirebaseMessaging,
     private val objectMapper: ObjectMapper,
+    private val apnsTopic: String? = null,
 ) : LiveActivityPushClient {
+    init {
+        require(apnsTopic == null || apnsTopic.matches(Regex("[A-Za-z0-9.-]+\\.push-type\\.liveactivity"))) {
+            "Explicit APNs topic must be a Live Activity topic."
+        }
+    }
     override fun send(request: LiveActivityPushRequest): LiveActivityPushResult {
         val message = createFirebaseMessage(request)
         return try {
@@ -85,6 +91,7 @@ internal class FirebaseLiveActivityPushClient(
                     .putHeader("apns-push-type", "liveactivity")
                     .putHeader("apns-priority", "10")
                     .putHeader("apns-expiration", request.expirationAt.epochSecond.toString())
+                    .apply { apnsTopic?.let { putHeader("apns-topic", it) } }
                     .setAps(apsBuilder.build())
                     .build()
             )

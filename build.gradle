@@ -184,6 +184,67 @@ tasks.register('groqIntegrationTest', Test) {
     }
     shouldRunAfter tasks.named('test')
 }
+
+// Explicit test-source-only loopback harness. Never boots the production application context.
+tasks.register('seoulBusVehicleReadinessProbe', JavaExec) {
+    description = 'Explicit read-only Seoul 7016 official API probe; no Spring app, DB, GPS, push, or dotenv loading.'
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.noLate.transit.qa.SeoulBusVehicleReadinessProbeKt'
+}
+tasks.register('seoulBusRouteCatalogReadinessProbe', JavaExec) {
+    description = 'Explicit fixed Seoul 7016 stops + shape probe; max two calls, no retries or dotenv loading.'
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.noLate.transit.qa.SeoulBusRouteCatalogReadinessProbeKt'
+}
+tasks.register('seoulBusCatalogOfflineReplay', JavaExec) {
+    description = 'Offline redacted public catalog replay only; no credentials, HTTP, app, DB or push.'
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.noLate.transit.qa.SeoulBusCatalogOfflineReplayKt'
+}
+tasks.register('walkingSnapshotHarness', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.noLate.journey.automatic.WalkingSnapshotHarnessKt'
+    jvmArgs '--add-modules=jdk.httpserver'
+}
+tasks.register('subwayObservationCheckHarness', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.noLate.journey.automatic.SubwayObservationCheckHarnessKt'
+    jvmArgs '--add-modules=jdk.httpserver'
+}
+tasks.register('authenticatedJourneyHarness', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.noLate.journey.automatic.AutomaticJourneyAuthenticatedHarnessKt'
+    jvmArgs '--add-modules=jdk.httpserver'
+}
+// Real server -> existing Firebase client -> FCM -> APNs. Credentials and a single test target
+// must be explicitly supplied; never substitutes DummyPushClient for an external test.
+tasks.register('authenticatedJourneyApnsHarness', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.noLate.journey.automatic.JourneyGuidanceRealApnsHarnessKt'
+    jvmArgs '--add-modules=jdk.httpserver'
+}
+tasks.register('automaticJourneyHarness', JavaExec) {
+    description = 'Runs isolated automatic departure fixtures on 127.0.0.1:15543 without application configuration.'
+    group = 'verification'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.noLate.journey.automatic.AutomaticJourneyHarnessKt'
+    jvmArgs '--add-modules=jdk.httpserver'
+}
 kapt {
     keepJavacAnnotationProcessors = true
 }

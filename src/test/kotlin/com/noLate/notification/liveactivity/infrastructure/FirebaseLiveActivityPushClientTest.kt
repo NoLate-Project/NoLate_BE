@@ -6,6 +6,7 @@ import com.noLate.notification.liveactivity.application.LiveActivityPushEvent
 import com.noLate.notification.liveactivity.application.LiveActivityPushRequest
 import com.noLate.notification.liveactivity.application.NOLATE_LIVE_ACTIVITY_ATTRIBUTES_TYPE
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.mock
 import java.time.Instant
@@ -88,6 +89,20 @@ class FirebaseLiveActivityPushClientTest {
             "alert",
             "sound",
         )
+    }
+
+    @Test
+    fun `isolated caller can supply exact Live Activity topic without changing default routing`() {
+        val explicit = FirebaseLiveActivityPushClient(mock<FirebaseMessaging>(), ObjectMapper().findAndRegisterModules(),
+            "com.anonymous.nolatefe.push-type.liveactivity")
+        val request = LiveActivityPushRequest("ordinary-fcm-route", "b".repeat(64), LiveActivityPushEvent.UPDATE,
+            1_785_960_100, contentState(), expirationAt = Instant.ofEpochSecond(1_785_960_200))
+        val configuredHeaders = field<Map<String, String>>(field<Any>(explicit.createFirebaseMessage(request), "apnsConfig"), "headers")
+        assertThat(configuredHeaders).containsEntry("apns-topic", "com.anonymous.nolatefe.push-type.liveactivity")
+        val defaultHeaders = field<Map<String, String>>(field<Any>(client.createFirebaseMessage(request), "apnsConfig"), "headers")
+        assertThat(defaultHeaders).doesNotContainKey("apns-topic")
+        assertThatThrownBy { FirebaseLiveActivityPushClient(mock<FirebaseMessaging>(), ObjectMapper(), "com.anonymous.nolatefe") }
+            .isInstanceOf(IllegalArgumentException::class.java)
     }
 
     private fun attributes(): Map<String, Any?> = mapOf(

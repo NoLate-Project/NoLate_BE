@@ -14,6 +14,26 @@ import java.nio.file.Path
 
 class ProductionSchemaVersionGuardTest {
 
+    @Test fun `walking snapshot migration is independently required before production startup`() {
+        val jdbc = markerDatabase(); val marker = ProductionSchemaVersionGuard.JOURNEY_WALKING_SCHEMA_VERSION
+        insertMarkers(jdbc, ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS - marker)
+        assertTrue(assertThrows(IllegalStateException::class.java) { guard(jdbc).afterSingletonsInstantiated() }.message!!.contains(marker))
+        val sql = Files.readString(Path.of("docs/schedule/migrations/2026-10-12-journey-walking-snapshots.sql"))
+        assertTrue(sql.indexOf("CALL assert_walking_snapshot_postconditions()") < sql.indexOf("INSERT INTO application_schema_migrations"))
+        assertTrue(sql.contains("uk_walking_owner_schedule")); assertTrue(sql.contains("idx_walking_expiry"))
+    }
+
+    @Test
+    fun `journey schema marker is required even when its runtime flag is off`() {
+        val jdbc = markerDatabase()
+        val marker = ProductionSchemaVersionGuard.JOURNEY_GUIDANCE_SCHEMA_VERSION
+        insertMarkers(jdbc, ProductionSchemaVersionGuard.REQUIRED_SCHEMA_VERSIONS - marker)
+        val error = assertThrows(IllegalStateException::class.java) { guard(jdbc).afterSingletonsInstantiated() }
+        assertTrue(error.message!!.contains(marker))
+        val migration = Files.readString(Path.of("docs/schedule/migrations/2026-10-03-journey-guidance-sessions.sql"))
+        assertTrue(migration.indexOf("CALL assert_journey_guidance_postconditions()") < migration.indexOf("INSERT INTO application_schema_migrations"))
+    }
+
     @Test
     fun `verified manual migration marker allows production startup`() {
         val jdbc = markerDatabase()

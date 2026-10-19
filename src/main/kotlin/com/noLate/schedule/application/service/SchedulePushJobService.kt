@@ -346,17 +346,16 @@ class SchedulePushJobService private constructor(
         scheduleId: Long,
         memberId: Long,
         liveActivityEndReason: String = "NOTIFICATION_DISABLED",
+        preserveLiveActivity: Boolean = false,
     ) {
         if (memberRepository != null &&
             memberRepository.findByIdForUpdate(memberId)?.deleted != false
         ) return
         schedulePushJobRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)?.cancel()
         departureAlarmSyncService?.cancel(memberId, scheduleId)
-        liveActivityLifecyclePublisher?.endMemberSchedule(
-            memberId,
-            scheduleId,
-            liveActivityEndReason,
-        )
+        if (!preserveLiveActivity) {
+            liveActivityLifecyclePublisher?.endMemberSchedule(memberId, scheduleId, liveActivityEndReason)
+        }
     }
 
     @Transactional

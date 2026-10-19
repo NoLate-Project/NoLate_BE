@@ -16,6 +16,16 @@ import org.springframework.data.repository.query.Param
 import java.time.Instant
 
 interface LiveActivityLifecycleIntentRepository : JpaRepository<LiveActivityLifecycleIntent, Long> {
+    @Query("""
+        select count(i) > 0 from LiveActivityLifecycleIntent i
+        where i.completedAt is null and (
+          (i.scopeType = com.noLate.notification.liveactivity.domain.LiveActivityLifecycleScopeType.MEMBER and i.memberId = :memberId)
+          or (i.scopeType = com.noLate.notification.liveactivity.domain.LiveActivityLifecycleScopeType.SCHEDULE and i.scheduleId = :scheduleId)
+          or (i.scopeType = com.noLate.notification.liveactivity.domain.LiveActivityLifecycleScopeType.MEMBER_SCHEDULE and i.memberId = :memberId and i.scheduleId = :scheduleId)
+        )
+    """)
+    fun hasUnfinishedEndForMemberSchedule(memberId: Long, scheduleId: Long): Boolean
+
     @Query(
         """
         select intent.id from LiveActivityLifecycleIntent intent

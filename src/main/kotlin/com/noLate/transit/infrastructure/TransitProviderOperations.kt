@@ -27,6 +27,8 @@ enum class TransitWireProvider(
 enum class TransitWireOperation(val metricTag: String) {
     ARRIVAL("arrival"),
     STATION_LOOKUP("station_lookup"),
+    VEHICLE_POSITION("vehicle_position"),
+    ROUTE_GEOMETRY("route_geometry"),
 }
 
 enum class TransitWireOutcome(val metricTag: String) {
@@ -47,7 +49,9 @@ class TransitProviderApplicationException(
     rawCode: String?,
 ) : IllegalStateException(
     "${provider.metricTag} returned an application-level error: " + boundedProviderCode(rawCode),
-)
+) {
+    val code: String = boundedProviderCode(rawCode)
+}
 
 /**
  * A physical HTTP request can be much more numerous than a logical arrival lookup, especially for
