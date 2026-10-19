@@ -178,6 +178,12 @@ data class ScheduleTravelPlanUpsertCommand(
     val destinationAddress: String? = null,
     val destinationLat: Double? = null,
     val destinationLng: Double? = null,
+    /** 첫 경로 선택 시 선택한 경로의 도착지를 공통 도착지에도 반영한다. */
+    val resolveUnlocatedCommonDestination: Boolean = false,
+    val expectedCommonDestinationName: String? = null,
+    val expectedCommonDestinationAddress: String? = null,
+    val expectedCommonDestinationLat: Double? = null,
+    val expectedCommonDestinationLng: Double? = null,
     val routeJson: String? = null,
     val notificationEnabled: Boolean = false,
     val notificationLeadMinutes: Int? = null,
