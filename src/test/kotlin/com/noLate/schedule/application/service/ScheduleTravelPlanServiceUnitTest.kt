@@ -267,6 +267,136 @@ class ScheduleTravelPlanServiceUnitTest {
     }
 
     @Test
+    fun `first route save adopts the destination selected in the route list`() {
+        val schedule = scheduleEntity()
+        val commonRoute = requireNotNull(schedule.route).apply {
+            destinationName = "금광2동3804번지"
+            destinationAddress = null
+            destinationLat = null
+            destinationLng = null
+            locationName = "금광2동3804번지"
+            routeJson = null
+        }
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.findByScheduleIdAndMemberIdForUpdate(10L, 1L)).thenReturn(null)
+        whenever(travelPlanRepository.saveAndFlush(any<ScheduleTravelPlan>())).thenAnswer { it.getArgument(0) }
+
+        val result = service.upsertMyTravelPlan(
+            memberId = 1L,
+            scheduleId = 10L,
+            command = routeCommand(originName = "집", travelMinutes = 31).copy(
+                destinationName = "경기도 성남시 중원구 금광동 3804",
+                destinationAddress = "경기도 성남시 중원구 금광동 3804",
+                destinationLat = 37.45,
+                destinationLng = 127.17,
+                resolveUnlocatedCommonDestination = true,
+                expectedCommonDestinationName = "금광2동3804번지",
+            ),
+        )
+
+        assertEquals("경기도 성남시 중원구 금광동 3804", commonRoute.destinationName)
+        assertEquals("경기도 성남시 중원구 금광동 3804", commonRoute.locationName)
+        assertEquals("경기도 성남시 중원구 금광동 3804", commonRoute.destinationAddress)
+        assertEquals(37.45, commonRoute.destinationLat)
+        assertEquals(127.17, commonRoute.destinationLng)
+        assertEquals(commonRoute.destinationName, result.destination?.name)
+    }
+
+    @Test
+    fun `first route save adopts a selected destination even when the old destination had coordinates`() {
+        val schedule = scheduleEntity().apply {
+            requireNotNull(route).routeJson = null
+        }
+        val commonRoute = requireNotNull(schedule.route)
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.saveAndFlush(any<ScheduleTravelPlan>())).thenAnswer { it.getArgument(0) }
+
+        val result = service.upsertMyTravelPlan(
+            memberId = 1L,
+            scheduleId = 10L,
+            command = routeCommand(originName = "집", travelMinutes = 31).copy(
+                destinationName = "선택한 도착지",
+                destinationAddress = "서울시 관악구",
+                destinationLat = 37.48,
+                destinationLng = 126.95,
+                resolveUnlocatedCommonDestination = true,
+                expectedCommonDestinationName = commonRoute.destinationName,
+                expectedCommonDestinationAddress = commonRoute.destinationAddress,
+                expectedCommonDestinationLat = commonRoute.destinationLat,
+                expectedCommonDestinationLng = commonRoute.destinationLng,
+            ),
+        )
+
+        assertEquals("선택한 도착지", commonRoute.destinationName)
+        assertEquals("서울시 관악구", commonRoute.destinationAddress)
+        assertEquals(37.48, result.destination?.lat)
+        assertEquals(126.95, result.destination?.lng)
+        assertEquals("{\"id\":\"target-route\"}", result.route?.toString())
+    }
+
+    @Test
+    fun `first route resolution rejects a stale original place`() {
+        val schedule = scheduleEntity().apply {
+            requireNotNull(route).destinationLat = null
+            requireNotNull(route).destinationLng = null
+        }
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+
+        val error = assertThrows(BusinessException::class.java) {
+            service.upsertMyTravelPlan(
+                memberId = 1L,
+                scheduleId = 10L,
+                command = routeCommand(originName = "집", travelMinutes = 31).copy(
+                    destinationName = "새 도착지",
+                    destinationLat = 37.45,
+                    destinationLng = 127.17,
+                    resolveUnlocatedCommonDestination = true,
+                    expectedCommonDestinationName = "오래된 도착지",
+                ),
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_STATE, error.errorCode)
+        assertNull(schedule.route?.destinationLat)
+        verify(travelPlanRepository, never()).saveAndFlush(any<ScheduleTravelPlan>())
+    }
+
+    @Test
+    fun `first route resolution cannot rewrite another participants active plan`() {
+        val schedule = scheduleEntity().apply {
+            requireNotNull(route).destinationLat = null
+            requireNotNull(route).destinationLng = null
+            requireNotNull(route).destinationAddress = null
+            requireNotNull(route).routeJson = null
+        }
+        whenever(scheduleRepository.findScheduleDetail(10L, 1L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.findAllActiveForScheduleUpdate(10L))
+            .thenReturn(listOf(travelPlan(memberId = 2L, originName = "참여자 집")))
+
+        val error = assertThrows(BusinessException::class.java) {
+            service.upsertMyTravelPlan(
+                memberId = 1L,
+                scheduleId = 10L,
+                command = routeCommand(originName = "집", travelMinutes = 31).copy(
+                    destinationName = "새 도착지",
+                    destinationLat = 37.45,
+                    destinationLng = 127.17,
+                    resolveUnlocatedCommonDestination = true,
+                    expectedCommonDestinationName = "강남역",
+                ),
+            )
+        }
+
+        assertEquals(ErrorCode.INVALID_STATE, error.errorCode)
+        assertNull(schedule.route?.destinationLat)
+        verify(travelPlanRepository, never()).saveAndFlush(any<ScheduleTravelPlan>())
+    }
+
+    @Test
     fun `viewer cannot supplement missing common destination coordinates`() {
         val schedule = scheduleEntity().apply {
             requireNotNull(route).destinationLat = null

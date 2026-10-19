@@ -83,7 +83,7 @@ class ScheduleTravelPlanService(
                 throw BusinessException(ErrorCode.FORBIDDEN, "이 일정은 이동 기능을 공유하지 않습니다.")
             }
         }
-        supplementCommonDestinationCoordinates(
+        synchronizeCommonDestination(
             memberId = memberId,
             schedule = schedule,
             command = command,
@@ -566,15 +566,8 @@ class ScheduleTravelPlanService(
         }
     }
 
-    /**
-     * 빠른 일정은 공통 목적지 이름만 먼저 저장할 수 있다. 이후 오너 또는 에디터가 실제 경로를
-     * 선택하면 개인 계획 요청에 포함된 동일 목적지 좌표로 비어 있는 공통 좌표만 보강한다.
-     *
-     * 공통 목적지의 이름과 주소는 이 경계에서 절대 변경하지 않는다. 기존 의미와 일치하는
-     * 식별자가 없거나, 권한 없는 참가자가 공유 좌표를 쓰려는 요청은 거부한다. schedule row는
-     * 호출자가 이미 비관적 잠금했으므로 동시에 들어온 보강도 한 좌표 쌍으로 직렬화된다.
-     */
-    private fun supplementCommonDestinationCoordinates(
+    /** 첫 경로 선택은 목록에서 선택한 도착지를 공통 도착지와 개인 경로에 함께 저장한다. */
+    private fun synchronizeCommonDestination(
         memberId: Long,
         schedule: Schedule,
         command: ScheduleTravelPlanUpsertCommand,
@@ -590,6 +583,52 @@ class ScheduleTravelPlanService(
         val candidateCoordinates = command.requireValidDestinationCoordinates()
         val hasLatitude = destination.destinationLat != null
         val hasLongitude = destination.destinationLng != null
+        if (hasLatitude != hasLongitude) {
+            throw BusinessException(
+                ErrorCode.INVALID_STATE,
+                "공통 도착지 좌표가 부분적으로만 저장되어 있습니다. 일정 편집에서 장소를 다시 저장해 주세요.",
+            )
+        }
+        if (command.resolveUnlocatedCommonDestination) {
+            if (!canEditCommonDestination) {
+                throw BusinessException(ErrorCode.FORBIDDEN, "공통 도착지를 변경할 권한이 없습니다.")
+            }
+            // 첫 경로 저장에 한해 현재 화면에서 선택한 도착지를 채택한다. 기존 도착지를
+            // 이름으로 추측하지 않고 잠근 일정의 스냅샷과 비교해 오래된 요청을 거부한다.
+            if (
+                (command.expectedCommonDestinationName == null &&
+                    command.expectedCommonDestinationAddress == null &&
+                    command.expectedCommonDestinationLat == null &&
+                    command.expectedCommonDestinationLng == null) ||
+                command.expectedCommonDestinationName != destination.destinationName ||
+                command.expectedCommonDestinationAddress != destination.destinationAddress ||
+                command.expectedCommonDestinationLat != destination.destinationLat ||
+                command.expectedCommonDestinationLng != destination.destinationLng ||
+                !destination.routeJson.isNullOrBlank()
+            ) {
+                throw BusinessException(
+                    ErrorCode.INVALID_STATE,
+                    "일정의 도착지 또는 경로가 이미 변경되었습니다. 일정을 다시 확인해 주세요.",
+                )
+            }
+            val selectedName = command.destinationName?.trim()?.takeIf(String::isNotEmpty)
+                ?: command.destinationAddress?.trim()?.takeIf(String::isNotEmpty)
+                ?: throw BusinessException(ErrorCode.INVALID_INPUT, "선택한 경로의 도착지 이름이 없습니다.")
+            val activePlans = travelPlanRepository.findAllActiveForScheduleUpdate(requireNotNull(schedule.id))
+            if (activePlans.any { it.memberId != memberId || !it.routeJson.isNullOrBlank() }) {
+                throw BusinessException(
+                    ErrorCode.INVALID_STATE,
+                    "이미 저장된 이동 계획이 있어 공통 도착지를 변경할 수 없습니다. 일정을 다시 확인해 주세요.",
+                )
+            }
+
+            destination.locationName = selectedName
+            destination.destinationName = selectedName
+            destination.destinationAddress = command.destinationAddress?.trim()?.takeIf(String::isNotEmpty)
+            destination.destinationLat = candidateCoordinates.lat
+            destination.destinationLng = candidateCoordinates.lng
+            return
+        }
         // 이미 확정된 공통 좌표는 절대 덮어쓰지 않는다. 다만 새 클라이언트가 목적지 좌표를
         // 보냈다면 개인 routeJson/travelMinutes가 전혀 다른 장소 기준으로 섞이지 않도록
         // provider 표기명이 아니라 실제 좌표 간 거리를 검증한다.
@@ -608,12 +647,6 @@ class ScheduleTravelPlanService(
             }
             return
         }
-        if (hasLatitude != hasLongitude) {
-            throw BusinessException(
-                ErrorCode.INVALID_STATE,
-                "공통 도착지 좌표가 부분적으로만 저장되어 있습니다. 일정 편집에서 장소를 다시 저장해 주세요.",
-            )
-        }
         if (!canEditCommonDestination) {
             throw BusinessException(
                 ErrorCode.FORBIDDEN,
@@ -621,14 +654,13 @@ class ScheduleTravelPlanService(
             )
         }
 
-        if (
-            !ScheduleDestinationIdentity.matches(
-                firstName = destination.destinationName,
-                firstAddress = destination.destinationAddress,
-                secondName = command.destinationName,
-                secondAddress = command.destinationAddress,
-            )
-        ) {
+        val sameDestination = ScheduleDestinationIdentity.matches(
+            firstName = destination.destinationName,
+            firstAddress = destination.destinationAddress,
+            secondName = command.destinationName,
+            secondAddress = command.destinationAddress,
+        )
+        if (!sameDestination) {
             throw BusinessException(
                 ErrorCode.INVALID_INPUT,
                 "선택한 도착지가 일정의 공통 도착지와 일치하지 않습니다.",

@@ -133,6 +133,75 @@ class ScheduleTravelPlanConcurrencyIntegrationTest @Autowired constructor(
     }
 
     @Test
+    fun `first searched route replaces a different saved destination and persists personal plan together`() {
+        val suffix = System.nanoTime()
+        val owner = memberRepository.saveAndFlush(
+            Member(name = "Owner", password = "Password1!", email = "confirmed-destination-$suffix@example.com")
+        )
+        val schedule = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = requireNotNull(owner.id),
+                title = "금광2동3804번지 방문",
+                startAt = Instant.parse("2026-08-05T01:00:00Z"),
+                endAt = Instant.parse("2026-08-05T02:00:00Z"),
+            ).apply {
+                updateRoute(
+                    travelMinutes = null,
+                    departAt = null,
+                    departedAt = null,
+                    travelMode = null,
+                    locationName = "금광2동3804번지",
+                    originName = null,
+                    originAddress = null,
+                    originLat = null,
+                    originLng = null,
+                    destinationName = "금광2동3804번지",
+                    destinationAddress = "서울시 강남구 강남대로 396",
+                    destinationLat = 37.497,
+                    destinationLng = 127.027,
+                    routeJson = null,
+                    notificationEnabled = false,
+                    notificationLeadMinutes = null,
+                    notificationIntervalMinutes = null,
+                )
+            }
+        )
+        val scheduleId = requireNotNull(schedule.id)
+        val ownerId = requireNotNull(owner.id)
+
+        val result = service.upsertMyTravelPlan(
+            memberId = ownerId,
+            scheduleId = scheduleId,
+            command = command(31).copy(
+                destinationName = "경기도 성남시 중원구 금광동 3804",
+                destinationAddress = "경기도 성남시 중원구 금광동 3804",
+                destinationLat = 37.45,
+                destinationLng = 127.17,
+                resolveUnlocatedCommonDestination = true,
+                expectedCommonDestinationName = "금광2동3804번지",
+                expectedCommonDestinationAddress = "서울시 강남구 강남대로 396",
+                expectedCommonDestinationLat = 37.497,
+                expectedCommonDestinationLng = 127.027,
+            ),
+        )
+
+        entityManager.flush()
+        entityManager.clear()
+        val persistedSchedule = scheduleRepository.findById(scheduleId).orElseThrow()
+        val persistedRoute = requireNotNull(persistedSchedule.route)
+        val persistedPlan = requireNotNull(
+            travelPlanRepository.findByScheduleIdAndMemberIdAndDeletedFalse(scheduleId, ownerId)
+        )
+        assertEquals(ScheduleTravelPlanStatus.READY, result.status)
+        assertEquals("경기도 성남시 중원구 금광동 3804", persistedRoute.destinationName)
+        assertEquals("경기도 성남시 중원구 금광동 3804", persistedRoute.locationName)
+        assertEquals("경기도 성남시 중원구 금광동 3804", persistedRoute.destinationAddress)
+        assertEquals(37.45, persistedRoute.destinationLat)
+        assertEquals(127.17, persistedRoute.destinationLng)
+        assertTrue(ScheduleTravelPlanFingerprint.matches(persistedPlan, persistedSchedule))
+    }
+
+    @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun `concurrent first saves for same member leave exactly one travel plan`() {
         val fixture = createFixture()
