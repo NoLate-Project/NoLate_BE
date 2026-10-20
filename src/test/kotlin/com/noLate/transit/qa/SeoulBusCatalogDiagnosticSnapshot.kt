@@ -28,8 +28,9 @@ internal fun catalogDiagnostic(stops: List<SeoulBusRouteStop>, shape: List<Seoul
 internal fun writeCatalogDiagnostic(target: Path, stops: List<SeoulBusRouteStop>, shape: List<SeoulBusRoutePathPoint>) {
     val absolute = target.toAbsolutePath().normalize()
     val parent = absolute.parent
+    val temporaryRoot = Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize()
     require(absolute.fileName.toString() == "catalog-diagnostic.json"
-        && parent.parent == Path.of("/private/tmp") && parent.fileName.toString().startsWith("nolate-seoul-catalog-")
+        && parent.parent == temporaryRoot && parent.fileName.toString().startsWith("nolate-seoul-catalog-")
         && parent.toRealPath() == parent && !Files.isSymbolicLink(parent)
         && Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS))
     val bytes = jacksonObjectMapper().writeValueAsBytes(catalogDiagnostic(stops, shape))

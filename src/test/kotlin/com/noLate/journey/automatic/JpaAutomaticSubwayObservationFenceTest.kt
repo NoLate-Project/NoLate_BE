@@ -25,6 +25,7 @@ import org.springframework.data.jpa.repository.support.JpaRepositoryFactory
 import org.springframework.transaction.support.*
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -38,7 +39,7 @@ class JpaAutomaticSubwayObservationFenceTest {
     @Test fun `real H2 concurrent plan revision edit invalidates OSIV cached personal route`()=run("edit")
     @Test fun `enabled Spring wiring without installed catalog makes zero provider calls`()=run("missing-catalog")
     private fun run(mode:String) {
-        val clock=AutomaticJourneyMutableClock(java.time.Instant.now());val f=AutomaticJourneyFixture(clock)
+        val clock=AutomaticJourneyMutableClock(java.time.Instant.now().truncatedTo(ChronoUnit.MICROS));val f=AutomaticJourneyFixture(clock)
         val route=syntheticSavedSubwayRoute(f.mapper)
         if(mode=="official") {
             val leg=route.path("transitLegs")[1] as com.fasterxml.jackson.databind.node.ObjectNode
