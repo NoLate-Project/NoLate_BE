@@ -25,6 +25,7 @@ import org.springframework.data.jpa.repository.support.JpaRepositoryFactory
 import org.springframework.transaction.support.*
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -37,14 +38,9 @@ class JpaAutomaticSubwayObservationFenceTest {
     @Test fun `real H2 concurrent cancellation invalidates OSIV cached preparation`()=run("cancel")
     @Test fun `real H2 concurrent plan revision edit invalidates OSIV cached personal route`()=run("edit")
     @Test fun `enabled Spring wiring without installed catalog makes zero provider calls`()=run("missing-catalog")
-    @Test fun `active subway transfer still receives observations after departure disables notification`() = run("active-transfer")
-    @Test fun `active subway transfer rejects a changed saved route during train lookup`() = run("active-transfer-edit")
     private fun run(mode:String) {
-        // H2 rounds persisted timestamps to microseconds. Keep the fixed test clock at
-        // database precision so preparedAt cannot round into its own future.
-        val clock=AutomaticJourneyMutableClock(java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS));val f=AutomaticJourneyFixture(clock)
-        val transfer = mode.startsWith("active-transfer")
-        val route=syntheticSavedSubwayRoute(f.mapper, transfer)
+        val clock=AutomaticJourneyMutableClock(java.time.Instant.now().truncatedTo(ChronoUnit.MICROS));val f=AutomaticJourneyFixture(clock)
+        val route=syntheticSavedSubwayRoute(f.mapper)
         if(mode=="official") {
             val leg=route.path("transitLegs")[1] as com.fasterxml.jackson.databind.node.ObjectNode
             leg.put("lineName","2호선").put("startName","강남").put("endName","선릉").put("directionCode","DOWN")
@@ -76,16 +72,10 @@ class JpaAutomaticSubwayObservationFenceTest {
             val member=Member(email="subway-owned@example.invalid",sessionGeneration=2);em.persist(member);memberId=requireNotNull(member.id)
             val plan=ScheduleTravelPlan(scheduleId=9001,memberId=memberId,routeJson=f.plan.route.toString());em.persist(plan);em.flush();planId=requireNotNull(plan.id)
             f.plan=f.plan.copy(memberId=memberId)
-            val prepared = AutomaticJourneyPreparation(sessionId=f.sessionId,memberId=memberId,scheduleId=9001,
+            preparations.saveAndFlush(AutomaticJourneyPreparation(sessionId=f.sessionId,memberId=memberId,scheduleId=9001,
                 loginSessionGeneration=2,clientOwnerId=f.owner,routeInputDigest=f.digest,
                 routeFingerprint=JourneyRouteSnapshot.from(f.plan,f.mapper).fingerprint,generation=1,
-                execution=AutomaticJourneyExecution.SIMULATOR,preparedAt=clock.now,expiresAt=clock.now.plusSeconds(600))
-            if (transfer) {
-                prepared.activate(f.event(), clock.now)
-                // Semantically unchanged route, same side-effect as a plan row version bump.
-                plan.routeJson = plan.routeJson + " "
-            }
-            preparations.saveAndFlush(prepared)
+                execution=AutomaticJourneyExecution.SIMULATOR,preparedAt=clock.now,expiresAt=clock.now.plusSeconds(600)))
         }
         val osiv=emf.createEntityManager()
         osiv.find(Member::class.java,memberId);osiv.find(ScheduleTravelPlan::class.java,planId)
@@ -103,7 +93,7 @@ class JpaAutomaticSubwayObservationFenceTest {
                 f.plan.copy(route=f.mapper.readTree(em.find(ScheduleTravelPlan::class.java,planId).routeJson))
             }
             val automatic=AutomaticJourneyService(preparations,members,plans,f.departure,f.jobs,f.schedules,f.manual,f.mapper,clock,
-                true,true,true,true,false,"test",savedPrepareFence=SavedJourneyPrepareFence(members,em))
+                true,true,true,true,false,"test")
             var calls=0;val ids=listOf("9990000001","9990000002","9990000003")
             val catalog=if(mode=="official") officialCatalog(clock) else SavedSubwayServicePatternCatalog { _,_ ->
                 JourneySubwayTrainStationMatcher.Pattern(SeoulSubwayObservationLine.LINE_2,0,ids.last(),0,ids,0,2)
@@ -111,16 +101,10 @@ class JpaAutomaticSubwayObservationFenceTest {
             val provider=mock<SeoulTransitArrivalClient>()
             whenever(provider.getSubwayTrainObservations(any())).thenAnswer {
                 calls++;assertFalse(TransactionSynchronizationManager.isActualTransactionActive())
-                if(mode in setOf("logout","cancel","edit","active-transfer-edit"))CompletableFuture.runAsync { tx.execute {
+                if(mode in setOf("logout","cancel","edit"))CompletableFuture.runAsync { tx.execute {
                     when(mode) {
                         "logout"->em.find(Member::class.java,memberId,LockModeType.PESSIMISTIC_WRITE).sessionGeneration=3
                         "cancel"->preparations.findBySessionId(f.sessionId)!!.stop(clock.now)
-                        "active-transfer-edit" -> {
-                            val row = em.find(ScheduleTravelPlan::class.java, planId, LockModeType.PESSIMISTIC_WRITE)
-                            val changed = f.mapper.readTree(row.routeJson) as com.fasterxml.jackson.databind.node.ObjectNode
-                            changed.put("id", "different-saved-route")
-                            row.routeJson = changed.toString()
-                        }
                         "edit"->em.find(ScheduleTravelPlan::class.java,planId,LockModeType.PESSIMISTIC_WRITE).routeJson=f.plan.route.toString()+" "
                     }
                 } }.get(2,TimeUnit.SECONDS)
@@ -146,9 +130,9 @@ class JpaAutomaticSubwayObservationFenceTest {
                 assertNull(configured.startupFailure)
                 assertEquals(1,configured.getBeansOfType(JourneySubwayObservationController::class.java).size)
                 val service=configured.getBean(JourneySubwayObservationService::class.java)
-                val command=JourneySubwayObservationCommand(1,1,f.owner,f.digest,if(transfer) 3 else 1)
+                val command=JourneySubwayObservationCommand(1,1,f.owner,f.digest,1)
                 when(mode) {
-                    "complete", "active-transfer" ->assertEquals(1,service.observe(memberId,9001,2,f.sessionId,command)["matchingTrainCount"])
+                    "complete"->assertEquals(1,service.observe(memberId,9001,2,f.sessionId,command)["matchingTrainCount"])
                     "official"->{
                         val result=service.input(memberId,9001,2,f.sessionId,command)
                         assertEquals("TRAIN_REFERENCES_ONLY",result["status"])

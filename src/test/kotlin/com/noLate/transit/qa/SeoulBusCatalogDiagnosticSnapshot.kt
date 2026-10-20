@@ -33,6 +33,7 @@ internal fun catalogDiagnosticRoot(): Path = listOf(Path.of("/private/tmp"), Pat
 internal fun writeCatalogDiagnostic(target: Path, stops: List<SeoulBusRouteStop>, shape: List<SeoulBusRoutePathPoint>) {
     val absolute = target.toAbsolutePath().normalize()
     val parent = absolute.parent
+    val temporaryRoot = Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize()
     require(absolute.fileName.toString() == "catalog-diagnostic.json"
         && parent.parent == catalogDiagnosticRoot() && parent.fileName.toString().startsWith("nolate-seoul-catalog-")
         && parent.toRealPath() == parent && !Files.isSymbolicLink(parent)
