@@ -38,7 +38,9 @@ class JpaAutomaticSubwayObservationFenceTest {
     @Test fun `real H2 concurrent plan revision edit invalidates OSIV cached personal route`()=run("edit")
     @Test fun `enabled Spring wiring without installed catalog makes zero provider calls`()=run("missing-catalog")
     private fun run(mode:String) {
-        val clock=AutomaticJourneyMutableClock(java.time.Instant.now());val f=AutomaticJourneyFixture(clock)
+        // H2 rounds persisted timestamps to microseconds. Keep the fixed test clock at
+        // database precision so preparedAt cannot round into its own future.
+        val clock=AutomaticJourneyMutableClock(java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS));val f=AutomaticJourneyFixture(clock)
         val route=syntheticSavedSubwayRoute(f.mapper)
         if(mode=="official") {
             val leg=route.path("transitLegs")[1] as com.fasterxml.jackson.databind.node.ObjectNode
