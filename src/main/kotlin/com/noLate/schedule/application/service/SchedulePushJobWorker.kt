@@ -15,6 +15,8 @@ import com.noLate.notification.liveactivity.application.ScheduleLiveActivityEtaP
 import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
 import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
+import com.noLate.eta.application.transit.TransitTransferRealtimeGuard
+import com.noLate.schedule.domain.PlannedJourneyArrivalBasis
 import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
@@ -82,6 +84,7 @@ class SchedulePushJobWorker(
     private val operationalMetrics: NoLateOperationalMetrics? = null,
     private val departureAlarmSyncService: DepartureAlarmSyncService? = null,
     private val scheduleLiveActivityService: ScheduleLiveActivityService? = null,
+    private val plannedRideRealtimeGuard: TransitTransferRealtimeGuard? = null,
 
     // 출발 상태 API와 같은 유예시간 설정을 사용한다.
     @Value("\${schedule.traffic.departure-status-snapshot-grace-minutes:5}")
@@ -305,16 +308,28 @@ class SchedulePushJobWorker(
             val previousEffectiveRouteSnapshot = EffectiveTransitRouteSnapshot.parse(
                 objectMapper = objectMapper,
                 json = job.lastEffectiveTransitRouteJson,
-            )
-            val effectiveRouteSnapshot = if (route.travelMode == ScheduleTravelMode.TRANSIT) {
+            ).takeIf { job.lastEtaRouteFingerprint == routeFingerprint }
+            val baseEffectiveRouteSnapshot = if (route.travelMode == ScheduleTravelMode.TRANSIT) {
                 EffectiveTransitRouteSnapshot.from(
                     trafficResult = trafficResult,
                     previous = previousEffectiveRouteSnapshot,
                     evaluationCheckCount = job.checkCount,
                     notificationGeneration = job.notificationGeneration,
+                    evaluatedAt = now,
                 )
             } else {
                 null
+            }
+            val effectiveRouteSnapshot = baseEffectiveRouteSnapshot?.let { snapshot ->
+                val plan = snapshot.inProgressPlannedRoute
+                val currentMatched = snapshot.plannedJourneyArrivalPrediction(now, arrivalSourceMaxAgeSeconds)
+                    ?.basis == PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
+                if (plan == null || currentMatched) snapshot else {
+                    // 출발 후 출발지 재검색이 지난 열차를 버려도, 저장한 동일 환승편은
+                    // 별도로 1회만 확인한다. 이 값은 출발 알람/정상 ETA에 전달하지 않는다.
+                    val observation = plannedRideRealtimeGuard?.observeLastPlannedRide(plan, now)
+                    snapshot.copy(plannedArrivalObservation = observation)
+                }
             }
             val effectiveRouteSnapshotJson = effectiveRouteSnapshot
                 ?.let(objectMapper::writeValueAsString)
@@ -322,7 +337,9 @@ class SchedulePushJobWorker(
                 ?.takeIf(EffectiveTransitRouteSnapshot::accepted)
                 ?.effectiveTransitRoute
             val routeChanged = effectiveRouteSnapshot?.routeChanged == true
-            val routeTransitioned = effectiveRouteSnapshot?.routeTransitioned == true
+            // 이미 시작한 계획 여정의 재조회는 새 출발 경로 알림으로 되돌리지 않는다.
+            val routeTransitioned = effectiveRouteSnapshot?.routeTransitioned == true &&
+                effectiveRouteSnapshot.inProgressPlannedRoute == null
             val effectiveRouteSummary = verifiedEffectiveRoute
                 ?.segments
                 ?.asSequence()
@@ -372,15 +389,19 @@ class SchedulePushJobWorker(
                     ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
 
             // 대중교통 재조회 결과가 기존 알림을 뒤로 미루지 못하게 수정
-            val recommendedDepartureAt = selectedRoute.anchoredDepartureAt ?: preventUnsafeTransitPostponement(
+            val recommendedDepartureAt = if (effectiveRouteSnapshot?.inProgressPlannedRoute != null) {
+                requireNotNull(previousRecommendedDepartureAt)
+            } else selectedRoute.anchoredDepartureAt ?: preventUnsafeTransitPostponement(
                 travelMode = request.travelMode,
                 previousRecommendedDepartureAt = previousRecommendedDepartureAt,
                 candidateRecommendedDepartureAt = candidateRecommendedDepartureAt,
             )
+            val inProgressPlannedRoute = effectiveRouteSnapshot?.inProgressPlannedRoute
             val degradedTransitPresentation =
-                route.travelMode == ScheduleTravelMode.TRANSIT && !trafficResult.accepted
+                route.travelMode == ScheduleTravelMode.TRANSIT &&
+                    (!trafficResult.accepted || inProgressPlannedRoute != null)
             val preservedAcceptedRoute = effectiveRouteSnapshot
-                ?.acceptedRoute()
+                ?.let { inProgressPlannedRoute ?: it.acceptedRoute() }
                 ?.takeIf { degradedTransitPresentation }
             val liveActivityTravelMinutes = when {
                 preservedAcceptedRoute != null -> preservedAcceptedRoute.totalMinutes
@@ -445,8 +466,8 @@ class SchedulePushJobWorker(
             // 조회 실패·시간표 부족·stale 결과는 알람 변경의 근거가 아니다.
             // 기존 알람은 그대로 두고, 채택 가능한 ETA 또는 확정 환승 실패만 동기화한다.
             // 특히 첫 평가의 과거 fallback 출발시각으로 미래 알람을 취소하면 안 된다.
-            val canSynchronizeAlarm = trafficResult.accepted ||
-                etaFailureReason == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED
+            val canSynchronizeAlarm = inProgressPlannedRoute == null &&
+                (trafficResult.accepted || etaFailureReason == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED)
             val alarmIntent = departureAlarmSyncService?.takeIf { canSynchronizeAlarm }?.let {
                 SchedulePushAlarmIntent.AutomaticEta(
                     memberId = job.memberId,
@@ -564,12 +585,14 @@ class SchedulePushJobWorker(
             val shouldPush =
                 !persistedEventExpired && !malformedPersistedEvent && (
                     persistedEvent != null ||
-                    reminderDecision != DepartureReminderDecision.NONE ||
-                    trafficChangeMinutes > 0 ||
-                    departureAdvanceMinutes > 0 ||
-                    semanticCatchUpDue ||
-                    transferFailureTransition ||
-                    routeTransitioned
+                    (inProgressPlannedRoute == null && (
+                        reminderDecision != DepartureReminderDecision.NONE ||
+                        trafficChangeMinutes > 0 ||
+                        departureAdvanceMinutes > 0 ||
+                        semanticCatchUpDue ||
+                        transferFailureTransition ||
+                        routeTransitioned
+                    ))
                     )
 
             val pushOutcome = if (persistedEventExpired || malformedPersistedEvent) {

@@ -3,14 +3,21 @@ package com.noLate.eta.application
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.eta.application.port.TransitJourneyProvider
 import com.noLate.eta.application.transit.FirstBoardingRealtimeOverlay
+import com.noLate.eta.application.transit.TransitRealtimeOverlay
+import com.noLate.eta.application.transit.TransitRealtimeOverlayResolution
 import com.noLate.eta.application.transit.SafeDepartureResolver
 import com.noLate.eta.application.transit.TransitJourneyMatcher
 import com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator
+import com.noLate.eta.application.transit.TransitTransferRealtimeGuard
+import com.noLate.eta.application.transit.TransitRideObservationPoint
+import com.noLate.eta.application.transit.TransitRideRealtimeObservation
 import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitJourneyLeg
 import com.noLate.eta.domain.TransitJourneySearchRequest
 import com.noLate.eta.domain.TransitLegMode
+import com.noLate.eta.domain.TransitLegTimetable
 import com.noLate.eta.domain.TransitLegTimingBasis
+import com.noLate.eta.domain.SeoulSubwayLine
 import com.noLate.eta.domain.TransitLine
 import com.noLate.eta.domain.TransitServiceClass
 import com.noLate.eta.domain.TransitStop
@@ -41,6 +48,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.time.Clock
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 
@@ -638,6 +646,171 @@ class TransitEtaCalculationServiceTest {
     }
 
     @Test
+    fun `동일 환승 열차의 실시간 지연이 확인되면 시간표 도착을 정상 ETA로 채택하지 않는다`() {
+        whenever(busArrivals()).thenReturn(
+            listOf(busArrival(expectedAt = evaluatedAt.plus(5, ChronoUnit.MINUTES)))
+        )
+        val guard = mock<TransitTransferRealtimeGuard>()
+        whenever(guard.observeLateTransfers(any(), eq(evaluatedAt))).thenReturn(listOf(
+            TransitRideRealtimeObservation(2, TransitRideObservationPoint.BOARDING,
+                evaluatedAt.plus(32, ChronoUnit.MINUTES), evaluatedAt),
+        ))
+        val selectedJourney = transferJourney(
+            firstRouteId = "bus-402",
+            firstLineName = "402",
+            secondRouteId = "subway-2",
+            secondLineName = "2호선",
+            firstArrivalMinute = 20,
+            transferWalkMinutes = 5,
+            secondDepartureMinute = 30,
+            finalArrivalMinute = 50,
+        )
+        val provider = RecordingProvider(providerId = "odsay", result = listOf(selectedJourney))
+
+        val result = service(listOf(provider), guard).calculate(
+            request(selectedRouteJson = selectedTransferRouteJson())
+        )
+
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_REALTIME_DELAY, result.failureReason)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.effectiveTransitRoute)
+        // 기존 검색 예산 안에서만 더 이른 동일 경로를 찾아본다.
+        assertEquals(3, provider.searchCount)
+    }
+
+    @Test
+    fun `환승편 하차역 관측을 최종 ETA와 두 승차 구간 표시로 함께 계산한다`() {
+        val firstOverlay = mock<FirstBoardingRealtimeOverlay>()
+        whenever(firstOverlay.resolve(any(), eq(evaluatedAt), any())).thenReturn(
+            TransitRealtimeOverlayResolution(overlay = TransitRealtimeOverlay(
+                travelMinutes = 43,
+                predictedArrivalAt = evaluatedAt.plus(43, ChronoUnit.MINUTES),
+                observedAt = evaluatedAt,
+                boardingAt = evaluatedAt.plus(6, ChronoUnit.MINUTES),
+            ))
+        )
+        val guard = mock<TransitTransferRealtimeGuard>()
+        whenever(guard.observeLateTransfers(any(), eq(evaluatedAt))).thenReturn(listOf(
+            TransitRideRealtimeObservation(3, TransitRideObservationPoint.ALIGHTING,
+                evaluatedAt.plus(45, ChronoUnit.MINUTES), evaluatedAt),
+        ))
+        fun table(line: SeoulSubwayLine, train: String, from: String, to: String,
+                  boardingMinute: Long, arrivalMinute: Long) = TransitLegTimetable(
+            provider = "seoul-timetable", line = line,
+            serviceDate = LocalDate.of(2026, 7, 29), trainNumber = train,
+            directionCode = "DOWN", serviceClass = TransitServiceClass.LOCAL,
+            fromStationCode = from, toStationCode = to, terminalName = "종착",
+            boardingAt = evaluatedAt.plus(boardingMinute, ChronoUnit.MINUTES),
+            arrivalAt = evaluatedAt.plus(arrivalMinute, ChronoUnit.MINUTES), fetchedAt = evaluatedAt,
+        )
+        val journey = TransitJourney(
+            provider = "odsay", requestedDepartureAt = evaluatedAt, departureAt = evaluatedAt,
+            arrivalAt = evaluatedAt.plus(42, ChronoUnit.MINUTES), totalMinutes = 42, fetchedAt = evaluatedAt,
+            legs = listOf(
+                TransitJourneyLeg(0, TransitLegMode.WALK, 5),
+                TransitJourneyLeg(1, TransitLegMode.SUBWAY, 15,
+                    scheduledDepartureAt = evaluatedAt.plus(5, ChronoUnit.MINUTES),
+                    scheduledArrivalAt = evaluatedAt.plus(20, ChronoUnit.MINUTES),
+                    from = TransitStop(providerStopId = "nowon", name = "노원"),
+                    to = TransitStop(providerStopId = "sadang4", name = "사당"),
+                    line = TransitLine(providerRouteId = "subway-4", name = "4호선",
+                        serviceClass = TransitServiceClass.LOCAL),
+                    directionName = "사당 방면", directionCode = "DOWN",
+                    timingBasis = TransitLegTimingBasis.TIMETABLE,
+                    timetable = table(SeoulSubwayLine.LINE_4, "4703", "0411", "0433", 5, 20)),
+                TransitJourneyLeg(2, TransitLegMode.WALK, 5),
+                TransitJourneyLeg(3, TransitLegMode.SUBWAY, 10,
+                    scheduledDepartureAt = evaluatedAt.plus(30, ChronoUnit.MINUTES),
+                    scheduledArrivalAt = evaluatedAt.plus(40, ChronoUnit.MINUTES),
+                    from = TransitStop(providerStopId = "sadang2", name = "사당"),
+                    to = TransitStop(providerStopId = "sillim", name = "신림"),
+                    line = TransitLine(providerRouteId = "subway-2", name = "2호선",
+                        serviceClass = TransitServiceClass.LOCAL),
+                    directionName = "신림 방면", directionCode = "DOWN",
+                    timingBasis = TransitLegTimingBasis.TIMETABLE,
+                    timetable = table(SeoulSubwayLine.LINE_2, "2480", "0226", "0230", 30, 40)),
+                TransitJourneyLeg(4, TransitLegMode.WALK, 2),
+            ),
+        )
+        val selectedJson = """
+            {"provider":"odsay","minutes":42,"transitLegs":[
+              {"kind":"WALK","durationMinutes":5},
+              {"kind":"SUBWAY","durationMinutes":15,"providerRouteId":"subway-4",
+               "lineName":"4호선","serviceClass":"LOCAL","startID":"nowon","startName":"노원",
+               "endID":"sadang4","endName":"사당","directionName":"사당 방면","directionCode":"DOWN"},
+              {"kind":"WALK","durationMinutes":5},
+              {"kind":"SUBWAY","durationMinutes":10,"providerRouteId":"subway-2",
+               "lineName":"2호선","serviceClass":"LOCAL","startID":"sadang2","startName":"사당",
+               "endID":"sillim","endName":"신림","directionName":"신림 방면","directionCode":"DOWN"},
+              {"kind":"WALK","durationMinutes":2}
+            ]}
+        """.trimIndent()
+        val provider = RecordingProvider(providerId = "odsay", result = listOf(journey))
+
+        val result = service(listOf(provider), guard, firstOverlay).calculate(
+            request(selectedRouteJson = selectedJson,
+                targetArrivalAt = evaluatedAt.plus(50, ChronoUnit.MINUTES))
+        )
+
+        assertTrue(result.accepted)
+        assertFalse(result.stale)
+        assertEquals(TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED, result.transitTimingBasis)
+        assertEquals(evaluatedAt.plus(47, ChronoUnit.MINUTES), result.predictedArrivalAt)
+        val route = requireNotNull(result.effectiveTransitRoute)
+        assertEquals(result.predictedArrivalAt, route.arrivalAt)
+        assertEquals(evaluatedAt.plus(21, ChronoUnit.MINUTES), route.segments[1].rideTiming?.predictedArrivalAt)
+        assertEquals(evaluatedAt.plus(45, ChronoUnit.MINUTES), route.segments[3].rideTiming?.predictedArrivalAt)
+        assertEquals(evaluatedAt, route.segments[3].rideTiming?.observationSourceUpdatedAt)
+
+        // 첫 차량 피드가 끊겨도 뒤 구간의 관측 자체는 폐기하지 않는다. 다만 출발 알림에
+        // 사용할 전체 여정 근거가 없으므로 정상 ETA로 승격하지 않는다.
+        whenever(firstOverlay.resolve(any(), eq(evaluatedAt), any())).thenReturn(
+            TransitRealtimeOverlayResolution(
+                overlay = null,
+                failureReason = TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE,
+            )
+        )
+        // 두 번째 열차가 15분 조회 창 안으로 들어온 별도 짧은 후보. 먼 미래 열차를
+        // 실시간으로 가장해 조회하지 않는 기존 한도 보호는 유지한다.
+        val shortJourney = journey.copy(
+            arrivalAt = evaluatedAt.plus(22, ChronoUnit.MINUTES), totalMinutes = 22,
+            legs = journey.legs.mapIndexed { index, leg -> when (index) {
+                1 -> leg.copy(durationMinutes = 3,
+                    scheduledArrivalAt = evaluatedAt.plus(8, ChronoUnit.MINUTES),
+                    timetable = leg.timetable!!.copy(arrivalAt = evaluatedAt.plus(8, ChronoUnit.MINUTES)))
+                2 -> leg.copy(durationMinutes = 2)
+                3 -> leg.copy(durationMinutes = 8,
+                    scheduledDepartureAt = evaluatedAt.plus(12, ChronoUnit.MINUTES),
+                    scheduledArrivalAt = evaluatedAt.plus(20, ChronoUnit.MINUTES),
+                    timetable = leg.timetable!!.copy(
+                        boardingAt = evaluatedAt.plus(12, ChronoUnit.MINUTES),
+                        arrivalAt = evaluatedAt.plus(20, ChronoUnit.MINUTES)))
+                else -> leg
+            } },
+        )
+        whenever(guard.observeLateTransfers(any(), eq(evaluatedAt))).thenReturn(listOf(
+            TransitRideRealtimeObservation(3, TransitRideObservationPoint.ALIGHTING,
+                evaluatedAt.plus(25, ChronoUnit.MINUTES), evaluatedAt),
+        ))
+        org.mockito.Mockito.clearInvocations(guard)
+        val firstUnobserved = service(listOf(RecordingProvider("odsay", listOf(shortJourney))),
+            guard, firstOverlay).calculate(
+            request(selectedRouteJson = selectedJson,
+                targetArrivalAt = evaluatedAt.plus(30, ChronoUnit.MINUTES))
+        )
+        assertFalse(firstUnobserved.accepted)
+        assertTrue(firstUnobserved.stale)
+        assertEquals(TransitTimingBasis.FIRST_BOARDING_TIMETABLE_TRANSFER_OBSERVED,
+            firstUnobserved.transitTimingBasis)
+        assertEquals(evaluatedAt.plus(27, ChronoUnit.MINUTES), firstUnobserved.predictedArrivalAt)
+        assertEquals(evaluatedAt.plus(25, ChronoUnit.MINUTES),
+            firstUnobserved.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.predictedArrivalAt)
+        verify(guard, times(1)).observeLateTransfers(any(), eq(evaluatedAt))
+    }
+
+    @Test
     fun `선택 여정의 미래 환승 시간표가 없어도 검증된 대체 경로가 있으면 명시적으로 전환한다`() {
         whenever(busArrivals()).thenReturn(
             listOf(busArrival(expectedAt = evaluatedAt.plus(12, ChronoUnit.MINUTES)))
@@ -1199,7 +1372,11 @@ class TransitEtaCalculationServiceTest {
         org.mockito.kotlin.verifyNoInteractions(provider, arrivalService)
     }
 
-    private fun service(providers: List<TransitJourneyProvider>): TransitEtaCalculationService {
+    private fun service(
+        providers: List<TransitJourneyProvider>,
+        transferRealtimeGuard: TransitTransferRealtimeGuard? = null,
+        firstBoardingOverlay: FirstBoardingRealtimeOverlay? = null,
+    ): TransitEtaCalculationService {
         val matcher = TransitJourneyMatcher()
         return TransitEtaCalculationService(
             selectedRouteDecoder = SelectedTransitRouteDecoder(jacksonObjectMapper()),
@@ -1209,7 +1386,7 @@ class TransitEtaCalculationServiceTest {
                 maxSearches = 3,
                 toleranceSeconds = 60,
             ),
-            firstBoardingRealtimeOverlay = FirstBoardingRealtimeOverlay(
+            firstBoardingRealtimeOverlay = firstBoardingOverlay ?: FirstBoardingRealtimeOverlay(
                 transitArrivalService = arrivalService,
                 clock = clock,
                 boardingBufferSeconds = 60,
@@ -1217,6 +1394,7 @@ class TransitEtaCalculationServiceTest {
             ),
             journeyMatcher = matcher,
             transferFeasibilityEvaluator = TransitTransferFeasibilityEvaluator(),
+            transferRealtimeGuard = transferRealtimeGuard,
         )
     }
 

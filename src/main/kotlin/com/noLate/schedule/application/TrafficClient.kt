@@ -16,6 +16,10 @@ enum class TransitRouteProvenance {
 
 enum class TransitTimingBasis {
     FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
+    /** 동일 환승 열차의 신선한 승차 또는 하차역 도착 예측을 일부 구간에 반영했다. */
+    FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED,
+    /** 환승편은 관측됐지만 첫 승차는 시간표뿐이라 출발 알림에는 채택하지 않는다. */
+    FIRST_BOARDING_TIMETABLE_TRANSFER_OBSERVED,
     FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
     /** 첫 차량 도착만 실시간이며 나머지 구간은 경로 추정값이다. */
     FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
@@ -68,6 +72,8 @@ enum class EffectiveTransitRouteSegmentKind {
 enum class EffectiveTransitRideTimingBasis {
     TIMETABLE,
     FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+    TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+    TRANSFER_ALIGHTING_REALTIME,
 }
 
 /** 비교용 원본 시간표와 이번 계산의 승하차 예측을 분리한다. 미래 환승은 실시간이 아니다. */
@@ -76,13 +82,21 @@ data class EffectiveTransitRideTiming(
     val predictedBoardingAt: Instant,
     val predictedArrivalAt: Instant,
     val basis: EffectiveTransitRideTimingBasis,
+    val observationSourceUpdatedAt: Instant? = null,
 ) {
     init {
         require(predictedArrivalAt.isAfter(predictedBoardingAt))
         // 첫 열차의 관측 지연만 승하차 양쪽에 한 번 적용한다. 운행시간을 임의 보정하지 않는다.
         val shift = java.time.Duration.between(timetable.boardingAt, predictedBoardingAt)
-        require(predictedArrivalAt == timetable.arrivalAt.plus(shift))
+        if (basis != EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME) {
+            require(predictedArrivalAt == timetable.arrivalAt.plus(shift))
+        } else require(shift.isZero)
         require(basis != EffectiveTransitRideTimingBasis.TIMETABLE || shift.isZero)
+        require(
+            (basis == EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME ||
+                basis == EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE) ==
+                (observationSourceUpdatedAt != null)
+        )
     }
 }
 
@@ -288,6 +302,8 @@ object TrafficFailureReasons {
         "TRANSIT_TRANSFER_MISSED: 첫 승차 지연으로 선택 여정의 환승 차량을 탈 수 없습니다."
     const val TRANSIT_TRANSFER_TIMING_UNKNOWN =
         "TRANSIT_TRANSFER_TIMING_UNKNOWN: 환승 시간표 또는 안전 여유가 불충분해 환승 가능 여부를 확정할 수 없습니다."
+    const val TRANSIT_TRANSFER_REALTIME_DELAY =
+        "TRANSIT_TRANSFER_REALTIME_DELAY: 선택한 환승 열차의 실시간 지연으로 시간표 도착시각을 사용할 수 없습니다."
     const val TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY =
         "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY: 경로 추정시각만 있어 전체 여정의 도착시각을 확정할 수 없습니다."
     const val UNSUPPORTED_TRAVEL_MODE =
@@ -342,6 +358,8 @@ fun sanitizeTrafficFailureReason(reason: String?): String? {
         "TRANSIT_TRANSFER_MISSED" -> TrafficFailureReasons.TRANSIT_TRANSFER_MISSED
         "TRANSIT_TRANSFER_TIMING_UNKNOWN" ->
             TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN
+        "TRANSIT_TRANSFER_REALTIME_DELAY" ->
+            TrafficFailureReasons.TRANSIT_TRANSFER_REALTIME_DELAY
         "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY" ->
             TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY
         "UNSUPPORTED_TRAVEL_MODE" -> TrafficFailureReasons.UNSUPPORTED_TRAVEL_MODE

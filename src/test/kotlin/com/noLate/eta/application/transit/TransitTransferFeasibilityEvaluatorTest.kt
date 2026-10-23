@@ -2,18 +2,93 @@ package com.noLate.eta.application.transit
 
 import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitJourneyLeg
+import com.noLate.eta.domain.SeoulSubwayLine
+import com.noLate.eta.domain.TransitLegTimetable
 import com.noLate.eta.domain.TransitLegMode
 import com.noLate.eta.domain.TransitLegTimingBasis
+import com.noLate.eta.domain.TransitServiceClass
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
 import java.time.Instant
+import java.time.LocalDate
 
 class TransitTransferFeasibilityEvaluatorTest {
     private val departureAt = Instant.parse("2026-08-01T08:00:00Z")
     private val evaluator = TransitTransferFeasibilityEvaluator()
+
+    @Test
+    fun `첫 승차가 미관측이어도 동일 환승편의 하차 예측은 독립적으로 계산한다`() {
+        val journey = observedTransferJourney()
+        val observation = TransitRideRealtimeObservation(
+            3, TransitRideObservationPoint.ALIGHTING,
+            departureAt.plusSeconds(45 * 60), departureAt,
+        )
+
+        val result = evaluator.evaluateWithObservedTransfers(
+            journey, null, departureAt, listOf(observation),
+        )!!
+
+        assertEquals(TransitTransferStatus.FEASIBLE, result.status)
+        assertEquals(departureAt.plusSeconds(47 * 60), result.predictedArrivalAt)
+        assertEquals(TransitJourneyTimingBasis.FIRST_BOARDING_TIMETABLE_TRANSFER_OBSERVED, result.timingBasis)
+        assertEquals(journey.rideLegs.first().timetable?.boardingAt,
+            result.observedRideTimings[1]?.boardingAt)
+        assertEquals(departureAt.plusSeconds(45 * 60), result.observedRideTimings[3]?.arrivalAt)
+    }
+
+    @Test
+    fun `환승 열차 하차역 예측을 해당 구간과 최종 도착에만 반영한다`() {
+        val journey = observedTransferJourney()
+        val observation = TransitRideRealtimeObservation(
+            3, TransitRideObservationPoint.ALIGHTING,
+            departureAt.plusSeconds(45 * 60), departureAt,
+        )
+
+        val result = evaluator.evaluateWithObservedTransfers(
+            journey, firstOverlay(journey), departureAt, listOf(observation),
+        )!!
+
+        assertEquals(TransitTransferStatus.FEASIBLE, result.status)
+        assertEquals(departureAt.plusSeconds(47 * 60), result.predictedArrivalAt)
+        assertEquals(47, result.travelMinutes)
+        assertEquals(TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED, result.timingBasis)
+        assertEquals(departureAt.plusSeconds(21 * 60), result.observedRideTimings[1]?.arrivalAt)
+        assertEquals(departureAt.plusSeconds(45 * 60), result.observedRideTimings[3]?.arrivalAt)
+    }
+
+    @Test
+    fun `환승 열차 승차역 지연은 그 열차의 시간표 운행시간만 이동한다`() {
+        val journey = observedTransferJourney()
+        val observation = TransitRideRealtimeObservation(
+            3, TransitRideObservationPoint.BOARDING,
+            departureAt.plusSeconds(32 * 60), departureAt,
+        )
+
+        val result = evaluator.evaluateWithObservedTransfers(
+            journey, firstOverlay(journey), departureAt, listOf(observation),
+        )!!
+
+        assertEquals(TransitTransferStatus.FEASIBLE, result.status)
+        assertEquals(departureAt.plusSeconds(44 * 60), result.predictedArrivalAt)
+        assertEquals(departureAt.plusSeconds(42 * 60), result.observedRideTimings[3]?.arrivalAt)
+    }
+
+    @Test
+    fun `구간 시간표가 없으면 일부 실시간 관측으로 전체 ETA를 만들지 않는다`() {
+        val journey = observedTransferJourney().let { it.copy(legs = it.legs.mapIndexed { index, leg ->
+            if (index == 3) leg.copy(timetable = null) else leg
+        }) }
+
+        assertNull(evaluator.evaluateWithObservedTransfers(
+            journey, firstOverlay(journey), departureAt,
+            listOf(TransitRideRealtimeObservation(3, TransitRideObservationPoint.ALIGHTING,
+                departureAt.plusSeconds(45 * 60), departureAt)),
+        ))
+    }
 
     @Test
     fun `첫 승차 접근 111초를 2분으로 올림해서 탈 수 있는 차량을 놓쳤다고 하지 않는다`() {
@@ -334,6 +409,44 @@ class TransitTransferFeasibilityEvaluatorTest {
 
         assertEquals(TransitTransferStatus.FEASIBLE, result.status)
         assertEquals(journey.arrivalAt, result.predictedArrivalAt)
+    }
+
+    private fun firstOverlay(journey: TransitJourney) = TransitRealtimeOverlay(
+        travelMinutes = journey.totalMinutes,
+        predictedArrivalAt = journey.arrivalAt,
+        observedAt = departureAt,
+        boardingAt = departureAt.plusSeconds(6 * 60),
+    )
+
+    private fun observedTransferJourney(): TransitJourney {
+        fun table(line: SeoulSubwayLine, train: String, from: String, to: String,
+                  boardingMinute: Long, arrivalMinute: Long) = TransitLegTimetable(
+            provider = "seoul-timetable", line = line,
+            serviceDate = LocalDate.parse("2026-08-01"), trainNumber = train,
+            directionCode = "DOWN", serviceClass = TransitServiceClass.LOCAL,
+            fromStationCode = from, toStationCode = to, terminalName = "종착",
+            boardingAt = departureAt.plusSeconds(boardingMinute * 60),
+            arrivalAt = departureAt.plusSeconds(arrivalMinute * 60), fetchedAt = departureAt,
+        )
+        return TransitJourney(
+            provider = "odsay", requestedDepartureAt = departureAt, departureAt = departureAt,
+            arrivalAt = departureAt.plusSeconds(42 * 60), totalMinutes = 42, fetchedAt = departureAt,
+            legs = listOf(
+                TransitJourneyLeg(0, TransitLegMode.WALK, 5),
+                TransitJourneyLeg(1, TransitLegMode.SUBWAY, 15,
+                    scheduledDepartureAt = departureAt.plusSeconds(5 * 60),
+                    scheduledArrivalAt = departureAt.plusSeconds(20 * 60),
+                    timingBasis = TransitLegTimingBasis.TIMETABLE,
+                    timetable = table(SeoulSubwayLine.LINE_4, "4703", "0411", "0433", 5, 20)),
+                TransitJourneyLeg(2, TransitLegMode.WALK, 5),
+                TransitJourneyLeg(3, TransitLegMode.SUBWAY, 10,
+                    scheduledDepartureAt = departureAt.plusSeconds(30 * 60),
+                    scheduledArrivalAt = departureAt.plusSeconds(40 * 60),
+                    timingBasis = TransitLegTimingBasis.TIMETABLE,
+                    timetable = table(SeoulSubwayLine.LINE_2, "2480", "0226", "0230", 30, 40)),
+                TransitJourneyLeg(4, TransitLegMode.WALK, 2),
+            ),
+        )
     }
 
     private fun singleRideJourney(timingBasis: TransitLegTimingBasis): TransitJourney = TransitJourney(

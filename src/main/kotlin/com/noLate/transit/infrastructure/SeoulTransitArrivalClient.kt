@@ -437,6 +437,12 @@ class SeoulTransitArrivalClient(
             observedAt = response.receivedAt)
     }
 
+    /** 격리 진단용 캐시 조회. 이미 받은 역 응답만 읽고 방향·limit 필터 전의 같은 노선 편을 반환한다. */
+    internal fun peekCachedSubwayLineArrivals(stationName: String, lineName: String?): List<TransitArrivalDto>? {
+        val response = synchronized(subwayResponseCache) { subwayResponseCache[stationName] } ?: return null
+        return parseSubwayArrivals(response.body, lineName, null, null, 40, observedAt = response.receivedAt)
+    }
+
     internal fun parseSubwayArrivals(
         response: JsonNode,
         lineName: String?,

@@ -272,6 +272,8 @@ object EtaRealProviderSimulatorServer {
                 context.getBean(com.noLate.eta.application.TransitEtaCalculationService::class.java),
                 context.getBean(com.noLate.eta.application.transit.FirstBoardingRealtimeOverlay::class.java),
             )
+            val plannedRideTrace = RealPlannedRideObservationTrace(
+                context.getBean(com.noLate.eta.application.transit.TransitTransferRealtimeGuard::class.java))
             var requestTrace: SeoulArrivalRequestTrace? = null
             val timetableTrace = RealTimetableSelectionTrace(
                 context.getBean(com.noLate.eta.application.transit.TransitJourneyTimetableEnricher::class.java))
@@ -295,6 +297,7 @@ object EtaRealProviderSimulatorServer {
                 val evidence = mapOf("classification" to "REAL_PROVIDER_ISOLATED_WORKER",
                     "journeyProvider" to journeyProviderId, "requestedCoordinates" to requestedCoordinates,
                     "firstBoardingSelectionTrace" to selectionTrace.snapshot(),
+                    "plannedRideObservationTrace" to plannedRideTrace.snapshot(),
                     "timetableSelectionTrace" to timetableTrace.snapshot(), "journeyTimingTrace" to journeyTimingTrace.snapshot(),
                     "database" to "H2_MEMORY_ONLY", "providersMocked" to false,
                     "pushAcknowledgementMocked" to true, "clockMode" to "SYSTEM_WALL_CLOCK",
@@ -466,6 +469,7 @@ object EtaRealProviderSimulatorServer {
                     "journeyProvider" to journeyProviderId,
                     "requestedCoordinates" to requestedCoordinates,
                     "firstBoardingSelectionTrace" to selectionTrace.snapshot(),
+                    "plannedRideObservationTrace" to plannedRideTrace.snapshot(),
                     "timetableSelectionTrace" to timetableTrace.snapshot(),
                     "journeyTimingTrace" to journeyTimingTrace.snapshot(),
                     "database" to "H2_MEMORY_ONLY", "providersMocked" to false,
@@ -506,7 +510,7 @@ object EtaRealProviderSimulatorServer {
                 println("REAL_ISOLATED_EVALUATED " + count)
                 System.out.flush()
                 if (requestTrace != null) break // At most one actual Worker comparison, no quota retry loop.
-            } } finally { requestTrace?.close(); journeyTimingTrace.close(); timetableTrace.close(); selectionTrace.close() }
+            } } finally { requestTrace?.close(); journeyTimingTrace.close(); timetableTrace.close(); plannedRideTrace.close(); selectionTrace.close() }
         }
     }
 
