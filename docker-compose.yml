@@ -8,7 +8,7 @@ services:
       - "5522:5522"
     restart: unless-stopped
     environment:
-      SPRING_PROFILES_ACTIVE: prod
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       SPRING_CONFIG_IMPORT: optional:file:/config/env.properties
       # 서비스 계정 파일은 아래 volume으로 항상 마운트하므로, 환경 파일의 기본값과 무관하게
       # 운영 푸시 클라이언트가 해당 파일을 사용하도록 명시한다.
