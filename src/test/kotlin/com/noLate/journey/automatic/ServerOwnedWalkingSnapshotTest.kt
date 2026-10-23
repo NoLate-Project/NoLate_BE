@@ -27,6 +27,16 @@ class ServerOwnedWalkingSnapshotTest {
         (paths[0] as MutableList).clear()
         assertThat(value.validatedWalks(f.plan, 7, 2, 1, f.clock.instant(), f.mapper)[0]).hasSize(3)
     }
+    @Test fun `unknown ODsay service can bind walking paths but never becomes operating`() {
+        val f = fixture()
+        val route = f.plan.route!!.deepCopy<ObjectNode>().also { it.put("transitServiceState", "unknown") }
+        val plan = f.plan.copy(route = route)
+        val before = f.mapper.writeValueAsString(plan)
+        val value = ServerOwnedWalkingSnapshotFactory(f.mapper, ::syntheticBody, f.clock).issue(plan, 7, 2, 1)
+        assertThat(value.validatedWalks(plan, 7, 2, 1, f.clock.instant(), f.mapper).keys).containsExactly(0, 2)
+        assertThat(f.mapper.writeValueAsString(plan)).isEqualTo(before)
+        assertThat(route.path("transitServiceState").asText()).isEqualTo("unknown")
+    }
     @Test fun `unowned invalid revision and unsupported provenance reject before provider calls`() {
         val f = fixture(); var calls = 0
         val factory = ServerOwnedWalkingSnapshotFactory(f.mapper, { calls++; error("must not fetch") }, f.clock)
@@ -41,11 +51,16 @@ class ServerOwnedWalkingSnapshotTest {
         }
         assertThat(calls).isZero()
     }
-    @Test fun `saved endpoints and competing containers cannot be repaired or proximity matched`() {
+    @Test fun `centimetre ODsay rounding connects but a metre-scale gap and competing containers reject`() {
         val f = fixture(); var calls = 0
         val factory = ServerOwnedWalkingSnapshotFactory(f.mapper, { calls++; error("must not fetch") }, f.clock)
+        val rounded = f.plan.route!!.deepCopy<ObjectNode>()
+        (rounded.path("transitLegs")[0].path("endCoord") as ObjectNode).put("lng", 126.97950001)
+        assertThat(ServerOwnedWalkingSnapshotFactory(f.mapper, ::syntheticBody, f.clock)
+            .issue(f.plan.copy(route = rounded), 7, 2, 1)
+            .validatedWalks(f.plan.copy(route = rounded), 7, 2, 1, f.clock.instant(), f.mapper)).hasSize(2)
         val altered = f.plan.route!!.deepCopy<ObjectNode>()
-        (altered.path("transitLegs")[0].path("endCoord") as ObjectNode).put("lng", 126.97950001)
+        (altered.path("transitLegs")[0].path("endCoord") as ObjectNode).put("lng", 126.97955)
         rejected("ENDPOINT_MISMATCH") { factory.issue(f.plan.copy(route = altered), 7, 2, 1) }
         val competing = f.plan.route!!.deepCopy<ObjectNode>(); competing.set<ObjectNode>("routeInfo", competing.deepCopy())
         rejected("UNSUPPORTED_SAVED_ROUTE") { factory.issue(f.plan.copy(route = competing), 7, 2, 1) }

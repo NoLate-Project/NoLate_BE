@@ -63,9 +63,13 @@ class AutomaticJourneyExpiryTest {
         val simulator = f.service().prepare(7, 9001, 2, f.prepareCommand())
         assertThat(simulator.expiresAt.epochSecond - simulator.preparedAt.epochSecond).isEqualTo(60)
         val device = AutomaticJourneyFixture(isolatedTtlSeconds = 60)
-        val real = device.service(deviceEnabled = true, isolated = false, profiles = "prod")
+        val real = device.service(deviceEnabled = true, isolated = false, profiles = "test")
             .prepare(7, 9001, 2, device.prepareCommand().copy(execution = com.noLate.journey.domain.AutomaticJourneyExecution.DEVICE))
         assertThat(real.expiresAt.epochSecond - real.preparedAt.epochSecond).isEqualTo(600)
+        val production = AutomaticJourneyFixture(isolatedTtlSeconds = 60)
+        assertThatThrownBy { production.service(deviceEnabled = true, isolated = false, profiles = "prod")
+            .prepare(7, 9001, 2, production.prepareCommand().copy(execution = com.noLate.journey.domain.AutomaticJourneyExecution.DEVICE)) }
+            .isInstanceOf(Exception::class.java)
         listOf(59L, 601L).forEach { ttl ->
             val bad = AutomaticJourneyFixture(isolatedTtlSeconds = ttl)
             assertThatThrownBy { bad.service().prepare(7, 9001, 2, bad.prepareCommand()) }.isInstanceOf(Exception::class.java)

@@ -27,6 +27,8 @@ data class AutomaticJourneyPreparationDto(
     val routeInputDigest: String, val preparedAt: Instant, val expiresAt: Instant,
     val execution: AutomaticJourneyExecution,
     val savedRouteValidated: Boolean = false,
+    val officialBusAdmission: JourneyBusDeviceAdmission? = null,
+    val officialSubwayAdmission: JourneySubwayDeviceAdmission? = null,
 )
 data class AutomaticJourneyDepartureAck(
     val sessionId: String, val generation: Long, val routeRevision: Long, val eventKey: String,
@@ -67,6 +69,8 @@ class AutomaticJourneyService(
     @Value("\${journey.automatic.isolated-ttl-seconds:600}") private val isolatedTtlSeconds: Long = 600,
     private val walkingSnapshots: SavedJourneyWalkingSnapshotService? = null,
     @Value("\${journey.automatic.extended-navigation-enabled:false}") private val extendedNavigationEnabled: Boolean = false,
+    private val busDeviceAdmission: JourneyBusDeviceAdmissionVerifier? = null,
+    private val subwayDeviceAdmission: JourneySubwayDeviceAdmissionVerifier? = null,
 ) {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     fun prepareSaved(memberId: Long, scheduleId: Long, loginGeneration: Long, command: com.noLate.journey.domain.AutomaticJourneySavedPrepareCommand): AutomaticJourneyPreparationDto {
@@ -83,14 +87,38 @@ class AutomaticJourneyService(
         if (plan.memberId != memberId || plan.scheduleId != scheduleId) invalid("저장 경로 소유자가 일치하지 않습니다.")
         val walking = if (mixed) walkingSnapshots?.currentForAdmission(memberId, scheduleId, loginGeneration,
             OwnedWalkingRoute(plan, revision)) ?: throw BusinessException(ErrorCode.FEATURE_DISABLED) else null
-        SavedJourneyInputValidator(objectMapper).validate(plan, command.routeInputJSON, command.routeInputDigest, revision, walking)
-        val fingerprint = JourneyRouteSnapshot.from(plan, objectMapper).fingerprint
+        val validator = SavedJourneyInputValidator(objectMapper)
+        validator.validate(plan, command.routeInputJSON, command.routeInputDigest, revision, walking)
+        val snapshot = JourneyRouteSnapshot.from(plan, objectMapper)
+        val (officialBus, officialSubway) = if (command.execution == AutomaticJourneyExecution.DEVICE &&
+            snapshot.legs.map { it.kind } == listOf("WALK", "SUBWAY", "WALK")) {
+            val verified = subwayDeviceAdmission?.verify(snapshot) ?: throw BusinessException(ErrorCode.FEATURE_DISABLED)
+            validator.requireDeviceReady(plan, command.routeInputJSON, walking, officialSubway = verified)
+            null to verified
+        } else if (command.execution == AutomaticJourneyExecution.DEVICE) {
+            if (busDeviceAdmission == null && activeProfiles.split(',').map(String::trim).contains("test")) {
+                // Existing synthetic fixture admission is test-only; production never infers
+                // official route proof from saved/provider metadata alone.
+                validator.requireDeviceReady(plan, command.routeInputJSON, walking)
+                null to null
+            } else {
+                val verified = busDeviceAdmission?.verify(snapshot)
+                    ?: throw BusinessException(ErrorCode.FEATURE_DISABLED)
+                validator.requireDeviceReady(plan, command.routeInputJSON, walking, verified)
+                verified to null
+            }
+        } else null to null
+        val fingerprint = snapshot.fingerprint
         val result = prepareOwned(memberId, scheduleId, loginGeneration, AutomaticJourneyPrepareCommand(command.requestId, command.clientOwnerId, command.routeInputDigest, command.execution), walking)
         if (owned(result.sessionId, memberId, scheduleId, loginGeneration).routeFingerprint != fingerprint) invalid("저장 경로가 변경되었습니다.")
-        return result.copy(savedRouteValidated = true)
+        return result.copy(savedRouteValidated = true, officialBusAdmission = officialBus,
+            officialSubwayAdmission = officialSubway)
     }
     @Transactional(isolation = Isolation.READ_COMMITTED)
     fun prepare(memberId: Long, scheduleId: Long, loginGeneration: Long, command: AutomaticJourneyPrepareCommand): AutomaticJourneyPreparationDto {
+        // Only the attested saved-route endpoint may arm a real device in production.
+        if (command.execution == AutomaticJourneyExecution.DEVICE && productionProfile())
+            throw BusinessException(ErrorCode.FEATURE_DISABLED)
         return prepareOwned(memberId, scheduleId, loginGeneration, command, null)
     }
     private fun prepareOwned(memberId: Long, scheduleId: Long, loginGeneration: Long, command: AutomaticJourneyPrepareCommand,
@@ -335,9 +363,11 @@ class AutomaticJourneyService(
         } else {
             val profiles = activeProfiles.split(',').map(String::trim)
             if (!simulatorEnabled || !isolatedTestScope || profiles.none { it in setOf("test", "journey-isolated-fixture") } ||
-                profiles.any { it.equals("prod", true) || it.equals("production", true) }) throw BusinessException(ErrorCode.FEATURE_DISABLED)
+                productionProfile()) throw BusinessException(ErrorCode.FEATURE_DISABLED)
         }
     }
+    private fun productionProfile() = activeProfiles.split(',').map(String::trim)
+        .any { it.equals("prod", true) || it.equals("production", true) }
     private fun requireUuid(value: String) {
         if (runCatching { UUID.fromString(value).toString() }.getOrNull() != value) throw BusinessException(ErrorCode.INVALID_INPUT, "식별자는 소문자 UUID여야 합니다.")
     }

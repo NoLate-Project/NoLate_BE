@@ -1,5 +1,26 @@
 # P2-2 버스 도착 관측과 저장 경로 매핑
 
+## 2026-10-21 공식 노선 대조 진전과 남은 연결
+
+실제 ODsay `maasRP` 버스 구간이 `way`/`stationCount`를 생략해도, 원본 local BIS 노선·정류장 ID,
+ARS, 순서, 좌표가 온전하면 `JourneyBusRideMapping`은 서울시 공식 순서 있는 정류장 목록과 노선 형상을
+대조할 수 있게 했다. 공식 구간이 유일하고 같은 방면이어야 하며, 원본에 방면/정류장 수가 **있는데**
+공식 자료와 충돌하면 차단한다. 누락된 값을 원본 ODsay 값으로 꾸미거나 기존 도착정보
+`SAVED_ROUTE_METADATA` 계약에 주입하지 않는다. 이 단계의 검증은 합성 ODsay-shaped fixture와
+공식 자료 형태의 fixture를 사용한 서버 단위 테스트이며, 실제 7016 응답 또는 시뮬레이터 E2E가 아니다.
+
+`DEVICE` 준비 전에 `JourneyBusDeviceAdmissionVerifier`가 공식 정류장·형상을 한 번 더 조회해
+저장 BUS와 유일 대조하고 정적 방면/정류장 수를 별도 응답으로 전달한다. FE/native는 원본
+누락 값에 한해서만 이를 적용하며 `serviceState=UNKNOWN`을 `operating`으로 바꾸지 않는다.
+`not_operating`, 형상·순서 불일치, 차량/GPS 근거 부족은 차단한다. 운영의
+`JOURNEY_OFFICIAL_BUS_ADMISSION_ENABLED`는 기본 OFF이고, 기기 길안내를 운영에서 켠다면
+startup guard가 이 플래그도 필수로 확인한다. 이는 실제 운행·탑승 증명이 아니다.
+실제 ODsay 성공 경로의 독립 시뮬레이터 전체 E2E, 실제 APNs, 마지막 실기기 GPS는 각각
+별도 검증해야 한다.
+검증: BE 전체 `./gradlew test` 통과, 추가된 읽기 전용 ride 서비스/매핑 19 tests 통과,
+FE ODsay 누락 필드·기존 엄격 binding 계약 57 tests 통과. 실제 경로 준비가 아직 차단되므로
+이번 단계에서 성공한 사용자 여정 E2E 또는 실기기 검증으로 기록하지 않는다.
+
 2026-10-07 후속: 첫 실제 시험 대상은 **7016 상명대 방면 서울역→경복궁역**으로 선정했다.
 서울시 공식 공개 화면에서 정류장 순서 44~48, 노선 `100100447`, 차량 source timestamp/방면과 형상을 읽기 전용 조회했다.
 이는 운영 API adapter 또는 ODsay 실제 응답 crosswalk 검증 완료가 아니다. test source에 `Seoul7016PreviewFixture`를 추가하고

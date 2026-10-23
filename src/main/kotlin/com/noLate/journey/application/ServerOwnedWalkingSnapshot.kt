@@ -58,7 +58,7 @@ class ServerOwnedWalkingSnapshotFactory(
         val route = if (raw.path("transitLegs").isArray) raw else raw.path("routeInfo")
         if (raw.path("mode").asText() != "TRANSIT" || route.path("provider").asText() != "odsay" ||
             route.path("source").asText() != "api" || route.path("routePlausibility").asText() != "normal" ||
-            route.path("transitServiceState").asText() != "operating" ||
+            route.path("transitServiceState").asText() !in setOf("operating", "unknown") ||
             route.path("routeReliability").asText() !in setOf("live_provider", "provider_estimate")) reject("UNSUPPORTED_SAVED_ROUTE")
         val legs = containers.single()
         if (legs.size() !in 3..31 || legs.size() % 2 != 1 || legs.withIndex().any { (i,leg) ->
@@ -68,15 +68,21 @@ class ServerOwnedWalkingSnapshotFactory(
         val ends = legs.map { coord(it.path("endCoord")) }
         val origin = plan.origin?.let { coord(mapper.valueToTree(it)) } ?: reject("ENDPOINT_MISMATCH")
         val destination = plan.destination?.let { coord(mapper.valueToTree(it)) } ?: reject("ENDPOINT_MISMATCH")
-        // Exact request tuple linkage, not proximity/name matching or inserted connectors.
-        if (starts[0] != origin || ends.last() != destination || (0 until legs.size()-1).any { ends[it] != starts[it+1] })
+        // ODsay stores an interpolated walk endpoint a few centimetres away from
+        // the same ride/origin tuple. This one-metre rounding allowance never
+        // inserts a connector or substitutes a nearby station for the saved leg.
+        fun samePoint(a: ServerWalkingCoordinate, b: ServerWalkingCoordinate) = meters(a, b) <= 1.0
+        if (!samePoint(starts[0], origin) || !samePoint(ends.last(), destination) ||
+            (0 until legs.size()-1).any { !samePoint(ends[it], starts[it+1]) })
             reject("ENDPOINT_MISMATCH")
         val issued = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
         val paths = linkedMapOf<Int, List<ServerWalkingCoordinate>>()
         for (index in 0 until legs.size() step 2) {
             val request = ServerWalkingRequest(starts[index], ends[index])
             if (request.origin == request.destination) reject("ENDPOINT_MISMATCH")
-            val body = try { provider.fetch(request) } catch (_: Exception) { reject("PROVIDER_UNAVAILABLE") }
+            val body = try { provider.fetch(request) }
+                catch (failure: WalkingContractRejected) { throw failure }
+                catch (_: Exception) { reject("PROVIDER_UNAVAILABLE") }
             paths[index] = parse(body, request)
             if (paths.values.sumOf { it.size } > 12_000) reject("INPUT_LIMIT")
             val now = clock.instant()

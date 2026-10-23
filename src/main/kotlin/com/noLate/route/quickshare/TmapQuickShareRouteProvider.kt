@@ -1,7 +1,6 @@
 package com.noLate.route.quickshare
 
 import com.fasterxml.jackson.databind.JsonNode
-import com.noLate.route.infrastructure.tmapTransitSecondsToMinutes
 import com.noLate.schedule.domain.ScheduleTravelMode
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -9,9 +8,6 @@ import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
 import java.net.URLEncoder
-import java.time.OffsetDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlin.math.ceil
 import com.noLate.global.config.externalHttpRequestFactory
 
@@ -70,7 +66,8 @@ class TmapQuickShareRouteProvider(
             ScheduleTravelMode.WALK -> listOf("0", "4").mapIndexedNotNull { index, option ->
                 runCatching { roadRoute(request, option, index) }.getOrNull()
             }
-            ScheduleTravelMode.TRANSIT -> transitRoutes(request)
+            // Transit routes are owned by the ODsay journey provider in QuickShareRouteService.
+            ScheduleTravelMode.TRANSIT -> emptyList()
             else -> emptyList()
         }.distinctBy { "${it.mode}:${it.minutes}:${it.distanceMeters}" }
 
@@ -126,44 +123,4 @@ class TmapQuickShareRouteProvider(
         )
     }
 
-    private fun transitRoutes(request: QuickShareRouteRequest): List<QuickShareRouteOption> {
-        val departure = request.departureAt
-            ?.let { runCatching { OffsetDateTime.parse(it).atZoneSameInstant(ZoneId.of("Asia/Seoul")) }.getOrNull() }
-            ?.format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"))
-        val body = linkedMapOf<String, Any>(
-            "startX" to request.origin.lng.toString(),
-            "startY" to request.origin.lat.toString(),
-            "endX" to request.destination.lng.toString(),
-            "endY" to request.destination.lat.toString(),
-            "count" to 5,
-            "lang" to 0,
-            "format" to "json",
-        ).apply { departure?.let { put("searchDttm", it) } }
-        val response = restClient.post()
-            .uri("/transit/routes")
-            .contentType(MediaType.APPLICATION_JSON)
-            .body(body)
-            .retrieve()
-            .body(JsonNode::class.java)
-            ?: return emptyList()
-        val itineraries = response.path("metaData").path("plan").path("itineraries")
-        if (!itineraries.isArray) return emptyList()
-        return itineraries.mapIndexedNotNull { index, itinerary ->
-            val totalTimeSeconds = itinerary.path("totalTime").takeIf { it.isNumber }?.asDouble()
-                ?: return@mapIndexedNotNull null
-            val minutes = tmapTransitSecondsToMinutes(totalTimeSeconds)
-            val transfers = itinerary.path("transferCount").takeIf { it.isNumber }?.asInt()
-            QuickShareRouteOption(
-                id = "transit-$index-$minutes-${transfers ?: 0}",
-                mode = ScheduleTravelMode.TRANSIT,
-                minutes = minutes.coerceAtLeast(1),
-                distanceMeters = itinerary.path("totalDistance").takeIf { it.isNumber }?.asInt(),
-                transferCount = transfers,
-                walkMeters = itinerary.path("totalWalkDistance").takeIf { it.isNumber }?.asInt(),
-                fareWon = itinerary.path("fare").path("regular").path("totalFare")
-                    .takeIf { it.isNumber }?.asInt(),
-                summary = transfers?.let { "대중교통 · 환승 ${it}회" } ?: "추천 대중교통 경로",
-            )
-        }.sortedBy { it.minutes }
-    }
 }

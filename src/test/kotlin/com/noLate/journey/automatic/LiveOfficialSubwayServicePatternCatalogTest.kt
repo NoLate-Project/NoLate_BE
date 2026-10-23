@@ -2,6 +2,7 @@ package com.noLate.journey.automatic
 
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.noLate.journey.application.*
+import com.noLate.global.error.BusinessException
 import com.noLate.transit.domain.*
 import com.noLate.transit.infrastructure.SeoulMetroShortestPath
 import com.noLate.transit.infrastructure.SeoulMetroShortestPathClient
@@ -77,6 +78,42 @@ class LiveOfficialSubwayServicePatternCatalogTest {
         }
         assertEquals(2, pathCalls)
         assertEquals(2, trainCalls); assertEquals(4, captures)
+    }
+
+    @Test fun `real ODsay metropolitan line label can reach official pattern lookup`() {
+        var officialCalls = 0
+        val catalog = LiveOfficialSubwayServicePatternCatalog({ query ->
+            officialCalls++
+            if (query.stationValueType == SeoulMetroShortestPathClient.StationValueType.NAME)
+                path(stations.take(3)) else path(stations)
+        }, ::coordinates, clock)
+        val prefixed = snapshot { root ->
+            (root.path("transitLegs")[1] as ObjectNode).put("lineName", "수도권 2호선")
+        }
+        assertNotNull(catalog.resolve(prefixed, 1))
+        assertEquals(2, officialCalls)
+        val mismatch = snapshot { root ->
+            (root.path("transitLegs")[1] as ObjectNode).put("lineName", "수도권 4호선")
+        }
+        assertNull(catalog.resolve(mismatch, 1))
+        assertEquals(2, officialCalls)
+    }
+
+    @Test fun `device subway admission requires the complete official path and rejects a changed saved stop`() {
+        val catalog = LiveOfficialSubwayServicePatternCatalog({ query ->
+            if (query.stationValueType == SeoulMetroShortestPathClient.StationValueType.NAME)
+                path(stations.take(3)) else path(stations)
+        }, ::coordinates, clock)
+        val verifier = LiveJourneySubwayDeviceAdmissionVerifier(catalog)
+        val proof = verifier.verify(snapshot())
+        assertEquals("OFFICIAL_STATION_PATH_CROSSWALK", proof.identityEvidence)
+        assertEquals(1, proof.subwayLegIndex)
+        assertEquals(2, proof.stationCount)
+        assertEquals("1000:2", proof.providerRouteId)
+        assertFailsWith<BusinessException> { verifier.verify(snapshot { route ->
+            val row = route.path("transitLegs")[1].path("navigationEvidence").path("stopOccurrences")[1] as ObjectNode
+            (row.path("coord") as ObjectNode).put("lat", 37.60)
+        }) }
     }
 
     @Test fun `a changed official direction or saved stop cannot reach train provider`() {

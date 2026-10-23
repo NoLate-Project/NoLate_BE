@@ -57,6 +57,9 @@ class JourneyGuidanceService(
     private val clock: Clock = Clock.systemUTC(),
     @Value("\${journey.guidance.enabled:false}") private val enabled: Boolean = false,
     private val lifecycleIntentRepository: LiveActivityLifecycleIntentRepository? = null,
+    // The legacy progress endpoint accepts client-supplied MANUAL events. Enabling the
+    // automatic engine must not silently expose that separate departure path in production.
+    @Value("\${journey.guidance.manual-enabled:false}") private val manualEnabled: Boolean = true,
 ) {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     fun start(memberId: Long, scheduleId: Long, loginGeneration: Long, command: JourneyStartCommand): JourneySessionDto {
@@ -156,7 +159,7 @@ class JourneyGuidanceService(
                     ?.let { JourneyRouteSnapshot.from(it, objectMapper) }
             } catch (_: BusinessException) { null }
         } else null
-        if (!enabled || route?.fingerprint != session.routeFingerprint || !now.isBefore(session.expiresAt)) {
+        if (!enabled || !manualEnabled || route?.fingerprint != session.routeFingerprint || !now.isBefore(session.expiresAt)) {
             session.terminate(JourneyPhase.STOPPED, now, "ACCESS_ROUTE_OR_SESSION_EXPIRED")
         }
         project(session)
@@ -181,7 +184,7 @@ class JourneyGuidanceService(
     }
 
     private fun requireEnabled() {
-        if (!enabled) throw BusinessException(ErrorCode.FEATURE_DISABLED)
+        if (!enabled || !manualEnabled) throw BusinessException(ErrorCode.FEATURE_DISABLED)
     }
 
     private fun legs(session: JourneyGuidanceSession) = JourneyRouteSnapshot.describe(objectMapper.readTree(session.routeLegsJson))

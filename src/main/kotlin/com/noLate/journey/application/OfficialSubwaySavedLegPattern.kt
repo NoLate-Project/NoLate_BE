@@ -26,9 +26,10 @@ internal object OfficialSubwaySavedLegPattern {
             "하행", "외선" -> 1
             else -> return null
         }
-        // ODsay wayCode is 1=up/inner, 2=down/outer. Do not silently replace a
-        // saved route's direction with the official shortest-path direction.
-        if (raw.routingWayCode != (directionCode + 1).toString()) return null
+        // ODsay wayCode is validated against its own saved direction label by the
+        // raw-evidence parser, but is not a Seoul inner/outer code. A persisted
+        // Line 2 wayCode=2 can describe an official 내선 segment. The complete
+        // ordered official station path and terminal-bound service select direction.
         if (service.any { it.transfer != "N" || it.express != "N" || it.direction != direction ||
                 it.departure.line != compared.line || it.arrival.line != compared.line ||
                 it.terminalCode != terminal } ||

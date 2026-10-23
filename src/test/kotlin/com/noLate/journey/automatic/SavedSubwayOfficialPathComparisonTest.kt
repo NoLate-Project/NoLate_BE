@@ -40,6 +40,15 @@ class SavedSubwayOfficialPathComparisonTest {
         assertFalse(candidate.toString().contains("0222"))
     }
 
+    @Test fun `ODsay metropolitan display prefix preserves the independently matched raw line`() {
+        val prefixed = snapshot { (it.path("transitLegs")[1] as ObjectNode).put("lineName", "수도권 2호선") }
+        assertEquals("2호선", SavedSubwayOfficialPathComparison.compare(prefixed, 1, official)?.line)
+        assertNull(SavedSubwayOfficialPathComparison.compare(snapshot {
+            (it.path("transitLegs")[1] as ObjectNode).put("lineName", "수도권 4호선")
+        }, 1, official))
+        assertNull(SavedSubwayOfficialPathComparison.canonicalLine("2", "수도권 2호선 급행"))
+    }
+
     @Test fun `single name match cannot override a conflicting full saved route`() {
         val changes = listOf<(ObjectNode) -> Unit>(
             { ((it.path("transitLegs")[1] as ObjectNode).path("navigationEvidence")

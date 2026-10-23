@@ -32,8 +32,13 @@ internal class SubwayObservationConfiguration {
     @Bean
     @ConditionalOnProperty(prefix="journey.subway-observation",name=["official-live-enabled"],havingValue="true")
     fun liveOfficialSubwayCatalog(path: SeoulMetroShortestPathClient,
-        coordinates: SeoulMetroStationCoordinateClient): SavedSubwayServicePatternCatalog =
+        coordinates: SeoulMetroStationCoordinateClient): LiveOfficialSubwayServicePatternCatalog =
         LiveOfficialSubwayServicePatternCatalog({ path.fetch(it) },{ coordinates.fetch() })
+
+    @Bean
+    @ConditionalOnProperty(prefix="journey.automatic",name=["official-subway-admission-enabled"],havingValue="true")
+    fun journeySubwayDeviceAdmissionVerifier(catalog: LiveOfficialSubwayServicePatternCatalog): JourneySubwayDeviceAdmissionVerifier =
+        LiveJourneySubwayDeviceAdmissionVerifier(catalog)
 
     @Bean fun journeySubwayObservationService(automatic: AutomaticJourneyService,mapper: ObjectMapper,
         provider: SeoulTransitArrivalClient,catalogs: ObjectProvider<SavedSubwayServicePatternCatalog>,

@@ -45,6 +45,13 @@ class JourneyGuidanceServiceTest {
     }
 
     @Test
+    fun `automatic guidance flag alone never opens the legacy manual departure path`() {
+        assertThatThrownBy { service(manualEnabled = false).start(7, 41, 2, JourneyStartCommand(requestId)) }
+            .isInstanceOfSatisfying(BusinessException::class.java) { assertThat(it.errorCode).isEqualTo(ErrorCode.FEATURE_DISABLED) }
+        verifyNoInteractions(sessions, departure, jobs, activities)
+    }
+
+    @Test
     fun `authorized schedule without a journey returns null before requiring a personal plan`() {
         whenever(members.findByIdForUpdate(7)).thenReturn(member)
         assertThat(service().current(7, 41, 2)).isNull()
@@ -169,5 +176,7 @@ class JourneyGuidanceServiceTest {
         )
     }
     private fun command() = JourneyProgressCommand(1, 1, 1, JourneyPhase.WAITING, 1, legProgress = 0.0, observedAt = now)
-    private fun service(enabled: Boolean = true) = JourneyGuidanceService(sessions, members, plans, departure, jobs, schedules, activities, mapper, Clock.fixed(now, ZoneOffset.UTC), enabled)
+    private fun service(enabled: Boolean = true, manualEnabled: Boolean = true) = JourneyGuidanceService(
+        sessions, members, plans, departure, jobs, schedules, activities, mapper,
+        Clock.fixed(now, ZoneOffset.UTC), enabled, manualEnabled = manualEnabled)
 }

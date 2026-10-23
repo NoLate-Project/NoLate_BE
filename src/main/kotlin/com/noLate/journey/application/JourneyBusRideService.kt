@@ -59,9 +59,9 @@ class JourneyBusRideService(
         mappings.entries.removeIf { now >= it.value.untilNanos }
         val key = "${route.fingerprint}:$index"
         mappings[key]?.let { return@synchronized it.mapping }
-        val saved = JourneyBusRouteBindingResolver().resolve(route,index)
-        val id = saved.query?.providerRouteId
-        if (id == null || !id.matches(Regex("[1-9][0-9]{8}"))) return@synchronized JourneyBusRideMapping.Result("ROUTE_NAMESPACE_UNAVAILABLE")
+        val saved = JourneyBusRouteBindingResolver().resolveRaw(route,index)
+        val id = saved.evidence?.routeId ?: return@synchronized JourneyBusRideMapping.Result(saved.status)
+        if (!id.matches(Regex("[1-9][0-9]{8}"))) return@synchronized JourneyBusRideMapping.Result("ROUTE_NAMESPACE_UNAVAILABLE")
         if (mappings.size >= 32) return@synchronized JourneyBusRideMapping.Result("MAPPING_BUDGET_EXHAUSTED")
         val result = try {
             val stops = provider.getBusRouteDiagnosticStops(id)

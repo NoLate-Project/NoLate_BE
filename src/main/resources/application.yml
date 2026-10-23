@@ -275,6 +275,8 @@ schedule:
 routing:
   tmap:
     enabled: ${TMAP_ENABLED:false}
+    # Legacy TMAP 대중교통 endpoint/ETA 전용. 지도·주소·도로 TMAP 설정과 분리한다.
+    transit-enabled: ${TMAP_TRANSIT_ENABLED:false}
     app-key: ${TMAP_APP_KEY:}
     base-url: ${TMAP_BASE_URL:https://apis.openapi.sk.com}
 
@@ -370,6 +372,31 @@ calendar:
     cache-ttl-hours: ${KASI_CACHE_TTL_HOURS:168}
 
 journey:
+  guidance:
+    enabled: ${JOURNEY_GUIDANCE_ENABLED:false}
+    # Manual progress is a separate legacy API, not the location-driven product path.
+    manual-enabled: ${JOURNEY_GUIDANCE_MANUAL_ENABLED:false}
+  automatic:
+    enabled: ${JOURNEY_AUTOMATIC_ENABLED:false}
+    device-enabled: ${JOURNEY_AUTOMATIC_DEVICE_ENABLED:false}
+    # Static official route proof is separate from live vehicle/passenger evidence.
+    official-bus-admission-enabled: ${JOURNEY_OFFICIAL_BUS_ADMISSION_ENABLED:false}
+    # DEVICE single-subway admission requires the independent live official path catalog.
+    official-subway-admission-enabled: ${JOURNEY_OFFICIAL_SUBWAY_ADMISSION_ENABLED:false}
+    simulator-enabled: ${JOURNEY_AUTOMATIC_SIMULATOR_ENABLED:false}
+    isolated-test-scope: ${JOURNEY_AUTOMATIC_ISOLATED_TEST_SCOPE:false}
+    expiry-enabled: ${JOURNEY_AUTOMATIC_EXPIRY_ENABLED:false}
+    extended-navigation-enabled: ${JOURNEY_AUTOMATIC_EXTENDED_NAVIGATION_ENABLED:false}
+  activity:
+    enabled: ${JOURNEY_ACTIVITY_ENABLED:false}
+    encryption-key: ${JOURNEY_ACTIVITY_ENCRYPTION_KEY:}
+  walking:
+    enabled: ${JOURNEY_WALKING_ENABLED:false}
+    snapshots-enabled: ${JOURNEY_WALKING_SNAPSHOTS_ENABLED:false}
+    retained-navigation-enabled: ${JOURNEY_WALKING_RETAINED_NAVIGATION_ENABLED:false}
+    extended-navigation-enabled: ${JOURNEY_WALKING_EXTENDED_NAVIGATION_ENABLED:false}
+  bus-ride:
+    enabled: ${JOURNEY_BUS_RIDE_ENABLED:false}
   subway-observation:
     enabled: ${JOURNEY_SUBWAY_OBSERVATION_ENABLED:false}
     # Actual official-data adapter stays off until the server owner explicitly opts in.

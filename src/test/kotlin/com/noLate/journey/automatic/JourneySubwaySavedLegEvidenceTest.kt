@@ -61,9 +61,17 @@ class JourneySubwaySavedLegEvidenceTest {
         assertNotNull(result { it.ids().put("wayCode", "2"); it.raw().put("directionCode", "DOWN"); it.leg().put("directionCode", "DOWN") }.evidence)
     }
 
-    @Test fun `raw rows retain order and require complete explicit count original index and increasing sequence`() {
+    @Test fun `missing provider count is allowed only with complete saved occurrences and display count`() {
+        val r = result { it.raw().remove("declaredStationCount") }
+        assertNotNull(r.evidence)
+        assertFalse(r.seoulRealtimeCrosswalkVerified)
+        assertEquals("RAW_SUBWAY_STATIONS_REQUIRED", result {
+            it.raw().remove("declaredStationCount"); it.leg().put("stationCount", 1)
+        }.status)
+    }
+
+    @Test fun `raw rows retain order and require consistent count original index and increasing sequence`() {
         for (change in listOf<(ObjectNode) -> Unit>(
-            { it.raw().remove("declaredStationCount") },
             { it.raw().put("declaredStationCount", 1) },
             { it.leg().put("stationCount", 1) },
             { (it.raw().path("stopOccurrences")[1] as ObjectNode).put("sourceIndex", 0) },
@@ -91,6 +99,9 @@ class JourneySubwaySavedLegEvidenceTest {
     }
 
     @Test fun `first last raw station and endpoint tuple must agree with saved leg`() {
+        assertNotNull(result {
+            (it.leg().path("startCoord") as ObjectNode).put("lat", 37.500003)
+        }.evidence)
         for (change in listOf<(ObjectNode) -> Unit>(
             { (it.raw().path("stopOccurrences")[0] as ObjectNode).put("routingStationID", "223") },
             { (it.raw().path("stopOccurrences")[2] as ObjectNode).put("routingStationID", "223") },

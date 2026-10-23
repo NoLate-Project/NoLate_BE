@@ -36,8 +36,9 @@ internal class LiveOfficialSubwayServicePatternCatalog(
             catch (_: Exception) { return emptyList() }
         val start = leg.path("startName").takeIf { it.isTextual }?.asText() ?: return emptyList()
         val end = leg.path("endName").takeIf { it.isTextual }?.asText() ?: return emptyList()
-        val line = leg.path("lineName").takeIf { it.isTextual }?.asText() ?: return emptyList()
-        if (start == end || line !in setOf("1호선", "2호선", "3호선", "4호선", "5호선", "6호선", "7호선", "8호선", "9호선"))
+        val line = SavedSubwayOfficialPathComparison.canonicalLine(raw.routingLine,
+            leg.path("lineName").takeIf { it.isTextual }?.asText())
+        if (start == end || line == null)
             return emptyList()
         // The path endpoint can return no paths overnight. Noon is used only to obtain
         // today's service topology; current train position/freshness is never time-shifted.

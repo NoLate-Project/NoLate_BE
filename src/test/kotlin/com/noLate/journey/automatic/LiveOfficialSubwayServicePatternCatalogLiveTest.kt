@@ -5,6 +5,7 @@ import com.noLate.journey.application.JourneyRouteSnapshot
 import com.noLate.journey.application.LiveOfficialSubwayServicePatternCatalog
 import com.noLate.journey.application.SavedJourneySubwayObservationCheck
 import com.noLate.journey.application.SavedSubwayOfficialPathComparison
+import com.noLate.journey.application.JourneySubwaySavedLegEvidence
 import com.noLate.transit.domain.SeoulSubwayTrainStatus
 import com.noLate.transit.infrastructure.SeoulMetroShortestPathClient
 import com.noLate.transit.infrastructure.SeoulMetroStationCoordinateClient
@@ -21,6 +22,52 @@ import kotlin.test.assertTrue
 
 /** Opt-in real-provider check against a saved-route fixture; no passenger GPS or UI assertion. */
 class LiveOfficialSubwayServicePatternCatalogLiveTest {
+    @Test fun `persisted ODsay line two route resolves against today's official station path`() {
+        val routeJson = System.getenv("NOLATE_ODSAY_ROUTE_JSON")
+        val pathKey = System.getenv("DATA_GO_KR_SUBWAY_PATH_API_KEY")
+        assumeTrue(System.getenv("RUN_SEOUL_OFFICIAL_SUBWAY_LIVE") == "1" &&
+            !routeJson.isNullOrBlank() && !pathKey.isNullOrBlank())
+        val f = AutomaticJourneyFixture()
+        val route = f.mapper.readTree(requireNotNull(routeJson))
+        assertEquals("odsay", route.path("provider").asText())
+        val subwayIndex = route.path("transitLegs").indexOfFirst { it.path("kind").asText() == "SUBWAY" }
+        assertTrue(subwayIndex >= 0)
+        assertEquals("수도권 2호선", route.path("transitLegs")[subwayIndex].path("lineName").asText())
+        val saved = JourneyRouteSnapshot.from(f.plan.copy(route = route), f.mapper)
+        val resolution = JourneySubwaySavedLegEvidence.resolve(saved, subwayIndex)
+        val evidence = assertNotNull(resolution.evidence,
+            "Persisted route must retain the complete ODsay stop evidence: ${resolution.status}")
+        println("PERSISTED_ODSAY_EVIDENCE line=${evidence.routingLine} stationCount=${evidence.stations.size}")
+        SeoulMetroShortestPathClient(requireNotNull(pathKey)).use { path ->
+            SeoulMetroStationCoordinateClient().use { coordinates ->
+                val seoul = ZoneId.of("Asia/Seoul")
+                val serviceTime = LocalDate.now(seoul).atTime(12, 0)
+                val leg = route.path("transitLegs")[subwayIndex]
+                val segment = path.fetch(SeoulMetroShortestPathClient.Query(
+                    leg.path("startName").asText(), leg.path("endName").asText(), serviceTime))
+                println("PERSISTED_ODSAY_OFFICIAL_SEGMENT calls=${segment.sections.map { it.departure.name to it.arrival.name }} transfers=${segment.reportedTransferCount} direction=${segment.sections.map { it.direction }} terminal=${segment.sections.map { it.terminalCode }} rawWay=${evidence.routingWayCode}")
+                assertNotNull(SavedSubwayOfficialPathComparison.compare(saved, subwayIndex, segment),
+                    "Saved ODsay station names and order must match official service")
+                val reference = coordinates.fetch()
+                val calls = listOf(segment.sections.first().departure) + segment.sections.map { it.arrival }
+                assertTrue(calls.zip(evidence.stations).all { (official, station) ->
+                    reference.corroborates(official, station.latitude, station.longitude)
+                }, "ODsay station coordinates must agree with official station coordinates")
+                val terminal = assertNotNull(segment.sections.map { it.terminalCode }.distinct().singleOrNull())
+                val full = path.fetch(SeoulMetroShortestPathClient.Query(calls.first().code, terminal,
+                    serviceTime, SeoulMetroShortestPathClient.StationValueType.CODE))
+                println("PERSISTED_ODSAY_OFFICIAL_FULL count=${full.sections.size} directions=${full.sections.map { it.direction }.distinct()} terminal=${full.sections.lastOrNull()?.arrival?.code}")
+                val catalog = LiveOfficialSubwayServicePatternCatalog({ path.fetch(it) }, { coordinates.fetch() })
+                val pattern = assertNotNull(catalog.resolve(saved, subwayIndex),
+                    "The persisted ODsay station sequence must match the official path")
+                assertEquals(1, pattern.alightingIndex)
+                assertEquals(calls.map { it.code }, pattern.stationCalls.take(calls.size))
+                assertEquals(full.sections.size + 1, pattern.stationCalls.size)
+                println("PERSISTED_ODSAY_OFFICIAL_PATH_MATCHED savedStations=${calls.size} terminalBoundStations=${pattern.stationCalls.size}")
+            }
+        }
+    }
+
     @Test fun `simulator saved route reaches the official path and current train feed`() {
         val pathKey = System.getenv("DATA_GO_KR_SUBWAY_PATH_API_KEY")
         val trainKey = System.getenv("SEOUL_SUBWAY_API_KEY")

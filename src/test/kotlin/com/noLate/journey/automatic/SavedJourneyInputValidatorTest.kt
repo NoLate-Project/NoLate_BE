@@ -3,16 +3,34 @@ package com.noLate.journey.automatic
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.noLate.global.error.BusinessException
 import com.noLate.journey.application.SavedJourneyInputValidator
+import com.noLate.journey.application.JourneyRouteSnapshot
+import com.noLate.journey.application.JourneyBusDeviceAdmission
+import com.noLate.journey.application.JourneySubwayDeviceAdmission
+import com.noLate.journey.application.WalkingSnapshotContract
 import com.noLate.journey.domain.AutomaticJourneyExecution
 import com.noLate.journey.domain.AutomaticJourneySavedPrepareCommand
 import com.noLate.schedule.domain.SchedulePlaceDto
+import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import org.assertj.core.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.verifyNoInteractions
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.Path
 
 class SavedJourneyInputValidatorTest {
+    @Test fun `optional captured ODsay simulator input matches its saved route`() {
+        val schedulePath = System.getenv("NOLATE_ODSAY_SCHEDULE_JSON") ?: return
+        val inputPath = System.getenv("NOLATE_ODSAY_INPUT_JSON") ?: return
+        val mapper = AutomaticJourneyFixture().mapper
+        val schedule = mapper.readTree(Files.readString(Path.of(schedulePath)))
+        val plan = mapper.treeToValue(schedule.path("myTravelPlan"), ScheduleTravelPlanDto::class.java)
+        val value = Files.readString(Path.of(inputPath))
+        val input = mapper.readTree(value)
+        val walking = mapper.treeToValue(input.path("walkingSnapshot"), WalkingSnapshotContract::class.java)
+        SavedJourneyInputValidator(mapper).validate(plan, value, digest(value), input.path("routeRevision").asLong(), walking)
+    }
     private val json = """{"schemaVersion":1,"routeRevision":1,"context":"SAVED_ROUTE","provider":"tmap","source":"api","reliability":"live_provider","plausibility":"normal","serviceState":"operating","origin":{"latitude":0,"longitude":0},"destination":{"latitude":0,"longitude":0.002},"legs":[{"index":0,"kind":"WALK","geometrySource":"WALK_STEPS_LINESTRING","exact":true,"geometryInputComplete":true,"coordinates":[{"latitude":0,"longitude":0},{"latitude":0,"longitude":0.001},{"latitude":0,"longitude":0.002}],"start":{"latitude":0,"longitude":0},"end":{"latitude":0,"longitude":0.002},"providerRouteId":null,"localRouteId":null,"directionName":null,"directionCode":null,"serviceAvailable":null,"declaredStationCount":null,"stopEvidenceProvider":"tmap","stopEvidenceVersion":1,"stops":[]}]}"""
     private fun fixture(): AutomaticJourneyFixture = AutomaticJourneyFixture().also { f ->
         f.plan = f.plan.copy(origin = SchedulePlaceDto(lat = 0.0, lng = 0.0), destination = SchedulePlaceDto(lat = 0.0, lng = 0.002),
@@ -105,6 +123,91 @@ class SavedJourneyInputValidatorTest {
         assertThatThrownBy { f.service().prepareSaved(7, 9001, 2, command(f)) }.isInstanceOf(BusinessException::class.java)
         assertThatThrownBy { f.service().prepareSaved(7, 9001, 2, command(f).copy(execution = AutomaticJourneyExecution.DEVICE)) }.isInstanceOf(BusinessException::class.java)
         assertThat(f.prepareCount.get()).isZero()
+    }
+    @Test fun `device admission is limited to mapped single bus rides with a server walking contract`() {
+        val f = AutomaticJourneyFixture().also { it.useRideGuidancePlan() }
+        val validator = SavedJourneyInputValidator(f.mapper)
+        val walk = WalkingSnapshotContract(snapshotId = f.sessionId, memberId = 7, scheduleId = 9001,
+            loginGeneration = 2, routeRevision = 1,
+            routeFingerprint = JourneyRouteSnapshot.from(f.plan, f.mapper).fingerprint,
+            issuedAtMs = 1, expiresAtMs = 2, walks = emptyList())
+        val input = f.mapper.readTree("""{"provider":"odsay","source":"api","reliability":"live_provider",
+            "plausibility":"normal","serviceState":"operating","legs":[
+            {"index":0,"kind":"WALK"},
+            {"index":1,"kind":"BUS","geometrySource":"TRANSIT_PASS_SHAPE_LINESTRING",
+             "exact":true,"geometryInputComplete":true,"coordinates":[{},{}]},
+            {"index":2,"kind":"WALK"}]}""") as ObjectNode
+        assertThatCode { validator.requireDeviceReady(f.plan, input.toString(), walk) }.doesNotThrowAnyException()
+        assertThatThrownBy { validator.requireDeviceReady(f.plan, input.toString(), null) }
+            .isInstanceOf(BusinessException::class.java)
+        for (kind in listOf("SUBWAY", "ETC")) {
+            val changed = input.deepCopy()
+            (changed.path("legs")[1] as ObjectNode).put("kind", kind)
+            assertThatThrownBy { validator.requireDeviceReady(f.plan, changed.toString(), walk) }
+                .isInstanceOf(BusinessException::class.java)
+        }
+        val transfer = input.deepCopy()
+        (transfer.path("legs") as com.fasterxml.jackson.databind.node.ArrayNode).addObject()
+            .put("index", 3).put("kind", "BUS")
+        assertThatThrownBy { validator.requireDeviceReady(f.plan, transfer.toString(), walk) }
+            .isInstanceOf(BusinessException::class.java)
+    }
+    @Test fun `unknown timetable state is not promoted to operating but official bus proof can admit saved geometry`() {
+        val f = AutomaticJourneyFixture().also { it.useRideGuidancePlan() }
+        val evidence = f.plan.route!!.path("transitLegs")[1].path("navigationEvidence") as ObjectNode
+        evidence.remove(listOf("directionName", "declaredStationCount"))
+        val walk = WalkingSnapshotContract(snapshotId = f.sessionId, memberId = 7, scheduleId = 9001,
+            loginGeneration = 2, routeRevision = 1,
+            routeFingerprint = JourneyRouteSnapshot.from(f.plan, f.mapper).fingerprint,
+            issuedAtMs = 1, expiresAtMs = 2, walks = emptyList())
+        val input = f.mapper.readTree("""{"provider":"odsay","source":"api","reliability":"provider_estimate",
+            "plausibility":"normal","serviceState":"UNKNOWN","legs":[
+            {"index":0,"kind":"WALK"},
+            {"index":1,"kind":"BUS","localRouteId":"999999999","geometrySource":"TRANSIT_PASS_SHAPE_LINESTRING",
+             "exact":true,"geometryInputComplete":true,"coordinates":[{},{}],"stops":[{},{},{}]},
+            {"index":2,"kind":"WALK"}]}""") as ObjectNode
+        val proof = JourneyBusDeviceAdmission(routeId = "999999999", direction = "합성 동쪽 방면",
+            stationCount = 2, firstStopSequence = 44, lastStopSequence = 46)
+        val validator = SavedJourneyInputValidator(f.mapper)
+        assertThatCode { validator.requireDeviceReady(f.plan, input.toString(), walk, proof) }.doesNotThrowAnyException()
+        assertThatThrownBy { validator.requireDeviceReady(f.plan, input.toString(), walk) }
+            .isInstanceOf(BusinessException::class.java)
+        val wrongService = input.deepCopy(); wrongService.put("serviceState", "not_operating")
+        assertThatThrownBy { validator.requireDeviceReady(f.plan, wrongService.toString(), walk, proof) }
+            .isInstanceOf(BusinessException::class.java)
+        for (bad in listOf(proof.copy(routeId = "999999998"), proof.copy(stationCount = 3))) {
+            assertThatThrownBy { validator.requireDeviceReady(f.plan, input.toString(), walk, bad) }
+                .isInstanceOf(BusinessException::class.java)
+        }
+    }
+    @Test fun `single saved subway DEVICE input needs matching official path proof`() {
+        val f = AutomaticJourneyFixture()
+        f.plan = f.plan.copy(route = syntheticSavedSubwayRoute(f.mapper))
+        val walk = WalkingSnapshotContract(snapshotId = f.sessionId, memberId = 7, scheduleId = 9001,
+            loginGeneration = 2, routeRevision = 1,
+            routeFingerprint = JourneyRouteSnapshot.from(f.plan, f.mapper).fingerprint,
+            issuedAtMs = 1, expiresAtMs = 2, walks = emptyList())
+        val input = f.mapper.readTree("""{"provider":"odsay","source":"api","reliability":"provider_estimate",
+            "plausibility":"normal","serviceState":"UNKNOWN","legs":[
+            {"index":0,"kind":"WALK"},
+            {"index":1,"kind":"SUBWAY","providerRouteId":"1000:2","geometrySource":"TRANSIT_PASS_SHAPE_LINESTRING",
+             "exact":true,"geometryInputComplete":true,"coordinates":[{},{}],"stops":[
+             {"routingStationId":"222"},{"routingStationId":"223"},{"routingStationId":"224"}]},
+            {"index":2,"kind":"WALK"}]}""") as ObjectNode
+        val proof = JourneySubwayDeviceAdmission(providerRouteId = "1000:2", startRoutingStationId = "222",
+            endRoutingStationId = "224", stationCount = 2)
+        val validator = SavedJourneyInputValidator(f.mapper)
+        assertThatCode { validator.requireDeviceReady(f.plan, input.toString(), walk, officialSubway = proof) }.doesNotThrowAnyException()
+        assertThatThrownBy { validator.requireDeviceReady(f.plan, input.toString(), walk) }.isInstanceOf(BusinessException::class.java)
+        for (bad in listOf(proof.copy(providerRouteId = "1000:3"), proof.copy(stationCount = 3),
+            proof.copy(startRoutingStationId = "223"))) {
+            assertThatThrownBy { validator.requireDeviceReady(f.plan, input.toString(), walk, officialSubway = bad) }
+                .isInstanceOf(BusinessException::class.java)
+        }
+        val changedStop = input.deepCopy()
+        (changedStop.path("legs")[1].path("stops")[1] as ObjectNode).put("routingStationId", "999")
+        assertThatThrownBy { validator.requireDeviceReady(f.plan, changedStop.toString(), walk, officialSubway = proof) }
+            .isInstanceOf(BusinessException::class.java)
     }
     @Test fun `actual controller returns saved attestation and rejects absent principal`() {
         val f = fixture(); val body = f.mapper.writeValueAsString(command(f))

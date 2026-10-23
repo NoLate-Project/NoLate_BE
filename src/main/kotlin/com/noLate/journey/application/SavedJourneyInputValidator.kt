@@ -73,6 +73,59 @@ class SavedJourneyInputValidator(private val mapper: ObjectMapper) {
         if (walking != null) expected.set<JsonNode>("walkingSnapshot", mapper.valueToTree(walking))
         if (!same(actual, expected) || expected.path("origin").isNull || expected.path("destination").isNull) reject()
     }
+
+    /** DEVICE admission is narrower than a structurally valid saved route. Only a single
+     * transit leg may be prepared; a static official crosswalk never confirms boarding. */
+    fun requireDeviceReady(plan: ScheduleTravelPlanDto, json: String, walking: WalkingSnapshotContract?,
+        officialBus: JourneyBusDeviceAdmission? = null,
+        officialSubway: JourneySubwayDeviceAdmission? = null) {
+        val input = runCatching { mapper.readTree(json) }.getOrNull() ?: rejectDevice()
+        val legs = input.path("legs")
+        if (officialBus != null && officialSubway != null) rejectDevice()
+        val kind = if (officialSubway != null) "SUBWAY" else "BUS"
+        if (walking == null || input.path("provider").asText() != "odsay" || input.path("source").asText() != "api" ||
+            input.path("plausibility").asText() != "normal" ||
+            input.path("serviceState").asText() !in (if (officialBus == null && officialSubway == null) setOf("operating") else setOf("operating", "UNKNOWN")) ||
+            input.path("reliability").asText() !in setOf("live_provider", "provider_estimate") ||
+            !legs.isArray || legs.size() != 3 || listOf("WALK", kind, "WALK").indices.any { index ->
+                legs[index].path("index").asInt(-1) != index || legs[index].path("kind").asText() != listOf("WALK", kind, "WALK")[index]
+            }) rejectDevice()
+        val transit = legs[1]
+        if (transit.path("geometrySource").asText() != "TRANSIT_PASS_SHAPE_LINESTRING" ||
+            !transit.path("exact").asBoolean(false) || !transit.path("geometryInputComplete").asBoolean(false) ||
+            transit.path("coordinates").size() !in 2..2000) rejectDevice()
+        if (transit.path("serviceAvailable").isBoolean && !transit.path("serviceAvailable").asBoolean()) rejectDevice()
+        if (officialSubway != null) {
+            val raw = JourneySubwaySavedLegEvidence.resolve(JourneyRouteSnapshot.from(plan, mapper), 1).evidence ?: rejectDevice()
+            if (officialSubway.schemaVersion != 1 || officialSubway.identityEvidence != "OFFICIAL_STATION_PATH_CROSSWALK" ||
+                officialSubway.subwayLegIndex != 1 || officialSubway.providerRouteId != "${raw.routingCity}:${raw.routingLine}" ||
+                officialSubway.providerRouteId != transit.path("providerRouteId").asText() ||
+                officialSubway.startRoutingStationId != raw.startStationId ||
+                officialSubway.endRoutingStationId != raw.endStationId ||
+                officialSubway.stationCount !in 1..63 || officialSubway.stationCount != raw.stations.size - 1 ||
+                transit.path("stops").size() != raw.stations.size ||
+                raw.stations.indices.any { transit.path("stops").path(it).path("routingStationId").asText() != raw.stations[it].routingStationId } ||
+                transit.path("declaredStationCount").takeIf { it.isNumber }?.asInt()?.let { it != officialSubway.stationCount } == true)
+                rejectDevice()
+        } else if (officialBus == null) {
+            val binding = JourneyBusRouteBindingResolver().resolve(JourneyRouteSnapshot.from(plan, mapper))
+            if (binding.query?.providerRouteId?.matches(Regex("[1-9][0-9]{8}")) != true) rejectDevice()
+        } else {
+            val raw = JourneyBusRouteBindingResolver().resolveRaw(JourneyRouteSnapshot.from(plan, mapper))
+            if (raw.evidence == null || officialBus.schemaVersion != 1 ||
+                officialBus.identityEvidence != "OFFICIAL_STOP_SHAPE_CROSSWALK" || officialBus.busLegIndex != 1 ||
+                officialBus.routeId != raw.evidence.routeId || officialBus.routeId != transit.path("localRouteId").asText() ||
+                officialBus.stationCount != legs[1].path("stops").size() - 1 ||
+                officialBus.firstStopSequence < 0 || officialBus.lastStopSequence.toLong() - officialBus.firstStopSequence.toLong() != officialBus.stationCount.toLong() ||
+                officialBus.direction.isBlank() || officialBus.direction.length > 128 || officialBus.direction.any(Char::isISOControl) ||
+                raw.evidence.direction?.let { it != officialBus.direction } == true ||
+                transit.path("directionName").takeIf { it.isTextual }?.asText()?.let { it != officialBus.direction } == true ||
+                transit.path("declaredStationCount").takeIf { it.isNumber }?.asInt()?.let { it != officialBus.stationCount } == true) rejectDevice()
+        }
+    }
+
+    private fun rejectDevice(): Nothing = throw BusinessException(
+        ErrorCode.INVALID_STATE, "이 저장 경로는 아직 실기기 자동 길안내를 지원하지 않습니다.")
     // JS encodes 1.0 as 1; Jackson IntNode/LongNode/DoubleNode equality is too strict.
     // Only numeric representation is relaxed, never object keys, order, strings or nulls.
     private fun same(a: JsonNode?, b: JsonNode): Boolean {

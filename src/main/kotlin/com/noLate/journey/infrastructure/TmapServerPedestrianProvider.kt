@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.time.Duration
 import java.util.concurrent.*
 import java.util.concurrent.Flow
+import org.slf4j.LoggerFactory
 
 /** Production destination is fixed, HTTPS only; key is a header, never query/body/log text.
  * No application retry, redirect, cookie handler, custom TLS trust or response-body logging. */
@@ -70,6 +71,8 @@ class TmapServerPedestrianProvider internal constructor(
             if (failure is InterruptedException) Thread.currentThread().interrupt()
             val cause = (failure as? ExecutionException)?.cause
             if (cause is WalkingContractRejected) throw cause
+            log.warn("TMAP pedestrian transport failed: failureType={} causeType={}",
+                failure.javaClass.simpleName, cause?.javaClass?.simpleName ?: "none")
             fail(if (failure is TimeoutException || cause is HttpTimeoutException) "PROVIDER_TIMEOUT" else "PROVIDER_UNAVAILABLE")
         } finally {
             subscriber.cancel(); future?.cancel(true); permits.release()
@@ -94,7 +97,10 @@ class TmapServerPedestrianProvider internal constructor(
             }
             subscription?.request(1)
         }
-        override fun onError(error: Throwable) { result.completeExceptionally(WalkingContractRejected("PROVIDER_UNAVAILABLE")) }
+        override fun onError(error: Throwable) {
+            log.warn("TMAP pedestrian response stream failed: type={}", error.javaClass.simpleName)
+            result.completeExceptionally(WalkingContractRejected("PROVIDER_UNAVAILABLE"))
+        }
         override fun onComplete() { result.complete(bytes.toByteArray()) }
         fun reject(reason: String) { result.completeExceptionally(WalkingContractRejected(reason)); cancel() }
         fun cancel() {
@@ -103,6 +109,7 @@ class TmapServerPedestrianProvider internal constructor(
         }
     }
     companion object {
+        private val log = LoggerFactory.getLogger(TmapServerPedestrianProvider::class.java)
         const val ENDPOINT = "https://apis.openapi.sk.com/tmap/routes/pedestrian?version=1&format=json"
         private const val MAX_BODY = 1_048_576
         private fun fail(reason: String): Nothing = throw WalkingContractRejected(reason)

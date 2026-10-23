@@ -3,6 +3,8 @@ package com.noLate.journey.application
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import kotlin.math.cos
+import kotlin.math.hypot
 
 /** ODsay raw metadata only. No Seoul station ID, service pattern, or passenger association is
  * derived here. A later independent catalog must crosswalk these exact ordered tuples. */
@@ -70,7 +72,12 @@ internal object JourneySubwaySavedLegEvidence {
             return blocked("RAW_SUBWAY_DIRECTION_REQUIRED")
         val rows = raw.path("stopOccurrences")
         val count = raw.path("declaredStationCount").integer()
-        if (!rows.isArray || rows.size() !in 2..500 || count != rows.size() - 1 || leg.path("stationCount").integer() != count)
+        // ODsay can omit stationCount while still returning every raw passStopList row.
+        // Accept the omission only when the saved display count agrees with the complete
+        // ordered occurrences. This remains raw metadata; official path matching below
+        // independently checks every name, station and coordinate before admission.
+        if (!rows.isArray || rows.size() !in 2..500 || count != null && count != rows.size() - 1 ||
+            leg.path("stationCount").integer() != rows.size() - 1)
             return blocked("RAW_SUBWAY_STATIONS_REQUIRED")
         var previous = -1
         val stations = rows.mapIndexed { index, row ->
@@ -84,13 +91,23 @@ internal object JourneySubwaySavedLegEvidence {
         }
         val first = stations.first(); val last = stations.last()
         if (first.routingStationId != start || last.routingStationId != end ||
-            coordinate(leg.path("startCoord")) != (first.latitude to first.longitude) ||
-            coordinate(leg.path("endCoord")) != (last.latitude to last.longitude))
+            !sameStationPoint(coordinate(leg.path("startCoord")), first) ||
+            !sameStationPoint(coordinate(leg.path("endCoord")), last))
             return blocked("SUBWAY_ENDPOINT_OCCURRENCE_MISMATCH")
         return Result("RAW_SAVED_SUBWAY_METADATA_ONLY", Evidence(legIndex, city, line, way, start, end, stations))
     }
 
     private fun validId(value: String) = value.matches(Regex("[0-9]{1,20}")) && value.any { it != '0' }
+    private fun sameStationPoint(leg: Pair<Double, Double>?, stop: Station): Boolean {
+        if (leg == null) return false
+        // ODsay startX/startY and the same station's passStop x/y can differ by
+        // sub-meter rounding. Keep the tolerance narrow; an official coordinate
+        // cross-check is still mandatory before a train pattern is admitted.
+        val north = (leg.first - stop.latitude) * 111_320.0
+        val east = (leg.second - stop.longitude) * 111_320.0 *
+            cos(Math.toRadians((leg.first + stop.latitude) / 2))
+        return hypot(north, east) <= 10.0
+    }
     private fun JsonNode.text(key: String) = path(key).takeIf { it.isTextual }?.asText()
     private fun JsonNode.integer(): Int? = takeIf { it.isIntegralNumber && it.canConvertToInt() }?.intValue()?.takeIf { it >= 0 }
     private fun coordinate(node: JsonNode): Pair<Double, Double>? {

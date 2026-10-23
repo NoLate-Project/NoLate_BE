@@ -14,7 +14,8 @@ import org.springframework.http.client.ClientHttpRequestFactory
 import java.time.Duration
 
 @Component
-@ConditionalOnProperty(prefix = "routing.tmap", name = ["enabled"], havingValue = "true")
+// Legacy adapter only. Map/road TMAP activation must never turn transit routing on.
+@ConditionalOnProperty(prefix = "routing.tmap", name = ["transit-enabled"], havingValue = "true")
 class TmapTransitRouteClient(
     @Value("\${routing.tmap.app-key}") appKey: String,
     @Value("\${routing.tmap.base-url}") baseUrl: String,

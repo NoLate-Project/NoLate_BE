@@ -55,12 +55,16 @@ class OfficialSubwaySavedLegPatternTest {
             ((route.path("transitLegs")[1] as ObjectNode).path("navigationEvidence")
                 .path("stopOccurrences")[1] as ObjectNode).put("name", "잠실")
         }, 1, segment, service))
-        assertNull(OfficialSubwaySavedLegPattern.resolve(snapshot { route ->
+        assertNotNull(OfficialSubwaySavedLegPattern.resolve(snapshot { route ->
             val leg = route.path("transitLegs")[1] as ObjectNode
             leg.put("directionCode", "UP")
             val evidence = leg.path("navigationEvidence") as ObjectNode
             evidence.put("directionCode", "UP")
             (evidence.path("subwayIdentifiers") as ObjectNode).put("wayCode", "1")
+        }, 1, segment, service))
+        assertNull(OfficialSubwaySavedLegPattern.resolve(snapshot { route ->
+            val leg = route.path("transitLegs")[1] as ObjectNode
+            leg.put("directionCode", "UP")
         }, 1, segment, service))
         assertNull(OfficialSubwaySavedLegPattern.resolve(snapshot(), 1, segment,
             path(stations, "내선")))

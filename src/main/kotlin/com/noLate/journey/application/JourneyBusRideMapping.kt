@@ -18,9 +18,10 @@ internal object JourneyBusRideMapping {
     private val mapper = jacksonObjectMapper()
 
     fun resolve(snapshot: JourneyRouteSnapshot, catalog: List<SeoulBusRouteStop>, shape: List<SeoulBusRoutePathPoint>, busLegIndex: Int = 1): Result {
-        val saved = JourneyBusRouteBindingResolver().resolve(snapshot, busLegIndex)
-        val query = saved.query ?: return Result(saved.status)
-        if (!query.providerRouteId.matches(Regex("[1-9][0-9]{8}"))) return Result("ROUTE_NAMESPACE_UNAVAILABLE")
+        val saved = JourneyBusRouteBindingResolver().resolveRaw(snapshot, busLegIndex)
+        val rawBinding = saved.evidence ?: return Result(saved.status)
+        val routeId = rawBinding.routeId
+        if (!routeId.matches(Regex("[1-9][0-9]{8}"))) return Result("ROUTE_NAMESPACE_UNAVAILABLE")
         val leg = mapper.readTree(snapshot.legsJson).path(busLegIndex)
         val evidence = leg.path("navigationEvidence")
         val rawStops = evidence.path("stopOccurrences")
@@ -29,7 +30,7 @@ internal object JourneyBusRideMapping {
         val windows = catalog.windowed(rawStops.size()).filter { window ->
             window.withIndex().all { (i, row) ->
                 val raw = rawStops[i]
-                row.routeId == query.providerRouteId && !row.publicStopNumberInvalid && row.arsId != null &&
+                row.routeId == routeId && !row.publicStopNumberInvalid && row.arsId != null &&
                     row.stationId == raw.path("localStationID").asText() &&
                     row.arsId == raw.path("arsID").asText().replace("-", "") &&
                     raw.path("coord").path("lat").isNumber && raw.path("coord").path("lng").isNumber &&
@@ -39,7 +40,11 @@ internal object JourneyBusRideMapping {
         }
         if (windows.size != 1) return Result("STOP_OCCURRENCE_CROSSWALK_UNAVAILABLE")
         val stops = windows.single()
-        val matched = SeoulBusStopShapeMatcher.match(query.providerRouteId, catalog, query.providerRouteId,
+        val officialDirection = stops.first().direction
+        if (officialDirection.isBlank() || officialDirection.length > 128 || officialDirection.any(Char::isISOControl) ||
+            stops.any { it.direction != officialDirection } ||
+            rawBinding.direction?.let { it != officialDirection } == true) return Result("DIRECTION_CROSSWALK_MISMATCH")
+        val matched = SeoulBusStopShapeMatcher.match(routeId, catalog, routeId,
             shape, stops.first().sequence, stops.last().sequence)
         if (matched.status != SeoulBusStopShapeMatcher.Status.MATCHED) return Result(matched.status.name)
         val rawCoordinates = leg.path("pathCoords")
@@ -80,14 +85,14 @@ internal object JourneyBusRideMapping {
         // Optional, bounded continuation to ONE immediately following official stop. Failure
         // here removes departure evidence capability, not the already verified selected ride.
         val next = catalog.singleOrNull { it.sequence == stops.last().sequence + 1 && it.direction == stops.first().direction }
-        val continuation = next?.let { SeoulBusStopShapeMatcher.match(query.providerRouteId, catalog,
-            query.providerRouteId, shape, stops.last().sequence, it.sequence) }
+        val continuation = next?.let { SeoulBusStopShapeMatcher.match(routeId, catalog,
+            routeId, shape, stops.last().sequence, it.sequence) }
         val continuationMeters = continuation?.takeIf { it.status == SeoulBusStopShapeMatcher.Status.MATCHED }
             ?.stops?.let { rows ->
                 if (abs(rows.first().alongShapeMeters - last) > 0.01) null
                 else (rows.last().alongShapeMeters - last).takeIf { it in 100.0..350.0 }
             } ?: 0.0
-        return Result("VERIFIED", Verified(query.providerRouteId, stops.first().direction, coordinates, stops,
+        return Result("VERIFIED", Verified(routeId, officialDirection, coordinates, stops,
             matched.stops, shape, catalog, continuationMeters,
             if (continuationMeters > 0) next!!.sequence else stops.last().sequence))
     }

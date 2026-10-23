@@ -2,6 +2,8 @@ package com.noLate.route.infrastructure
 
 import com.noLate.route.domain.TransitRouteRequest
 import com.sun.net.httpserver.HttpServer
+import org.springframework.boot.test.context.runner.ApplicationContextRunner
+import org.springframework.context.annotation.Import
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.springframework.web.client.HttpClientErrorException
@@ -11,6 +13,21 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Loopback HTTP contract, not a live Tmap call or journey-accuracy proof. */
 class TmapTransitQuotaContractTest {
+    @Test
+    fun `TMAP 지도 활성화만으로 대중교통 공급자는 등록되지 않는다`() {
+        val runner = ApplicationContextRunner()
+            .withUserConfiguration(LegacyTransitConfiguration::class.java)
+            .withPropertyValues("routing.tmap.enabled=true", "routing.tmap.app-key=synthetic-key",
+                "routing.tmap.base-url=https://apis.openapi.sk.com")
+        runner.run { context -> assertTrue(context.getBeansOfType(TmapTransitRouteClient::class.java).isEmpty()) }
+        runner.withPropertyValues("routing.tmap.transit-enabled=true").run { context ->
+            assertEquals(1, context.getBeansOfType(TmapTransitRouteClient::class.java).size)
+        }
+    }
+
+    @Import(TmapTransitRouteClient::class)
+    class LegacyTransitConfiguration
+
     @Test
     fun `429는 경로 성공으로 바꾸지 않고 공급자가 회복되면 같은 클라이언트로 다시 조회한다`() {
         val exhausted = AtomicBoolean(true)

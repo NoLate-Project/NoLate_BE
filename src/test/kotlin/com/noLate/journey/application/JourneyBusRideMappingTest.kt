@@ -19,6 +19,47 @@ class JourneyBusRideMappingTest {
         assertEquals(listOf(44,45,46), verified.stops.map { it.sequence }) // saved ODsay ordinals are 10,11,12
         assertEquals(3, verified.coordinates.size)
     }
+    @Test fun `official catalog supplies direction and stop count omitted by real ODsay bus response`() {
+        val f = fixture()
+        val evidence = f.plan.route!!.path("transitLegs")[1].path("navigationEvidence") as ObjectNode
+        evidence.remove(listOf("directionName", "declaredStationCount"))
+        val route = snapshot(f)
+        assertEquals("DIRECTION_REQUIRED", JourneyBusRouteBindingResolver().resolve(route).status)
+        val result = JourneyBusRideMapping.resolve(route, rideFixtureStops(), rideFixtureShape())
+        assertEquals("VERIFIED", result.status)
+        val verified = assertNotNull(result.verified)
+        assertEquals("합성 동쪽 방면", verified.direction)
+        assertEquals(listOf(44, 45, 46), verified.stops.map { it.sequence })
+    }
+    @Test fun `official catalog cannot override contradictory raw direction or station count`() {
+        val wrongDirection = fixture()
+        val directionEvidence = wrongDirection.plan.route!!.path("transitLegs")[1].path("navigationEvidence") as ObjectNode
+        directionEvidence.put("directionName", "반대 방면")
+        assertEquals("DIRECTION_CROSSWALK_MISMATCH", mapping(wrongDirection).status)
+        val wrongCount = fixture()
+        val countEvidence = wrongCount.plan.route!!.path("transitLegs")[1].path("navigationEvidence") as ObjectNode
+        countEvidence.put("declaredStationCount", 3)
+        assertEquals("STOP_OCCURRENCE_REQUIRED", mapping(wrongCount).status)
+        val mixedDirections = rideFixtureStops().mapIndexed { i, stop -> if (i == 1) stop.copy(direction = "반대 방면") else stop }
+        assertEquals("DIRECTION_CROSSWALK_MISMATCH", JourneyBusRideMapping.resolve(snapshot(fixture()), mixedDirections, rideFixtureShape()).status)
+    }
+    @Test fun `read only ride endpoint fetches official catalog for raw ODsay stop evidence without way or count`() {
+        val f = fixture()
+        val evidence = f.plan.route!!.path("transitLegs")[1].path("navigationEvidence") as ObjectNode
+        evidence.remove(listOf("directionName", "declaredStationCount"))
+        val automatic = f.service()
+        automatic.prepare(7, 9001, 2, f.prepareCommand())
+        val provider = mock<SeoulTransitArrivalClient>()
+        whenever(provider.getBusRouteDiagnosticStops("999999999")).thenReturn(rideFixtureStops())
+        whenever(provider.getBusRoutePath("999999999")).thenReturn(rideFixtureShape())
+        val binding = JourneyBusRideService(automatic, provider, f.clock, true)
+            .binding(7, 9001, 2, f.sessionId, JourneyBusBindingCommand(1, 1, f.owner, f.digest))
+        assertEquals("VERIFIED", binding["status"])
+        assertEquals("합성 동쪽 방면", binding["direction"])
+        verify(provider).getBusRouteDiagnosticStops("999999999")
+        verify(provider).getBusRoutePath("999999999")
+        verifyNoInteractions(f.departure, f.jobs, f.schedules)
+    }
     @Test fun `unselected synthetic bend preserves saved tuple binding and bounded continuation`() {
         val result = JourneyBusRideMapping.resolve(snapshot(fixture()),rideCatalogBendFixtureStops(),rideCatalogBendFixtureShape())
         val verified = assertNotNull(result.verified)

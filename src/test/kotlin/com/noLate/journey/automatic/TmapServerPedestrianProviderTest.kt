@@ -4,11 +4,29 @@ import com.noLate.journey.application.*
 import com.noLate.journey.infrastructure.TmapServerPedestrianProvider
 import org.assertj.core.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.net.URI
 import java.time.Duration
 
 class TmapServerPedestrianProviderTest {
     private val request = ServerWalkingRequest(ServerWalkingCoordinate(37.5665, 126.978), ServerWalkingCoordinate(37.5665, 126.9795))
+    @Test fun `opt in live Tmap pedestrian provider returns walk for saved ODsay endpoints`() {
+        assumeTrue(System.getenv("RUN_TMAP_PEDESTRIAN_LIVE") == "1")
+        val key = System.getenv("TMAP_APP_KEY")
+        assumeTrue(!key.isNullOrBlank())
+        TmapServerPedestrianProvider(key).use { provider ->
+            val first = provider.fetch(ServerWalkingRequest(
+                ServerWalkingCoordinate(37.56650007553443, 126.978),
+                ServerWalkingCoordinate(37.56603807553346, 126.98223800000001),
+            ))
+            val last = provider.fetch(ServerWalkingRequest(
+                ServerWalkingCoordinate(37.56628507553399, 126.99105300000001),
+                ServerWalkingCoordinate(37.56650007553443, 126.991),
+            ))
+            assertThat(first).contains("FeatureCollection")
+            assertThat(last).contains("FeatureCollection")
+        }
+    }
     @Test fun `fixed official HTTPS destination and raw request bound server parsing with header-only artificial key`() {
         assertThat(TmapServerPedestrianProvider.ENDPOINT).isEqualTo("https://apis.openapi.sk.com/tmap/routes/pedestrian?version=1&format=json")
         SyntheticWalkingHttpFixture().use { socket ->
@@ -48,7 +66,7 @@ class TmapServerPedestrianProviderTest {
     }
     @Test fun `socket contract scenarios use real coordinator and never confer navigation readiness`() {
         for ((case, reason) in mapOf("http-complete" to "TRANSIT_ADMISSION_PENDING", "http-edited" to "SAVED_ROUTE_CHANGED",
-            "http-revoked" to "OWNER_CHANGED", "http-redirect" to "PROVIDER_UNAVAILABLE", "http-large" to "PROVIDER_UNAVAILABLE", "http-timeout" to "PROVIDER_UNAVAILABLE")) {
+            "http-revoked" to "OWNER_CHANGED", "http-redirect" to "PROVIDER_REDIRECT", "http-large" to "PROVIDER_BODY_LIMIT", "http-timeout" to "PROVIDER_TIMEOUT")) {
             val result = walkingHttpContractFixture(case)
             assertThat(result["reason"]).isEqualTo(reason); assertThat(result["navigationReady"]).isEqualTo(false)
             assertThat(result["redirectTrapCalls"]).isEqualTo(0)
