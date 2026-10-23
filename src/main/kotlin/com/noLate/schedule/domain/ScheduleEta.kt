@@ -15,6 +15,29 @@ enum class TrafficSource {
     SAVED_FALLBACK,
 }
 
+/** 출발 알림의 정상 ETA와 분리된, 승차 확인 전 계획 여정의 잠정 도착 근거. */
+enum class PlannedJourneyArrivalBasis {
+    LAST_ACCEPTED_PLAN,
+    MATCHED_TRAIN_REALTIME,
+}
+
+data class PlannedJourneyArrivalPrediction(
+    val predictedArrivalAt: Instant,
+    /** 이 응답에서 잠정 예측을 구성한 시각. 원본 공급자 관측시각으로 해석하지 않는다. */
+    val presentedAt: Instant,
+    val routeIdentity: String,
+    val basis: PlannedJourneyArrivalBasis,
+)
+
+/** 출발 후 원래 출발지에서 다시 출발한다고 가정한 조회 결과. 진행 중 계획의 도착 예측이 아니다. */
+data class OriginReplanDiagnostic(
+    val travelMinutes: Int,
+    val source: TrafficSource,
+    val stale: Boolean,
+    val failureReason: String?,
+    val providerFetchedAt: Instant?,
+)
+
 /**
  * 도착 예측이 어떤 시간축을 기준으로 만들어졌는지 구분한다.
  *
@@ -153,4 +176,8 @@ data class ScheduleDepartureEtaStatusDto(
     val firstBoardingObservation: TransitFirstBoardingObservation? = null,
     /** 실시간 채택 ETA가 아닌 미래 시간표 미리보기. 출발 알람/정시 도착 확정에 사용하지 않는다. */
     val futureTimetablePrediction: EffectiveTransitRoute? = null,
+    /** 출발 후에도 동일 편을 확인한 경우만 보정한다. 실제 탑승·정시 도착 확정값이 아니다. */
+    val plannedJourneyArrivalPrediction: PlannedJourneyArrivalPrediction? = null,
+    /** 출발 후 새 출발지 재검색의 진단. 위 잠정 도착이나 보호된 출발 알림에 적용하지 않는다. */
+    val originReplanDiagnostic: OriginReplanDiagnostic? = null,
 )

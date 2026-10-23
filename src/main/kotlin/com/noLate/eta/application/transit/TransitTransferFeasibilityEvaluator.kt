@@ -17,12 +17,21 @@ enum class TransitTransferStatus {
 
 enum class TransitJourneyTimingBasis {
     FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
+    FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED,
+    FIRST_BOARDING_TIMETABLE_TRANSFER_OBSERVED,
     FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
     FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
     ROUTE_ESTIMATE_ONLY,
     TIMETABLE_ONLY,
     TIMETABLE_TRANSFER_UNKNOWN,
 }
+
+data class TransitObservedRideTiming(
+    val boardingAt: Instant,
+    val arrivalAt: Instant,
+    val observationPoint: TransitRideObservationPoint?,
+    val observationSourceUpdatedAt: Instant?,
+)
 
 data class TransitTransferEvaluation(
     val status: TransitTransferStatus,
@@ -33,15 +42,16 @@ data class TransitTransferEvaluation(
     val missedBySeconds: Long? = null,
     /** 분 단위 시간표의 경계 불확실성을 해소하기 위해 더 일찍 재검색할 최소 시간. */
     val searchEarlierBySeconds: Long? = missedBySeconds,
+    val observedRideTimings: Map<Int, TransitObservedRideTiming> = emptyMap(),
 ) {
     val eligible: Boolean
         get() = status == TransitTransferStatus.FEASIBLE
 }
 
 /**
- * 첫 승차 실시간 지연을 환승 지점까지 전파하고 다음 시간표 차량을 실제로 탈 수 있는지 확인한다.
+ * 각 승차 구간의 예측 하차시각을 순서대로 연결하고 다음 차량을 실제로 탈 수 있는지 확인한다.
  *
- * 미래 환승 차량은 실시간으로 가장하지 않는다. 실제 시간표로 확인된 구간 시각만 사용하고,
+ * 아직 관측되지 않은 미래 환승 차량은 실시간으로 가장하지 않는다. 실제 시간표로 확인된 구간 시각만 사용하고,
  * 추정값이거나 시각이 없으면 성공으로 간주하지 않고 UNKNOWN 진단으로 남긴다. 시간표 차량을
  * 탈 수 있으면 첫 지연은 환승 대기에서 흡수되고 이후 구간은 시간표대로 운행한다고 본다.
  */
@@ -177,6 +187,89 @@ class TransitTransferFeasibilityEvaluator(
             predictedArrivalAt = predictedArrivalAt,
             travelMinutes = journey.durationTo(predictedArrivalAt),
             timingBasis = journey.timingBasis(firstBoardingOverlay != null, unknown),
+        )
+    }
+
+    /**
+     * 신선한 동일 편 관측이 있는 구간만 실제 역 예측으로 교체한다. 다른 구간은 원본 시간표와
+     * 현재 predictor를 유지한다. 부분적인 시간축을 정상 ETA로 승격하지 않도록 null로 거부한다.
+     */
+    fun evaluateWithObservedTransfers(
+        journey: TransitJourney,
+        firstBoardingOverlay: TransitRealtimeOverlay?,
+        evaluatedAt: Instant,
+        observations: List<TransitRideRealtimeObservation>,
+    ): TransitTransferEvaluation? {
+        if (observations.isEmpty()) return evaluate(journey, firstBoardingOverlay, evaluatedAt)
+        val rideIndexes = journey.legs.indices.filter { journey.legs[it].isRide }
+        if (rideIndexes.size < 2 || rideIndexes.any { journey.legs[it].timetable == null } ||
+            (firstBoardingOverlay == null && journey.legs[rideIndexes.first()].firstBoardingObservation != null) ||
+            observations.map { it.legIndex }.distinct().size != observations.size ||
+            observations.any { it.legIndex !in rideIndexes.drop(1) }) return null
+        val byIndex = observations.associateBy { it.legIndex }
+        val timings = linkedMapOf<Int, TransitObservedRideTiming>()
+        for (index in rideIndexes) {
+            val timetable = requireNotNull(journey.legs[index].timetable)
+            val observation = byIndex[index]
+            val boardingAt = when {
+                index == rideIndexes.first() -> firstBoardingOverlay?.boardingAt ?: timetable.boardingAt
+                observation?.point == TransitRideObservationPoint.BOARDING -> observation.expectedAt
+                else -> timetable.boardingAt
+            }
+            val arrivalAt = if (observation?.point == TransitRideObservationPoint.ALIGHTING) {
+                observation.expectedAt
+            } else rideArrivalPredictor.predict(timetable, boardingAt).arrivalAt
+            if (!arrivalAt.isAfter(boardingAt)) return null
+            timings[index] = TransitObservedRideTiming(
+                boardingAt, arrivalAt, observation?.point, observation?.sourceUpdatedAt,
+            )
+        }
+        val firstIndex = rideIndexes.first()
+        val accessSeconds = journey.legs.take(firstIndex).filterNot(TransitJourneyLeg::isRide)
+            .sumOf(TransitJourneyLeg::movementDurationSeconds)
+        val firstReadyAt = maxOf(evaluatedAt, journey.departureAt).plusSeconds(accessSeconds)
+        if (firstReadyAt.isAfter(requireNotNull(timings[firstIndex]).boardingAt)) return null
+
+        val lastTable = requireNotNull(journey.legs[rideIndexes.last()].timetable)
+        val lastArrivalAt = requireNotNull(timings[rideIndexes.last()]).arrivalAt
+        val predictedArrivalAt = journey.arrivalAt.plus(Duration.between(lastTable.arrivalAt, lastArrivalAt))
+        val basis = if (firstBoardingOverlay == null) {
+            TransitJourneyTimingBasis.FIRST_BOARDING_TIMETABLE_TRANSFER_OBSERVED
+        } else TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED
+        val marginSeconds = maxOf(transferBufferSeconds, transferConfidenceMarginSeconds)
+        for ((transferIndex, pair) in rideIndexes.zipWithNext().withIndex()) {
+            val (currentIndex, nextIndex) = pair
+            val walkSeconds = journey.legs.subList(currentIndex + 1, nextIndex)
+                .filterNot(TransitJourneyLeg::isRide).sumOf(TransitJourneyLeg::movementDurationSeconds)
+            val readyAt = requireNotNull(timings[currentIndex]).arrivalAt.plusSeconds(walkSeconds)
+            val boardingAt = requireNotNull(timings[nextIndex]).boardingAt
+            val marginReadyAt = readyAt.plusSeconds(marginSeconds)
+            val status = when {
+                readyAt.isAfter(boardingAt) -> TransitTransferStatus.MISSED
+                marginReadyAt.isAfter(boardingAt) -> TransitTransferStatus.UNKNOWN
+                else -> TransitTransferStatus.FEASIBLE
+            }
+            if (status != TransitTransferStatus.FEASIBLE) {
+                val shortfall = Duration.between(boardingAt,
+                    if (status == TransitTransferStatus.MISSED) readyAt else marginReadyAt).seconds.coerceAtLeast(1)
+                return TransitTransferEvaluation(
+                    status = status,
+                    predictedArrivalAt = predictedArrivalAt,
+                    travelMinutes = journey.durationTo(predictedArrivalAt),
+                    timingBasis = basis,
+                    failedTransferSequence = transferIndex + 1,
+                    missedBySeconds = shortfall.takeIf { status == TransitTransferStatus.MISSED },
+                    searchEarlierBySeconds = shortfall,
+                    observedRideTimings = timings,
+                )
+            }
+        }
+        return TransitTransferEvaluation(
+            status = TransitTransferStatus.FEASIBLE,
+            predictedArrivalAt = predictedArrivalAt,
+            travelMinutes = journey.durationTo(predictedArrivalAt),
+            timingBasis = basis,
+            observedRideTimings = timings,
         )
     }
 

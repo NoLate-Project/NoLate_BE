@@ -13,6 +13,7 @@ import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.sanitizeTrafficFailureReason
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleDepartureEtaStatusDto
+import com.noLate.schedule.domain.OriginReplanDiagnostic
 import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.ScheduleEtaConfidence
 import com.noLate.schedule.domain.SchedulePushJob
@@ -271,6 +272,11 @@ class ScheduleDepartureEtaService(
             json = job.lastEffectiveTransitRouteJson,
         )
         val readAt = Instant.now(clock)
+        val inProgressPlan = effectiveRouteSnapshot
+            ?.takeIf { job.checkCount > 0 && it.evaluationCheckCount == job.checkCount - 1 &&
+                it.evaluationNotificationGeneration == job.notificationGeneration }
+            ?.inProgressPlannedRoute
+            ?.takeIf { !readAt.isBefore(it.departureAt) && readAt.isBefore(it.arrivalAt) }
         val currentObservation = effectiveRouteSnapshot
             ?.takeIf { job.checkCount > 0 && it.evaluationCheckCount == job.checkCount - 1 &&
                 it.evaluationNotificationGeneration == job.notificationGeneration }
@@ -280,14 +286,26 @@ class ScheduleDepartureEtaService(
         // Job 스냅샷의 5분 grace는 차량 관측의 120초 유효기간을 연장하지 않는다.
         // 관측만 숨기고 전체 여정을 정상으로 남기면 앱이 만료된 보정을 계속 안내한다.
         // 조회 시점의 파생 진단만 변경하며 저장된 이력·보호된 알람 시각은 수정하지 않는다.
+        val expiredTransferObservation = effectiveRouteSnapshot?.effectiveTransitRoute?.segments
+            ?.any { segment ->
+                val timing = segment.rideTiming
+                val hasRealtimeTransfer = timing?.basis in setOf(
+                    EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+                    EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME,
+                )
+                hasRealtimeTransfer && (timing?.observationSourceUpdatedAt?.let {
+                    it.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds)) || it.isAfter(readAt.plusSeconds(5))
+                } ?: true)
+            } == true
         val expiredRealtimeJourney = effectiveRouteSnapshot?.accepted == true &&
-            effectiveRouteSnapshot.transitTimingBasis in setOf(
+            (expiredTransferObservation || (effectiveRouteSnapshot.transitTimingBasis in setOf(
                 TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
+                TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED,
                 TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
                 TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
-            ) && freshObservation == null
+            ) && freshObservation == null))
         val observationFailure = if (expiredRealtimeJourney) {
-            if (currentObservation != null && (
+            if (expiredTransferObservation || currentObservation != null && (
                 currentObservation.sourceUpdatedAt.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds)) ||
                     currentObservation.evaluatedAt.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds))
                 )) TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_STALE
@@ -295,39 +313,42 @@ class ScheduleDepartureEtaService(
         } else null
         val acceptedEffectiveRouteSnapshot = effectiveRouteSnapshot
             ?.takeIf {
-                !expiredRealtimeJourney && it.accepted && it.effectiveTransitRoute != null
+                inProgressPlan == null && !expiredRealtimeJourney && it.accepted && it.effectiveTransitRoute != null
             }
         val evaluatedAt = listOfNotNull(job.lastCheckedAt, job.lastLiveFetchedAt)
             .maxOrNull()
             ?: Instant.now(clock)
         return ScheduleDepartureEtaStatusDto(
             scheduleId = scheduleId,
-            travelMinutes = travelMinutes,
+            // 출발 후에는 최신 TrafficResult가 '원래 출발지에서 지금 다시 출발'하는 가상 경로다.
+            // 진행 중인 저장 여정의 이동시간/출처/실패로 섞지 않고 별도 진단에만 노출한다.
+            travelMinutes = travelMinutes.takeUnless { inProgressPlan != null },
             recommendedDepartureAt = job.lastRecommendedDepartureAt
                 ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES),
             evaluatedAt = evaluatedAt,
-            liveFetchedAt = job.lastLiveFetchedAt,
-            source = source,
-            stale = expiredRealtimeJourney || requireNotNull(job.lastEtaStale),
+            liveFetchedAt = job.lastLiveFetchedAt.takeUnless { inProgressPlan != null },
+            source = source.takeUnless { inProgressPlan != null },
+            stale = inProgressPlan != null || expiredRealtimeJourney || requireNotNull(job.lastEtaStale),
             confidence = if (
-                expiredRealtimeJourney || onTimeUnavailableDiagnostic ||
+                inProgressPlan != null || expiredRealtimeJourney || onTimeUnavailableDiagnostic ||
                 job.lastEtaStale == true ||
                 job.lastEtaFailureReason != null
             ) {
                 ScheduleEtaConfidence.LOW
             } else {
-                confidence(source)
+                confidence(source, effectiveRouteSnapshot?.transitTimingBasis)
             },
-            failureReason = sanitizeTrafficFailureReason(observationFailure ?: job.lastEtaFailureReason),
-            lastTrafficChangeMinutes = job.lastTrafficChangeMinutes,
-            lastChangedAt = job.lastChangedAt,
+            failureReason = sanitizeTrafficFailureReason(observationFailure ?: job.lastEtaFailureReason)
+                .takeUnless { inProgressPlan != null },
+            lastTrafficChangeMinutes = job.lastTrafficChangeMinutes.takeUnless { inProgressPlan != null },
+            lastChangedAt = job.lastChangedAt.takeUnless { inProgressPlan != null },
             nextCheckAt = job.activeNextCheckAt(),
             preparationMinutes = null,
             preparationStartAt = null,
             safetyBufferMinutes = null,
             timeZone = serviceZone.id,
-            predictedArrivalAt = job.lastPredictedArrivalAt.takeUnless { expiredRealtimeJourney },
-            onTimeArrivalPossible = job.lastPredictedArrivalAt?.takeUnless { expiredRealtimeJourney }?.let {
+            predictedArrivalAt = job.lastPredictedArrivalAt.takeUnless { expiredRealtimeJourney || inProgressPlan != null },
+            onTimeArrivalPossible = job.lastPredictedArrivalAt?.takeUnless { expiredRealtimeJourney || inProgressPlan != null }?.let {
                 !it.isAfter(schedule.startAt)
             },
             transitRouteProvenance = acceptedEffectiveRouteSnapshot?.transitRouteProvenance,
@@ -339,7 +360,7 @@ class ScheduleDepartureEtaService(
             // 정상 ETA와 필드를 분리한다. 현재 평가·알림 세대의 완전한 미래 시간표만 제공한다.
             // 이 미리보기를 통해 보호 중인 출발시각이나 알람 예약을 늦추지 않는다.
             futureTimetablePrediction = effectiveRouteSnapshot
-                ?.takeIf { !it.accepted && source == TrafficSource.TIMETABLE_PROVIDER &&
+                ?.takeIf { inProgressPlan == null && !it.accepted && source == TrafficSource.TIMETABLE_PROVIDER &&
                     job.lastEtaFailureReason == TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED &&
                     it.transitTimingBasis == TransitTimingBasis.TIMETABLE_ONLY && job.checkCount > 0 &&
                     it.evaluationCheckCount == job.checkCount - 1 &&
@@ -356,7 +377,26 @@ class ScheduleDepartureEtaService(
                 },
             // 저장 경로를 유지하는 LOW 상태에도 현재 평가에서 검증한 첫 차량은 별도 제공한다.
             // 전체 ETA의 신뢰도/알람 결정은 바꾸지 않으며 오래된 차량은 API에서 숨긴다.
-            firstBoardingObservation = freshObservation,
+            firstBoardingObservation = freshObservation.takeUnless { inProgressPlan != null },
+            // 출발 후 예측은 정상 출발 ETA와 별개다. 실제 승차는 확인되지 않았고,
+            // 이번 평가가 같은 알림 세대/회차일 때만 저장한 계획 편을 읽는다.
+            plannedJourneyArrivalPrediction = effectiveRouteSnapshot
+                ?.takeIf { job.lastEtaTravelMode == ScheduleTravelMode.TRANSIT &&
+                    readAt.isBefore(schedule.startAt) &&
+                    it.evaluationCheckCount == job.checkCount - 1 &&
+                    it.evaluationNotificationGeneration == job.notificationGeneration &&
+                    (inProgressPlan != null ||
+                        job.lastEtaFailureReason?.startsWith("TRANSIT_TRANSFER_MISSED:") != true) }
+                ?.plannedJourneyArrivalPrediction(readAt, arrivalSourceMaxAgeSeconds),
+            originReplanDiagnostic = inProgressPlan?.let {
+                OriginReplanDiagnostic(
+                    travelMinutes = travelMinutes,
+                    source = source,
+                    stale = requireNotNull(job.lastEtaStale),
+                    failureReason = sanitizeTrafficFailureReason(job.lastEtaFailureReason),
+                    providerFetchedAt = job.lastEtaProviderFetchedAt,
+                )
+            },
         )
     }
 
@@ -453,7 +493,25 @@ class ScheduleDepartureEtaService(
         timeZone = serviceZone.id,
     )
 
-    private fun confidence(source: TrafficSource?): ScheduleEtaConfidence? = when (source) {
+    private fun confidence(
+        source: TrafficSource?,
+        transitTimingBasis: TransitTimingBasis? = null,
+    ): ScheduleEtaConfidence? = when {
+        // 첫 승차가 실시간이어도 미래 환승편은 시간표 예측이다. 전체 ETA를 HIGH로 표시하지 않는다.
+        source == TrafficSource.LIVE_PROVIDER &&
+            transitTimingBasis in setOf(
+                TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
+                TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED,
+            ) ->
+            ScheduleEtaConfidence.MEDIUM
+        source == TrafficSource.LIVE_PROVIDER && transitTimingBasis in setOf(
+            TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
+            TransitTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE,
+        ) -> ScheduleEtaConfidence.LOW
+        else -> confidenceBySource(source)
+    }
+
+    private fun confidenceBySource(source: TrafficSource?): ScheduleEtaConfidence? = when (source) {
         TrafficSource.LIVE_PROVIDER -> ScheduleEtaConfidence.HIGH
         TrafficSource.TIMETABLE_PROVIDER -> ScheduleEtaConfidence.MEDIUM
         TrafficSource.SELECTED_ROUTE -> ScheduleEtaConfidence.MEDIUM

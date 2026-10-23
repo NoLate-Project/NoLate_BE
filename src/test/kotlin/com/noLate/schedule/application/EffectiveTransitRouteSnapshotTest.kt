@@ -21,6 +21,50 @@ class EffectiveTransitRouteSnapshotTest {
     private val fetchedAt = Instant.parse("2026-08-10T01:00:00Z")
 
     @Test
+    fun `출발 후 같은 환승 열차의 신선한 관측만 잠정 도착에 반영한다`() {
+        val firstTable = TransitLegTimetable("seoul-timetable", SeoulSubwayLine.LINE_4,
+            java.time.LocalDate.parse("2026-08-10"), "4012", "DOWN", TransitServiceClass.LOCAL,
+            "0426", "0433", "오이도", fetchedAt.plusSeconds(900), fetchedAt.plusSeconds(2100), fetchedAt)
+        val transferTable = TransitLegTimetable("seoul-timetable", SeoulSubwayLine.LINE_2,
+            java.time.LocalDate.parse("2026-08-10"), "2464", "DOWN", TransitServiceClass.LOCAL,
+            "0226", "0230", "신도림", fetchedAt.plusSeconds(2400), fetchedAt.plusSeconds(3300), fetchedAt)
+        val first = EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.SUBWAY, 20,
+            rideTiming = EffectiveTransitRideTiming(firstTable, firstTable.boardingAt, firstTable.arrivalAt,
+                EffectiveTransitRideTimingBasis.TIMETABLE))
+        val transfer = EffectiveTransitRouteSegment(1, EffectiveTransitRouteSegmentKind.SUBWAY, 15,
+            rideTiming = EffectiveTransitRideTiming(transferTable, transferTable.boardingAt, transferTable.arrivalAt,
+                EffectiveTransitRideTimingBasis.TIMETABLE))
+        val plan = effectiveRoute("f".repeat(64), listOf(first, transfer))
+        val accepted = requireNotNull(EffectiveTransitRouteSnapshot.from(
+            trafficResult(plan.identity).copy(effectiveTransitRoute = plan), null, 0))
+        val readAt = fetchedAt.plusSeconds(2700)
+        val delayedTransfer = transfer.copy(rideTiming = EffectiveTransitRideTiming(
+            transferTable, transferTable.boardingAt, transferTable.arrivalAt.plusSeconds(180),
+            EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME, readAt.minusSeconds(20)))
+        val candidate = plan.copy(arrivalAt = plan.arrivalAt.plusSeconds(180),
+            segments = listOf(first, delayedTransfer))
+        val degraded = requireNotNull(EffectiveTransitRouteSnapshot.from(
+            trafficResult(plan.identity).copy(stale = true,
+                failureReason = TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN,
+                effectiveTransitRoute = candidate), accepted, 1, evaluatedAt = readAt))
+
+        assertEquals(plan, degraded.inProgressPlannedRoute)
+        assertEquals(candidate.arrivalAt, degraded.plannedJourneyArrivalPrediction(readAt, 120)?.predictedArrivalAt)
+        assertEquals(com.noLate.schedule.domain.PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME,
+            degraded.plannedJourneyArrivalPrediction(readAt, 120)?.basis)
+        assertEquals(plan.arrivalAt, degraded.plannedJourneyArrivalPrediction(readAt.plusSeconds(121), 120)?.predictedArrivalAt)
+        assertEquals(com.noLate.schedule.domain.PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN,
+            degraded.plannedJourneyArrivalPrediction(readAt.plusSeconds(121), 120)?.basis)
+        val wrongTrain = candidate.copy(segments = listOf(first, delayedTransfer.copy(rideTiming =
+            delayedTransfer.rideTiming!!.copy(timetable = transferTable.copy(trainNumber = "2465")))))
+        assertEquals(plan.arrivalAt, degraded.copy(effectiveTransitRoute = wrongTrain)
+            .plannedJourneyArrivalPrediction(readAt, 120)?.predictedArrivalAt)
+        val roundTrip = EffectiveTransitRouteSnapshot.parse(objectMapper, objectMapper.writeValueAsString(degraded))
+        assertEquals(plan, roundTrip?.inProgressPlannedRoute)
+        assertNull(accepted.plannedJourneyArrivalPrediction(readAt, 120))
+    }
+
+    @Test
     fun `도보 상세는 정상과 degraded 스냅샷에 보존하고 구버전 명목 좌표는 UNKNOWN이다`() {
         val geometry = com.noLate.eta.domain.TransitWalkingGeometry(
             endpointBasis = com.noLate.eta.domain.TransitWalkingEndpointBasis.PROVIDER_LEG_ENDPOINTS,

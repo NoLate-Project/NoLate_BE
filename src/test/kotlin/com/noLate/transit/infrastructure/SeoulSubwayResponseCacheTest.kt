@@ -32,6 +32,14 @@ class SeoulSubwayResponseCacheTest {
     }
 
     @Test
+    fun `진단 캐시 조회는 추가 요청 없이 방향 필터 전 같은 노선 열차를 보여준다`() = Fixture().use { f ->
+        assertNull(f.cachedLine())
+        assertEquals("4012", f.lookup().single().trainNumber)
+        assertEquals(listOf("4012", "4013"), f.cachedLine()!!.map { it.trainNumber })
+        assertEquals(1, f.calls.get())
+    }
+
+    @Test
     fun `15초 경계는 실제 HTTP를 다시 조회하지만 원천 시각을 새로 만들지 않는다`() = Fixture().use { f ->
         val first = f.lookup().single()
         f.clock.now = f.clock.now.plusSeconds(15)
@@ -131,6 +139,7 @@ class SeoulSubwayResponseCacheTest {
             subwayResponseCacheMaxEntries = maxEntries)
         fun lookup(line: String = "4호선", direction: String = "DOWN", station: String = "노원") =
             client.getSubwayArrivals(station, line, null, direction, 1)
+        fun cachedLine() = client.peekCachedSubwayLineArrivals("노원", "4호선")
         override fun close() { server.stop(0); registry.close() }
     }
 

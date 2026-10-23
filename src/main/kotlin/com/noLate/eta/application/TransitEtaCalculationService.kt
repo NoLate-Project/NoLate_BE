@@ -11,6 +11,9 @@ import com.noLate.eta.application.transit.TransitTransferEvaluation
 import com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator
 import com.noLate.eta.application.transit.TransitTransferStatus
 import com.noLate.eta.application.transit.TransitJourneyTimetableEnricher
+import com.noLate.eta.application.transit.TransitTransferRealtimeGuard
+import com.noLate.eta.application.transit.TransitRideObservationPoint
+import com.noLate.eta.application.transit.TransitObservedRideTiming
 import com.noLate.eta.domain.SelectedTransitRoute
 import com.noLate.eta.domain.TransitFirstBoardingObservation
 import com.noLate.eta.domain.TransitJourney
@@ -59,6 +62,7 @@ class TransitEtaCalculationService(
         com.noLate.eta.application.transit.TransitWalkingTimeEnricher(),
     private val rideArrivalPredictor: com.noLate.eta.application.transit.TransitRideArrivalPredictor =
         com.noLate.eta.application.transit.TransitRideArrivalPredictor(),
+    private val transferRealtimeGuard: TransitTransferRealtimeGuard? = null,
 ) {
 
     fun calculate(request: TrafficRequest): TrafficResult {
@@ -97,11 +101,13 @@ class TransitEtaCalculationService(
                     reason = TrafficFailureReasons.TRANSIT_TRANSFER_MISSED,
                 )
             }
-            resolution?.bestDegraded?.let {
+            resolution?.bestDegraded?.let { candidate ->
                 return degradedTimetableResult(
-                    projected = it,
+                    projected = candidate,
                     request = request,
-                    reason = it.projection.overlayResolution.failureReason
+                    reason = TrafficFailureReasons.TRANSIT_TRANSFER_REALTIME_DELAY.takeIf {
+                        candidate.projection.transferRealtimeDelayed
+                    } ?: candidate.projection.overlayResolution.failureReason
                         ?: TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE,
                 )
             }
@@ -153,6 +159,15 @@ class TransitEtaCalculationService(
         var bestAlternativeMissed: ProjectedTransitJourney<TransitCandidateProjection>? = null
         var bestSelectedUnknown: ProjectedTransitJourney<TransitCandidateProjection>? = null
         var bestAlternativeUnknown: ProjectedTransitJourney<TransitCandidateProjection>? = null
+        // 첫 차량 피드가 없는 후보마다 환승역을 조회하면 한 번의 ETA 평가가 공개 API
+        // 예산을 급격히 소모한다. 선택 경로의 첫 관측 가능 후보에만 이 보조 진단을 허용한다.
+        var transferOnlyProbeUsed = false
+        val claimTransferOnlyProbe = {
+            if (transferOnlyProbeUsed) false else {
+                transferOnlyProbeUsed = true
+                true
+            }
+        }
         safeDepartureResolver.resolveProjectedCandidates(
             provider = provider,
             request = TransitJourneySearchRequest(
@@ -173,6 +188,7 @@ class TransitEtaCalculationService(
                         journey = journey,
                         routeProvenance = TransitRouteProvenance.SELECTED_ROUTE_PRESERVED,
                         request = request,
+                        claimTransferOnlyProbe = claimTransferOnlyProbe,
                     )
                 }.getOrNull()
             }
@@ -183,7 +199,7 @@ class TransitEtaCalculationService(
                         bestSelectedLateLive = earlierArrival(bestSelectedLateLive, it)
                     },
                     onDegraded = {
-                        bestSelectedDegraded = earlierArrival(bestSelectedDegraded, it)
+                        bestSelectedDegraded = preferableDegraded(bestSelectedDegraded, it)
                     },
                     onMissed = { bestSelectedMissed = earlierArrival(bestSelectedMissed, it) },
                     onUnknown = { bestSelectedUnknown = earlierArrival(bestSelectedUnknown, it) },
@@ -220,6 +236,7 @@ class TransitEtaCalculationService(
                             journey = journey,
                             routeProvenance = TransitRouteProvenance.ODSAY_ALTERNATIVE_ROUTE,
                             request = request,
+                            claimTransferOnlyProbe = { false },
                         )
                     }.getOrNull()
                 }
@@ -231,7 +248,7 @@ class TransitEtaCalculationService(
                         bestAlternativeLateLive = earlierArrival(bestAlternativeLateLive, it)
                     },
                     onDegraded = {
-                        bestAlternativeDegraded = earlierArrival(bestAlternativeDegraded, it)
+                        bestAlternativeDegraded = preferableDegraded(bestAlternativeDegraded, it)
                     },
                     onMissed = {
                         bestAlternativeMissed = earlierArrival(bestAlternativeMissed, it)
@@ -297,16 +314,18 @@ class TransitEtaCalculationService(
         journey: TransitJourney,
         routeProvenance: TransitRouteProvenance,
         request: TrafficRequest,
+        claimTransferOnlyProbe: () -> Boolean,
     ): ProjectedTransitJourney<TransitCandidateProjection> = projectEnrichedJourney(
         timetableEnricher.enrich(walkingTimeEnricher.enrich(journey), request.evaluatedAt, request.maxTravelMinutes) { timetable ->
             firstBoardingRealtimeOverlay.observeTimetableCandidate(journey, timetable, request.evaluatedAt)
-        }, routeProvenance, request,
+        }, routeProvenance, request, claimTransferOnlyProbe,
     )
 
     private fun projectEnrichedJourney(
         journey: TransitJourney,
         routeProvenance: TransitRouteProvenance,
         request: TrafficRequest,
+        claimTransferOnlyProbe: () -> Boolean,
     ): ProjectedTransitJourney<TransitCandidateProjection> {
         var overlayResolution = firstBoardingRealtimeOverlay.resolve(
             journey = journey,
@@ -353,6 +372,35 @@ class TransitEtaCalculationService(
                 }
             }
         }
+        // 후속 차량의 동일 편·방향·종별·종착과 신선한 환승역 도착 예측이 시간표 지연을
+        // 증명하면, 첫 차량만 실시간인 ETA를 정상 알람/도착시각으로 승격하지 않는다.
+        val transferWindowOpen = projectedJourney.rideLegs.drop(1).any { leg ->
+            leg.mode == TransitLegMode.SUBWAY && leg.timetable?.let { table ->
+                listOf(table.boardingAt, table.arrivalAt).any { at ->
+                    !at.isBefore(request.evaluatedAt.minusSeconds(120)) &&
+                        !at.isAfter(request.evaluatedAt.plusSeconds(15 * 60))
+                }
+            } == true
+        }
+        val mayObserveTransfer = overlay != null ||
+            (transferWindowOpen && projectedJourney.rideLegs.all { it.timetable != null } &&
+                claimTransferOnlyProbe())
+        val transferObservations = if (mayObserveTransfer) transferRealtimeGuard
+            ?.observeLateTransfers(projectedJourney, request.evaluatedAt).orEmpty() else emptyList()
+        val observedTransfer = transferObservations.takeIf { it.isNotEmpty() }
+            ?.let { transferFeasibilityEvaluator.evaluateWithObservedTransfers(
+                projectedJourney, overlay, request.evaluatedAt, it,
+            ) }
+            ?.takeIf {
+                // 공급자 전체 경로와 구간별 초 단위 시간축이 일치할 때만 알람 ETA로 채택한다.
+                projectedJourney.currentRideDisplayTimings(
+                    overlay?.boardingAt ?: projectedJourney.rideLegs.first().timetable?.boardingAt,
+                    it.predictedArrivalAt, it.observedRideTimings,
+                ).size == projectedJourney.rideLegs.size
+            }
+        // 근거가 있지만 완전한 시간축으로 연결할 수 없다면 기존 시간표 ETA를 채택하지 않는다.
+        val transferRealtimeDelayed = transferObservations.isNotEmpty() && observedTransfer == null
+        if (observedTransfer != null) transfer = observedTransfer
         val searchEarlierBySeconds = transfer.searchEarlierBySeconds
         return ProjectedTransitJourney(
             journey = projectedJourney,
@@ -360,6 +408,8 @@ class TransitEtaCalculationService(
             projection = TransitCandidateProjection(
                 overlayResolution = overlayResolution,
                 transfer = transfer,
+                transferRealtimeDelayed = transferRealtimeDelayed,
+                transferObservedAt = transferObservations.maxOfOrNull { it.sourceUpdatedAt },
                 routeProvenance = routeProvenance,
                 effectiveTransitRoute = projectedJourney.toEffectiveTransitRoute(
                     predictedArrivalAt = transfer.predictedArrivalAt,
@@ -367,9 +417,11 @@ class TransitEtaCalculationService(
                     firstBoardingWaitMinutes = overlayResolution.overlay
                         ?.firstBoardingWaitMinutes,
                     firstBoardingAt = overlay?.boardingAt,
+                    observedRideTimings = transfer.observedRideTimings,
                 ),
             ),
             eligible = transfer.eligible &&
+                !transferRealtimeDelayed &&
                 !journey.departureAt.isBefore(request.evaluatedAt) &&
                 overlayResolution.overlay != null,
             // readyAt already includes the actual access walk and configured
@@ -382,6 +434,7 @@ class TransitEtaCalculationService(
                     Duration.between(observation.departureAt, observation.readyAt),
                 ) },
             searchAdjustmentSeconds = when {
+                transferRealtimeDelayed -> -UNKNOWN_TRANSFER_PROBE_SECONDS
                 searchEarlierBySeconds != null ->
                     -maxOf(searchEarlierBySeconds, 60L)
                 transfer.status != TransitTransferStatus.FEASIBLE ->
@@ -411,6 +464,11 @@ class TransitEtaCalculationService(
         val journey = projected.journey
         val overlay = projected.projection.overlayResolution.overlay
         val transfer = projected.projection.transfer
+        if (projected.projection.transferRealtimeDelayed) {
+            return degradedTimetableResult(
+                projected, request, TrafficFailureReasons.TRANSIT_TRANSFER_REALTIME_DELAY,
+            )
+        }
         if (transfer.status != TransitTransferStatus.FEASIBLE) {
             return transferDiagnosticResult(
                 projected = projected,
@@ -434,7 +492,8 @@ class TransitEtaCalculationService(
             } else {
                 TrafficSource.LIVE_PROVIDER
             },
-            fetchedAt = overlay?.observedAt ?: journey.fetchedAt,
+            fetchedAt = listOfNotNull(overlay?.observedAt,
+                projected.projection.transferObservedAt).maxOrNull() ?: journey.fetchedAt,
             // A timetable refresh and a realtime arrival lookup are separate evidence. Do not
             // silently turn an unavailable/stale first-boarding feed into a fully accepted ETA.
             stale = overlayFailureReason != null,
@@ -534,11 +593,17 @@ class TransitEtaCalculationService(
         stale = true,
         failureReason = reason,
         recommendedDepartureAt = projected.journey.departureAt.coerceAtLeast(request.evaluatedAt),
-        predictedArrivalAt = projected.predictedArrivalAt,
+        // 확인된 환승편 지연이 있으면 예전 시간표 도착시각을 사용자 예측으로 내리지 않는다.
+        predictedArrivalAt = projected.predictedArrivalAt.takeUnless {
+            projected.projection.transferRealtimeDelayed
+        },
         transitRouteProvenance = projected.projection.routeProvenance,
         transitTimingBasis = projected.projection.transfer.timingBasis.toTrafficTimingBasis(),
         firstBoardingWaitMinutes = projected.journey.legs.firstOrNull { it.isRide }?.waitingMinutes,
-        effectiveTransitRoute = projected.projection.effectiveTransitRoute,
+        // 후속 열차의 신선한 지연 관측과 충돌하는 구간 시각을 상세 경로로 노출하지 않는다.
+        effectiveTransitRoute = projected.projection.effectiveTransitRoute.takeUnless {
+            projected.projection.transferRealtimeDelayed
+        },
     )
 
     private fun onTimeUnavailableResult(
@@ -671,6 +736,10 @@ class TransitEtaCalculationService(
         ) {
             return
         }
+        if (projection.transferRealtimeDelayed) {
+            onDegraded(this)
+            return
+        }
         if (projection.overlayResolution.overlay == null) {
             onDegraded(this)
         } else if (request.targetArrivalAt?.let(predictedArrivalAt::isAfter) == true) {
@@ -689,6 +758,7 @@ class TransitEtaCalculationService(
         return current
             .filter {
                 it.projection.overlayResolution.overlay != null &&
+                    !it.projection.transferRealtimeDelayed &&
                     it.projection.transfer.status == TransitTransferStatus.FEASIBLE
             }
             .minByOrNull(ProjectedTransitJourney<TransitCandidateProjection>::predictedArrivalAt)
@@ -700,7 +770,7 @@ class TransitEtaCalculationService(
                     }.thenBy { it.predictedArrivalAt }
                 )
             ?: current
-                .filter { it.projection.overlayResolution.overlay == null }
+                .filter { it.projection.overlayResolution.overlay == null || it.projection.transferRealtimeDelayed }
                 .minByOrNull(ProjectedTransitJourney<TransitCandidateProjection>::predictedArrivalAt)
     }
 
@@ -709,9 +779,12 @@ class TransitEtaCalculationService(
         totalMinutes: Int,
         firstBoardingWaitMinutes: Int?,
         firstBoardingAt: Instant?,
+        observedRideTimings: Map<Int, TransitObservedRideTiming> = emptyMap(),
     ): EffectiveTransitRoute {
         val firstRideIndex = legs.indexOfFirst(TransitJourneyLeg::isRide)
-        val currentRideTimings = currentRideDisplayTimings(firstBoardingAt, predictedArrivalAt)
+        val currentRideTimings = currentRideDisplayTimings(
+            firstBoardingAt, predictedArrivalAt, observedRideTimings,
+        )
         return EffectiveTransitRoute(
             provider = provider,
             identity = stableRouteIdentity(),
@@ -746,17 +819,24 @@ class TransitEtaCalculationService(
                     walkingTiming = leg.walkingTiming,
                     transferTiming = currentTiming?.transferTiming,
                     rideTiming = leg.timetable?.takeIf { leg.mode == TransitLegMode.SUBWAY }?.let { timetable ->
+                        val observed = observedRideTimings[index]
                         val liveBoardingAt = firstBoardingAt.takeIf { index == firstRideIndex }
-                        val boardingAt = liveBoardingAt ?: timetable.boardingAt
+                        val boardingAt = observed?.boardingAt ?: liveBoardingAt ?: timetable.boardingAt
                         // 항상 원본 시간표에서 계산해 embedded observation의 지연을 이중 적용하지 않는다.
                         // 재연결한 다음 환승 열차에는 첫 열차 지연을 다시 전파하지 않는다.
                         EffectiveTransitRideTiming(
                             timetable = timetable,
                             predictedBoardingAt = boardingAt,
-                            predictedArrivalAt = rideArrivalPredictor.predict(timetable, boardingAt).arrivalAt,
-                            basis = if (liveBoardingAt != null) {
+                            predictedArrivalAt = observed?.arrivalAt
+                                ?: rideArrivalPredictor.predict(timetable, boardingAt).arrivalAt,
+                            basis = if (observed?.observationPoint == TransitRideObservationPoint.ALIGHTING) {
+                                EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME
+                            } else if (observed?.observationPoint == TransitRideObservationPoint.BOARDING) {
+                                EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE
+                            } else if (liveBoardingAt != null) {
                                 EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE
                             } else EffectiveTransitRideTimingBasis.TIMETABLE,
+                            observationSourceUpdatedAt = observed?.observationSourceUpdatedAt,
                         )
                     },
                 )
@@ -771,6 +851,7 @@ class TransitEtaCalculationService(
     private fun TransitJourney.currentRideDisplayTimings(
         firstBoardingAt: Instant?,
         predictedArrivalAt: Instant,
+        observedRideTimings: Map<Int, TransitObservedRideTiming> = emptyMap(),
     ): Map<Int, RideDisplayTiming> {
         if (firstBoardingAt == null || rideLegs.any { it.timetable == null }) return emptyMap()
         val firstRideIndex = legs.indexOfFirst(TransitJourneyLeg::isRide)
@@ -784,8 +865,10 @@ class TransitEtaCalculationService(
                 continue
             }
             val timetable = requireNotNull(leg.timetable)
-            val boardingAt = if (index == firstRideIndex) firstBoardingAt else timetable.boardingAt
-            val arrivalAt = rideArrivalPredictor.predict(timetable, boardingAt).arrivalAt
+            val boardingAt = observedRideTimings[index]?.boardingAt
+                ?: if (index == firstRideIndex) firstBoardingAt else timetable.boardingAt
+            val arrivalAt = observedRideTimings[index]?.arrivalAt
+                ?: rideArrivalPredictor.predict(timetable, boardingAt).arrivalAt
             if (boardingAt < cursor || arrivalAt <= boardingAt) return emptyMap()
             fun minutesUntil(at: Instant) = ((Duration.between(cursor, at).seconds + 59) / 60).toInt()
             val transferTiming = previousRideArrivalAt?.let {
@@ -820,6 +903,25 @@ class TransitEtaCalculationService(
                     .thenBy { it.journey.departureAt }
             )
 
+    private fun preferableDegraded(
+        current: ProjectedTransitJourney<TransitCandidateProjection>?,
+        candidate: ProjectedTransitJourney<TransitCandidateProjection>,
+    ): ProjectedTransitJourney<TransitCandidateProjection> {
+        if (current == null) return candidate
+        // 조회 예산을 다 쓴 뒤 다른 미관측 시간표 후보가 더 이르다는 이유만으로
+        // 이미 확인한 동일 경로 환승 지연을 지우면 안전하지 않다.
+        fun ProjectedTransitJourney<TransitCandidateProjection>.evidenceRank() = when {
+            projection.transferRealtimeDelayed -> 2
+            projection.transferObservedAt != null -> 1
+            else -> 0
+        }
+        return when {
+            candidate.evidenceRank() > current.evidenceRank() -> candidate
+            candidate.evidenceRank() < current.evidenceRank() -> current
+            else -> earlierArrival(current, candidate)
+        }
+    }
+
     private fun ProjectedTransitJourney<TransitCandidateProjection>.recordTransferDiagnostic(
         onMissed: (ProjectedTransitJourney<TransitCandidateProjection>) -> Unit,
         onUnknown: (ProjectedTransitJourney<TransitCandidateProjection>) -> Unit,
@@ -843,6 +945,10 @@ class TransitEtaCalculationService(
     private fun TransitJourneyTimingBasis.toTrafficTimingBasis(): TransitTimingBasis = when (this) {
         TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE ->
             TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE
+        TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED ->
+            TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED
+        TransitJourneyTimingBasis.FIRST_BOARDING_TIMETABLE_TRANSFER_OBSERVED ->
+            TransitTimingBasis.FIRST_BOARDING_TIMETABLE_TRANSFER_OBSERVED
         TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN ->
             TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN
         TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE ->
@@ -889,6 +995,8 @@ private data class TransitJourneyResolution(
 private data class TransitCandidateProjection(
     val overlayResolution: TransitRealtimeOverlayResolution,
     val transfer: TransitTransferEvaluation,
+    val transferRealtimeDelayed: Boolean,
+    val transferObservedAt: Instant?,
     val routeProvenance: TransitRouteProvenance,
     val effectiveTransitRoute: EffectiveTransitRoute,
 )
