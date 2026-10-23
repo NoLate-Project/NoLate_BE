@@ -1,0 +1,28 @@
+# Explicit opt-in overlay for the iOS TestFlight journey candidate.
+# Activate with prod,journey-testflight only after the deployment's provider keys,
+# Activity encryption key, and Seoul HTTP transport opt-in pass the production guard.
+journey:
+  guidance:
+    enabled: true
+    manual-enabled: false
+  automatic:
+    enabled: true
+    device-enabled: true
+    official-bus-admission-enabled: true
+    official-subway-admission-enabled: true
+    simulator-enabled: false
+    isolated-test-scope: false
+    expiry-enabled: true
+    extended-navigation-enabled: true
+  activity:
+    enabled: true
+  walking:
+    enabled: true
+    snapshots-enabled: true
+    retained-navigation-enabled: true
+    extended-navigation-enabled: true
+  bus-ride:
+    enabled: true
+  subway-observation:
+    enabled: true
+    official-live-enabled: true
