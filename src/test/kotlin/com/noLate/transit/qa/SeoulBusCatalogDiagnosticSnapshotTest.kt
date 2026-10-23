@@ -44,7 +44,7 @@ class SeoulBusCatalogDiagnosticSnapshotTest {
         }
     }
     @Test fun `owner only snapshot cannot overwrite existing artifact`() {
-        val directory = Files.createTempDirectory(java.nio.file.Path.of("/private/tmp"), "nolate-seoul-catalog-test-")
+        val directory = Files.createTempDirectory(catalogDiagnosticRoot(), "nolate-seoul-catalog-test-")
         val target = directory.resolve("catalog-diagnostic.json")
         try {
             writeCatalogDiagnostic(target, stops, shape)

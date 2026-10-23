@@ -25,11 +25,16 @@ internal fun catalogDiagnostic(stops: List<SeoulBusRouteStop>, shape: List<Seoul
         }, "shape" to shape.map { mapOf("order" to it.order, "latitude" to it.latitude, "longitude" to it.longitude) })
 }
 
+/** Keep the diagnostic confined to a real temporary directory on macOS and Linux CI. */
+internal fun catalogDiagnosticRoot(): Path = listOf(Path.of("/private/tmp"), Path.of(System.getProperty("java.io.tmpdir")))
+    .firstOrNull { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(it) && it.toRealPath() == it }
+    ?: error("No safe diagnostic temporary directory")
+
 internal fun writeCatalogDiagnostic(target: Path, stops: List<SeoulBusRouteStop>, shape: List<SeoulBusRoutePathPoint>) {
     val absolute = target.toAbsolutePath().normalize()
     val parent = absolute.parent
     require(absolute.fileName.toString() == "catalog-diagnostic.json"
-        && parent.parent == Path.of("/private/tmp") && parent.fileName.toString().startsWith("nolate-seoul-catalog-")
+        && parent.parent == catalogDiagnosticRoot() && parent.fileName.toString().startsWith("nolate-seoul-catalog-")
         && parent.toRealPath() == parent && !Files.isSymbolicLink(parent)
         && Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS))
     val bytes = jacksonObjectMapper().writeValueAsBytes(catalogDiagnostic(stops, shape))

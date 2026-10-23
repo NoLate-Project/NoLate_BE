@@ -62,7 +62,7 @@ fun main() {
         val path = Path.of(System.getenv("NOLATE_SEOUL_CATALOG_DIAGNOSTIC_FILE") ?: error("Missing diagnostic"))
             .toAbsolutePath().normalize()
         require(path.fileName.toString() == "catalog-diagnostic.json" &&
-            path.parent.parent == Path.of("/private/tmp") && path.parent.fileName.toString().startsWith("nolate-seoul-catalog-") &&
+            path.parent.parent == catalogDiagnosticRoot() && path.parent.fileName.toString().startsWith("nolate-seoul-catalog-") &&
             path.toRealPath() == path && !Files.isSymbolicLink(path) && Files.isRegularFile(path) && Files.size(path) <= 2_000_000)
         replayCatalogDiagnostic(Files.readAllBytes(path))
     } catch (_: Exception) {
