@@ -142,6 +142,8 @@ tasks.named('test') {
     // default test-worker heap can exhaust during late classpath scans.
     // 312 Spring/JPA suites exhausted 1 GiB; 2 GiB completed all 2,194 tests.
     maxHeapSize = providers.gradleProperty('testMaxHeapSize').getOrElse('2048m')
+    // CI must retain the cause and message of environment-only failures.
+    testLogging { exceptionFormat = 'full' }
     // 테스트가 개발/운영 MySQL 및 스케줄러/외부 공급자를 절대 사용하지 않도록
     // 모든 Gradle test 실행에 전용 profile을 강제한다.
     systemProperty 'spring.profiles.active', 'test'
