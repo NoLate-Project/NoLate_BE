@@ -279,6 +279,7 @@ class ScheduleNotificationActionIdempotencyIntegrationTest @Autowired constructo
             any(),
             any(),
             org.mockito.kotlin.anyOrNull(),
+            eq(false),
         )
         verify(departureStatusService, never()).markDeparted(any(), any(), any())
         verify(scheduleService, never()).markDeparted(any(), any())

@@ -457,6 +457,14 @@ class AppleAccountLifecycleIntegrationTest @Autowired constructor(
             releaseProvider.countDown()
             executor.shutdownNow()
         }
+        // 응답 지연 검증 뒤 비동기 revoke가 다음 테스트의 DB 정리와 경합하지 않게 한다.
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (credentialRepository.countByStatus(AppleProviderCredentialStatus.REVOKED) != 1L &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.sleep(10)
+        }
+        assertEquals(1L, credentialRepository.countByStatus(AppleProviderCredentialStatus.REVOKED))
     }
 
     @Test
