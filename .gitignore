@@ -59,3 +59,8 @@ http/http-client.private.env.json
 
 # Local debug logs
 spy.log
+
+# Generated local QA reports and Python bytecode, not test source/scenarios.
+/e2e/live-*.xml
+**/__pycache__/
+*.py[cod]
