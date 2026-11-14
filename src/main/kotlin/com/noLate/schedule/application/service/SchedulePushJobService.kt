@@ -7,6 +7,8 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
+import com.fasterxml.jackson.databind.JsonNode
+import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.SchedulePushJob
@@ -14,6 +16,7 @@ import com.noLate.schedule.domain.SchedulePushJobDto
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleNotificationInputFingerprint
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
+import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import jakarta.transaction.Transactional
 import org.springframework.beans.factory.annotation.Autowired
@@ -211,7 +214,9 @@ class SchedulePushJobService private constructor(
 
         val scheduleId = requireNotNull(schedule.id) { "저장된 일정 ID가 없습니다." }
         val travelMinutes = requireNotNull(route.travelMinutes) { "출발 알림을 생성하려면 travelMinutes가 필요합니다." }
-        val departureAt = route.departAt ?: schedule.startAt.minusSeconds(travelMinutes.toLong() * 60)
+        val departureAt = initialDepartureAt(
+            schedule.startAt, route.departAt, travelMinutes, route.travelMode, scheduleDto.route,
+        )
         val leadMinutes = route.notificationLeadMinutes ?: 60
         val monitorStartAt = departureAt.minusSeconds(leadMinutes.toLong() * 60)
         val intervalMinutes = EtaRefreshCadencePolicy.INTERVAL_MINUTES
@@ -257,8 +262,9 @@ class SchedulePushJobService private constructor(
         val travelMinutes = requireNotNull(plan.travelMinutes) {
             "출발 알림을 생성하려면 travelMinutes가 필요합니다."
         }
-        val departureAt = plan.departAt?.let(::parseInstant)
-            ?: scheduleAt.minusSeconds(travelMinutes.toLong() * 60)
+        val departureAt = initialDepartureAt(
+            scheduleAt, plan.departAt?.let(::parseInstant), travelMinutes, plan.travelMode, plan.route,
+        )
         val leadMinutes = plan.notificationLeadMinutes ?: 60
         val intervalMinutes = EtaRefreshCadencePolicy.INTERVAL_MINUTES
         return register(
@@ -273,6 +279,19 @@ class SchedulePushJobService private constructor(
             alertMode = plan.alertMode,
             scheduleTitle = scheduleDto.title,
         )
+    }
+
+    private fun initialDepartureAt(
+        scheduleAt: Instant,
+        savedDepartureAt: Instant?,
+        travelMinutes: Int,
+        travelMode: ScheduleTravelMode?,
+        savedRoute: JsonNode?,
+    ): Instant {
+        val estimatedDepartureAt = scheduleAt.minusSeconds(travelMinutes.toLong() * 60)
+        return savedDepartureAt?.let {
+            SelectedRouteMetadata.guardSavedDeparture(scheduleAt, it, travelMinutes, travelMode, savedRoute)
+        } ?: estimatedDepartureAt
     }
 
     private fun register(

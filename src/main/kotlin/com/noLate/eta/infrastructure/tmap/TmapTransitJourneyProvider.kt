@@ -39,7 +39,13 @@ class TmapTransitJourneyProvider(
         it.providerId().trim().equals(PROVIDER_ID, ignoreCase = true)
     }.let { matches ->
         require(matches.size == 1) {
-            "TMAP ETA 재조회에는 활성화된 TMAP 경로 공급자 하나가 필요합니다."
+            if (matches.isEmpty()) {
+                "TMAP ETA 재조회가 활성화됐지만 대중교통 경로 공급자가 없습니다. " +
+                    "routing.tmap.transit-enabled=true (TMAP_TRANSIT_ENABLED=true)가 필요합니다. " +
+                    "Tmap 재조회를 사용하지 않으면 TMAP_ETA_ENABLED=false로 설정하세요."
+            } else {
+                "TMAP ETA 재조회에는 TMAP 경로 공급자를 하나만 등록해야 합니다."
+            }
         }
         matches.single()
     }

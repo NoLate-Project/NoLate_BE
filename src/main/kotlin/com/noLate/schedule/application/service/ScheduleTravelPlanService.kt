@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleDepartureParticipantRole
@@ -526,9 +527,15 @@ class ScheduleTravelPlanService(
         val scheduleId = requireNotNull(schedule.id)
         val existing = travelPlanRepository.findByScheduleIdAndMemberIdForUpdate(scheduleId, memberId)
         val normalizedNotification = normalizeNotification(command)
-        val departAt = command.departAt?.let { parseInstant(it, "departAt") }
+        val requestedDeparture = command.departAt?.let { parseInstant(it, "departAt") }
         val routeJson = normalizeRouteJson(command.routeJson)
-        IntercityJourneyValidator.validate(routeJson?.let(objectMapper::readTree), departAt, command.travelMinutes, schedule.startAt)
+        val route = routeJson?.let(objectMapper::readTree)
+        IntercityJourneyValidator.validate(route, requestedDeparture, command.travelMinutes, schedule.startAt)
+        val departAt = requestedDeparture?.let {
+            SelectedRouteMetadata.guardSavedDeparture(
+                schedule.startAt, it, command.travelMinutes, command.travelMode, route,
+            )
+        }
         val plan = existing ?: ScheduleTravelPlan(scheduleId = scheduleId, memberId = memberId)
         val alertMode = command.alertMode
             ?: existing?.takeUnless { it.deleted }?.alertMode

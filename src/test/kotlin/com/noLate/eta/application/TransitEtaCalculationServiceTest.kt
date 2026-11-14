@@ -350,6 +350,23 @@ class TransitEtaCalculationServiceTest {
     }
 
     @Test
+    fun `ODsay만 활성화된 환경에서 저장된 Tmap 여정은 재조회 미지원으로 기록한다`() {
+        val odsay = RecordingProvider(providerId = "odsay", result = emptyList())
+        val result = service(listOf(odsay)).calculate(
+            request(selectedRouteJson = selectedOdsayRouteJson().replace("\"odsay\"", "\"tmap\"")),
+        )
+
+        assertEquals(TrafficFailureReasons.TRANSIT_ITINERARY_REFRESH_UNSUPPORTED, result.failureReason)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertFalse(result.accepted)
+        assertTrue(result.stale)
+        assertNull(result.recommendedDepartureAt)
+        assertNull(result.predictedArrivalAt)
+        assertEquals(0, odsay.searchCount)
+        org.mockito.kotlin.verifyNoInteractions(arrivalService)
+    }
+
+    @Test
     fun `ODsay 재조회 실패 뒤 첫 차량 정보가 있어도 검증 안 된 legacy 환승을 actionable로 만들지 않는다`() {
         whenever(busArrivals()).thenReturn(
             listOf(busArrival(expectedAt = evaluatedAt.plus(12, ChronoUnit.MINUTES)))

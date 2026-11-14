@@ -115,7 +115,7 @@ class SchedulePushOperationalReadinessGuardTest {
                 *completeProviderProperties(),
                 "eta.transit.odsay.enabled" to "false",
                 "eta.transit.tmap.enabled" to "false",
-                "routing.tmap.enabled" to "true",
+                "routing.tmap.transit-enabled" to "true",
                 "routing.tmap.app-key" to "tmap-routing-key",
             ).afterSingletonsInstantiated()
         }
@@ -144,8 +144,8 @@ class SchedulePushOperationalReadinessGuardTest {
         val incompleteProperties = listOf(
             "eta.transit.tmap.enabled" to null,
             "eta.transit.tmap.enabled" to "false",
-            "routing.tmap.enabled" to null,
-            "routing.tmap.enabled" to "false",
+            "routing.tmap.transit-enabled" to null,
+            "routing.tmap.transit-enabled" to "false",
             "routing.tmap.app-key" to null,
             "routing.tmap.app-key" to "",
             "routing.tmap.app-key" to "   ",
@@ -162,6 +162,17 @@ class SchedulePushOperationalReadinessGuardTest {
 
             assertEquals(missingTransitProviderMessage, failure.message)
         }
+    }
+
+    @Test
+    fun `road TMAP activation does not satisfy transit readiness`() {
+        val properties = completeTmapTransitProperties()
+            .filterNot { it.first == "routing.tmap.transit-enabled" }
+            .plus("routing.tmap.enabled" to "true")
+        val failure = assertThrows(IllegalStateException::class.java) {
+            guard(*properties.toTypedArray()).afterSingletonsInstantiated()
+        }
+        assertEquals(missingTransitProviderMessage, failure.message)
     }
 
     @Test
@@ -218,7 +229,7 @@ class SchedulePushOperationalReadinessGuardTest {
             .plus(
                 listOf(
                     "eta.transit.tmap.enabled" to "true",
-                    "routing.tmap.enabled" to "true",
+                    "routing.tmap.transit-enabled" to "true",
                     "routing.tmap.app-key" to "tmap-routing-key",
                 )
             )
@@ -228,7 +239,7 @@ class SchedulePushOperationalReadinessGuardTest {
         "Production startup blocked: schedule.push.enabled=true requires " +
             "a configured ODsay or TMAP transit ETA provider. " +
             "Enable eta.transit.odsay with its api-key, or eta.transit.tmap and " +
-            "routing.tmap with its app-key."
+            "routing.tmap.transit-enabled with its app-key."
 
     private fun guard(
         vararg properties: Pair<String, String>,

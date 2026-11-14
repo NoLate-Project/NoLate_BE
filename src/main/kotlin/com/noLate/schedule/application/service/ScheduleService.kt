@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.intercity.IntercityJourneyValidator
+import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.schedule.application.cache.ScheduleCalendarCacheAudienceResolver
@@ -30,6 +31,7 @@ import com.noLate.schedule.domain.ScheduleShareContentMode
 import com.noLate.schedule.domain.ScheduleShareStatus
 import com.noLate.schedule.domain.ScheduleShareResourceType
 import com.noLate.schedule.domain.ScheduleType
+import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.application.service.policy.ScheduleNotificationPolicy
 import jakarta.transaction.Transactional
 import org.springframework.data.domain.PageRequest
@@ -212,7 +214,7 @@ class ScheduleService(
         val normalizedDto = normalizeNotificationDto(
             scheduleDto = routeNormalizedDto,
             existingSchedule = null,
-        )
+        ).withGuardedDeparture()
         validateScheduleRange(normalizedDto)
 
         val entity = normalizedDto.toEntity(memberId).apply {
@@ -312,7 +314,7 @@ class ScheduleService(
             scheduleDto = routeNormalizedDto,
             existingSchedule = existingSchedule,
             personalBaseline = actorPersonalBaseline,
-        )
+        ).withGuardedDeparture()
         validateScheduleRange(normalizedDto)
 
         // The schedule row is the serialization parent for direct share mutations and invitation
@@ -1058,6 +1060,19 @@ class ScheduleService(
         if (!endAt.isAfter(startAt)) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "endAt must be after startAt.")
         }
+    }
+
+    /** Keep the appointment and the persisted owner/actor departure on the same time basis. */
+    private fun ScheduleDto.withGuardedDeparture(): ScheduleDto {
+        val value = departAt ?: return this
+        // Preserve the original request for the selected-service validator; its
+        // booking/timetable clocks must not be repaired by moving a departure.
+        if (travelMode != ScheduleTravelMode.TRANSIT || route?.has("intercityJourney") == true) return this
+        val saved = parseInstant(value, "departAt")
+        val guarded = SelectedRouteMetadata.guardSavedDeparture(
+            parseInstant(startAt, "startAt"), saved, travelMinutes, travelMode, route,
+        )
+        return if (guarded == saved) this else copy(departAt = guarded?.toString())
     }
 
     private fun applyDto(schedule: Schedule, scheduleDto: ScheduleDto) {

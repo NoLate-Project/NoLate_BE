@@ -3,6 +3,7 @@ package com.noLate.schedule.application.service
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.logging.BackgroundSchedulerSqlContext
 import com.noLate.member.infrastructure.MemberRepository
+import com.noLate.schedule.application.SelectedRouteMetadata
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.ScheduleTravelPlan
@@ -197,7 +198,10 @@ class SchedulePushJobBackfillPairWriter(
             }
         val route = if (personal != null) {
             AlarmBackfillRoute(
-                departureAt = personal.departAt
+                departureAt = personal.departAt?.let { saved ->
+                    SelectedRouteMetadata.guardSavedDeparture(schedule.startAt, saved, personal.travelMinutes,
+                        personal.travelMode, personal.routeJson?.let { runCatching { objectMapper.readTree(it) }.getOrNull() })
+                }
                     ?: schedule.startAt.minusSeconds(requireNotNull(personal.travelMinutes).toLong() * 60),
                 alertMode = personal.alertMode,
             )
@@ -211,7 +215,10 @@ class SchedulePushJobBackfillPairWriter(
                 }
                 ?.let {
                     AlarmBackfillRoute(
-                        departureAt = it.departAt
+                        departureAt = it.departAt?.let { saved ->
+                            SelectedRouteMetadata.guardSavedDeparture(schedule.startAt, saved, it.travelMinutes,
+                                it.travelMode, it.routeJson?.let { raw -> runCatching { objectMapper.readTree(raw) }.getOrNull() })
+                        }
                             ?: schedule.startAt.minusSeconds(requireNotNull(it.travelMinutes).toLong() * 60),
                         alertMode = it.alertMode,
                     )

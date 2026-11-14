@@ -1376,6 +1376,27 @@ class ScheduleDepartureEtaServiceTest {
         assertTrue(result.failureReason.orEmpty().startsWith("SELECTED_ROUTE_SNAPSHOT:"))
     }
 
+    @ParameterizedTest
+    @CsvSource("45,45", "20,30", "-5,30")
+    fun `job 없는 저장 대중교통의 출발 안내는 캘린더와 같은 안전 시각을 유지한다`(
+        savedMinutesBeforeTarget: Long,
+        expectedMinutesBeforeTarget: Long,
+    ) {
+        val target = queryAt.plus(2, ChronoUnit.HOURS)
+        val schedule = schedule(
+            travelMode = ScheduleTravelMode.TRANSIT,
+            departureAt = target.minus(savedMinutesBeforeTarget, ChronoUnit.MINUTES),
+        )
+        stubVisible(schedule)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(target.minus(expectedMinutesBeforeTarget, ChronoUnit.MINUTES), result.recommendedDepartureAt)
+        assertEquals(30, result.travelMinutes)
+        assertTrue(result.stale)
+        assertNull(result.predictedArrivalAt)
+    }
+
     @Test
     fun `route-level 시간이 없으면 step 시간이 아니라 저장 travelMinutes를 사용한다`() {
         val schedule = schedule(
@@ -1811,6 +1832,7 @@ class ScheduleDepartureEtaServiceTest {
         destinationLat: Double = 37.2,
         notificationEnabled: Boolean = true,
         travelMode: ScheduleTravelMode = ScheduleTravelMode.CAR,
+        departureAt: Instant? = null,
     ): Schedule =
         Schedule(
             id = 10L,
@@ -1821,7 +1843,7 @@ class ScheduleDepartureEtaServiceTest {
         ).apply {
             updateRoute(
                 travelMinutes = travelMinutes,
-                departAt = null,
+                departAt = departureAt,
                 departedAt = null,
                 travelMode = travelMode,
                 locationName = "회사",

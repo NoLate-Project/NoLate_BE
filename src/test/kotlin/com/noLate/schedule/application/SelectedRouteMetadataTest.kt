@@ -6,9 +6,21 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.Instant
 
 class SelectedRouteMetadataTest {
     private val objectMapper = ObjectMapper()
+
+    @Test
+    fun `저장 출발 보호는 안전한 이른 시각과 다른 이동수단 시각을 변경하지 않는다`() {
+        val target = Instant.parse("2026-11-15T01:00:00Z")
+        val early = target.minusSeconds(80 * 60)
+        val late = target.minusSeconds(4 * 60)
+        assertEquals(early, SelectedRouteMetadata.guardSavedDeparture(target, early, 65, ScheduleTravelMode.TRANSIT, null))
+        assertEquals(target.minusSeconds(65 * 60), SelectedRouteMetadata.guardSavedDeparture(target, late, 65, ScheduleTravelMode.TRANSIT, null))
+        assertEquals(late, SelectedRouteMetadata.guardSavedDeparture(target, late, 65, ScheduleTravelMode.CAR, null))
+        assertNull(SelectedRouteMetadata.guardSavedDeparture(target, target, null, ScheduleTravelMode.TRANSIT, null))
+    }
 
     @Test
     fun `상세 JSON이 없어도 이동수단 경로바 구간은 유지한다`() {

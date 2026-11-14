@@ -43,8 +43,11 @@ schedule:
 routing:
   tmap:
     enabled: false
+    transit-enabled: false
 eta:
   transit:
+    tmap:
+      enabled: false
     odsay:
       enabled: false
       api-key: ""

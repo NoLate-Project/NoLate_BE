@@ -103,6 +103,7 @@ class ScheduleDepartureEtaService(
             val current = ScheduleTravelPlanFingerprint.matches(personal, schedule)
             return DepartureRoute(
                 travelMinutes = personal.travelMinutes,
+                savedDepartureAt = personal.departAt,
                 travelMode = personal.travelMode,
                 routeJson = personal.routeJson,
                 notificationEnabled = personal.notificationEnabled,
@@ -127,6 +128,7 @@ class ScheduleDepartureEtaService(
         val legacy = schedule.route?.takeIf { schedule.memberId == memberId } ?: return null
         return DepartureRoute(
             travelMinutes = legacy.travelMinutes,
+            savedDepartureAt = legacy.departAt,
             travelMode = legacy.travelMode,
             routeJson = legacy.routeJson,
             notificationEnabled = legacy.notificationEnabled,
@@ -444,10 +446,14 @@ class ScheduleDepartureEtaService(
         } else {
             TrafficSource.SAVED_FALLBACK
         }
+        val estimatedDeparture = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+        val earlierSavedDeparture = route.savedDepartureAt?.takeIf {
+            route.current && route.travelMode == ScheduleTravelMode.TRANSIT && it < estimatedDeparture
+        }
         return ScheduleDepartureEtaStatusDto(
             scheduleId = scheduleId,
             travelMinutes = travelMinutes,
-            recommendedDepartureAt = selectedRoute.anchoredDepartureAt ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES),
+            recommendedDepartureAt = selectedRoute.anchoredDepartureAt ?: earlierSavedDeparture ?: estimatedDeparture,
             evaluatedAt = evaluatedAt,
             liveFetchedAt = null,
             source = source,
@@ -535,6 +541,7 @@ class ScheduleDepartureEtaService(
 
 private data class DepartureRoute(
     val travelMinutes: Int?,
+    val savedDepartureAt: Instant?,
     val travelMode: ScheduleTravelMode?,
     val routeJson: String?,
     val notificationEnabled: Boolean,

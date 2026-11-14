@@ -412,7 +412,8 @@ class SchedulePushJobWorker(
                 selectedRoute.anchoredDepartureAt != null -> selectedRoute.anchoredDepartureAt
                 preservedAcceptedRoute != null -> preservedAcceptedRoute.departureAt
                 degradedTransitPresentation ->
-                    schedule.startAt.minus(fallbackMinutes.toLong(), ChronoUnit.MINUTES)
+                    // Match the protected reminder while keeping the saved route duration and no live arrival.
+                    minOf(recommendedDepartureAt, schedule.startAt.minus(fallbackMinutes.toLong(), ChronoUnit.MINUTES))
                 else -> recommendedDepartureAt
             }
             val liveActivityPredictedArrivalAt = when {

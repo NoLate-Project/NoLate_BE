@@ -189,6 +189,31 @@ class SchedulePushJobServiceTest {
     }
 
     @Test
+    fun `잘못 저장된 대중교통 출발 시각은 오너와 참가자 모두 재조회 시작을 늦추지 않는다`() {
+        whenever(repository.save(any<SchedulePushJob>())).thenAnswer { it.getArgument(0) }
+        val service = SchedulePushJobService(repository)
+        val schedule = ScheduleDto(
+            id = 10L, title = "교통 일정", startAt = "2026-11-01T15:20:00+09:00",
+            departAt = "2026-11-01T17:35:00+09:00", travelMinutes = 73,
+            travelMode = ScheduleTravelMode.TRANSIT, notificationEnabled = true,
+            origin = SchedulePlaceDto(lat = 37.1, lng = 127.1),
+            destination = SchedulePlaceDto(lat = 37.2, lng = 127.2),
+            category = ScheduleCategoryDto(id = "1", title = "업무", color = "#000000"),
+        )
+        val plan = com.noLate.schedule.domain.ScheduleTravelPlanDto(
+            scheduleId = 10L, memberId = 2L,
+            status = com.noLate.schedule.domain.ScheduleTravelPlanStatus.READY,
+            departAt = schedule.departAt, travelMinutes = schedule.travelMinutes,
+            travelMode = schedule.travelMode, notificationEnabled = true,
+        )
+        listOf(service.registerFromScheduleDto(1L, schedule), service.registerFromTravelPlanDto(2L, schedule, plan)).forEach { result ->
+            assertNotNull(result)
+            assertEquals(Instant.parse("2026-11-01T05:07:00Z"), result?.departureAt)
+            assertEquals(Instant.parse("2026-11-01T04:07:00Z"), result?.monitorStartAt)
+        }
+    }
+
+    @Test
     fun `다시 알림 요청은 job을 5분 뒤로 재예약한다`() {
         val now = Instant.parse("2026-06-12T01:00:00Z")
         val job = SchedulePushJob.create(

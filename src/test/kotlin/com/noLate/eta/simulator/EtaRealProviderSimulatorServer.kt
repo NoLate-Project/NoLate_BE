@@ -157,6 +157,7 @@ object EtaRealProviderSimulatorServer {
             "--spring.data.redis.host=127.0.0.1", "--spring.data.redis.port=1",
             "--schedule.sharing.enabled=true", "--schedule.push.enabled=true",
             "--routing.tmap.enabled=${journeyProviderId == "tmap"}", "--eta.transit.tmap.enabled=${journeyProviderId == "tmap"}",
+            "--routing.tmap.transit-enabled=${journeyProviderId == "tmap"}",
             "--eta.transit.odsay.enabled=${journeyProviderId == "odsay"}", "--eta.transit.seoul-timetable.enabled=true",
             // Actual acceptance needs the normal bounded search, not the old one-shot diagnostic.
             // This remains test-only and does not change production search/cadence settings.

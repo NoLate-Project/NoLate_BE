@@ -127,10 +127,12 @@ class TransitEtaCalculationService(
             return legacyResult(selected, request, reason)
         }
 
-        val reason = if (selected.provider.equals(ODSAY_PROVIDER_ID, ignoreCase = true)) {
-            TrafficFailureReasons.TRANSIT_JOURNEY_PROVIDER_UNAVAILABLE
-        } else {
-            null
+        val reason = when {
+            selected.provider.equals(ODSAY_PROVIDER_ID, ignoreCase = true) ->
+                TrafficFailureReasons.TRANSIT_JOURNEY_PROVIDER_UNAVAILABLE
+            selected.provider.equals(TMAP_PROVIDER_ID, ignoreCase = true) ->
+                TrafficFailureReasons.TRANSIT_ITINERARY_REFRESH_UNSUPPORTED
+            else -> null
         }
         return legacyResult(selected, request, reason)
     }
@@ -965,6 +967,7 @@ class TransitEtaCalculationService(
     private companion object {
         const val TIMETABLE_PREVIOUS_VEHICLE_PROBE_SECONDS = 300L
         const val ODSAY_PROVIDER_ID = "odsay"
+        const val TMAP_PROVIDER_ID = "tmap"
         const val MILLIS_PER_MINUTE = 60_000.0
         const val MAX_ALTERNATIVE_CANDIDATES_PER_RESPONSE = 3
         const val UNKNOWN_TRANSFER_PROBE_SECONDS = 5L * 60L

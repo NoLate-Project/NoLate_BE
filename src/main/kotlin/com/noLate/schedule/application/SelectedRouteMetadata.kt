@@ -43,7 +43,7 @@ data class SelectedRouteMetadata(
             }
         }
 
-        private fun extractAnchoredDeparture(root: JsonNode): Instant? = runCatching {
+        internal fun extractAnchoredDeparture(root: JsonNode): Instant? = runCatching {
             val journey = root.path("intercityJourney")
             val info = root.path("routeInfo")
             if (root.path("schemaVersion").asInt() != 3 || journey.path("version").asInt() != 1 ||
@@ -55,6 +55,21 @@ data class SelectedRouteMetadata(
             val arrival = OffsetDateTime.parse(journey.path("arrivalAt").asText()).toInstant()
             departure.takeIf { arrival.isAfter(it) }
         }.getOrNull()
+
+        /** An old saved metro/bus departure must not delay preparation past the current appointment's estimate. */
+        internal fun guardSavedDeparture(
+            target: Instant,
+            saved: Instant,
+            travelMinutes: Int?,
+            travelMode: ScheduleTravelMode?,
+            route: JsonNode?,
+        ): Instant? {
+            if (travelMode != ScheduleTravelMode.TRANSIT ||
+                (saved < target && route?.let(::extractAnchoredDeparture) == saved)
+            ) return saved
+            val estimate = travelMinutes?.takeIf { it > 0 }?.let { target.minusSeconds(it.toLong() * 60) }
+            return if (estimate != null) minOf(saved, estimate) else saved.takeIf { it < target }
+        }
 
         private fun extractTravelMinutes(root: JsonNode, maxTravelMinutes: Int): Int? {
             val routeInfo = root.path("routeInfo")
