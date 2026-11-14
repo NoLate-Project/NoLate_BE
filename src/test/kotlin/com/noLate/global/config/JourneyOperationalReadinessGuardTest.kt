@@ -25,6 +25,8 @@ class JourneyOperationalReadinessGuardTest {
         "journey.bus-ride.enabled" to "true",
         "journey.activity.enabled" to "true",
         "firebase.enabled" to "true",
+        "eta.transit.odsay.enabled" to "true",
+        "eta.transit.odsay.api-key" to "test-only",
         "routing.tmap.app-key" to "test-only",
         "transit.seoul.bus-api-key" to "test-only",
         "transit.seoul.allow-insecure-http" to "true",
@@ -46,6 +48,8 @@ class JourneyOperationalReadinessGuardTest {
             "journey.subway-observation.official-live-enabled")) {
             assertThat(flags[name]).describedAs(name).isEqualTo("true")
         }
+        assertThat(flags["eta.transit.odsay.enabled"]).isEqualTo("true")
+        assertThat(flags["eta.transit.tmap.enabled"]).isEqualTo("false")
         for (name in listOf("journey.guidance.manual-enabled", "journey.automatic.simulator-enabled",
             "journey.automatic.isolated-test-scope")) assertThat(flags[name]).isEqualTo("false")
         assertThrows(IllegalStateException::class.java) { guard(flags).afterSingletonsInstantiated() }
@@ -88,13 +92,17 @@ class JourneyOperationalReadinessGuardTest {
         for (flag in listOf("journey.automatic.official-bus-admission-enabled", "journey.automatic.expiry-enabled", "journey.walking.enabled",
             "journey.walking.snapshots-enabled", "journey.bus-ride.enabled", "journey.activity.enabled",
             "firebase.enabled", "routing.tmap.app-key", "transit.seoul.bus-api-key",
-            "transit.seoul.allow-insecure-http", "journey.activity.encryption-key")) {
+            "transit.seoul.allow-insecure-http", "journey.activity.encryption-key",
+            "eta.transit.odsay.enabled", "eta.transit.odsay.api-key")) {
             val value = if (flag.endsWith("enabled") || flag == "transit.seoul.allow-insecure-http") "false" else ""
             val failure = assertThrows(IllegalStateException::class.java) {
                 guard(ready + (flag to value)).afterSingletonsInstantiated()
             }
             assertThat(failure.message).contains("Production startup blocked")
             assertThat(failure.message).doesNotContain(key)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            guard(ready + ("eta.transit.tmap.enabled" to "true")).afterSingletonsInstantiated()
         }
         assertThrows(IllegalStateException::class.java) {
             guard(ready + ("spring.task.scheduling.enabled" to "false")).afterSingletonsInstantiated()

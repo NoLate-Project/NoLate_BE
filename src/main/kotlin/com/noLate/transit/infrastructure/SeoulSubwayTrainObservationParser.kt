@@ -42,6 +42,22 @@ internal object SeoulSubwayTrainObservationParser {
         } catch (_: Exception) { throw IllegalArgumentException("Invalid subway observation JSON") }
         require(root != null && root.isObject) { "Invalid subway observation envelope" }
         val error = root.path("errorMessage")
+        // realtimePosition returns a flat INFO-200 envelope before service
+        // hours (observed 2026-11-04). Accept only its explicit empty contract;
+        // never use this alternate shape to admit train observations.
+        if (error.isMissingNode && root.path("code").asText() == "INFO-200") {
+            val rows = root.path("realtimePositionList")
+            val status = root.path("status")
+            val total = root.get("list_total_count")
+            require(status.isIntegralNumber && status.canConvertToInt() && status.intValue() == 500 &&
+                root.path("total").count() == 0 &&
+                (rows.isMissingNode || rows.isArray && rows.isEmpty) &&
+                (total == null || total.count() == 0)) {
+                "Contradictory subway no-data envelope"
+            }
+            return SeoulSubwayTrainObservationBatch(SeoulSubwayTrainStatus.NO_TRAINS)
+        }
+        require(!root.has("code")) { "Mixed subway observation envelope" }
         require(error.isObject) { "Missing subway observation status" }
         val code = error.field("code")
         if (code !in setOf("INFO-000", "INFO-200")) throw TransitProviderApplicationException(

@@ -24,6 +24,29 @@ class TransitArrivalServiceTest {
     private val service = TransitArrivalService(seoulClient, tagoClient, TransitCityCodeResolver())
 
     @Test
+    fun `요청한 방면 열차가 없으면 반대 방향을 역 안내에 노출하지 않는다`() {
+        val wrong = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", direction = "상행")
+        whenever(seoulClient.getSubwayArrivals(eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), any())).thenReturn(listOf(wrong))
+
+        assertTrue(service.getSubwayArrivals("노원", "4호선", null, "DOWN", 3).isEmpty())
+        // ETA candidates have their own strict train matching; keep that input contract.
+        assertEquals(listOf(wrong), service.getSubwayArrivalsForEta("노원", "4호선", null, "DOWN", 10))
+    }
+
+    @Test
+    fun `역 안내는 동일 열차의 최신 관측만 남기고 시각이 같은 다른 열차는 보존한다`() {
+        val first = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", direction = "하행",
+            subwayLineId = "1004", subwayStationId = "1004000411", trainNumber = "4012",
+            expectedAt = "2026-11-15T03:10:00Z", sourceUpdatedAt = "2026-11-15T03:06:00Z")
+        val newer = first.copy(sourceUpdatedAt = "2026-11-15T03:07:00Z")
+        val other = first.copy(trainNumber = "4013")
+        whenever(seoulClient.getSubwayArrivals(eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), any()))
+            .thenReturn(listOf(first, newer, other))
+
+        assertEquals(listOf(newer, other), service.getSubwayArrivals("노원", "4호선", null, "DOWN", 2))
+    }
+
+    @Test
     fun `기존 목록 API는 빈 값으로 보호하지만 ETA 전용 조회는 같은 예외를 전달한다`() {
         val failure = IllegalStateException("provider private response")
         whenever(seoulClient.getSubwayArrivals("노원", "4호선", null, "DOWN", 10)).thenThrow(failure)

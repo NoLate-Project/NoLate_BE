@@ -1,6 +1,13 @@
 # Explicit opt-in overlay for the iOS TestFlight journey candidate.
 # Activate with prod,journey-testflight only after the deployment's provider keys,
 # Activity encryption key, and Seoul HTTP transport opt-in pass the production guard.
+eta:
+  transit:
+    odsay:
+      enabled: true
+    tmap:
+      enabled: false
+
 journey:
   guidance:
     enabled: true

@@ -46,6 +46,14 @@ class ServerOwnedWalkingSnapshotFactory(
     private val mapper: ObjectMapper, private val provider: ServerPedestrianProvider,
     private val clock: Clock = Clock.systemUTC(),
 ) {
+    // Match NoLateJourneyRouteNormalizer's static geometry bound. The saved
+    // origin/ride/destination tuple above remains a separate 1m identity check;
+    // provider points are returned unchanged, without endpoint connectors.
+    private companion object {
+        const val STATION_GEOMETRY_ENDPOINT_TOLERANCE_METERS = 75.0
+        const val USER_GEOMETRY_ENDPOINT_TOLERANCE_METERS = 30.0
+    }
+
     fun issue(plan: ScheduleTravelPlanDto, actor: Long, login: Long, revision: Long): ServerOwnedWalkingSnapshot {
         if (actor <= 0 || actor != plan.memberId || plan.scheduleId <= 0 || login !in 0..9_007_199_254_740_991L) reject("OWNER_CHANGED")
         if (revision !in 1..9_007_199_254_740_991L) reject("REVISION_CHANGED")
@@ -83,7 +91,9 @@ class ServerOwnedWalkingSnapshotFactory(
             val body = try { provider.fetch(request) }
                 catch (failure: WalkingContractRejected) { throw failure }
                 catch (_: Exception) { reject("PROVIDER_UNAVAILABLE") }
-            paths[index] = parse(body, request)
+            paths[index] = parse(body, request,
+                if (index == 0) USER_GEOMETRY_ENDPOINT_TOLERANCE_METERS else STATION_GEOMETRY_ENDPOINT_TOLERANCE_METERS,
+                if (index == legs.size() - 1) USER_GEOMETRY_ENDPOINT_TOLERANCE_METERS else STATION_GEOMETRY_ENDPOINT_TOLERANCE_METERS)
             if (paths.values.sumOf { it.size } > 12_000) reject("INPUT_LIMIT")
             val now = clock.instant()
             if (now.isBefore(issued) || !now.isBefore(issued.plusSeconds(30))) reject("FETCH_DEADLINE")
@@ -95,7 +105,7 @@ class ServerOwnedWalkingSnapshotFactory(
             issued, issued.plusSeconds(300), paths.mapValues { it.value.toList() })
     }
 
-    private fun parse(body: String, request: ServerWalkingRequest): List<ServerWalkingCoordinate> {
+    private fun parse(body: String, request: ServerWalkingRequest, startTolerance: Double, endTolerance: Double): List<ServerWalkingCoordinate> {
         if (body.toByteArray(Charsets.UTF_8).size !in 1..1_048_576) reject("INPUT_LIMIT")
         val root: JsonNode = try {
             mapper.factory.createParser(body).use { parser ->
@@ -136,7 +146,8 @@ class ServerOwnedWalkingSnapshotFactory(
             }
         }
         if (points.size < 2 || length <= 0) reject("EMPTY_PATH")
-        if (meters(points.first(), request.origin) > 30 || meters(points.last(), request.destination) > 30)
+        if (meters(points.first(), request.origin) > startTolerance ||
+            meters(points.last(), request.destination) > endTolerance)
             reject("ENDPOINT_MISMATCH")
         return points.toList()
     }

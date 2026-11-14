@@ -6,6 +6,7 @@ import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
 import com.noLate.transit.infrastructure.TagoTransitArrivalClient
 import com.noLate.transit.infrastructure.TransitProviderWireMetrics
 import org.springframework.stereotype.Service
+import java.time.Instant
 
 @Service
 class TransitArrivalService(
@@ -21,8 +22,44 @@ class TransitArrivalService(
         directionCode: String?,
         limit: Int,
     ): List<TransitArrivalDto> = runCatching {
-        getSubwayArrivalsForEta(stationName, lineName, directionName, directionCode, limit)
+        val tokens = when (directionCode?.trim()?.uppercase()) {
+            "UP" -> setOf("상행", "내선")
+            "DOWN" -> setOf("하행", "외선")
+            else -> emptySet()
+        }
+        // The adapter may return all directions as diagnostic candidates. A
+        // directional station board must not present those as matching trains.
+        val rows = getSubwayArrivalsForEta(stationName, lineName, directionName, directionCode, 10)
+            .filter { row -> tokens.isEmpty() || tokens.any { row.direction?.contains(it) == true } }
+        distinctStationTrainObservations(rows).take(limit.coerceIn(1, 10))
     }.getOrDefault(emptyList())
+
+    private data class StationTrainKey(val provider: String, val line: String, val station: String, val direction: String, val train: String)
+
+    private fun distinctStationTrainObservations(rows: List<TransitArrivalDto>): List<TransitArrivalDto> {
+        val index = mutableMapOf<StationTrainKey, Int>()
+        val distinct = mutableListOf<TransitArrivalDto>()
+        fun received(row: TransitArrivalDto): Instant? = row.sourceUpdatedAt?.let {
+            runCatching { Instant.parse(it) }.getOrNull()
+        }
+        for (row in rows) {
+            val line = row.subwayLineId?.trim()?.takeIf(String::isNotEmpty)
+            val station = row.subwayStationId?.trim()?.takeIf(String::isNotEmpty)
+            val direction = row.direction?.trim()?.takeIf(String::isNotEmpty)
+            val train = row.trainNumber?.trim()?.takeIf(String::isNotEmpty)
+            val key = if (line != null && station != null && direction != null && train != null) {
+                StationTrainKey(row.provider, line, station, direction, train)
+            } else null
+            val previous = key?.let(index::get)
+            if (previous == null) {
+                key?.let { index[it] = distinct.size }
+                distinct += row
+            } else if (received(row)?.let { it > (received(distinct[previous]) ?: Instant.MIN) } == true) {
+                distinct[previous] = row
+            }
+        }
+        return distinct
+    }
 
     /** 기존 목록 API는 fail-soft를 유지하되 ETA에서는 호출 실패와 정상 빈 목록을 구분한다. */
     fun getSubwayArrivalsForEta(

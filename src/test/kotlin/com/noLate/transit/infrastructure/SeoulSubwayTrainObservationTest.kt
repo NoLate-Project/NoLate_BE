@@ -128,6 +128,32 @@ class SeoulSubwayTrainObservationTest {
         for (value in listOf("{}", "[]", "{\"errorMessage\":{}}", "{\"errorMessage\":{\"code\":\"INFO-000\"}}")) assertFails { parse(value.toByteArray()) }
     }
 
+    @Test fun `official flat no data envelope reports no trains without observation authority`() {
+        // Observed from realtimePosition on 2026-11-04 before service hours:
+        // HTTP 200, top-level status=500/code=INFO-200/total=0, no nested errorMessage.
+        val batch = parse("""{"status":500,"code":"INFO-200","message":"PRIVATE-BODY-MARKER","link":"","developerMessage":"","total":0}""".toByteArray())
+        assertEquals(SeoulSubwayTrainStatus.NO_TRAINS, batch.status)
+        assertEquals(0, batch.observationCount)
+        assertFalse(batch.passengerTrainAssociation)
+        assertFalse(batch.stationOrderCrosswalkVerified)
+        assertFalse(batch.passengerGeographicPositionAvailable)
+        assertFalse(batch.toString().contains("PRIVATE-BODY-MARKER"))
+    }
+
+    @Test fun `flat no data rejects missing counts positive rows wrong status and mixed envelopes`() {
+        for (value in listOf(
+            """{"status":500,"code":"INFO-200"}""",
+            """{"status":500,"code":"INFO-200","total":"0"}""",
+            """{"status":500,"code":"INFO-200","total":1}""",
+            """{"status":200,"code":"INFO-200","total":0}""",
+            """{"status":500,"code":"INFO-200","total":0,"realtimePositionList":[{}]}""",
+            """{"status":500,"code":"INFO-200","total":0,"list_total_count":1}""",
+            """{"status":500,"code":"INFO-200","total":0,"errorMessage":{"code":"INFO-000","total":0},"realtimePositionList":[]}""",
+            """{"status":500,"code":"INFO-200","total":0,"errorMessage":null}""",
+            """{"status":500,"code":"INFO-000","total":0,"realtimePositionList":[]}""",
+        )) assertFailsWith<IllegalArgumentException> { parse(value.toByteArray()) }
+    }
+
     @Test fun `malformed duplicate trailing excessive depth size and UTF8 have sanitized failures`() {
         val bad = listOf("PRIVATE-BODY", "{\"errorMessage\":{},\"errorMessage\":{}}", "{} {}",
             "[".repeat(20) + "0" + "]".repeat(20))
@@ -221,7 +247,8 @@ class SeoulSubwayTrainObservationTest {
         val calls = AtomicInteger(); val registry = SimpleMeterRegistry()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/") { exchange ->
-                calls.incrementAndGet(); val output = body(emptyList(), "INFO-200")
+                calls.incrementAndGet()
+                val output = """{"status":500,"code":"INFO-200","total":0}""".toByteArray()
                 exchange.sendResponseHeaders(200, output.size.toLong()); exchange.responseBody.use { it.write(output) }
             }; start()
         }

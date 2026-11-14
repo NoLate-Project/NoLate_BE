@@ -1,7 +1,8 @@
-# TestFlight 길안내 운영 서버 활성화
+# iOS 길안내 운영 서버 활성화 (TestFlight·App Store)
 
-`main`의 `application-journey-testflight.yml`은 길안내 제품 기능을 켜는 명시적
-프로필이다. Compose의 기본값은 계속 `prod`이므로 단순 재시작만으로 켜지지 않는다.
+`main`의 `application-journey-testflight.yml`은 TestFlight와 App Store iOS 빌드가
+공유하는 길안내 제품 기능 프로필이다. Compose의 기본값은 계속 `prod`이므로
+단순 재시작만으로 켜지지 않는다.
 운영 배포 담당자가 새 서버 코드를 배포할 때 같은 셸에서 다음과 같이 실행한다.
 
 ```sh
@@ -14,8 +15,14 @@ SPRING_PROFILES_ACTIVE=prod,journey-testflight docker compose up -d --build app
 - `routing.tmap.app-key`, 서울 버스 키(`transit.seoul.bus-api-key` 또는
   `transit.seoul.api-key`), `DATA_GO_KR_SUBWAY_PATH_API_KEY`, 서울 실시간 지하철 키
   (`transit.seoul.subway-api-key` 또는 `transit.seoul.api-key`)
+- `ODSAY_SERVER_API_KEY`: 저장한 ODsay 대중교통 경로의 ETA 재조회에 사용한다.
+  이 프로필은 ODsay ETA를 켜고 TMAP 대중교통 ETA를 끈다. TMAP 지도·보행 키는
+  그대로 필요하며, 서버에서 `TMAP_ETA_ENABLED=true`만 설정해도 이 프로필의
+  ODsay 선택을 덮어쓰지 않는다.
 - 기본 서울 버스 URL이 HTTP라면 `transit.seoul.allow-insecure-http=true`
-- `journey.activity.encryption-key`: Base64로 인코딩한 32바이트 키
+- `JOURNEY_ACTIVITY_ENCRYPTION_KEY`: Base64로 인코딩한 32바이트 키. 배포 서버가
+  실제로 마운트하는 `env.properties`에 한 번 설정하고 재시작 후에도 같은 값을 보존한다.
+  로컬 개발용 `env.local.properties`의 값은 다른 서버로 자동 전달되지 않는다.
 - Firebase와 Spring 스케줄링 활성화
 
 누락되면 `JourneyOperationalReadinessGuard`가 기동을 차단한다. 기동 후 실제

@@ -61,6 +61,13 @@ class JourneyOperationalReadinessGuard(private val environment: Environment) : S
             "journey.activity.enabled",
             "firebase.enabled",
         ).forEach(::requireFlag)
+        requireFlag("eta.transit.odsay.enabled")
+        check(hasKey("eta.transit.odsay.api-key")) {
+            "Production startup blocked: journey guidance requires an ODsay server key."
+        }
+        check(!on("eta.transit.tmap.enabled")) {
+            "Production startup blocked: journey ETA must use the saved ODsay route."
+        }
         check(on("spring.task.scheduling.enabled", default = true)) {
             "Production startup blocked: journey expiry and Activity delivery require scheduling."
         }

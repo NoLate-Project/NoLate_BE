@@ -27,6 +27,51 @@ class ServerOwnedWalkingSnapshotTest {
         (paths[0] as MutableList).clear()
         assertThat(value.validatedWalks(f.plan, 7, 2, 1, f.clock.instant(), f.mapper)[0]).hasSize(3)
     }
+    @Test fun `road-snapped walking endpoints use the native static geometry bound without rewriting saved tuples`() {
+        val f = fixture(); val before = f.mapper.writeValueAsString(f.plan)
+        for (offsetMeters in listOf(35.8, 74.9)) {
+            val delta = offsetMeters / 6_371_000.0 * 180 / Math.PI
+            val fetched = mutableListOf<ServerWalkingRequest>()
+            val snapshot = ServerOwnedWalkingSnapshotFactory(f.mapper, { request ->
+                val shifted = if (fetched.isEmpty()) request.copy(destination = request.destination.copy(lat = request.destination.lat + delta))
+                    else request.copy(origin = request.origin.copy(lat = request.origin.lat + delta))
+                fetched.add(shifted)
+                syntheticBody(shifted)
+            }, f.clock).issue(f.plan, 7, 2, 1)
+            val paths = snapshot.validatedWalks(f.plan, 7, 2, 1, f.clock.instant(), f.mapper)
+            assertThat(paths.keys).containsExactly(0, 2)
+            for ((position, index) in listOf(0, 2).withIndex()) {
+                assertThat(paths[index]!!.first()).isEqualTo(fetched[position].origin)
+                assertThat(paths[index]!!.last()).isEqualTo(fetched[position].destination)
+                assertThat(paths[index]).hasSize(3)
+            }
+            assertThat(f.mapper.writeValueAsString(f.plan)).isEqualTo(before)
+        }
+    }
+    @Test fun `walking geometry beyond the native endpoint bound remains rejected`() {
+        val f = fixture(); val delta = 75.1 / 6_371_000.0 * 180 / Math.PI
+        rejected("ENDPOINT_MISMATCH") {
+            ServerOwnedWalkingSnapshotFactory(f.mapper, { request ->
+                syntheticBody(request.copy(destination = request.destination.copy(lat = request.destination.lat + delta)))
+            }, f.clock).issue(f.plan, 7, 2, 1)
+        }
+    }
+    @Test fun `user origin and destination retain the stricter endpoint bound`() {
+        val f = fixture(); val delta = 35.8 / 6_371_000.0 * 180 / Math.PI
+        for (origin in listOf(true, false)) {
+            var call = 0
+            rejected("ENDPOINT_MISMATCH") {
+                ServerOwnedWalkingSnapshotFactory(f.mapper, { request ->
+                    val shifted = when {
+                        origin && call == 0 -> request.copy(origin = request.origin.copy(lat = request.origin.lat + delta))
+                        !origin && call == 1 -> request.copy(destination = request.destination.copy(lat = request.destination.lat + delta))
+                        else -> request
+                    }
+                    call++; syntheticBody(shifted)
+                }, f.clock).issue(f.plan, 7, 2, 1)
+            }
+        }
+    }
     @Test fun `unknown ODsay service can bind walking paths but never becomes operating`() {
         val f = fixture()
         val route = f.plan.route!!.deepCopy<ObjectNode>().also { it.put("transitServiceState", "unknown") }
