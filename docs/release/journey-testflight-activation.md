@@ -30,6 +30,15 @@ SPRING_PROFILES_ACTIVE=prod,journey-testflight docker compose up -d --build app
 정상인지 확인한 뒤, 시험 계정의 저장된 ODsay 경로로 기기 현장 검증을 진행한다.
 단순 프로세스 재시작이나 앱 IPA 업로드만으로 서버 기능이 켜지지는 않는다.
 
+운영 서버의 Compose 디렉터리에서 다음 명령으로 적용된 프로필을 확인한다. 첫 명령은
+정확히 `prod,journey-testflight`를 출력해야 한다. 두 번째 명령의 `UP`은 서버가
+요청을 받고 있다는 뜻이며, 프로필 확인을 대신하지 않는다. 키 원문은 출력하지 않는다.
+
+```sh
+docker compose exec -T app printenv SPRING_PROFILES_ACTIVE
+curl --fail-with-body --silent --show-error https://nolate.jinuk.dev/health/readiness
+```
+
 문제가 생기면 이전 서버 이미지·코드로 되돌리고 프로필도 `prod`만 사용한다.
 프로필만 해제할 때는 다음처럼 앱 컨테이너를 다시 생성한다.
 
