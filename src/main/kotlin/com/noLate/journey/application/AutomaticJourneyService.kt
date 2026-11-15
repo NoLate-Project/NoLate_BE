@@ -206,7 +206,12 @@ class AutomaticJourneyService(
         requireDigest(command.routeInputDigest)
         lockActor(memberId, loginGeneration)
         travelPlanService.getTravelPlan(memberId, scheduleId, memberId)
-        val preparation = owned(sessionId, memberId, scheduleId, loginGeneration)
+        // A fresh login revokes the old access token, but the same account must
+        // still be able to deliver a durable stop for its previous session.
+        // Observation and departure paths retain exact login-generation fences.
+        val preparation = repository.findBySessionId(sessionId) ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        if (preparation.memberId != memberId || preparation.scheduleId != scheduleId ||
+            preparation.loginSessionGeneration > loginGeneration) throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
         preparation.fence(command.generation, command.routeRevision, command.clientOwnerId, command.routeInputDigest)
         preparation.stop(Instant.now(clock))
         return dto(repository.saveAndFlush(preparation))

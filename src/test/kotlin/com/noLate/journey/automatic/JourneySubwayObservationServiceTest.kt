@@ -12,14 +12,25 @@ class JourneySubwayObservationServiceTest {
     private val f=AutomaticJourneyFixture(clock).also { it.plan=it.plan.copy(route=syntheticSavedSubwayRoute(it.mapper,transfer=true)) }
     private val automatic=f.service()
     private val ids=listOf("9990000001","9990000002","9990000003")
-    private var reads=0; private var fetches=0
+    private var reads=0; private var fetches=0; private var arrivalFetches=0
     private val command get()=JourneySubwayObservationCommand(1,1,f.owner,f.digest,1)
-    private fun service(change:()->Unit={}):JourneySubwayObservationService {
+    private fun service(withArrival:Boolean=false, change:()->Unit={}):JourneySubwayObservationService {
+        val patternIds = if(withArrival) listOf("0222","0221","0220") else ids
         val checker=SavedJourneySubwayObservationCheck(f.mapper,null,
-            { _,_ -> JourneySubwayTrainStationMatcher.Pattern(SeoulSubwayObservationLine.LINE_2,0,ids.last(),0,ids,0,2) },
+            { _,_ -> JourneySubwayTrainStationMatcher.Pattern(SeoulSubwayObservationLine.LINE_2,0,patternIds.last(),0,patternIds,0,2,
+                if(withArrival) listOf("강남","역삼","성수") else null) },
             { fetches++;change();SeoulSubwayTrainObservationBatch(SeoulSubwayTrainStatus.AVAILABLE,listOf(
                 SeoulSubwayTrainObservation("00123",SeoulSubwayObservationLine.LINE_2,ids[1],ids.last(),0,1,0,false,
-                    clock.now.minusSeconds(1),clock.now,clock.now.plusSeconds(29)))) },clock,true)
+                    clock.now.minusSeconds(1),clock.now,clock.now.plusSeconds(29)))) },clock,true,
+            arrivals = if(withArrival) SubwayWaitingArrivalProvider { station,line,terminal,direction ->
+                arrivalFetches++
+                assertEquals(listOf("강남","2호선","성수","UP"),listOf(station,line,terminal,direction))
+                listOf(TransitArrivalDto(provider="seoul-openapi",kind="SUBWAY",lineName=line,
+                    stationName=station,direction="내선",destinationName=terminal,trainNumber="2243",
+                    sourceUpdatedAt=clock.now.minusSeconds(20).toString(),observedAt=clock.now.minusSeconds(15).toString(),
+                    expectedAt=clock.now.plusSeconds(100).toString(),
+                    freshnessEvidence=TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP))
+            } else null)
         return JourneySubwayObservationService({ member,schedule,login,session,c ->
             reads++;automatic.requireSubwayObservationFence(member,schedule,login,session,c)
         },checker)
@@ -44,6 +55,19 @@ class JourneySubwayObservationServiceTest {
         val legacy=observe(s)
         assertFalse(legacy.containsKey("nativeInput"));assertFalse(f.mapper.writeValueAsString(legacy).contains("00123"))
         assertEquals(4,reads);assertEquals(2,fetches)
+    }
+    @Test fun `only native input includes exact official platform arrival without claiming boarding`() {
+        prepare();val s=service(withArrival=true)
+        val input=s.input(7,9001,2,f.sessionId,command)
+        val arrival=input["arrivalInput"] as Map<*,*>
+        assertEquals("OFFICIAL_SAVED_SUBWAY_SERVICE_PATTERN",arrival["identityEvidence"])
+        assertEquals("강남",arrival["boardingStationName"])
+        assertEquals(clock.now.plusSeconds(100).toString(),arrival["expectedAt"])
+        assertEquals(false,arrival["confirmedBoarding"])
+        assertNull(input["passengerPosition"])
+        val legacy=observe(s)
+        assertFalse(legacy.containsKey("arrivalInput"))
+        assertEquals(1,arrivalFetches)
     }
     @Test fun `native input cannot bypass concurrent cancellation fence`() {
         prepare();assertFailsWith<BusinessException> {
