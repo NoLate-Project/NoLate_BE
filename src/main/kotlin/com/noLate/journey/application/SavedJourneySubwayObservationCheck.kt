@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.noLate.transit.domain.SeoulSubwayTrainObservationBatch
 import com.noLate.transit.domain.SeoulSubwayTrainQuery
+import com.noLate.transit.domain.TransitArrivalDto
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Clock
 import java.time.Instant
@@ -25,12 +26,17 @@ internal fun interface SubwayTrainObservationProvider {
     fun fetch(query: SeoulSubwayTrainQuery): SeoulSubwayTrainObservationBatch
 }
 
+internal fun interface SubwayWaitingArrivalProvider {
+    fun fetch(stationName: String, lineName: String, terminalName: String, directionCode: String): List<TransitArrivalDto>
+}
+
 /** Bounded diagnostic projection, not a native admission/boarding receipt. */
 internal data class SavedSubwayObservationCheckResult(
     val status: String,
     val matchingTrainCount: Int = 0,
     val schemaVersion: Int = 1,
     @get:JsonIgnore val nativeInput: Map<String, Any?>? = null,
+    @get:JsonIgnore val arrivalInput: Map<String, Any?>? = null,
 ) {
     val navigationReady = false
     val passengerBoardingConfirmed = false
@@ -50,6 +56,7 @@ internal class SavedJourneySubwayObservationCheck(
     private val provider: SubwayTrainObservationProvider,
     private val clock: Clock = Clock.systemUTC(),
     private val enabled: Boolean = false,
+    private val arrivals: SubwayWaitingArrivalProvider? = null,
 ) {
     private val permits = Semaphore(2)
     private val members = ConcurrentHashMap.newKeySet<Long>()
@@ -63,7 +70,7 @@ internal class SavedJourneySubwayObservationCheck(
 
     /** Server-internal callback only. The HTTP caller never submits a snapshot or provider ID. */
     fun checkWithFence(member: Long, schedule: Long, login: Long, expectedRevision: Long, legIndex: Int,
-        freshSnapshot: () -> JourneyRouteSnapshot): SavedSubwayObservationCheckResult {
+        includeArrival: Boolean = false, freshSnapshot: () -> JourneyRouteSnapshot): SavedSubwayObservationCheckResult {
         if (!enabled) reject("FEATURE_DISABLED")
         if (member <= 0 || schedule <= 0 || login !in 0..MAX_SAFE_INTEGER) reject("OWNER_CHANGED")
         if (expectedRevision !in 1..MAX_SAFE_INTEGER) reject("REVISION_CHANGED")
@@ -85,6 +92,18 @@ internal class SavedJourneySubwayObservationCheck(
                 reject("CATALOG_UNAVAILABLE")
             val batch = if (patterns.isNotEmpty()) try { provider.fetch(SeoulSubwayTrainQuery(patterns.first().line)) }
                 catch (_: Exception) { reject("PROVIDER_UNAVAILABLE") } else null
+            val arrivalRows = if (includeArrival && arrivals != null) {
+                val stations = patterns.mapNotNull { pattern -> pattern.officialStationNames
+                    ?.takeIf { it.size == pattern.stationCalls.size && pattern.boardingIndex in it.indices }
+                    ?.get(pattern.boardingIndex) }.distinct()
+                val lines = patterns.map { it.line.requestName }.distinct()
+                if (stations.size != 1 || lines.size != 1 || patterns.any { it.officialStationNames == null }) emptyList()
+                else try {
+                    val only = patterns.singleOrNull()
+                    arrivals.fetch(stations.single(), lines.single(), only?.officialStationNames?.last() ?: "",
+                        only?.let { if (it.direction == 0) "UP" else "DOWN" } ?: "")
+                } catch (_: Exception) { emptyList() }
+            } else emptyList()
             requireOutsideTransaction()
             return run {
                 val after = freshSnapshot()
@@ -98,6 +117,7 @@ internal class SavedJourneySubwayObservationCheck(
                     if (raw.evidence == null) raw.status else "STATION_CROSSWALK_REQUIRED")
                 else JourneySubwayTrainStationMatcher.match(patterns, batch, now).let {
                     val evidence = requireNotNull(raw.evidence)
+                    val arrival = if (includeArrival) SavedSubwayWaitingArrival.select(patterns, arrivalRows, now) else null
                     val calls = it.trains.map { train -> train.pattern.stationCalls.subList(
                         train.pattern.boardingIndex, train.pattern.alightingIndex + 1) }.distinct()
                     val selected = calls.singleOrNull()?.takeIf { rows -> rows.size == evidence.stations.size }
@@ -113,7 +133,7 @@ internal class SavedJourneySubwayObservationCheck(
                             "stopIndex" to train.referenceIndex - train.pattern.boardingIndex, "state" to train.state,
                             "sourceAt" to train.observedAt.toEpochMilli() / 1000.0,
                             "validUntil" to train.validUntil.toEpochMilli() / 1000.0) }) else null
-                    SavedSubwayObservationCheckResult(it.status, it.trainCount, nativeInput = input)
+                    SavedSubwayObservationCheckResult(it.status, it.trainCount, nativeInput = input, arrivalInput = arrival)
                 }
             }
         } finally { members.remove(member); permits.release() }

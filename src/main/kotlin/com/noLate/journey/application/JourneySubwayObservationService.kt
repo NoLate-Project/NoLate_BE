@@ -20,7 +20,8 @@ internal class JourneySubwayObservationService(private val fence: AutomaticSubwa
 
     private fun observe(member: Long, schedule: Long, login: Long, session: String,
         command: JourneySubwayObservationCommand, includeInput: Boolean): Map<String,Any?> {
-        val result=checker.checkWithFence(member,schedule,login,command.routeRevision,command.subwayLegIndex) {
+        val result=checker.checkWithFence(member,schedule,login,command.routeRevision,command.subwayLegIndex,
+            includeArrival = includeInput) {
             fence.capture(member,schedule,login,session,command)
         }
         return mapOf("schemaVersion" to if(includeInput)2 else 1,"sessionId" to session,"generation" to command.generation,
@@ -29,6 +30,6 @@ internal class JourneySubwayObservationService(private val fence: AutomaticSubwa
             "status" to result.status,"matchingTrainCount" to result.matchingTrainCount,
             "navigationReady" to false,"passengerBoardingConfirmed" to false,
             "passengerPosition" to null,"passengerRemainingStops" to null) +
-            if(includeInput) mapOf("nativeInput" to result.nativeInput) else emptyMap()
+            if(includeInput) mapOf("nativeInput" to result.nativeInput, "arrivalInput" to result.arrivalInput) else emptyMap()
     }
 }

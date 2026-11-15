@@ -48,5 +48,8 @@ internal class SubwayObservationConfiguration {
         JourneySubwayObservationService(JpaAutomaticSubwayObservationFence(automatic,members,plans,preparations,em,manager,mapper),SavedJourneySubwayObservationCheck(mapper,null,
             catalogs.getIfAvailable() ?: if(catalogFile.isNotBlank()) ReviewedSubwayCatalogLoader.load(catalogFile,mapper)
                 else SavedSubwayServicePatternCatalog { _,_ -> null },
-            { query -> provider.getSubwayTrainObservations(query) },enabled=true))
+            { query -> provider.getSubwayTrainObservations(query) },enabled=true,
+            arrivals = { station, line, terminal, direction ->
+                provider.getSubwayArrivals(station, line, terminal, direction, 40)
+            }))
 }

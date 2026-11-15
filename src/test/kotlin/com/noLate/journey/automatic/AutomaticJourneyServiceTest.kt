@@ -183,6 +183,25 @@ class AutomaticJourneyServiceTest {
         verifyNoInteractions(f.departure, f.jobs, f.schedules)
     }
 
+    @Test fun `current login can deliver an exact stop for its own previous login generation`() {
+        val f = AutomaticJourneyFixture(); val service = f.service()
+        service.prepare(7, 9001, 2, f.prepareCommand())
+        f.actor.sessionGeneration = 3
+        assertThatThrownBy { service.stop(7, 9001, 2, f.sessionId, f.stopCommand()) }
+            .isInstanceOf(BusinessException::class.java)
+        assertThatThrownBy { service.stop(7, 9001, 3, f.sessionId,
+            f.stopCommand().copy(routeInputDigest = "b".repeat(64))) }
+            .isInstanceOf(BusinessException::class.java)
+        assertThat(service.stop(7, 9001, 3, f.sessionId, f.stopCommand()).state)
+            .isEqualTo(AutomaticJourneyState.STOPPED)
+        assertThatThrownBy { service.departure(7, 9001, 3, f.sessionId, f.event()) }
+            .isInstanceOf(BusinessException::class.java)
+        // The rejected departure may acquire the status lock, but must not apply effects.
+        assertThat(f.departureCount.get()).isZero()
+        assertThat(f.activationCount.get()).isZero()
+        assertThat(f.cancelCount.get()).isZero()
+    }
+
     @Test fun `new login can replace the old preparation but cannot accept its late event`() {
         val f = AutomaticJourneyFixture(); val service = f.service()
         service.prepare(7, 9001, 2, f.prepareCommand()); f.actor.sessionGeneration = 3
