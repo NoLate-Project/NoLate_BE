@@ -58,6 +58,8 @@ class JourneyRerouteSearchServiceTest {
         assertThat(requested?.destinationLat).isEqualTo(37.576)
         assertThat(requested?.destinationLng).isEqualTo(126.978)
         assertThat(response.path("provider").asText()).isEqualTo("odsay")
+        assertThat(response.path("routeInputDigest").asText()).isEqualTo("a".repeat(64))
+        assertThat(response.path("observedAt").asText()).isEqualTo(now.toString())
         assertThat(response.path("result").path("paths").size()).isEqualTo(3)
         assertThatThrownBy { service.search(7, 41, 2, session, command()) }
             .isInstanceOf(BusinessException::class.java)

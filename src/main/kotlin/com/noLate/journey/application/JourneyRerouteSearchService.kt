@@ -56,6 +56,8 @@ class JourneyRerouteSearchService(
             put("sessionId", sessionId)
             put("generation", command.generation)
             put("routeRevision", command.routeRevision)
+            put("routeInputDigest", command.routeInputDigest)
+            put("observedAt", command.observedAt.toString())
             set<JsonNode>("result", mapper.createObjectNode().apply {
                 set<JsonNode>("paths", mapper.createArrayNode().apply { candidates.forEach { add(it.deepCopy<JsonNode>()) } })
             })
