@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.noLate.eta.application.stableRouteIdentity
+import com.noLate.eta.application.transit.TransitJourneyMatcher
 import com.noLate.eta.domain.TransitJourneySearchRequest
 import com.noLate.eta.domain.TransitLegMode
 import com.noLate.eta.domain.TransitLegTimingBasis
 import com.noLate.eta.domain.TransitServiceClass
+import com.noLate.eta.infrastructure.routejson.SelectedTransitRouteDecoder
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -23,6 +26,43 @@ class TmapTransitJourneyMapperTest {
     private val mapper = TmapTransitJourneyMapper()
     private val departureAt = Instant.parse("2026-10-04T03:00:37.123Z")
     private val fetchedAt = Instant.parse("2026-10-04T02:59:41Z")
+
+    @Test
+    fun `Tmap 지하철 노선 ID가 바뀌어도 전체 정차 순서가 동일하면 저장 경로로 재조회한다`() {
+        val payload = response()
+        val subway = ride(payload)
+        subway.put("mode", "SUBWAY").put("type", 2).put("route", "수도권2호선").put("routeId", "110021007")
+        val stations = objectMapper.readTree("""[
+            {"index":3,"stationID":"110230","stationName":"신림"},
+            {"index":1,"stationID":"110226","stationName":"사당"},
+            {"index":2,"stationID":"110228","stationName":"서울대입구"}
+        ]""")
+        subway.putObject("passStopList").set<JsonNode>("stationList", stations)
+        val saved = requireNotNull(SelectedTransitRouteDecoder(objectMapper).decode("""
+            {"provider":"tmap","transitLegs":[{"kind":"SUBWAY","lineName":"수도권2호선","serviceClass":"LOCAL",
+            "providerRouteId":"110021006","startName":"사당","endName":"신림",
+            "passStops":[{"code":"110226"},{"code":"110228"},{"code":"110230"}]}]}
+        """.trimIndent()))
+        val matcher = TransitJourneyMatcher()
+        val candidate = mapper.map(payload, request(), fetchedAt).single()
+        assertEquals(candidate, matcher.findSelected(saved, listOf(candidate)))
+
+        val leg = candidate.rideLegs.single()
+        val originalId = candidate.copy(legs = candidate.legs.map {
+            if (it == leg) it.copy(line = it.line?.copy(providerRouteId = "110021006")) else it
+        })
+        assertEquals(originalId.stableRouteIdentity(), candidate.stableRouteIdentity(saved))
+
+        val savedRide = saved.rides.single()
+        for (differentRide in listOf(
+            savedRide.copy(orderedStopIds = emptyList()),
+            savedRide.copy(orderedStopIds = listOf("PROVIDER:tmap:110226", "PROVIDER:tmap:110225", "PROVIDER:tmap:110230")),
+            savedRide.copy(directionCode = "DOWN"),
+            savedRide.copy(serviceClass = TransitServiceClass.EXPRESS),
+        )) {
+            assertNull(matcher.findSelected(saved.copy(rides = listOf(differentRide)), listOf(candidate)))
+        }
+    }
 
     @Test
     fun `복수 후보의 도보 메타데이터는 여정별로 보존한다`() {

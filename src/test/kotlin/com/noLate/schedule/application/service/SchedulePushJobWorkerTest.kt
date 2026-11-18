@@ -18,6 +18,7 @@ import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.TrafficResult
 import com.noLate.schedule.application.TransitRouteProvenance
 import com.noLate.schedule.application.TransitTimingBasis
+import com.noLate.schedule.application.savedOdsayTimetableFixture
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
 import com.noLate.schedule.application.service.policy.PeriodicPushPolicy
 import com.noLate.schedule.application.service.policy.TrafficChangePolicy
@@ -1614,6 +1615,42 @@ class SchedulePushJobWorkerTest {
         verify(scheduleLiveActivityService).projectEta(projection.capture())
         assertEquals(fixed, job.lastRecommendedDepartureAt)
         assertEquals(fixed, projection.firstValue.recommendedDepartureAt)
+        assertTrue(projection.firstValue.etaStale)
+        assertNull(projection.firstValue.predictedArrivalAt)
+    }
+
+    @ParameterizedTest
+    @CsvSource("SUBWAY", "BUS")
+    fun `ODsay 재조회가 실패해도 알림과 Live Activity는 저장된 초 단위 출발을 유지한다`(mode: String) {
+        val departure = defaultScheduleStartAt.minusSeconds(1771)
+        val routeJson = if (mode == "SUBWAY") {
+            savedOdsayTimetableFixture(departure, defaultScheduleStartAt)
+        } else {
+            """
+            {"provider":"odsay","minutes":35,"transitLegs":[{"kind":"WALK"},{"kind":"BUS"},{"kind":"WALK"}],
+             "routeInfo":{"provider":"odsay","timeBasis":"estimated","providerTimeBasis":"route_estimate",
+               "totalDurationMinutes":30,"totalDurationSeconds":1771,"departureTime":"$departure","arrivalTime":"$defaultScheduleStartAt",
+               "busPreviewObservation":{"targetArrivalAt":"$defaultScheduleStartAt","sourceUpdatedAt":"${departure.minusSeconds(60)}"}}}
+            """.trimIndent()
+        }
+        val schedule = schedule(routeJson = routeJson, travelMode = ScheduleTravelMode.TRANSIT)
+        val job = persistedJob(1, 10, schedule.startAt, departure, testNow.minusSeconds(1), notificationIntervalMinutes)
+        ReflectionTestUtils.setField(job, "id", 322L)
+        job.startProcessing("mock-owner", testNow)
+        whenever(mockedPushJobCoordinator.claimNextDueJob(any(), any())).thenReturn(job, null)
+        whenever(mockedPushJobCoordinator.execute<Unit>(any())).thenAnswer { it.getArgument<() -> Unit>(0).invoke() }
+        whenever(mockedPushJobCoordinator.persist(any(), any(), anyOrNull(), anyOrNull(), anyOrNull())).thenReturn(true)
+        whenever(scheduleRepository.findScheduleDetail(10, 1)).thenReturn(schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(travelMinutes = 30,
+            source = TrafficSource.SELECTED_ROUTE, stale = true, failureReason = TrafficFailureReasons.PROVIDER_TIMEOUT))
+
+        worker(coordinator = mockedPushJobCoordinator, liveActivityService = scheduleLiveActivityService).runDueJobs(testNow)
+
+        val projection = argumentCaptor<ScheduleLiveActivityEtaProjection>()
+        verify(scheduleLiveActivityService).projectEta(projection.capture())
+        assertEquals(departure, job.lastRecommendedDepartureAt)
+        assertEquals(departure, projection.firstValue.recommendedDepartureAt)
+        assertEquals(TrafficSource.SELECTED_ROUTE, projection.firstValue.etaSource)
         assertTrue(projection.firstValue.etaStale)
         assertNull(projection.firstValue.predictedArrivalAt)
     }

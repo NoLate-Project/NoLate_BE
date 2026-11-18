@@ -66,7 +66,7 @@ data class ScheduleParseConfidenceDto(
  * 사용자가 수정한 뒤 기존 일정 생성 API로 제출할 수 있도록 구조화된 값만 반환한다.
  */
 data class ScheduleParseDto(
-    /** 화면 제목에 사용할 "장소 + 시간" 형식의 값이다. */
+    /** 원문에서 찾았거나 분석 중 구성한 일정 제목이다. */
     val title: String? = null,
 
     /** 예약자, 촬영 종류, 작가 배정처럼 제목에서 제외한 부가 정보다. */
@@ -111,6 +111,9 @@ data class ScheduleParseDto(
 
     /** 신뢰도 산식이 바뀌었을 때 점수를 같은 기준끼리 비교하기 위한 버전이다. */
     val confidenceVersion: String? = null,
+
+    /** 별도의 제목이나 일정 목적이 없어 시각·장소만 조합한 제목인지 나타낸다. */
+    val titleDerivedFromTimeOrPlace: Boolean = false,
 )
 
 enum class QuickScheduleClientPlatform {

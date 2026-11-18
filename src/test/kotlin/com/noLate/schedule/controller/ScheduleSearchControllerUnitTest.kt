@@ -18,7 +18,7 @@ class ScheduleSearchControllerUnitTest {
     )
 
     @Test
-    fun `search forwards the optional result limit`() {
+    fun `search forwards the optional result limit and calendar scope`() {
         whenever(
             scheduleUseCase.searchScheduleList(
                 memberId = 7L,
@@ -27,6 +27,7 @@ class ScheduleSearchControllerUnitTest {
                 startAt = "2026-08-01T00:00:00Z",
                 endAt = "2026-08-31T23:59:59Z",
                 limit = 35,
+                calendarScope = "personal",
             )
         ).thenReturn(emptyList())
 
@@ -37,6 +38,7 @@ class ScheduleSearchControllerUnitTest {
             startAt = "2026-08-01T00:00:00Z",
             endAt = "2026-08-31T23:59:59Z",
             limit = 35,
+            calendarScope = "personal",
         )
 
         assertEquals(emptyList<Any>(), response.data)
@@ -47,6 +49,7 @@ class ScheduleSearchControllerUnitTest {
             startAt = "2026-08-01T00:00:00Z",
             endAt = "2026-08-31T23:59:59Z",
             limit = 35,
+            calendarScope = "personal",
         )
     }
 }

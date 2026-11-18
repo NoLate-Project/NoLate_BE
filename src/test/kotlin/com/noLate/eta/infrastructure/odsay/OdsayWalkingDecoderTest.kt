@@ -24,6 +24,11 @@ class OdsayWalkingDecoderTest {
         assertEquals(listOf(2L, 170L, 14L), decoded.map { it.geometry?.distanceMeters })
         assertTrue(decoded.all { it.geometry?.pathEvidence?.status == TransitWalkingPathStatus.PROVIDED })
         assertTrue(decoded.all { it.durationSeconds == null })
+        // The access and egress each repeat the same link with separate endpoint connectors.
+        // A V2 query for the egress reports only one link and cannot validate its whole walk.
+        assertNull(decoded.first().geometry?.providerQueryEndpoints)
+        assertNotNull(decoded[1].geometry?.providerQueryEndpoints)
+        assertNull(decoded.last().geometry?.providerQueryEndpoints)
         assertEquals(157L, walks[1].path("routes").sumOf { it.path("DURATION").longValue() })
         assertEquals(listOf(60L, 180L, 60L), walks.mapIndexed { index, walk ->
             TransitJourneyLeg(index, TransitLegMode.WALK, walk.path("duration").intValue(),

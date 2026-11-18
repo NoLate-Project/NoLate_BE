@@ -52,6 +52,23 @@ class ScheduleAccessPolicyTest {
     }
 
     @Test
+    fun `owner role is only assigned to schedules in a shared calendar`() {
+        val personal = routeSchedule(ownerId = 1L, calendarId = null)
+        val shared = routeSchedule(ownerId = 1L, calendarId = 30L)
+        val calendar = ScheduleCalendar(id = 30L, ownerMemberId = 1L, title = "가족")
+        whenever(calendars.findByIdAndStatusAndDeletedFalse(30L)).thenReturn(calendar)
+        whenever(calendars.findAllById(listOf(30L))).thenReturn(listOf(calendar))
+
+        for ((schedule, expectedRole) in listOf(personal to null, shared to ScheduleCalendarRole.OWNER)) {
+            val access = policy.resolve(1L, schedule)
+            assertEquals(expectedRole, access.calendarRole)
+            assertEquals(ScheduleSharePermission.OWNER, access.effectivePermission)
+            assertTrue(access.canManageAudience)
+            assertEquals(access, policy.resolveAll(1L, listOf(schedule)).getValue(10L))
+        }
+    }
+
+    @Test
     fun `direct and calendar grants combine strongest permission and widest content`() {
         val schedule = routeSchedule(ownerId = 1L, calendarId = 30L)
         whenever(directShares.findByScheduleIdAndTargetMemberId(10L, 2L)).thenReturn(

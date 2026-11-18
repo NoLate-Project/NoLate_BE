@@ -566,10 +566,17 @@ class ScheduleHybridParserService(
             ?.let {
                 toPlace(ai.originName, ai.originAddress)
             }
+        val explicitRuleTitle = rule.title
+            ?.trim()
+            ?.takeIf { it.isNotBlank() && !rule.titleDerivedFromTimeOrPlace }
         val aiDestination = ai.destinationConfidence
             .takeIf { it >= aiConfidenceThreshold }
             ?.let {
                 toPlace(ai.destinationName, ai.destinationAddress)
+            }
+            ?.takeUnless { place ->
+                rule.destination == null && explicitRuleTitle != null &&
+                    (explicitRuleTitle.equals(place.name, ignoreCase = true) || explicitRuleTitle.equals(place.address, ignoreCase = true))
             }
         val destination = when {
             rule.destination == null -> aiDestination
@@ -581,10 +588,6 @@ class ScheduleHybridParserService(
             rule.notes?.takeIf { it.isNotBlank() },
             summary?.let { "일정 내용: $it" },
         ).distinct().joinToString("\n").takeIf { it.isNotBlank() }
-        val ruleDefaultTitle = buildTitle(rule.destination, rule.time)
-        val explicitRuleTitle = rule.title
-            ?.trim()
-            ?.takeIf { it.isNotBlank() && it != ruleDefaultTitle }
         val title = explicitRuleTitle ?: buildTitle(destination, time)
         val dateTime = toDateTime(date, time)
         val resolvedEnd = ruleParser.resolveScheduleEnd(
@@ -603,6 +606,7 @@ class ScheduleHybridParserService(
 
         return rule.copy(
             title = title,
+            titleDerivedFromTimeOrPlace = title != null && explicitRuleTitle == null,
             notes = notes,
             date = date,
             time = time,

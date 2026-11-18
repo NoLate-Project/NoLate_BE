@@ -261,7 +261,10 @@ class SchedulePushJobWorker(
                 }
                 it
             }
-            val trustedSelectedMinutes = selectedRoute.travelMinutes
+            val savedBusPreview = selectedRoute.odsayBusPreview?.takeIf {
+                it.matches(schedule.startAt, job.departureAt, canonicalMinutes)
+            }
+            val trustedSelectedMinutes = (savedBusPreview?.travelMinutes ?: selectedRoute.travelMinutes)
                 ?.takeIf { canonicalMinutes == null || it == canonicalMinutes }
             val fallbackMinutes = canonicalMinutes ?: trustedSelectedMinutes
                 ?: error("교통 조회 fallback 이동 시간이 없습니다.")
@@ -325,7 +328,7 @@ class SchedulePushJobWorker(
                 val currentMatched = snapshot.plannedJourneyArrivalPrediction(now, arrivalSourceMaxAgeSeconds)
                     ?.basis == PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
                 if (plan == null || currentMatched) snapshot else {
-                    // 출발 후 출발지 재검색이 지난 열차를 버려도, 저장한 동일 환승편은
+                    // 출발 후 출발지 재검색이 지난 열차를 버려도, 저장한 동일 마지막 편은
                     // 별도로 1회만 확인한다. 이 값은 출발 알람/정상 ETA에 전달하지 않는다.
                     val observation = plannedRideRealtimeGuard?.observeLastPlannedRide(plan, now)
                     snapshot.copy(plannedArrivalObservation = observation)
@@ -411,9 +414,15 @@ class SchedulePushJobWorker(
             val liveActivityRecommendedDepartureAt = when {
                 selectedRoute.anchoredDepartureAt != null -> selectedRoute.anchoredDepartureAt
                 preservedAcceptedRoute != null -> preservedAcceptedRoute.departureAt
+                degradedTransitPresentation &&
+                    (savedBusPreview != null ||
+                        selectedRoute.odsayTimetable?.matches(schedule.startAt, job.departureAt, fallbackMinutes) == true) ->
+                    recommendedDepartureAt
                 degradedTransitPresentation ->
                     // Match the protected reminder while keeping the saved route duration and no live arrival.
-                    minOf(recommendedDepartureAt, schedule.startAt.minus(fallbackMinutes.toLong(), ChronoUnit.MINUTES))
+                    minOf(recommendedDepartureAt, selectedRoute.odsayEstimatedDepartureAt(schedule.startAt, fallbackMinutes)
+                        ?.takeIf { trustedSelectedMinutes == fallbackMinutes }
+                        ?: schedule.startAt.minus(fallbackMinutes.toLong(), ChronoUnit.MINUTES))
                 else -> recommendedDepartureAt
             }
             val liveActivityPredictedArrivalAt = when {

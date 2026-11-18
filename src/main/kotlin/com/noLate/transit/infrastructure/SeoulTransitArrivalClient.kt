@@ -19,6 +19,7 @@ import com.noLate.eta.resilience.EtaCalculationDeadline
 import com.noLate.eta.resilience.EtaDeadlineAwareClientHttpRequestFactory
 import com.noLate.eta.resilience.EtaProviderGuard
 import com.noLate.eta.resilience.StaticEtaProviderResiliencePolicyResolver
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
@@ -199,6 +200,15 @@ class SeoulTransitArrivalClient(
     fun getBusRoutePath(routeId: String) = busCatalogRequest(routeId, "/busRouteInfo/getRoutePath",
         TransitWireOperation.ROUTE_GEOMETRY, SeoulBusRouteCatalogParser::path)
 
+    internal fun getPairedBusArrivals(path: List<com.noLate.transit.domain.SeoulBusRouteStop>): List<SeoulBusPairedArrival> {
+        if (!SeoulBusRouteCatalogParser.isForwardBusPath(path)) return emptyList()
+        return busCatalogRequest(path.first().routeId, "/arrive/getArrInfoByRouteAll", TransitWireOperation.ARRIVAL) {
+            SeoulBusRouteCatalogParser.pairedArrivals(it, path, clock.instant()) { reason ->
+                logger.debug("Seoul bus arrival pairing unavailable: {}", reason)
+            }
+        }
+    }
+
     private fun <T> busCatalogRequest(routeId: String, path: String, operation: TransitWireOperation,
         parse: (ByteArray) -> List<T>): List<T> {
         require(routeId.matches(Regex("[1-9][0-9]{8}"))) { "Invalid Seoul route identifier" }
@@ -296,16 +306,16 @@ class SeoulTransitArrivalClient(
         routeName: String?,
         limit: Int,
     ): List<TransitArrivalDto> {
-        val arsCandidates = buildList {
-            val directArsId = arsId?.filter { it.isDigit() }?.takeIf(::isSeoulBusArsId)
-            if (directArsId != null) add(directArsId)
-            seoulBusStationSearchTerms(stationName).forEach { searchTerm ->
-                addAll(resolveSeoulBusArsIds(apiKey, searchTerm))
-            }
-        }.distinct().take(MAX_ARS_CANDIDATES)
+        val directArsId = arsId?.filter { it.isDigit() }?.takeIf(::isSeoulBusArsId)
+        if (directArsId != null) {
+            // The saved stop ID identifies the boarding stop even when its name has aliases.
+            return requestBusArrivals(apiKey, directArsId, routeName, limit)
+        }
 
-        return arsCandidates
-            .asSequence()
+        return seoulBusStationSearchTerms(stationName).asSequence()
+            .flatMap { searchTerm -> resolveSeoulBusArsIds(apiKey, searchTerm).asSequence() }
+            .distinct()
+            .take(MAX_ARS_CANDIDATES)
             .map { candidate -> requestBusArrivals(apiKey, candidate, routeName, limit) }
             .firstOrNull { it.isNotEmpty() }
             ?: emptyList()
@@ -813,6 +823,7 @@ class SeoulTransitArrivalClient(
     private fun Int.toWaitMinutes(): Int = ceil(this / 60.0).toInt().coerceAtLeast(0)
 
     private companion object {
+        val logger = LoggerFactory.getLogger(SeoulTransitArrivalClient::class.java)
         const val MAX_STATION_CACHE_ENTRIES = 500
         const val MAX_ARS_CANDIDATES = 8
         const val SEOUL_LOW_FLOOR_BUS_CODE = "1"

@@ -9,6 +9,9 @@ import com.noLate.eta.domain.TransitLegTimingBasis
 import com.noLate.eta.domain.TransitLine
 import com.noLate.eta.domain.TransitServiceClass
 import com.noLate.eta.domain.TransitStop
+import com.noLate.eta.domain.TransitWalkingCoordinate
+import com.noLate.eta.domain.TransitWalkingPathStatus
+import com.noLate.eta.domain.TransitWalkingQueryEndpoints
 import com.noLate.eta.domain.SeoulSubwayLine
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import org.springframework.stereotype.Component
@@ -21,6 +24,8 @@ import java.time.format.ResolverStyle
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.cos
+import kotlin.math.hypot
 
 /**
  * ODsay maasRP 원본을 ETA 계산이 공급자 스키마를 몰라도 되는 canonical 여정으로 바꾼다.
@@ -84,7 +89,39 @@ class OdsayTransitJourneyMapper {
             totalMinutes = totalMinutes,
             legs = legs,
             fetchedAt = fetchedAt,
+            entranceWalkEndpoints = boundaryWalk(rawLegs, legs, request, entrance = true),
+            exitWalkEndpoints = boundaryWalk(rawLegs, legs, request, entrance = false),
         )
+    }
+
+    private fun boundaryWalk(raw: List<JsonNode>, legs: List<TransitJourneyLeg>, request: TransitJourneySearchRequest,
+                             entrance: Boolean): TransitWalkingQueryEndpoints? {
+        val boundary = if (entrance) 0 else legs.lastIndex
+        val walk = legs[boundary].takeIf { it.mode == TransitLegMode.WALK }
+        if (walk == null && !entrance) return null
+        val ride = if (walk == null) boundary else if (entrance) 1 else boundary - 1
+        if (legs.getOrNull(ride)?.line?.seoulSubwayLine == null) return null
+        val node = raw[ride]
+        val prefix = if (entrance) "startExit" else "endExit"
+        if (node.text("${prefix}No").isNullOrBlank() || !node.path("${prefix}X").isNumber ||
+            !node.path("${prefix}Y").isNumber) return null
+        return runCatching {
+            val pin = if (entrance) TransitWalkingCoordinate(request.originLat, request.originLng)
+                else TransitWalkingCoordinate(request.destinationLat, request.destinationLng)
+            val door = TransitWalkingCoordinate(node.path("${prefix}Y").doubleValue(), node.path("${prefix}X").doubleValue())
+            if (pin == door || door.lat == 0.0 || door.lng == 0.0) return null
+            if (walk != null) {
+                val geometry = walk.walkingGeometry ?: return null
+                val distance = geometry.distanceMeters ?: return null
+                val pinToDoor = hypot(pin.lat - door.lat, (pin.lng - door.lng) * cos(Math.toRadians(pin.lat))) * 111_195
+                // A full walk cannot be shorter than its endpoints' straight-line separation.
+                if (geometry.providerQueryEndpoints != null || geometry.pathEvidence?.status != TransitWalkingPathStatus.PROVIDED ||
+                    pinToDoor <= distance + 10) return null
+            }
+            if (entrance) TransitWalkingQueryEndpoints(pin, door)
+            else TransitWalkingQueryEndpoints(door, pin,
+                originalEgressEndpoint = walk?.walkingGeometry?.pathEvidence?.steps?.lastOrNull()?.coordinates?.lastOrNull())
+        }.getOrNull()
     }
 
     private fun hasInvalidTimeline(leg: TransitJourneyLeg): Boolean {
@@ -171,7 +208,15 @@ class OdsayTransitJourneyMapper {
             .takeIf { !it.isMissingNode && !it.isNull }
             ?.let { nonNegativeMinutes(it, maxTravelMinutes) }
             ?: if (node.hasNonNull("waitingTime")) return null else null
-        val lanes = node.path("lane").arrayLike()
+        // The itinerary timestamps are estimates; use them only to exclude a clearly
+        // weekday-only lane on a civil weekend, away from the overnight service boundary.
+        val providerDepartureAt = parseOdsayDateTime(node.text("startDateTime"))
+        val providerArrivalAt = parseOdsayDateTime(node.text("endDateTime"))
+        val rawLanes = node.path("lane").arrayLike()
+        val lanes = if (mode == TransitLegMode.BUS && isWeekendDaytime(providerDepartureAt, providerArrivalAt)) {
+            rawLanes.filterNot { lane -> listOfNotNull(lane.text("busNo"), lane.text("name")).any(WEEKDAYS_ONLY::containsMatchIn) }
+        } else rawLanes
+        if (rawLanes.isNotEmpty() && lanes.isEmpty()) return null
         val lane = lanes.firstOrNull()
         val subwayStops = orderedSubwayStops(node)
         val canonicalLine = if (mode == TransitLegMode.SUBWAY && lanes.size == 1 && subwayStops != null) {
@@ -180,11 +225,6 @@ class OdsayTransitJourneyMapper {
 
         // maasRP 시각은 실제 운행 시간표가 아니라 SearchTime과
         // 구간별 이동시간으로 만들어진 경로 표시용 예상시각이다.
-        val providerDepartureAt =
-            parseOdsayDateTime(node.text("startDateTime"))
-        val providerArrivalAt =
-            parseOdsayDateTime(node.text("endDateTime"))
-
         return TransitJourneyLeg(
             sequence = index,
             mode = mode,
@@ -197,13 +237,7 @@ class OdsayTransitJourneyMapper {
             from = stop(node, "start"),
             to = stop(node, "end"),
             line = when (mode) {
-                TransitLegMode.BUS -> TransitLine(
-                    providerRouteId = lane?.text("busID") ?: lane?.text("busId"),
-                    localRouteId = lane?.text("busLocalBlID"),
-                    cityCode = lane?.text("busCityCode"),
-                    providerCode = lane?.text("busProviderCode"),
-                    name = lane?.text("busNo") ?: lane?.text("name"),
-                )
+                TransitLegMode.BUS -> busLine(lane)
                 TransitLegMode.SUBWAY -> TransitLine(
                     providerRouteId = listOfNotNull(
                         lane?.text("subwayCityCode"),
@@ -241,7 +275,26 @@ class OdsayTransitJourneyMapper {
                 TransitLegTimingBasis.UNKNOWN
             },
             nextStopName = if (mode == TransitLegMode.SUBWAY) subwayStops?.getOrNull(1)?.text("stationName") else null,
+            orderedStopNames = if (canonicalLine != null) {
+                subwayStops.orEmpty().mapNotNull { it.text("stationName") }
+            } else emptyList(),
+            alternativeBusLines = if (mode == TransitLegMode.BUS) lanes.drop(1).map(::busLine) else emptyList(),
         )
+    }
+
+    private fun busLine(lane: JsonNode?) = TransitLine(
+        providerRouteId = lane?.text("busID") ?: lane?.text("busId"),
+        localRouteId = lane?.text("busLocalBlID"),
+        cityCode = lane?.text("busCityCode"),
+        providerCode = lane?.text("busProviderCode"),
+        name = lane?.text("busNo") ?: lane?.text("name"),
+    )
+
+    private fun isWeekendDaytime(start: Instant?, end: Instant?): Boolean {
+        val departure = start?.atZone(SERVICE_ZONE) ?: return false
+        val arrival = end?.atZone(SERVICE_ZONE) ?: return false
+        return departure.hour >= 3 && departure.toLocalDate() == arrival.toLocalDate() &&
+            departure.dayOfWeek.value >= 6
     }
 
     /** https://lab.odsay.com/guide/releaseReference : maasRP 및 지하철 노선/도시 코드 표. */
@@ -375,6 +428,7 @@ class OdsayTransitJourneyMapper {
             ?.takeIf(String::isNotBlank)
 
     private companion object {
+        val WEEKDAYS_ONLY = Regex("""(?:^|[(.,·])\s*평일\s*운행\s*(?=[).,·]|$)""")
         const val PROVIDER_ID = "odsay"
         const val PUBLIC_TRANSIT_PATH_TYPE = 2
         const val ALLOWED_TOTAL_ROUNDING_MINUTES = 1

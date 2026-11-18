@@ -859,7 +859,7 @@ class ScheduleUseCaseUnitTest {
     }
 
     @Test
-    fun `일정 검색은 키워드와 기간 조건을 일정 서비스에 넘긴다`() {
+    fun `일정 검색은 키워드와 기간 및 캘린더 범위를 일정 서비스에 넘긴다`() {
         val memberId = 1L
         whenever(
             scheduleService.searchScheduleList(
@@ -869,6 +869,7 @@ class ScheduleUseCaseUnitTest {
                 startAt = eq("2026-06-01T00:00:00Z"),
                 endAt = eq("2026-06-30T23:59:59Z"),
                 limit = eq(35),
+                calendarScope = eq("23"),
             )
         ).thenReturn(listOf(scheduleDto()))
 
@@ -879,6 +880,7 @@ class ScheduleUseCaseUnitTest {
             startAt = "2026-06-01T00:00:00Z",
             endAt = "2026-06-30T23:59:59Z",
             limit = 35,
+            calendarScope = "23",
         )
 
         verify(scheduleService, times(1)).searchScheduleList(
@@ -888,6 +890,7 @@ class ScheduleUseCaseUnitTest {
             startAt = "2026-06-01T00:00:00Z",
             endAt = "2026-06-30T23:59:59Z",
             limit = 35,
+            calendarScope = "23",
         )
         assertEquals(1, result.size)
     }

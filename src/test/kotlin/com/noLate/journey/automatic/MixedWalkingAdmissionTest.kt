@@ -10,6 +10,32 @@ import java.security.MessageDigest
 import java.util.UUID
 
 class MixedWalkingAdmissionTest {
+    @Test fun `accepted departure keeps the same walking route despite notification-only plan revision`() {
+        val clock = AutomaticJourneyMutableClock()
+        WalkingSnapshotDatabaseFixture("jdbc:h2:mem:departure-walk-${UUID.randomUUID()};MODE=MySQL;DB_CLOSE_DELAY=-1",
+            clock, connectorWalking = true, retainedNavigation = true, extendedNavigation = true).use { f ->
+            val walking = f.service.issue(7, 9001, 2, 1)
+            val service = f.automaticService()
+            val prepared = service.prepareSaved(7, 9001, 2, command(f, walking))
+            val fence = AutomaticJourneyStopCommand(prepared.generation, prepared.routeRevision,
+                prepared.clientOwnerId, prepared.routeInputDigest)
+            val event = AutomaticJourneyDepartureCommand(prepared.generation, prepared.routeRevision,
+                prepared.clientOwnerId, prepared.routeInputDigest,
+                "${prepared.sessionId}:${prepared.generation}:1:AUTO_DEPARTURE", 1, "AUTO_DEPARTURE",
+                clock.instant(), AutomaticJourneyExecution.SIMULATOR)
+            service.departure(7, 9001, 2, prepared.sessionId, event)
+            f.revision++ // A notification-only write increments the persisted plan row version.
+            assertThat(service.validate(7, 9001, 2, prepared.sessionId, fence).state)
+                .isEqualTo(AutomaticJourneyState.ACTIVE)
+            val original = f.fixture.plan
+            val changed = original.route!!.deepCopy<ObjectNode>()
+            (changed.path("transitLegs")[1] as ObjectNode).put("lineName", "different route")
+            f.fixture.plan = original.copy(route = changed)
+            assertThatThrownBy { service.validate(7, 9001, 2, prepared.sessionId, fence) }
+                .isInstanceOf(RuntimeException::class.java)
+        }
+    }
+
     @Test fun `subway original station namespace survives saved preparation and cannot be substituted`() {
         WalkingSnapshotDatabaseFixture("jdbc:h2:mem:subway-admission-${UUID.randomUUID()};MODE=MySQL;DB_CLOSE_DELAY=-1",
             connectorWalking=true,durablePreparations=true,retainedNavigation=true,subwayFixture=true).use { f ->

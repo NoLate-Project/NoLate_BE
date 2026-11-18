@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.nio.file.Files
@@ -17,6 +18,7 @@ import java.util.concurrent.TimeUnit
  * the repository's current Testcontainers API negotiation is rejected by newer Docker Engines.
  * A host without Docker records an explicit JUnit skip, never a false-positive verification pass.
  */
+@Tag("mysql")
 class PushEtaTrustMySqlMigrationTest {
     @Test
     fun `migration creates exact trust schema and rejects reapplication`() {

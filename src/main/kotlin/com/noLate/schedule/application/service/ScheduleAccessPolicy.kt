@@ -76,7 +76,7 @@ class ScheduleAccessPolicy(
             ?.takeIf(::isActive)
         if (effectiveCalendarId != null && calendar == null) return NO_ACCESS
         val resourceOwnerMemberId = resourceOwnerMemberId(schedule, category, calendar)
-        if (resourceOwnerMemberId == memberId) return ownerDecision(schedule, resourceOwnerMemberId)
+        if (resourceOwnerMemberId == memberId) return ownerDecision(schedule, resourceOwnerMemberId, calendar)
         if (!sharingAvailabilityPolicy.enabled) return NO_ACCESS
         if (enforceOwnerBlock &&
             sharingBlockPolicy?.isInteractionBlocked(memberId, resourceOwnerMemberId) == true
@@ -183,7 +183,7 @@ class ScheduleAccessPolicy(
             val decision = if (parentUnavailable) {
                 NO_ACCESS
             } else if (resourceOwnerMemberId == memberId) {
-                ownerDecision(schedule, resourceOwnerMemberId)
+                ownerDecision(schedule, resourceOwnerMemberId, calendar)
             } else if (resourceOwnerMemberId in blockedOwnerIds) {
                 NO_ACCESS
             } else {
@@ -480,6 +480,7 @@ class ScheduleAccessPolicy(
     private fun ownerDecision(
         schedule: Schedule,
         resourceOwnerMemberId: Long,
+        calendar: ScheduleCalendar?,
     ) = ScheduleAccessDecision(
         canView = true,
         canEdit = true,
@@ -491,7 +492,7 @@ class ScheduleAccessPolicy(
         } else {
             ScheduleShareContentMode.SCHEDULE_ONLY
         },
-        calendarRole = ScheduleCalendarRole.OWNER,
+        calendarRole = calendar?.let { ScheduleCalendarRole.OWNER },
         resourceOwnerMemberId = resourceOwnerMemberId,
         canManageAudience = true,
     )

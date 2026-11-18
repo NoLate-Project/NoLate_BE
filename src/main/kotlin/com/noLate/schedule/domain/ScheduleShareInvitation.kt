@@ -49,6 +49,8 @@ data class ScheduleShareInvitationAcceptDto(
     val invitation: ScheduleShareInvitationDto,
     val share: ScheduleShareDto,
     val calendarMembership: ScheduleCalendarMemberDto? = null,
+    val calendarTitle: String? = null,
+    val scheduleTitle: String? = null,
 )
 
 @Entity

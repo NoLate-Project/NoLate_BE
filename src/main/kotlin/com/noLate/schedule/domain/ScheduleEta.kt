@@ -180,4 +180,6 @@ data class ScheduleDepartureEtaStatusDto(
     val plannedJourneyArrivalPrediction: PlannedJourneyArrivalPrediction? = null,
     /** 출발 후 새 출발지 재검색의 진단. 위 잠정 도착이나 보호된 출발 알림에 적용하지 않는다. */
     val originReplanDiagnostic: OriginReplanDiagnostic? = null,
+    /** 재조회가 불확실할 때 저장한 대중교통 경로 기준의 출발시각. 예약된 출발시각과 다를 수 있다. */
+    val savedRouteEstimatedDepartureAt: Instant? = null,
 )

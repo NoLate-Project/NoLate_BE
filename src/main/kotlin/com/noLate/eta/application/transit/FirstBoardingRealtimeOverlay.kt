@@ -48,7 +48,10 @@ data class TransitRealtimeOverlayResolution(
     val failureReason: String? = null,
     /** 전체 ETA를 보정하지 못해도 검증된 첫 차량 관측은 따로 보존한다. */
     val firstBoardingObservation: TransitFirstBoardingObservation? = null,
+    val observedWaitWithoutOverlay: Int? = null,
 ) {
+    val firstBoardingWaitMinutes: Int? get() = overlay?.firstBoardingWaitMinutes ?: observedWaitWithoutOverlay
+
     init {
         require((overlay != null) xor !failureReason.isNullOrBlank()) {
             "실시간 승차 보정 결과는 overlay 또는 실패 사유 중 정확히 하나를 가져야 합니다."
@@ -113,13 +116,13 @@ class FirstBoardingRealtimeOverlay(
         // 실제 시간표의 초 단위 대기를 표시용 올림 분으로 되돌리지 않는다.
         val scheduledWaitMillis = firstRide.timetable?.let {
             val start = firstRide.scheduledDepartureAt ?: return unavailableMetadata()
-            Duration.between(start, it.boardingAt).toMillis()
+            Duration.between(start, it.boardingStationArrivalAt ?: it.boardingAt).toMillis()
         } ?: firstRide.waitingMinutes?.toLong()?.times(60_000L)
         val accessMillis = journey.legs
             .take(firstRideIndex)
             .sumOf(TransitJourneyLeg::movementDurationSeconds) * 1_000L
         val embeddedDelay = firstRide.firstBoardingObservation?.let { observation ->
-            Duration.between(requireNotNull(firstRide.timetable).boardingAt, observation.expectedBoardingAt)
+            requireNotNull(firstRide.timetable).shiftFromObservedBoardingArrival(observation.expectedBoardingAt)
         } ?: Duration.ZERO
         // 지연 후보 연결에서 이미 적용한 지연을 실시간 보정으로 두 번 더하지 않는다.
         val baselineArrivalAt = journey.arrivalAt.minus(embeddedDelay)
@@ -142,6 +145,10 @@ class FirstBoardingRealtimeOverlay(
             return TransitRealtimeOverlayResolution(
                 failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
                 firstBoardingObservation = observation,
+                observedWaitWithoutOverlay = ceil(
+                    Duration.between(stopArrivalAt(baseDepartureAt, accessMillis), candidate.expectedAt)
+                        .toMillis() / MILLIS_PER_MINUTE,
+                ).toInt().coerceAtLeast(0),
             )
         }
         val overlay = overlay(plan, baseDepartureAt, baselineArrivalAt, scheduledWaitMillis, candidate, maxTravelMinutes)
@@ -211,6 +218,12 @@ class FirstBoardingRealtimeOverlay(
             cityCodeNamespace = firstStop.cityCodeNamespace,
             providerCode = firstStop.providerCode,
             nodeId = firstStop.localStopId,
+            seoulBusRouteId = firstLine.localRouteId?.takeIf {
+                journey.provider == "odsay" && firstRide.mode == TransitLegMode.BUS &&
+                    firstStop.cityCodeNamespace == TransitCityCodeNamespace.ODSAY_CID &&
+                    firstStop.cityCode?.trim() == ODSAY_SEOUL_CITY_CODE &&
+                    SEOUL_BUS_ROUTE_ID_PATTERN.matches(it)
+            },
             subwayRealtimeMetadataSupported = firstRide.mode != TransitLegMode.SUBWAY ||
                 firstLine.seoulSubwayLine != null ||
                 supportsSeoulSubwayRealtime(
@@ -320,10 +333,13 @@ class FirstBoardingRealtimeOverlay(
         val arrivals = lookup.arrivals
             .filter(TransitArrivalDto::realtime)
             .let { candidates ->
-                if (plan.kind == TransitLegMode.SUBWAY) {
-                    filterCompatibleSubwayArrivals(candidates, plan)
-                } else {
-                    candidates
+                when {
+                    plan.kind == TransitLegMode.SUBWAY -> filterCompatibleSubwayArrivals(candidates, plan)
+                    plan.seoulBusRouteId != null -> candidates.filter { arrival ->
+                        arrival.provider == "seoul-bus" && arrival.kind == "BUS" &&
+                            arrival.providerRouteId == plan.seoulBusRouteId
+                    }
+                    else -> candidates
                 }
             }
         if (arrivals.isEmpty()) {
@@ -335,10 +351,14 @@ class FirstBoardingRealtimeOverlay(
             val evaluations = related.map { it.toCandidate(evaluatedAt) }
             val expectedTrainPresent = lookup.arrivals.any { it.trainNumber == plan.expectedTrainNumber ||
                 (plan.expectedRealtimeTrainNumber != null && it.trainNumber == plan.expectedRealtimeTrainNumber) }
-            val reason = sourceRejectionReason(evaluations) ?: if (
-                !expectedTrainPresent && plan.scheduledBoardingAt?.isAfter(evaluatedAt) == true &&
-                evaluations.any { it.candidate != null }
-            ) TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED else TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE
+            val futureTrainPending = !expectedTrainPresent &&
+                plan.scheduledBoardingAt?.isAfter(evaluatedAt) == true &&
+                (evaluations.any { it.candidate != null } || related.any { it.isRecentlyDeparted(evaluatedAt) })
+            val reason = if (futureTrainPending) {
+                TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED
+            } else {
+                sourceRejectionReason(evaluations) ?: TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE
+            }
             return ArrivalSelection(
                 failureReason = reason
             )
@@ -501,8 +521,8 @@ class FirstBoardingRealtimeOverlay(
                 // 따라서 종착역==하차역인 차량만 허용하던 제한을 검증된 열차에 한해 해제한다.
                 (arrival.trainNumber == plan.expectedTrainNumber ||
                     (plan.expectedRealtimeTrainNumber != null && arrival.trainNumber == plan.expectedRealtimeTrainNumber)) &&
-                    normalizeStopName(arrival.destinationName) == normalizeStopName(plan.verifiedTerminalName)
-            } else normalizeStopName(arrival.destinationName) == expectedAlightingStation) &&
+                    normalizeTerminalName(arrival.destinationName) == normalizeTerminalName(plan.verifiedTerminalName)
+            } else normalizeTerminalName(arrival.destinationName) == expectedAlightingStation) &&
                 // A generic/local itinerary cannot inherit an express train's shorter runtime (or
                 // vice versa). Missing provider service-type evidence is deliberately not guessed.
                 arrival.express != null && arrival.express == selectedExpress
@@ -539,10 +559,10 @@ class FirstBoardingRealtimeOverlay(
         if (serviceClass == TransitServiceClass.UNKNOWN) return false
         val normalizedNetworkCode = networkCityCode?.trim()?.takeIf(String::isNotBlank)
         if (normalizedNetworkCode != null) {
-            return normalizedNetworkCode == ODSAY_SEOUL_SUBWAY_CITY_CODE
+            return normalizedNetworkCode == ODSAY_SEOUL_CITY_CODE
         }
         return stationCityCodeNamespace == TransitCityCodeNamespace.ODSAY_CID &&
-            stationCityCode?.trim() == ODSAY_SEOUL_SUBWAY_CITY_CODE
+            stationCityCode?.trim() == ODSAY_SEOUL_CITY_CODE
     }
 
     private fun normalizeStopName(value: String?): String? =
@@ -554,6 +574,24 @@ class FirstBoardingRealtimeOverlay(
             ?.removeSuffix("역")
             ?.trim()
             ?.takeIf(String::isNotBlank)
+
+    private fun normalizeTerminalName(value: String?): String? =
+        normalizeStopName(value?.trim()?.removeSuffix("종착"))
+
+    // A fresh previous train proves the feed is running. It cannot be used for boarding or cache retention.
+    private fun TransitArrivalDto.isRecentlyDeparted(evaluatedAt: Instant): Boolean {
+        if (trainNumber.isNullOrBlank() || freshnessEvidence != TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP) {
+            return false
+        }
+        val sourceUpdated = parseInstant(sourceUpdatedAt) ?: return false
+        if (!isFreshSource(sourceUpdated, evaluatedAt)) return false
+        return arrivalStatus == TransitArrivalStatus.DEPARTED ||
+            parseInstant(expectedAt)?.isBefore(evaluatedAt.minusSeconds(ALLOWED_PROVIDER_CLOCK_SKEW_SECONDS)) == true
+    }
+
+    private fun isFreshSource(sourceUpdated: Instant, evaluatedAt: Instant): Boolean =
+        !sourceUpdated.isBefore(evaluatedAt.minusSeconds(arrivalSourceMaxAgeSeconds)) &&
+            !sourceUpdated.isAfter(evaluatedAt.plusSeconds(ALLOWED_PROVIDER_CLOCK_SKEW_SECONDS))
 
     private fun TransitArrivalDto.toCandidate(evaluatedAt: Instant): ArrivalCandidateEvaluation {
         // 출발한 열차의 잔존 countdown이나 이전 관측으로 승차 가능성을 되살리지 않는다.
@@ -567,10 +605,7 @@ class FirstBoardingRealtimeOverlay(
         }
         val sourceUpdated = parseInstant(sourceUpdatedAt)
             ?: return ArrivalCandidateEvaluation(rejectedUnverifiedSource = true)
-        if (sourceUpdated.isBefore(evaluatedAt.minusSeconds(arrivalSourceMaxAgeSeconds))) {
-            return ArrivalCandidateEvaluation(rejectedStale = true)
-        }
-        if (sourceUpdated.isAfter(evaluatedAt.plusSeconds(ALLOWED_PROVIDER_CLOCK_SKEW_SECONDS))) {
+        if (!isFreshSource(sourceUpdated, evaluatedAt)) {
             return ArrivalCandidateEvaluation(rejectedStale = true)
         }
         val expected = parseInstant(expectedAt)
@@ -655,6 +690,7 @@ class FirstBoardingRealtimeOverlay(
         val scheduledBoardingAt: Instant? = null,
         val expectedRealtimeTrainNumber: String?,
         val verifiedTerminalName: String?,
+        val seoulBusRouteId: String? = null,
     )
 
     private data class ArrivalCandidate(
@@ -685,6 +721,7 @@ class FirstBoardingRealtimeOverlay(
         val cityCodeNamespace: TransitCityCodeNamespace,
         val providerCode: String?,
         val nodeId: String?,
+        val seoulBusRouteId: String?,
         val limit: Int,
     ) {
         companion object {
@@ -699,6 +736,7 @@ class FirstBoardingRealtimeOverlay(
                 cityCodeNamespace = plan.cityCodeNamespace,
                 providerCode = plan.providerCode,
                 nodeId = plan.nodeId,
+                seoulBusRouteId = plan.seoulBusRouteId,
                 limit = limit,
             )
         }
@@ -716,6 +754,7 @@ class FirstBoardingRealtimeOverlay(
     )
 
     private companion object {
+        val SEOUL_BUS_ROUTE_ID_PATTERN = Regex("[1-9][0-9]{8}")
         const val MILLIS_PER_MINUTE = 60_000.0
         const val DEFAULT_BOARDING_BUFFER_SECONDS = 60L
         const val MAX_BOARDING_BUFFER_SECONDS = 600L
@@ -728,7 +767,7 @@ class FirstBoardingRealtimeOverlay(
         const val MAX_ARRIVAL_CACHE_TTL_SECONDS = 60L
         const val DEFAULT_ARRIVAL_CACHE_MAX_ENTRIES = 512
         const val MAX_ARRIVAL_CACHE_MAX_ENTRIES = 2_048
-        const val ODSAY_SEOUL_SUBWAY_CITY_CODE = "1000"
+        const val ODSAY_SEOUL_CITY_CODE = "1000"
         const val OBSERVATION_LOOKAHEAD_SECONDS = 20 * 60L
         val WHITESPACE_PATTERN = Regex("""\s+""")
         val PARENTHESIZED_PATTERN = Regex("""\([^)]*\)""")

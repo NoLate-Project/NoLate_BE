@@ -47,6 +47,7 @@ class SeoulTransitTimetableProviderTest {
         val ride = first.single()
         assertEquals("DOWN", ride.directionCode)
         assertEquals("4012", ride.trainNumber)
+        assertEquals(now.plusSeconds(160), ride.boardingStationArrivalAt)
         assertEquals(now.plusSeconds(180), ride.boardingAt)
         assertEquals(now.plusSeconds(1500), ride.arrivalAt)
         assertEquals("오이도", ride.terminalName)
@@ -55,6 +56,16 @@ class SeoulTransitTimetableProviderTest {
         assertEquals(first, repeated)
         assertEquals(6, calls.get())
     }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["00:00:00", "15:03:01"])
+    fun `승차역 도착이 없거나 출발보다 늦으면 도착 근거만 남기지 않는다`(boardingArrival: String) =
+        withServer(boardingArrival = boardingArrival) { provider, _ ->
+            val ride = provider.findRides(query()).single()
+            assertNull(ride.boardingStationArrivalAt)
+            assertEquals(now.plusSeconds(180), ride.boardingAt)
+            assertEquals(now.plusSeconds(1500), ride.arrivalAt)
+        }
 
     @ParameterizedTest
     @ValueSource(strings = ["wrongTrain", "wrongOrigin", "wrongTerminal", "wrongClass", "unknownClass", "wrongDirection", "wrongWeek", "wrongStation", "reverseTime", "duplicateRun", "ambiguousStation", "bothDirections"])
@@ -139,7 +150,11 @@ class SeoulTransitTimetableProviderTest {
         assertEquals(0, calls.get())
     }
 
-    private fun withServer(mismatch: String = "", block: (SeoulTransitTimetableProvider, AtomicInteger) -> Unit) {
+    private fun withServer(
+        mismatch: String = "",
+        boardingArrival: String = "15:02:40",
+        block: (SeoulTransitTimetableProvider, AtomicInteger) -> Unit,
+    ) {
         val calls = AtomicInteger()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/") { exchange ->
@@ -162,7 +177,7 @@ class SeoulTransitTimetableProviderTest {
                     val direction = path.last()
                     if (direction == "1" && mismatch != "bothDirections") emptyList() else {
                         val end = station == "TO_CODE"
-                        val row = row(station, end, mismatch, direction).let {
+                        val row = row(station, end, mismatch, direction, boardingArrival).let {
                             if (mismatch.startsWith("overnight")) it.replace("15:", if (mismatch == "overnight-zero") "00:" else "24:") else it
                         }
                         if (mismatch == "korailCollision") listOf(row, row.replace("K4012", "4012"))
@@ -182,7 +197,7 @@ class SeoulTransitTimetableProviderTest {
         } finally { server.stop(0) }
     }
 
-    private fun row(station: String, end: Boolean, mismatch: String, direction: String): String = """
+    private fun row(station: String, end: Boolean, mismatch: String, direction: String, boardingArrival: String): String = """
         {"STATION_CD":"${if (end && mismatch == "wrongStation") "OTHER_CODE" else station}",
         "STATION_NM":"${if (end) "사당" else "서울역"}","LINE_NUM":"04호선",
         "WEEK_TAG":"${if (end && mismatch == "wrongWeek") "1" else "3"}",
@@ -192,7 +207,7 @@ class SeoulTransitTimetableProviderTest {
         "DESTSTATION":"${if (end && mismatch == "wrongTerminal") "OTHER_TERM" else "TERM_CODE"}",
         "SUBWAYENAME":"오이도","BRANCH_LINE":"0",
         "EXPRESS_YN":"${if (end && mismatch == "wrongClass") "D" else if (mismatch == "unknownClass") "?" else "G"}",
-        "ARRIVETIME":"${if (!end) "15:02:40" else if (mismatch == "reverseTime") "15:02:00" else "15:25:00"}",
+        "ARRIVETIME":"${if (!end) boardingArrival else if (mismatch == "reverseTime") "15:02:00" else "15:25:00"}",
         "LEFTTIME":"${if (end) "15:25:20" else "15:03:00"}"}
     """.trimIndent()
 }

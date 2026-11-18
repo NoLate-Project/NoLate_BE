@@ -376,6 +376,48 @@ class ScheduleTextParserServiceTest {
     }
 
     @Test
+    fun `keeps the separate OCR title out of the inferred destination`() {
+        val result = parser.parse(
+            text = "2026-11-26 14:00\nPhoto Fixture Marigold",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-11-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("Photo Fixture Marigold", result.title)
+        assertEquals("2026-11-26T05:00:00Z", result.startAt)
+        assertNull(result.destination)
+        assertTrue("destination" in result.missingFields)
+    }
+
+    @Test
+    fun `keeps a recognized venue on its own OCR line`() {
+        val result = parser.parse(
+            text = "Seoul Convention Center\n2026-11-26 14:00",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-11-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("Seoul Convention Center", result.destination?.name)
+        assertEquals("14:00 Seoul Convention Center", result.title)
+        assertTrue(result.titleDerivedFromTimeOrPlace)
+    }
+
+    @Test
+    fun `does not infer a place from a labeled title when typing in quick input`() {
+        val result = parser.parse(
+            text = "제목: 팀 디자인 회고\n2026-11-26 14:00",
+            inputType = ScheduleParseInputType.CONVERSATION,
+            referenceDate = "2026-11-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals("팀 디자인 회고", result.title)
+        assertNull(result.destination)
+    }
+
+    @Test
     fun `uses an explicitly labeled title instead of the generated time and place title`() {
         val result = parser.parse(
             text = "제목: 팀 주간회의\n일시: 2026-08-07 오후 3시\n장소: 강남역",
@@ -385,6 +427,7 @@ class ScheduleTextParserServiceTest {
         )
 
         assertEquals("팀 주간회의", result.title)
+        assertFalse(result.titleDerivedFromTimeOrPlace)
         assertEquals("15:00", result.time)
         assertEquals("강남역", result.destination?.name)
     }

@@ -3,6 +3,7 @@ package com.noLate.auth.apple
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.nio.file.Files
@@ -16,6 +17,7 @@ import java.util.concurrent.TimeUnit
  * the repository's current Testcontainers dependency. A host without Docker records an explicit
  * JUnit skip; it must never be reported as MySQL verification success.
  */
+@Tag("mysql")
 class AppleTokenLifecycleMySqlMigrationTest {
     @Test
     fun `reviewed migration accepts clean and reapply but rejects semantic and receipt drift`() {

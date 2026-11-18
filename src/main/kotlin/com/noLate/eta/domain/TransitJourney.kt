@@ -2,7 +2,6 @@ package com.noLate.eta.domain
 
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import java.time.Instant
-import java.time.Duration
 import java.util.Locale
 
 enum class TransitLegMode {
@@ -84,9 +83,16 @@ data class TransitJourneyLeg(
     /** 원본 시간표와 구분한 첫 열차 관측. 지연으로 되살린 후보의 시간축에만 적용한다. */
     val firstBoardingObservation: TransitFirstBoardingObservation? = null,
     val walkingTiming: TransitWalkingTimingEvidence? = null,
+    /** 공급자가 순서대로 준 승차역부터 하차역까지의 정류장 ID. 누락 시 빈 목록이다. */
+    val orderedStopIds: List<String> = emptyList(),
+    /** 동일 노선의 정차역 순서를 별도 시간표 제공자와 대조할 때 쓴다. */
+    val orderedStopNames: List<String> = emptyList(),
+    /** Lines sharing the ODsay bus segment's exact boarding and alighting stops. */
+    val alternativeBusLines: List<TransitLine> = emptyList(),
 ) {
     init {
         require(walkingGeometry == null || mode == TransitLegMode.WALK)
+        require(alternativeBusLines.isEmpty() || mode == TransitLegMode.BUS)
         require(walkingTiming == null || (mode == TransitLegMode.WALK && walkingTiming.movementSeconds == movementDurationSeconds))
         timetable?.let {
             val observation = firstBoardingObservation
@@ -101,7 +107,7 @@ data class TransitJourneyLeg(
                 require(observation.expectedBoardingAt >= it.boardingAt)
                 require(scheduledDepartureAt != null && scheduledDepartureAt <= observation.readyAt)
                 require(scheduledArrivalAt == it.arrivalAt.plus(
-                    Duration.between(it.boardingAt, observation.expectedBoardingAt)))
+                    it.shiftFromObservedBoardingArrival(observation.expectedBoardingAt)))
             }
         }
         require(firstBoardingObservation == null || timetable != null)
@@ -142,6 +148,8 @@ data class TransitJourney(
     val totalMinutes: Int,
     val legs: List<TransitJourneyLeg>,
     val fetchedAt: Instant,
+    val entranceWalkEndpoints: TransitWalkingQueryEndpoints? = null,
+    val exitWalkEndpoints: TransitWalkingQueryEndpoints? = null,
 ) {
     val rideLegs: List<TransitJourneyLeg>
         get() = legs.filter(TransitJourneyLeg::isRide)
@@ -184,6 +192,7 @@ data class TransitRideSignature(
     val toName: String? = null,
     val directionName: String? = null,
     val directionCode: String? = null,
+    val orderedStopIds: List<String> = emptyList(),
 )
 
 data class LegacyTransitBoardingPlan(

@@ -66,17 +66,19 @@ class RouteSetupReminderPolicy {
         now: Instant,
     ): Boolean = travelEnabled && isWithinWindow(schedule, now) && !routeReady
 
-    private fun isCompleteLegacyOwnerRoute(schedule: Schedule): Boolean {
-        val route = schedule.route ?: return false
-        return route.travelMinutes != null &&
-            route.travelMode != null &&
-            route.originLat != null &&
-            route.originLng != null &&
-            route.destinationLat != null &&
-            route.destinationLng != null
-    }
-
     companion object {
         val REMINDER_WINDOW: Duration = Duration.ofDays(3)
+
+        // DTO readiness and reminder eligibility must agree about missing inputs.
+        // Completeness itself is independent of the D-3/future reminder window.
+        fun isCompleteLegacyOwnerRoute(schedule: Schedule): Boolean {
+            val route = schedule.route ?: return false
+            return route.travelMinutes != null &&
+                route.travelMode != null &&
+                route.originLat != null &&
+                route.originLng != null &&
+                route.destinationLat != null &&
+                route.destinationLng != null
+        }
     }
 }

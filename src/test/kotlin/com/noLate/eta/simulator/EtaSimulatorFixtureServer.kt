@@ -60,9 +60,10 @@ object EtaSimulatorFixtureServer {
         val output = Path.of(args.single()).toRealPath()
         check(output.toString().startsWith("/private/tmp/nolate-eta-mock-e2e."))
         val port = System.getProperty("nolate.eta.simulator-fixture.port", "5523").toInt()
-        check(port == 5523 || port == 5524)
+        check(port in setOf(5523, 5524, 5525, 5528))
         val incidentOdsayOnly = System.getProperty("nolate.eta.simulator-fixture.incident-odsay-only") == "true"
-        check(!incidentOdsayOnly || port == 5524)
+        check(!incidentOdsayOnly || port in setOf(5524, 5525))
+        val departedTrainReplay = System.getProperty("nolate.eta.simulator-fixture.departed-train-replay") == "true"
         val app = SpringApplication(NoLateApplication::class.java, FixtureConfiguration::class.java)
         app.setAdditionalProfiles("test")
         app.addInitializers({ context ->
@@ -159,7 +160,8 @@ object EtaSimulatorFixtureServer {
                         val scheduleIds = cases.mapIndexed { index, (startMinute, departureMinute, duration) ->
                             val id = 363L + index
                             val target = testDay.atStartOfDay(seoul).plusMinutes(startMinute.toLong()).toInstant()
-                            val savedDeparture = testDay.atStartOfDay(seoul).plusMinutes(departureMinute.toLong()).toInstant()
+                            val departureDay = if (index == 1) testDay.plusDays(2) else testDay
+                            val savedDeparture = departureDay.atStartOfDay(seoul).plusMinutes(departureMinute.toLong()).toInstant()
                             jdbc.update("""INSERT INTO schedules (id,member_id,title,start_at,end_at,has_end_time,
                                 all_day,route_setup_required,schedule_type,deleted) VALUES (?,?,?, ?,?,true,false,false,'ROUTE',false)""",
                                 id, 296, "ETA E2E calendar ${index + 1}", target, target.plusSeconds(7200))
@@ -172,6 +174,20 @@ object EtaSimulatorFixtureServer {
                                 destinationLat = 37.4842, destinationLng = 126.9297, routeJson = null,
                                 notificationEnabled = false, notificationLeadMinutes = null, notificationIntervalMinutes = null)
                             schedules.saveAndFlush(schedule)
+                            if (index == 1) {
+                                context.getBean(com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository::class.java)
+                                    .saveAndFlush(com.noLate.schedule.domain.ScheduleTravelPlan(
+                                        scheduleId = id,
+                                        memberId = 296,
+                                        travelMinutes = duration,
+                                        departAt = savedDeparture,
+                                        travelMode = ScheduleTravelMode.TRANSIT,
+                                        originName = "노원역",
+                                        originLat = 37.6551,
+                                        originLng = 127.0610,
+                                        scheduleFingerprint = com.noLate.schedule.domain.ScheduleTravelPlanFingerprint.calculate(schedule),
+                                    ))
+                            }
                             id
                         }
                         mapper.writeValue(output.resolve("incident-calendar.json").toFile(), mapOf(
@@ -227,7 +243,83 @@ object EtaSimulatorFixtureServer {
                         mapper.writeValue(output.resolve("incident-due-evaluation.json").toFile(), mapOf("cases" to rows))
                         continue
                     }
-                    if (command == "planned-postdeparture") {
+                    if (command in setOf("prepare-unlocated", "prepare-unlocated-located")) {
+                        // Reproduce a legacy name-only destination, not a route fabricated
+                        // by the runner. Only the real installed UI may save the first route.
+                        check(schedules.count() == 0L && jobs.count() == 0L && history.count() == 0L)
+                        val target = Instant.now().plusSeconds(4 * 3600)
+                        val located = command == "prepare-unlocated-located"
+                        jdbc.update("""INSERT INTO schedules (id,member_id,title,start_at,end_at,has_end_time,
+                            all_day,route_setup_required,schedule_type,deleted)
+                            VALUES (363,296,?,?,?,false,false,true,'ROUTE',false)""",
+                            "E2E 도착지만 저장", target, target.plusSeconds(1800))
+                        val schedule = requireNotNull(schedules.findScheduleDetail(363, 296))
+                        val category = context.getBean(com.noLate.schedule.infrastructure.ScheduleCategoryRepository::class.java)
+                            .saveAndFlush(ScheduleCategory(memberId = 296, title = "격리 경로 저장", color = "#2F80FF"))
+                        schedule.updateCategorySnapshot(requireNotNull(category.id).toString(), category.title, category.color)
+                        schedule.updateRoute(travelMinutes = null, departAt = null, departedAt = null,
+                            travelMode = null, locationName = if (located) "강남역" else "금광2동3804번지", originName = null,
+                            originAddress = null, originLat = null, originLng = null,
+                            destinationName = if (located) "강남역" else "금광2동3804번지", destinationAddress = null,
+                            destinationLat = if (located) 37.4979 else null,
+                            destinationLng = if (located) 127.0276 else null, routeJson = null,
+                            notificationEnabled = false, notificationLeadMinutes = null, notificationIntervalMinutes = null)
+                        schedules.saveAndFlush(schedule)
+                        check(context.getBean(com.noLate.schedule.application.service.RouteSetupReminderPolicy::class.java)
+                            .requiresOwnerSetup(schedule, true, null, Instant.now())) {
+                            "The destination-only fixture must actually require route setup under production policy"
+                        }
+                        context.getBean(RecentRoutePlaceRepository::class.java).saveAll(listOf(
+                            RecentRoutePlace(memberId = 296, label = "노원역", placeName = "노원역",
+                                address = "서울 노원구", lat = 37.6551, lng = 127.0610, provider = "tmap"),
+                            RecentRoutePlace(memberId = 296, label = "신림역", placeName = "신림역",
+                                address = "서울 관악구", lat = 37.4842, lng = 126.9297, provider = "tmap"),
+                        ))
+                        mapper.writeValue(output.resolve("unlocated-before.json").toFile(), mapOf(
+                            "scheduleId" to schedule.id, "memberId" to schedule.memberId,
+                            "title" to schedule.title, "targetArrivalAt" to target.toString(),
+                            "scheduleType" to schedule.scheduleType.name,
+                            "initialDestinationKind" to if (located) "COORDINATES" else "NAME_ONLY",
+                            "destinationName" to schedule.route?.destinationName,
+                            "destinationLat" to schedule.route?.destinationLat,
+                            "destinationLng" to schedule.route?.destinationLng,
+                            "routeJson" to schedule.route?.routeJson,
+                            "personalPlanCount" to jdbc.queryForObject("SELECT COUNT(*) FROM schedule_travel_plans", Int::class.java),
+                            "historyCount" to history.count(), "jobCount" to jobs.count()))
+                        println("ETA_FIXTURE_UNLOCATED_READY: name-only destination; no route or personal plan")
+                        System.out.flush()
+                        continue
+                    }
+                    if (command == "inspect-unlocated") {
+                        val schedule = requireNotNull(schedules.findScheduleDetail(363, 296))
+                        val plans = jdbc.queryForList("SELECT member_id,travel_minutes,travel_mode,origin_name,origin_lat,origin_lng,route_json,notification_enabled FROM schedule_travel_plans WHERE schedule_id=363")
+                        val safePlans = plans.map { row -> row.mapValues { (key, value) ->
+                            if (key == "route_json" && value != null) {
+                                val raw = if (value is java.sql.Clob) value.getSubString(1, value.length().toInt()) else value.toString()
+                                mapper.readTree(raw)
+                            } else value
+                        } }
+                        mapper.writeValue(output.resolve("unlocated-after.json").toFile(), mapOf(
+                            "classification" to "SYNTHETIC_UNLOCATED_DESTINATION_SAVE",
+                            "database" to "H2_MEMORY_ONLY", "providersMocked" to true,
+                            "productionDatabaseModified" to false,
+                            "physicalTransitHttpCalls" to context.getBean(MeterRegistry::class.java)
+                                .find("nolate.eta.transit.provider.wire.duration").timers().sumOf { it.count() },
+                            "scheduleId" to schedule.id, "memberId" to schedule.memberId,
+                            "title" to schedule.title, "targetArrivalAt" to schedule.startAt.toString(),
+                            "destinationName" to schedule.route?.destinationName,
+                            "destinationLat" to schedule.route?.destinationLat,
+                            "destinationLng" to schedule.route?.destinationLng,
+                            "personalPlans" to safePlans, "successfulTravelPlanSaveCount" to fixture.successfulTravelPlanSaveCount,
+                            "routeRequests" to fixture.routeRequests.toList(),
+                            "clientMockRouteRequests" to fixture.clientMockRouteRequests.toList(),
+                            "historyCount" to history.count(), "jobCount" to jobs.count()))
+                        println("ETA_FIXTURE_UNLOCATED_INSPECTED: scoped saved route evidence")
+                        System.out.flush()
+                        continue
+                    }
+                    if (command in setOf("planned-postdeparture", "planned-alighting")) {
+                        val probeAlighting = command == "planned-alighting"
                         check(fixture.phase == "transfer-observed" && history.count() == 1L)
                         val beforeJob = requireNotNull(jobs.findByScheduleIdAndMemberId(363, 296))
                         val before = requireNotNull(EffectiveTransitRouteSnapshot.parse(mapper,
@@ -235,13 +327,22 @@ object EtaSimulatorFixtureServer {
                         val plan = requireNotNull(before.acceptedRoute())
                         check(before.accepted && plan.segments.count { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY } == 2)
                         val protectedDepartureAt = requireNotNull(beforeJob.lastRecommendedDepartureAt)
-                        val now = maxOf(requireNotNull(beforeJob.nextCheckAt), plan.departureAt.plusSeconds(30))
-                        check(now.isBefore(requireNotNull(plan.segments.first { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY }
-                            .rideTiming).timetable.boardingAt) && now.isBefore(beforeJob.scheduleAt))
+                        val rides = plan.segments.filter { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY }
+                        val lastRide = requireNotNull(rides.last().rideTiming)
+                        val clockAnchor = if (probeAlighting) lastRide.predictedBoardingAt else plan.departureAt
+                        val now = maxOf(requireNotNull(beforeJob.nextCheckAt), clockAnchor.plusSeconds(30))
+                        check(now.isBefore(beforeJob.scheduleAt))
+                        if (probeAlighting) {
+                            check(now.isBefore(lastRide.timetable.boardingAt.plusSeconds(120)))
+                        } else {
+                            check(now.isBefore(requireNotNull(rides.first().rideTiming).timetable.boardingAt))
+                        }
                         fixture.logicalNow = now
                         fixture.phase = "transfer-first-unobserved"
-                        fixture.evidenceStem = "planned-postdeparture"
+                        fixture.evidenceStem = command
                         fixture.postDepartureProbe = true
+                        fixture.postDepartureAlighting = probeAlighting
+                        fixture.postDepartureStations.clear()
                         fixture.queries.clear()
                         fixture.routeRequests.clear()
                         val processed = worker.runDueJobForSchedule(296, 363, now)
@@ -265,8 +366,11 @@ object EtaSimulatorFixtureServer {
                             "provisionalPrediction" to provisional,
                             "currentAccepted" to after.accepted,
                             "inProgressPlanIdentity" to after.inProgressPlannedRoute?.identity,
-                            "historyCount" to history.count(), "routeRequests" to fixture.routeRequests.toList())
-                        mapper.writeValue(output.resolve("planned-postdeparture.json").toFile(), safe)
+                            "historyCount" to history.count(), "routeRequests" to fixture.routeRequests.toList(),
+                            "queriedStations" to fixture.postDepartureStations.toList(),
+                            "lastRidePredictedBoardingAt" to lastRide.predictedBoardingAt,
+                            "lastRidePredictedAlightingAt" to lastRide.predictedArrivalAt)
+                        mapper.writeValue(output.resolve("$command.json").toFile(), safe)
                         println("ETA_FIXTURE_POST_DEPARTURE " + mapper.writeValueAsString(safe))
                         System.out.flush()
                         continue
@@ -411,11 +515,11 @@ object EtaSimulatorFixtureServer {
                     // Quota scenarios advance the same job at its persisted due time. Unlike
                     // snapshot fixtures, they must not reset the saved input or accepted alarm.
                     val quotaScenario = command in setOf("quota-route", "quota-timetable", "quota-arrival", "quota-recovered",
-                        "quality-unobserved", "quality-stale", "quality-unverified", "quality-error", "quality-timeout",
+                        "quality-unobserved", "quality-departed", "quality-stale", "quality-unverified", "quality-error", "quality-timeout",
                         "optimization-timeout")
                     if (quotaScenario) check(schedules.findScheduleDetail(363, 296) != null && history.count() > 0)
                     if (command in nativeScenarios) check(nativeFixtureCategory != null) { "Explicit native delivery mode is required" }
-                    if (command !in setOf("success", "reconnect", "early-transfer", "transfer-observed", "transfer-first-unobserved", "unknown", "missed", "recovered", "late", "evaluate-saved", "evaluate-created") && command !in recoveryScenarios && command !in nativeScenarios && !quotaScenario) continue
+                    if (command !in setOf("success", "reconnect", "early-transfer", "dwell-transfer", "early-transfer-risk", "transfer-observed", "transfer-first-unobserved", "unknown", "missed", "recovered", "late", "evaluate-saved", "evaluate-created") && command !in recoveryScenarios && command !in nativeScenarios && !quotaScenario) continue
                     val evaluateSaved = command in setOf("evaluate-saved", "evaluate-created") || quotaScenario
                     fixture.phase = if (quotaScenario && command !in setOf("quota-recovered", "optimization-timeout")) command else if (evaluateSaved) "success" else recoveryScenarios[command] ?: nativeScenarios[command] ?: command
                     fixture.failSecondRouteSearch = command == "optimization-timeout"
@@ -428,7 +532,11 @@ object EtaSimulatorFixtureServer {
                         else -> System.getProperty("nolate.eta.native-delivery-lead-seconds", "60").toLong()
                     }
                     check(deliveryLead in 60..600)
-                    if (!quotaScenario) fixture.epoch = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(deliveryLead)
+                    val seedForAlighting = command == "transfer-observed" &&
+                        System.getProperty("nolate.eta.alighting-replay") == "true"
+                    if (!quotaScenario) fixture.epoch = Instant.now().truncatedTo(ChronoUnit.MINUTES)
+                        .plusSeconds(if (seedForAlighting) -870L else deliveryLead)
+                    val fixtureEvaluationAt = if (seedForAlighting) fixture.epoch.minusSeconds(60) else Instant.now()
                     fixture.queries.clear()
                     fixture.routeRequests.clear()
                     fixture.injectedFaults.clear()
@@ -436,7 +544,11 @@ object EtaSimulatorFixtureServer {
                         check(if (quotaScenario) true else if (command == "evaluate-created") fixture.successfulUiCreateCount == 1 && fixture.successfulUiSaveCount == 0
                             else fixture.successfulUiSaveCount == 1) { "A single actual UI save is required" }
                         requireNotNull(schedules.findScheduleDetail(363, 296)).startAt
-                    } else fixture.epoch.plusSeconds(if (command == "late") 2452 else 3000)
+                    } else fixture.epoch.plusSeconds(when {
+                        command == "late" -> 2452
+                        departedTrainReplay -> 65 * 60L
+                        else -> 3000
+                    })
                     if (!evaluateSaved) {
                         if (jdbc.queryForObject("SELECT COUNT(*) FROM schedules WHERE id=363", Int::class.java) == 0) {
                             jdbc.update("""INSERT INTO schedules (id,member_id,title,start_at,end_at,has_end_time,
@@ -453,11 +565,11 @@ object EtaSimulatorFixtureServer {
                             travelMinutes = 65, departAt = fixture.epoch, departedAt = null, travelMode = ScheduleTravelMode.TRANSIT,
                             locationName = "신림역", originName = "노원역", originAddress = null, originLat = 37.6551, originLng = 127.0610,
                             destinationName = "신림역", destinationAddress = null, destinationLat = 37.4842, destinationLng = 126.9297,
-                            routeJson = if (command == "transfer-observed") fixture.savedRouteWithWalks(mapper) else fixture.savedRoute,
+                            routeJson = if (command in setOf("transfer-observed", "early-transfer-risk")) fixture.savedRouteWithWalks(mapper) else fixture.savedRoute,
                             notificationEnabled = true, notificationLeadMinutes = 15,
                             notificationIntervalMinutes = 10,
                             // 조기 환승 품질 E2E는 OS 알람 예약/전달을 검사하지 않는다.
-                            alertMode = if (command in setOf("early-transfer", "transfer-observed", "transfer-first-unobserved")) ScheduleAlertMode.STANDARD else ScheduleAlertMode.ALARM,
+                            alertMode = if (command in setOf("early-transfer", "dwell-transfer", "transfer-observed", "transfer-first-unobserved")) ScheduleAlertMode.STANDARD else ScheduleAlertMode.ALARM,
                         )
                         schedules.saveAndFlush(schedule)
                     }
@@ -466,7 +578,7 @@ object EtaSimulatorFixtureServer {
                     val count = jdbc.queryForObject("SELECT COUNT(*) FROM schedule_push_job WHERE schedule_id=363 AND member_id=296", Int::class.java)
                     if (count == 0) {
                         jobs.saveAndFlush(SchedulePushJob.create(296, 363, target, fixture.epoch,
-                            Instant.now().minusSeconds(60), 10))
+                            fixtureEvaluationAt.minusSeconds(60), 10))
                     } else if (!quotaScenario) {
                         // Test-only due trigger in the private H2 fixture. No SQL can address a production DB.
                         jdbc.update("""UPDATE schedule_push_job SET schedule_at=?, departure_at=?, monitor_start_at=?,
@@ -478,13 +590,17 @@ object EtaSimulatorFixtureServer {
                         // Use the real domain's persisted due time, not a forced SQL retry.
                         val value = jdbc.queryForObject("SELECT next_check_at FROM schedule_push_job WHERE schedule_id=363 AND member_id=296", java.sql.Timestamp::class.java)
                         requireNotNull(value).toInstant()
-                    } else Instant.now()
+                    } else fixtureEvaluationAt
                     // This phase verifies a fixed calculated snapshot on the real app.
                     // Freeze only the private backend clock so Xcode build/navigation latency
                     // does not turn it into an unintended expiry test. Natural-cadence tests
                     // independently advance this clock and verify expiry/generation boundaries.
                     fixture.logicalNow = evaluatedAt
                     val alarmService = context.getBean(DepartureAlarmSyncService::class.java)
+                    if (command == "early-transfer-risk") {
+                        alarmService.synchronizeConfigured(296, 363, true, ScheduleAlertMode.ALARM,
+                            fixture.epoch.plusSeconds(60), "ETA E2E isolated fixture")
+                    }
                     val pastConfiguredRecovery = System.getProperty("nolate.eta.cancellation-recovery") == "true" && command == "success"
                     if (pastConfiguredRecovery || command in setOf("user-cancel-recovered", "legacy-cancel-recovered")) {
                         alarmService.synchronizeConfigured(296, 363, true, ScheduleAlertMode.ALARM,
@@ -600,6 +716,28 @@ class FixtureConfiguration {
         on { providerId } doReturn "odsay"
         on { search(any()) } doAnswer { error("Saved Tmap route must never be sent to ODsay") }
     }
+    @Bean fun fixtureMobileOdsayTransport(state: FixtureState): FilterRegistrationBean<Filter> =
+        FilterRegistrationBean<Filter>().apply {
+            order = org.springframework.core.Ordered.HIGHEST_PRECEDENCE
+            setFilter(Filter { request, response, chain ->
+                val http = request as HttpServletRequest
+                if (http.requestURI != "/__eta_fixture__/odsay/maasRP") {
+                    chain.doFilter(request, response)
+                } else {
+                    val out = response as HttpServletResponse
+                    out.setHeader("X-NoLate-Eta-Fixture", "h2-memory-only")
+                    val points = listOf("SX", "SY", "EX", "EY").associateWith { http.getParameter(it)?.toDoubleOrNull() }
+                    if (http.method != "GET" || http.getParameter("apiKey") != "synthetic-fixture-no-provider-key" ||
+                        points != mapOf("SX" to 127.0610, "SY" to 37.6551, "EX" to 126.9297, "EY" to 37.4842)) {
+                        out.status = 400
+                    } else {
+                        state.clientMockRouteRequests += points
+                        out.contentType = "application/json;charset=UTF-8"
+                        out.writer.write(state.mobileOdsayRoutePayload)
+                    }
+                }
+            })
+        }
     @Bean @Primary fun fixtureClock(state: FixtureState): Clock = object : Clock() {
         override fun getZone(): ZoneId = ZoneId.of("UTC")
         override fun withZone(zone: ZoneId): Clock = Clock.fixed(instant(), zone)
@@ -623,6 +761,10 @@ class FixtureConfiguration {
                 wrapped.setHeader("X-NoLate-Eta-Fixture", "h2-memory-only")
                 try {
                     chain.doFilter(request, wrapped)
+                    if (http.method == "PUT" && http.requestURI == "/api/schedules/363/travel-plans/my" && wrapped.status == 200 &&
+                        mapper.readTree(wrapped.contentAsByteArray).path("success").asBoolean()) {
+                        state.successfulTravelPlanSaveCount++
+                    }
                     if (http.method == "PUT" && http.requestURI == "/api/schedules/363" && wrapped.status == 200 &&
                         mapper.readTree(wrapped.contentAsByteArray).path("success").asBoolean()) {
                         // Record only the scoped mutation count, never auth headers or request bodies.
@@ -691,16 +833,27 @@ class FixtureConfiguration {
                 LocalDate.ofInstant(state.epoch, ZoneId.of("Asia/Seoul")), if (first) "4012" else "2012",
                 "DOWN", TransitServiceClass.LOCAL, if (first) "N" else "S4", if (first) "S4" else "S2",
                 if (first) "오이도" else "성수", state.epoch.plusSeconds(if (first) {
-                    if (state.phase == "early-transfer") 330 else 197
-                } else if (state.phase in setOf("transfer-observed", "transfer-first-unobserved")) 840 else 1800),
+                    if (state.phase in setOf("early-transfer", "dwell-transfer")) 330 else 197
+                } else if (state.phase == "early-transfer") 1050
+                else if (state.phase == "early-transfer-risk") 600
+                else if (state.phase in setOf("transfer-observed", "transfer-first-unobserved")) 840 else 1800),
                 state.epoch.plusSeconds(if (first) {
                     when (state.phase) {
-                        "early-transfer" -> 1530
+                        "early-transfer" -> 800
+                        "dwell-transfer" -> 1490
+                        "early-transfer-risk" -> 260
                         "transfer-observed", "transfer-first-unobserved" -> 500
                         else -> 1397
                     }
-                } else if (state.phase in setOf("transfer-observed", "transfer-first-unobserved")) 1321 else 2281), state.logicalNow ?: Instant.now())
-            return listOf(original) + if (!first && state.phase in setOf("reconnect", "recovered", "late", "early-transfer")) {
+                } else if (state.phase == "early-transfer") 1531
+                else if (state.phase == "early-transfer-risk") 1081
+                else if (state.phase in setOf("transfer-observed", "transfer-first-unobserved")) 1321 else 2281), state.logicalNow ?: Instant.now(),
+                boardingStationArrivalAt = when {
+                    first && state.phase in setOf("early-transfer", "dwell-transfer") -> state.epoch.plusSeconds(310)
+                    !first && state.phase == "early-transfer-risk" -> state.epoch.plusSeconds(580)
+                    else -> null
+                })
+            return listOf(original) + if (!first && state.phase in setOf("reconnect", "recovered", "late", "early-transfer", "dwell-transfer")) {
                 listOf(original.copy(trainNumber = "2014", boardingAt = state.epoch.plusSeconds(2100),
                     arrivalAt = state.epoch.plusSeconds(2581)))
             } else emptyList()
@@ -709,6 +862,30 @@ class FixtureConfiguration {
     @Bean @Primary fun fixtureSeoulArrivalClient(state: FixtureState): SeoulTransitArrivalClient = mock {
         on { getSubwayArrivals(any(), anyOrNull(), anyOrNull(), anyOrNull(), any()) } doAnswer {
             val station = it.getArgument<String>(0)
+            val firstAlightingRisk = state.phase == "early-transfer-risk" &&
+                System.getProperty("nolate.eta.first-alighting-risk") == "true"
+            if ((firstAlightingRisk || state.phase == "early-transfer") && station.removeSuffix("역") == "사당") {
+                if (it.getArgument<String?>(1) != "4호선") return@doAnswer emptyList<TransitArrivalDto>()
+                if (System.getProperty("nolate.eta.first-timetable-alighting") == "true") {
+                    return@doAnswer emptyList<TransitArrivalDto>()
+                }
+                return@doAnswer listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "4호선",
+                    stationName = "사당", direction = "하행", destinationName = "오이도",
+                    expectedAt = state.epoch.plusSeconds(if (firstAlightingRisk) 305 else 700).toString(),
+                    sourceUpdatedAt = requireNotNull(state.logicalNow).toString(),
+                    freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
+                    express = false, subwayLineId = "1004", trainNumber = "4012"))
+            }
+            if (state.postDepartureProbe) state.postDepartureStations += station.removeSuffix("역")
+            if (state.postDepartureAlighting && station.removeSuffix("역") == "신림") {
+                return@doAnswer listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "2호선",
+                    stationName = "신림", direction = "외선", destinationName = "성수종착",
+                    // The last ride's earlier accepted forecast is epoch + 1401s.
+                    expectedAt = state.epoch.plusSeconds(1431).toString(),
+                    sourceUpdatedAt = requireNotNull(state.logicalNow).toString(),
+                    freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
+                    express = false, subwayLineId = "1002", trainNumber = "2012"))
+            }
             if (state.phase == "incident-station-board" && station.removeSuffix("역") == "노원") {
                 val older = TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "4호선",
                     stationName = "노원", direction = "하행", subwayLineId = "1004",
@@ -733,13 +910,31 @@ class FixtureConfiguration {
                 throw org.springframework.web.client.ResourceAccessException("Synthetic timeout", java.net.SocketTimeoutException())
             }
             if (state.phase.startsWith("quality-")) state.injectedFaults += "arrival:" + state.phase.removePrefix("quality-").uppercase()
+            if (state.phase == "quality-departed") {
+                // Replay the observed 47s-old timestamp. Explicitly mark the fixture train as
+                // departed to exercise that provider state even inside the clock-skew tolerance.
+                val passedAt = requireNotNull(state.logicalNow).minusSeconds(47)
+                return@doAnswer listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "4호선",
+                    stationName = "노원역", direction = "하행", destinationName = "사당",
+                    expectedAt = passedAt.toString(), sourceUpdatedAt = passedAt.toString(),
+                    freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
+                    arrivalStatus = com.noLate.transit.domain.TransitArrivalStatus.DEPARTED,
+                    express = false, subwayLineId = "1004", trainNumber = "4045"))
+            }
             if (state.phase == "transfer-first-unobserved" && station.removeSuffix("역") == "노원") {
                 return@doAnswer emptyList<TransitArrivalDto>()
             }
-            if (state.phase in setOf("transfer-observed", "transfer-first-unobserved") && station.removeSuffix("역") == "사당") {
+            if (state.phase in setOf("transfer-observed", "transfer-first-unobserved", "early-transfer-risk") && station.removeSuffix("역") == "사당") {
                 return@doAnswer listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "2호선",
                     stationName = "사당", direction = "외선", destinationName = "성수",
-                    expectedAt = state.epoch.plusSeconds(if (state.postDepartureProbe) 1080 else 960).toString(),
+                    expectedAt = state.epoch.plusSeconds(when {
+                        // Arrives 30s before the 580s station clock. With scheduled
+                        // dwell, the projected departure still breaches the margin.
+                        state.phase == "early-transfer-risk" -> 550
+                        state.postDepartureProbe -> 1080
+                        System.getProperty("nolate.eta.alighting-replay") == "true" -> 920
+                        else -> 960
+                    }).toString(),
                     sourceUpdatedAt = (state.logicalNow ?: Instant.now()).toString(),
                     freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
                     express = false, subwayLineId = "1002", trainNumber = "2012"))
@@ -747,9 +942,11 @@ class FixtureConfiguration {
             // Preserve the real adapter's provider namespace; the server marker and
             // evidence declare that these timestamped vehicle rows are synthetic.
             listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "4호선", stationName = "노원역",
-                direction = "하행", destinationName = "오이도",
-                expectedAt = state.epoch.plusSeconds(if (state.phase == "early-transfer") 197
-                    else if (state.phase in setOf("success", "unknown", "transfer-observed")) 210 else 407).toString(),
+                direction = "하행", destinationName = if (state.phase in setOf("early-transfer", "dwell-transfer")) "오이도종착" else "오이도",
+                expectedAt = state.epoch.plusSeconds(if (firstAlightingRisk) 190
+                    else if (state.phase == "early-transfer") 197
+                    else if (state.phase == "dwell-transfer") 320
+                    else if (state.phase in setOf("success", "unknown", "transfer-observed", "early-transfer-risk")) 210 else 407).toString(),
                 sourceUpdatedAt = (state.logicalNow ?: Instant.now()).minusSeconds(if (state.phase == "quality-stale") 121 else 0).toString(),
                 freshnessEvidence = if (state.phase == "quality-unverified") TransitArrivalFreshnessEvidence.LOCAL_RECEIPT_TIMESTAMP_ONLY
                     else TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
@@ -765,14 +962,39 @@ class FixtureState {
     var phase = "success"
     var successfulUiSaveCount = 0
     var successfulUiCreateCount = 0
+    var successfulTravelPlanSaveCount = 0
     var logicalNow: Instant? = null
     var anchorRidesToSearch = false
     var failSecondRouteSearch = false
     var postDepartureProbe = false
+    var postDepartureAlighting = false
+    val postDepartureStations = mutableListOf<String>()
     var naturalRunCount = 0
     val routeRequests = mutableListOf<Map<String, Any?>>()
+    val clientMockRouteRequests = mutableListOf<Map<String, Double?>>()
     val queries = mutableListOf<Map<String, String>>()
     val injectedFaults = mutableListOf<String>()
+    // Synthetic maasRP protocol, not a Tmap response relabeled as ODsay.
+    // Mobile requests remain on the real ODsay parser and normal route-save UI.
+    val mobileOdsayRoutePayload = """{"result":{"paths":[{"pathType":2,"totalTime":65,"totalDistance":30000,
+        "totalPayment":1550,"rps":[
+        {"trafficType":3,"duration":2,"distance":128,"routes":[{"xyInfos":[
+            {"x":127.0610,"y":37.6551},{"x":127.0609,"y":37.6550}]}]},
+        {"trafficType":1,"duration":48,"distance":25000,"startID":411,"startName":"노원역",
+         "startX":127.0609,"startY":37.6550,"endID":433,"endName":"사당",
+         "endX":126.9816,"endY":37.4765,"way":"사당","wayCode":2,
+         "graph":"127.0609 37.6550|126.9816 37.4765",
+         "lane":[{"name":"수도권 4호선","subwayCode":4,"subwayCityCode":1000}]},
+        {"trafficType":3,"duration":4,"distance":205,"routes":[{"xyInfos":[
+            {"x":126.9816,"y":37.4765},{"x":126.9817,"y":37.4766}]}]},
+        {"trafficType":1,"duration":8,"distance":4000,"startID":226,"startName":"사당",
+         "startX":126.9817,"startY":37.4766,"endID":230,"endName":"신림",
+         "endX":126.9295,"endY":37.4840,"way":"성수","wayCode":1,
+         "graph":"126.9817 37.4766|126.9295 37.4840",
+         "lane":[{"name":"수도권 2호선","subwayCode":2,"subwayCityCode":1000}]},
+        {"trafficType":3,"duration":3,"distance":126,"routes":[{"xyInfos":[
+            {"x":126.9295,"y":37.4840},{"x":126.9297,"y":37.4842}]}]}
+        ]}]}}"""
     // All geometry is synthetic; sufficient for exercising the real route parser and UI selection.
     val routePayload = """{"metaData":{"plan":{"itineraries":[{"totalTime":3888,"transferCount":1,"legs":[
         {"mode":"WALK","sectionTime":111,"distance":128,"start":{"name":"출발지","lat":37.6551,"lon":127.0610},

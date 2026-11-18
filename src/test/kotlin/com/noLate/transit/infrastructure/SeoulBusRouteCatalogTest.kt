@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.net.InetSocketAddress
 import java.net.URLDecoder
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
@@ -20,6 +21,43 @@ class SeoulBusRouteCatalogTest {
         <posX>198000</posX><posY>450000</posY></itemList>
     """.trimIndent()
     private fun point(no: Int) = "<itemList><no>$no</no><gpsX>126.972926</gpsX><gpsY>37.555411</gpsY></itemList>"
+
+    @Test fun `route arrival pairs exact stops and the same vehicle across different slots`() {
+        val path = SeoulBusRouteCatalogParser.stops(xml(stop() +
+            stop(45, "101000010").replace("02007", "02010") +
+            stop(46, "101000008").replace("02007", "02008")), route)
+        val (board, middle, alight) = path
+        fun arrivals(seq: Int, station: String, ars: String, slots: String, clock: String = "2026-11-16 09:19:43.0") =
+            "<itemList><busRouteId>$route</busRouteId><staOrd>$seq</staOrd><stId>$station</stId>" +
+                "<arsId>$ars</arsId><mkTm>$clock</mkTm>$slots</itemList>"
+        val first = arrivals(44, board.stationId, "02007",
+            "<vehId1>101000091</vehId1><traTime1>5</traTime1><vehId2>101000092</vehId2><traTime2>319</traTime2>")
+        val second = arrivals(46, alight.stationId, "02008",
+            "<vehId1>101000092</vehId1><traTime1>455</traTime1><vehId2>101000091</vehId2><traTime2>141</traTime2>")
+        val received = Instant.parse("2026-11-16T00:19:54Z")
+        fun paired(secondRow: String, stops: List<com.noLate.transit.domain.SeoulBusRouteStop> = path) =
+            SeoulBusRouteCatalogParser.pairedArrivals(xml(first + secondRow), stops, received)
+
+        val predictions = paired(second)
+        assertEquals(2, predictions.size)
+        assertEquals(Instant.parse("2026-11-16T00:25:02Z"), predictions[1].boardingAt)
+        assertEquals(Instant.parse("2026-11-16T00:27:18Z"), predictions[1].alightingAt)
+        assertTrue(paired(second.replace("09:19:43", "09:19:44")).isEmpty())
+        assertTrue(paired(second.replace("02008", "02009")).isEmpty())
+        assertTrue(paired(second.replace("101000091", "101000092")).isEmpty())
+        assertTrue(paired(second + second).isEmpty())
+        assertTrue(paired(second, listOf(board, alight)).isEmpty())
+        assertTrue(paired(second, listOf(board, middle.copy(direction = "반대 방면"), alight)).isEmpty())
+        assertTrue(paired(second, path.reversed()).isEmpty())
+
+        val failures = mutableListOf<SeoulBusPairingFailure>()
+        val disjoint = second.replace("101000091", "101000093").replace("101000092", "101000094")
+        assertTrue(SeoulBusRouteCatalogParser.pairedArrivals(xml(first + disjoint), path, received, failures::add).isEmpty())
+        assertTrue(SeoulBusRouteCatalogParser.pairedArrivals(
+            xml(first + disjoint.replace("09:19:43", "09:19:44")), path, received, failures::add,
+        ).isEmpty())
+        assertEquals(listOf(SeoulBusPairingFailure.NO_COMMON_VEHICLE, SeoulBusPairingFailure.SOURCE_TIME_UNVERIFIED), failures)
+    }
 
     @Test fun `official stop occurrences preserve namespace section and WGS84 only`() {
         val result = SeoulBusRouteCatalogParser.stops(xml(stop() + stop(45)), route)

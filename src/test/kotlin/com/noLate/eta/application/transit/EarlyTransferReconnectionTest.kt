@@ -19,6 +19,7 @@ class EarlyTransferReconnectionTest {
     private val observation = TransitFirstBoardingObservation("seoul-openapi", "노원", "4호선",
         departure, departure.plusSeconds(120), now.plusSeconds(320), now, now, first.trainNumber)
     private val overlay = TransitRealtimeOverlay(70, now.plusSeconds(4310), now, observation.expectedBoardingAt)
+    private val observedFirstAlightingAt = now.plusSeconds(3200)
 
     @Test
     fun `정상 환승도 조기 관측으로 더 이른 열차를 연결하며 도보와 여유를 유지한다`() {
@@ -27,7 +28,9 @@ class EarlyTransferReconnectionTest {
         val enricher = enricher(queries)
         assertEquals(TransitTransferStatus.FEASIBLE,
             TransitTransferFeasibilityEvaluator().evaluate(original, overlay, now).status)
-        val improved = enricher.reconnectEarlierTransfers(original, overlay, observation, now, 180)
+        assertSame(original, enricher.reconnectEarlierTransfers(original, overlay, observation, now, 180))
+        assertTrue(queries.isEmpty())
+        val improved = enricher.reconnectEarlierTransfers(original, overlay, observation, now, 180, observedFirstAlightingAt)
 
         assertEquals(1, queries.size) // 첫 정류장 실시간/전체 경로를 다시 조회하지 않는다.
         assertEquals(now.plusSeconds(3440), queries.single().notBefore) // 23:51:20 + 180초 + 60초
@@ -43,6 +46,38 @@ class EarlyTransferReconnectionTest {
         assertEquals(65, evaluated.travelMinutes)
         assertEquals(now.plusSeconds(4440), original.arrivalAt)
         assertEquals(later.trainNumber, original.rideLegs.last().timetable?.trainNumber)
+    }
+
+    @Test
+    fun `노원 정차 30초를 구분하면 여유가 부족한 사당 2148편을 앞당겨 연결하지 않는다`() {
+        // Replay the clocks from the 4555/2148/2150 public timetable on the test clock.
+        val first = table(SeoulSubwayLine.LINE_4, "4555", 420, 3300)
+        val earlier = table(SeoulSubwayLine.LINE_2, "2148", 3480, 3930)
+        val later = table(SeoulSubwayLine.LINE_2, "2150", 3810, 4260)
+        val observation = observation.copy(trainNumber = first.trainNumber, expectedBoardingAt = now.plusSeconds(355))
+        val overlay = overlay.copy(boardingAt = observation.expectedBoardingAt)
+        val original = journey().copy(arrivalAt = now.plusSeconds(4320), totalMinutes = 70, legs = listOf(
+            TransitJourneyLeg(0, TransitLegMode.WALK, 1),
+            leg(1, first, 180, "노원", "사당"),
+            TransitJourneyLeg(2, TransitLegMode.WALK, 3, durationSeconds = 157),
+            leg(3, later, 3457, "사당", "신림"),
+            TransitJourneyLeg(4, TransitLegMode.WALK, 1),
+        ))
+        val queries = mutableListOf<TransitTimetableQuery>()
+        val enricher = enricher(queries, listOf(earlier, later))
+        val oldResult = enricher.reconnectEarlierTransfers(original, overlay, observation, now, 180, now.plusSeconds(3235))
+        assertEquals("2148", oldResult.rideLegs.last().timetable?.trainNumber)
+        assertEquals(now.plusSeconds(3990), oldResult.arrivalAt)
+
+        val withDwell = original.copy(legs = original.legs.map { ride ->
+            if (ride.sequence == 1) ride.copy(timetable = first.copy(boardingStationArrivalAt = now.plusSeconds(390)))
+            else ride
+        })
+        val result = enricher.reconnectEarlierTransfers(withDwell, overlay, observation, now, 180, now.plusSeconds(3235))
+        assertEquals(listOf(now.plusSeconds(3452), now.plusSeconds(3482)), queries.map { it.notBefore })
+        assertEquals("2150", result.rideLegs.last().timetable?.trainNumber)
+        assertEquals(now.plusSeconds(4320), result.arrivalAt)
+        assertEquals(TransitTransferStatus.FEASIBLE, TransitTransferFeasibilityEvaluator().evaluate(result, overlay, now).status)
     }
 
     @ParameterizedTest
@@ -64,7 +99,8 @@ class EarlyTransferReconnectionTest {
         }
         val original = journey()
         val queries = mutableListOf<TransitTimetableQuery>()
-        assertSame(original, enricher(queries).reconnectEarlierTransfers(original, overlay, invalid, now, 180))
+        assertSame(original, enricher(queries)
+            .reconnectEarlierTransfers(original, overlay, invalid, now, 180, observedFirstAlightingAt))
         assertTrue(queries.isEmpty())
     }
 
@@ -83,26 +119,26 @@ class EarlyTransferReconnectionTest {
         }
         val original = journey()
         assertSame(original, enricher(mutableListOf(), listOf(invalid))
-            .reconnectEarlierTransfers(original, overlay, observation, now, 180))
+            .reconnectEarlierTransfers(original, overlay, observation, now, 180, observedFirstAlightingAt))
     }
 
     @Test
     fun `같은 도착 예측 예외 미완전 환승이나 시간 예산 초과는 원본을 보존한다`() {
         val original = journey()
         assertSame(original, enricher(mutableListOf(), listOf(later))
-            .reconnectEarlierTransfers(original, overlay, observation, now, 180))
+            .reconnectEarlierTransfers(original, overlay, observation, now, 180, observedFirstAlightingAt))
         assertSame(original, enricher(mutableListOf())
-            .reconnectEarlierTransfers(original, overlay, observation, now, 64))
+            .reconnectEarlierTransfers(original, overlay, observation, now, 64, observedFirstAlightingAt))
         val failure = object : TransitTimetableProvider {
             override fun findRides(query: TransitTimetableQuery): List<TransitLegTimetable> = error("synthetic failure")
         }
         assertSame(original, TransitJourneyTimetableEnricher(listOf(failure))
-            .reconnectEarlierTransfers(original, overlay, observation, now, 180))
+            .reconnectEarlierTransfers(original, overlay, observation, now, 180, observedFirstAlightingAt))
         val third = table(SeoulSubwayLine.LINE_3, "THIRD_FIXTURE", 4600, 4800)
         val multiple = original.copy(arrivalAt = third.arrivalAt, totalMinutes = 78,
             legs = original.legs + leg(5, third, 4440, "신림", "최종역"))
         assertSame(multiple, enricher(mutableListOf())
-            .reconnectEarlierTransfers(multiple, overlay, observation, now, 180))
+            .reconnectEarlierTransfers(multiple, overlay, observation, now, 180, observedFirstAlightingAt))
     }
 
     private fun enricher(queries: MutableList<TransitTimetableQuery>, rides: List<TransitLegTimetable> = listOf(earlier, later)) =

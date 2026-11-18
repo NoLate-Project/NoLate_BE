@@ -92,7 +92,12 @@ internal object JourneyBusRideMapping {
                 if (abs(rows.first().alongShapeMeters - last) > 0.01) null
                 else (rows.last().alongShapeMeters - last).takeIf { it in 100.0..350.0 }
             } ?: 0.0
-        return Result("VERIFIED", Verified(routeId, officialDirection, coordinates, stops,
+        // Native route normalization removes only adjacent repeated vertices. Keep the same
+        // representation in the binding after validating the complete provider geometry above.
+        val canonicalCoordinates = coordinates.filterIndexed { index, coordinate ->
+            index == 0 || coordinate != coordinates[index - 1]
+        }
+        return Result("VERIFIED", Verified(routeId, officialDirection, canonicalCoordinates, stops,
             matched.stops, shape, catalog, continuationMeters,
             if (continuationMeters > 0) next!!.sequence else stops.last().sequence))
     }
@@ -110,16 +115,25 @@ internal object JourneyBusRideMapping {
             if (vehicle.vehicleId in duplicateIds || !vehicle.vehicleId.matches(Regex("[1-9][0-9]{8}")) || vehicle.routeId != mapping.routeId ||
                 vehicle.sourceUpdatedAt > vehicle.receivedAt || vehicle.receivedAt > now || vehicle.sourceUpdatedAt > now ||
                 vehicle.validUntil > vehicle.sourceUpdatedAt.plusSeconds(15) || !vehicle.validUntil.isAfter(now)) return@mapNotNull null
-            val projected = project(Coordinate(coordinate.latitude, coordinate.longitude), mapping.shape, 0.0, 100_000.0)
+            val point = Coordinate(coordinate.latitude, coordinate.longitude)
+            val first = mapping.projections.first().alongShapeMeters
+            val last = mapping.projections.last().alongShapeMeters
+            val projected = project(point, mapping.shape, first - 25,
+                last + maxOf(25.0, mapping.departureWindowMeters))
                 ?: return@mapNotNull null
-            if (projected.second > 25 || projected.first < mapping.projections.first().alongShapeMeters - 25 ||
-                projected.first > mapping.projections.last().alongShapeMeters + maxOf(25.0, mapping.departureWindowMeters)) return@mapNotNull null
-            val past = projected.first - mapping.projections.last().alongShapeMeters
+            if (projected.second > 25) return@mapNotNull null
+            // A second passage elsewhere on the complete shape is not evidence for
+            // initial boarding. Mark it so the native reducer can use it only after
+            // the same vehicle was independently confirmed on an unambiguous passage.
+            val ambiguousOccurrence = project(point, mapping.shape, 0.0, 100_000.0) == null
+            val past = projected.first - last
             val after = past > 25
             if (after && mapping.departureWindowMeters <= 0) return@mapNotNull null
             JourneyBusRideVehicle(vehicle.vehicleId, vehicle.routeId, mapping.direction,
                 Coordinate(coordinate.latitude, coordinate.longitude), seconds(vehicle.sourceUpdatedAt), seconds(vehicle.receivedAt), seconds(vehicle.validUntil),
-                if (after) "AFTER_ALIGHTING" else "SELECTED_SEGMENT", if (after) past else null)
+                if (after) (if (ambiguousOccurrence) "AMBIGUOUS_AFTER_ALIGHTING" else "AFTER_ALIGHTING")
+                  else (if (ambiguousOccurrence) "AMBIGUOUS_SELECTED_SEGMENT" else "SELECTED_SEGMENT"),
+                if (after) past else null)
         }
     }
     private fun seconds(value: Instant) = value.toEpochMilli() / 1000.0

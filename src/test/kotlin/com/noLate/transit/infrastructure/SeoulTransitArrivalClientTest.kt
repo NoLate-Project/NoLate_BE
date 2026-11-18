@@ -386,8 +386,14 @@ class SeoulTransitArrivalClientTest {
     }
 
     @Test
-    fun `서울 버스 논리 조회의 성공 latency를 고정 provider outcome으로 기록한다`() {
+    fun `서울 버스는 저장된 정류장 번호로만 조회하고 성공 latency를 기록한다`() {
+        val stationLookups = AtomicInteger()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/stationinfo/getStationByName") { exchange ->
+                stationLookups.incrementAndGet()
+                exchange.sendResponseHeaders(503, -1)
+                exchange.close()
+            }
             createContext("/stationinfo/getStationByUid") { exchange ->
                 val body = """
                     <ServiceResult><msgBody><itemList>
@@ -414,12 +420,14 @@ class SeoulTransitArrivalClientTest {
 
             val arrivals = client.getBusArrivals(
                 arsId = "02005",
-                stationName = null,
+                stationName = "서울역버스환승센터",
                 routeName = "402",
                 limit = 1,
             )
 
             assertEquals(1, arrivals.size)
+            assertEquals("02005", arrivals.single().arsId)
+            assertEquals(0, stationLookups.get())
             assertEquals(
                 1L,
                 registry.get("nolate.eta.transit.provider.duration")

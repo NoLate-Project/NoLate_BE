@@ -160,20 +160,20 @@ data class EffectiveTransitRouteSnapshot(
     fun plannedJourneyArrivalPrediction(readAt: Instant, maxAgeSeconds: Long): PlannedJourneyArrivalPrediction? {
         val plan = inProgressPlannedRoute ?: return null
         val candidate = effectiveTransitRoute
-        val matchingObservation = candidate?.takeIf { it.sameTrainsAs(plan) }
-            ?.segments?.any { segment ->
-                segment.rideTiming?.observationSourceUpdatedAt?.let { observedAt ->
-                    !observedAt.isBefore(readAt.minusSeconds(maxAgeSeconds)) &&
-                        !observedAt.isAfter(readAt.plusSeconds(5))
-                } == true
-            } == true
+        val oldestSourceAt = readAt.minusSeconds(maxAgeSeconds)
+        val latestSourceAt = readAt.plusSeconds(5)
+        // An intermediate train does not provide realtime evidence for arrival on the final train.
+        val finalRideObservedAt = candidate?.takeIf { it.sameTrainsAs(plan) }
+            ?.segments?.filter { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY }
+            ?.maxByOrNull { it.sequence }
+            ?.rideTiming?.observationSourceUpdatedAt?.takeIf { it in oldestSourceAt..latestSourceAt }
         val directObservation = plannedArrivalObservation?.takeIf { observation ->
             observation.routeIdentity == plan.identity &&
-                !observation.sourceUpdatedAt.isBefore(readAt.minusSeconds(maxAgeSeconds)) &&
-                !observation.sourceUpdatedAt.isAfter(readAt.plusSeconds(5))
+                observation.sourceUpdatedAt in oldestSourceAt..latestSourceAt
         }
         val arrivalAt = when {
-            matchingObservation -> candidate!!.arrivalAt
+            finalRideObservedAt != null && (directObservation == null || finalRideObservedAt > directObservation.sourceUpdatedAt) ->
+                candidate.arrivalAt
             directObservation != null -> directObservation.predictedArrivalAt
             else -> plan.arrivalAt
         }
@@ -182,7 +182,7 @@ data class EffectiveTransitRouteSnapshot(
             predictedArrivalAt = arrivalAt,
             presentedAt = readAt,
             routeIdentity = plan.identity,
-            basis = if (matchingObservation || directObservation != null) PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
+            basis = if (finalRideObservedAt != null || directObservation != null) PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
                 else PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN,
         )
     }

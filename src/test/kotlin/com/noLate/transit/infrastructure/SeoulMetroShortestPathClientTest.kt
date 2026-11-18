@@ -5,6 +5,11 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.net.URLDecoder
 import java.time.LocalDateTime
+import java.time.Instant
+import java.time.LocalDate
+import com.noLate.eta.application.port.TransitTimetableQuery
+import com.noLate.eta.domain.SeoulSubwayLine
+import com.noLate.eta.domain.TransitServiceClass
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
@@ -30,6 +35,41 @@ class SeoulMetroShortestPathClientTest {
         assertFalse(result.toString().contains("0222"))
     }
 
+    @Test fun `date-specific route admits only the same train along the whole ordered ODsay ride`() {
+        val timed = sample.replace(
+            "\"trsitNmtm\":0",
+            "\"trsitNmtm\":0,\"schInclYn\":\"Y\"",
+        ).replace(
+            "\"etrnYn\":\"N\"",
+            """"etrnYn":"N","tmnlStnNm":"성수","nonstopYn":"N","trainno":"2031","trainDptreTm":"17:05:30","trainArvlTm":"17:07:30"""",
+        )
+        val query = TransitTimetableQuery(SeoulSubwayLine.LINE_2, "강남", "역삼", "역삼",
+            TransitServiceClass.LOCAL, Instant.parse("2026-11-16T08:05:00Z"), serviceDate = LocalDate.parse("2026-11-16"))
+        val receipt = Instant.parse("2026-11-15T07:00:00Z")
+        val path = SeoulMetroShortestPathParser.parse(timed.toByteArray(), withTimetable = true)
+        val ride = assertNotNull(bindRide(query, listOf("강남", "역삼"), path, receipt))
+        assertEquals("2031", ride.trainNumber)
+        assertEquals("DOWN", ride.directionCode)
+        assertEquals(Instant.parse("2026-11-16T08:05:30Z"), ride.boardingAt)
+        assertEquals(Instant.parse("2026-11-16T08:07:30Z"), ride.arrivalAt)
+        assertNull(bindRide(query, listOf("강남", "선릉"), path, receipt))
+        assertNull(bindRide(query.copy(notBefore = ride.boardingAt.plusSeconds(1)), listOf("강남", "역삼"), path, receipt))
+        assertNull(bindRide(query.copy(directionCode = "UP"), listOf("강남", "역삼"), path, receipt))
+        val first = path.sections.single()
+        val second = first.copy(
+            departure = first.arrival, arrival = SeoulMetroShortestPath.Station("0220", "2호선", "선릉"),
+            scheduled = first.scheduled!!.copy(departureTime = java.time.LocalTime.of(17, 8),
+                arrivalTime = java.time.LocalTime.of(17, 10)),
+        )
+        val longer = query.copy(toName = "선릉")
+        val stops = listOf("강남", "역삼", "선릉")
+        assertNotNull(bindRide(longer, stops, SeoulMetroShortestPath(listOf(first, second), 0), receipt))
+        val switched = second.copy(scheduled = second.scheduled!!.copy(trainNumber = "2033"))
+        assertNull(bindRide(longer, stops, SeoulMetroShortestPath(listOf(first, switched), 0), receipt))
+        assertFails { SeoulMetroShortestPathParser.parse(sample.toByteArray(), withTimetable = true) }
+        assertFails { SeoulMetroShortestPathParser.parse(timed.replace("17:07:30", "24:01:30").toByteArray(), withTimetable = true) }
+    }
+
     @Test fun `actual transfer shape retains distinct station codes for the same interchange name`() {
         val transfer = """{
           "header":{"resultCode":"00","resultMsg":"성공"},
@@ -51,6 +91,34 @@ class SeoulMetroShortestPathClientTest {
         assertEquals("Y", result.sections[1].transfer)
         assertEquals("2호선", result.sections[1].departure.line)
         assertEquals("4호선", result.sections[1].arrival.line)
+    }
+
+    @Test fun `the dated path keeps the original service day when the same train arrives after midnight`() {
+        val timed = """{
+          "header":{"resultCode":"00"},
+          "body":{"schInclYn":"Y","trsitNmtm":0,"paths":[
+            {"dptreStn":{"stnCd":"1757","lineNm":"4호선","stnNm":"중앙"},
+             "arvlStn":{"stnCd":"1758","lineNm":"4호선","stnNm":"고잔"},
+             "tmnlStnCd":"1763","upbdnbSe":"하행","trsitYn":"N","etrnYn":"N",
+             "tmnlStnNm":"오이도","nonstopYn":"N","trainno":"K4709",
+             "trainDptreTm":"23:59:00","trainArvlTm":"00:00:30"}
+          ]}
+        }""".trimIndent()
+        val path = SeoulMetroShortestPathParser.parse(timed.toByteArray(), withTimetable = true)
+        val date = LocalDate.parse("2026-11-16")
+        val query = TransitTimetableQuery(SeoulSubwayLine.LINE_4, "중앙", "고잔", "고잔",
+            TransitServiceClass.LOCAL, Instant.parse("2026-11-16T14:58:30Z"), serviceDate = date)
+        val ride = assertNotNull(bindRide(query, listOf("중앙", "고잔"), path, query.notBefore))
+        assertEquals(date, ride.serviceDate)
+        assertEquals(Instant.parse("2026-11-16T14:59:00Z"), ride.boardingAt)
+        assertEquals(Instant.parse("2026-11-16T15:00:30Z"), ride.arrivalAt)
+        assertFails {
+            SeoulMetroShortestPathParser.parse(timed.replace("00:00:30", "23:58:30").toByteArray(), withTimetable = true)
+        }
+        val implausiblyLong = SeoulMetroShortestPathParser.parse(timed.replace("23:59:00", "19:59:00").toByteArray(),
+            withTimetable = true)
+        assertNull(bindRide(query.copy(notBefore = query.notBefore.minusSeconds(5 * 60 * 60)),
+            listOf("중앙", "고잔"), implausiblyLong, query.notBefore))
     }
 
     @Test fun `malformed conflicting and non-success provider bodies fail closed without leaking content`() {

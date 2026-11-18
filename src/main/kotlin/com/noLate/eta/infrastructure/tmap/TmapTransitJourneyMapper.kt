@@ -14,6 +14,7 @@ import com.noLate.eta.domain.TransitWalkingCoordinate
 import com.noLate.eta.domain.TransitWalkingGeometry
 import com.noLate.eta.domain.TransitWalkingEndpointBasis
 import com.noLate.eta.domain.TransitWalkingPathStatus
+import com.noLate.eta.domain.providerScopedStopId
 import org.springframework.stereotype.Component
 import java.time.Instant
 import java.util.Locale
@@ -145,6 +146,10 @@ class TmapTransitJourneyMapper {
                 ?.takeIf { it == "UP" || it == "DOWN" },
             timingBasis = TransitLegTimingBasis.ROUTE_ESTIMATE,
             nextStopName = stations.getOrNull(1)?.text("stationName"),
+            orderedStopIds = if (mode == TransitLegMode.SUBWAY) {
+                stations.mapNotNull { providerScopedStopId(PROVIDER_ID, it.identifier("stationID")) }
+                    .takeIf { it.size == stations.size }.orEmpty()
+            } else emptyList(),
             // WALK 원본 경계만 보존한다. 승차 정류장 좌표나 요청 좌표로 대체하지 않는다.
             walkingGeometry = if (mode == TransitLegMode.WALK) walkingGeometry(node) else null,
         )

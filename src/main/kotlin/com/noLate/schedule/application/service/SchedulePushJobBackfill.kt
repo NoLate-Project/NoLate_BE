@@ -198,10 +198,10 @@ class SchedulePushJobBackfillPairWriter(
             }
         val route = if (personal != null) {
             AlarmBackfillRoute(
-                departureAt = personal.departAt?.let { saved ->
-                    SelectedRouteMetadata.guardSavedDeparture(schedule.startAt, saved, personal.travelMinutes,
-                        personal.travelMode, personal.routeJson?.let { runCatching { objectMapper.readTree(it) }.getOrNull() })
-                }
+                departureAt = SelectedRouteMetadata.guardSavedDeparture(
+                    schedule.startAt, personal.departAt, personal.travelMinutes, personal.travelMode,
+                    personal.routeJson?.let { runCatching { objectMapper.readTree(it) }.getOrNull() },
+                )
                     ?: schedule.startAt.minusSeconds(requireNotNull(personal.travelMinutes).toLong() * 60),
                 alertMode = personal.alertMode,
             )
@@ -215,10 +215,10 @@ class SchedulePushJobBackfillPairWriter(
                 }
                 ?.let {
                     AlarmBackfillRoute(
-                        departureAt = it.departAt?.let { saved ->
-                            SelectedRouteMetadata.guardSavedDeparture(schedule.startAt, saved, it.travelMinutes,
-                                it.travelMode, it.routeJson?.let { raw -> runCatching { objectMapper.readTree(raw) }.getOrNull() })
-                        }
+                        departureAt = SelectedRouteMetadata.guardSavedDeparture(
+                            schedule.startAt, it.departAt, it.travelMinutes, it.travelMode,
+                            it.routeJson?.let { raw -> runCatching { objectMapper.readTree(raw) }.getOrNull() },
+                        )
                             ?: schedule.startAt.minusSeconds(requireNotNull(it.travelMinutes).toLong() * 60),
                         alertMode = it.alertMode,
                     )

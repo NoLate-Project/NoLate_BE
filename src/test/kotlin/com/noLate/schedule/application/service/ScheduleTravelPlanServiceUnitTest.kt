@@ -149,6 +149,32 @@ class ScheduleTravelPlanServiceUnitTest {
     }
 
     @Test
+    fun `stores and returns the same appointment timing when an ODsay lookup arrives after the target`() {
+        val schedule = scheduleEntity()
+        whenever(scheduleRepository.findScheduleDetail(10L, 2L)).thenReturn(schedule)
+        whenever(scheduleRepository.findActiveForTravelPlanUpdate(10L)).thenReturn(schedule)
+        whenever(travelPlanRepository.saveAndFlush(any<ScheduleTravelPlan>())).thenAnswer { it.getArgument(0) }
+        val lookupDeparture = schedule.startAt.minusSeconds(240)
+        val lookupArrival = lookupDeparture.plusSeconds(3900)
+        val result = service.upsertMyTravelPlan(2L, 10L, routeCommand("참여자 집", 65).copy(
+            travelMode = ScheduleTravelMode.TRANSIT,
+            departAt = lookupDeparture.toString(),
+            routeJson = """{"provider":"odsay","routeInfo":{"provider":"odsay","timeBasis":"estimated",
+                "providerTimeBasis":"route_estimate","departureTime":"$lookupDeparture","arrivalTime":"$lookupArrival",
+                "steps":[]}}""".trimIndent(),
+        ))
+
+        val expectedDeparture = schedule.startAt.minusSeconds(3900)
+        assertEquals(expectedDeparture.toString(), result.departAt)
+        assertEquals(expectedDeparture.toString(), result.route?.at("/routeInfo/departureTime")?.asText())
+        assertEquals(schedule.startAt.toString(), result.route?.at("/routeInfo/arrivalTime")?.asText())
+        verify(travelPlanRepository).saveAndFlush(check {
+            assertEquals(expectedDeparture, it.departAt)
+            assertEquals(result.route?.toString(), it.routeJson)
+        })
+    }
+
+    @Test
     fun `personal alarm mode is stored and a legacy update preserves it`() {
         val schedule = scheduleEntity()
         val existing = travelPlan(memberId = 2L, originName = "참여자 집").apply {

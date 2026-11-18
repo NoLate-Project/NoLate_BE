@@ -642,6 +642,7 @@ class ScheduleService(
         startAt: String?,
         endAt: String?,
         limit: Int? = null,
+        calendarScope: String? = null,
     ): List<ScheduleDto> {
         val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
         if (
@@ -657,6 +658,13 @@ class ScheduleService(
         // The cap is enforced here as well as in the DB query so every caller receives the same policy.
         val normalizedLimit = (limit ?: DEFAULT_SEARCH_LIMIT).coerceIn(1, MAX_SEARCH_LIMIT)
         val pageable = PageRequest.of(0, normalizedLimit)
+        // Calendar IDs are positive. The repository uses zero for schedules without a calendar.
+        val scopeCalendarId = when (val scope = calendarScope?.trim()) {
+            null, "", "all" -> null
+            "personal" -> 0L
+            else -> scope.toLongOrNull()?.takeIf { it > 0 }
+                ?: throw BusinessException(ErrorCode.INVALID_INPUT, "Invalid calendar search scope.")
+        }
 
         return toVisibleDtos(
             memberId,
@@ -668,6 +676,7 @@ class ScheduleService(
                     rangeStart = startAt?.let { parseInstant(it, "startAt") },
                     rangeEnd = endAt?.let { parseInstant(it, "endAt") },
                     pageable = pageable,
+                    scopeCalendarId = scopeCalendarId,
                 )
             } else {
                 scheduleRepository.searchOwnedScheduleList(
@@ -677,6 +686,7 @@ class ScheduleService(
                     rangeStart = startAt?.let { parseInstant(it, "startAt") },
                     rangeEnd = endAt?.let { parseInstant(it, "endAt") },
                     pageable = pageable,
+                    scopeCalendarId = scopeCalendarId,
                 )
             },
         )
@@ -752,7 +762,7 @@ class ScheduleService(
                 base = base,
                 plan = schedule.id?.let(myPlans::get),
                 access = access,
-            ) ?: base
+            ) ?: base.withGuardedDeparture()
             return personalized.copy(
                 ownerMemberId = access?.resourceOwnerMemberId ?: personalized.ownerMemberId,
                 sharePermission = access?.effectivePermission.takeIf { received },
@@ -1053,26 +1063,30 @@ class ScheduleService(
     }
 
     private fun validateScheduleRange(scheduleDto: ScheduleDto) {
-        if (scheduleDto.hasEndTime == false || scheduleDto.endAt == null) return
+        val suppliedEndAt = scheduleDto.endAt ?: return
+        if (!scheduleDto.usesSuppliedEndAt()) return
 
         val startAt = parseInstant(scheduleDto.startAt, "startAt")
-        val endAt = parseInstant(scheduleDto.endAt, "endAt")
-        if (!endAt.isAfter(startAt)) {
+        val endAt = parseInstant(suppliedEndAt, "endAt")
+        // Older all-day rows without an end time may already store startAt as their end.
+        val legacySingleDay = scheduleDto.allDay == true && scheduleDto.hasEndTime == false && endAt == startAt
+        if (!endAt.isAfter(startAt) && !legacySingleDay) {
             throw BusinessException(ErrorCode.INVALID_INPUT, "endAt must be after startAt.")
         }
     }
 
     /** Keep the appointment and the persisted owner/actor departure on the same time basis. */
     private fun ScheduleDto.withGuardedDeparture(): ScheduleDto {
-        val value = departAt ?: return this
         // Preserve the original request for the selected-service validator; its
         // booking/timetable clocks must not be repaired by moving a departure.
         if (travelMode != ScheduleTravelMode.TRANSIT || route?.has("intercityJourney") == true) return this
-        val saved = parseInstant(value, "departAt")
+        val saved = departAt?.let { parseInstant(it, "departAt") }
+        val target = parseInstant(startAt, "startAt")
         val guarded = SelectedRouteMetadata.guardSavedDeparture(
-            parseInstant(startAt, "startAt"), saved, travelMinutes, travelMode, route,
+            target, saved, travelMinutes, travelMode, route,
         )
-        return if (guarded == saved) this else copy(departAt = guarded?.toString())
+        val aligned = SelectedRouteMetadata.alignOdsayRouteTiming(target, guarded, travelMinutes, travelMode, route)
+        return if (guarded == saved && aligned === route) this else copy(departAt = guarded?.toString(), route = aligned)
     }
 
     private fun applyDto(schedule: Schedule, scheduleDto: ScheduleDto) {
@@ -1462,6 +1476,7 @@ class ScheduleService(
             ?: scheduleDto.notes?.trim().orEmpty()
 
         val startAt = parseInstant(scheduleDto.startAt, "startAt")
+        // Match the range as it was stored by imports that predate external source keys.
         val hasEndTime = scheduleDto.hasEndTime ?: (scheduleDto.endAt != null)
         val endAt = if (hasEndTime) {
             parseInstant(scheduleDto.endAt, "endAt")

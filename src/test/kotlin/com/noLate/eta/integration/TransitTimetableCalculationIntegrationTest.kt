@@ -44,19 +44,22 @@ class TransitTimetableCalculationIntegrationTest {
     }
 
     @Test
-    fun `첫 열차가 일러도 같은 환승편을 유지하면 실제 도착 이후의 늘어난 대기를 표시한다`() {
+    fun `첫 승차역 예측만 빠르면 하차 시간표로 계산한 환승 대기를 표시한다`() {
         val result = calculate("4012", false, liveBoardingSeconds = 197,
             firstBoardingSeconds = 330, firstArrivalSeconds = 1450)
         assertTrue(result.accepted)
         val route = requireNotNull(result.effectiveTransitRoute)
         assertEquals(now.plusSeconds(2452), result.predictedArrivalAt)
         assertEquals("2012", route.segments[3].rideTiming?.timetable?.trainNumber)
-        // 첫 하차1317초 + 원본 도보243초 = 1560초. 1800초 승차까지 240초 기다린다.
-        // 다음 편이 같아도 옛 시간표 하차1450초를 기준으로 대기/구간 분을 남겨두면 안 된다.
-        assertEquals(4, route.segments[3].waitingMinutes)
-        assertEquals(13, route.segments[3].durationMinutes) // 2281 - 1560 = 721초
+        assertEquals(2, route.segments[3].waitingMinutes) // 1800 - (1450 + 243) = 107초
+        assertEquals(10, route.segments[3].durationMinutes) // 2281 - (1450 + 243) = 588초
         assertEquals(listOf(111L, 243L, 171L), route.segments.filter { it.kind.name == "WALK" }.map { it.durationSeconds })
         assertEquals(now.plusSeconds(330), route.segments[1].rideTiming?.timetable?.boardingAt)
+        assertEquals(now.plusSeconds(197), route.segments[1].rideTiming?.predictedBoardingAt)
+        assertEquals(now.plusSeconds(1450), route.segments[1].rideTiming?.predictedArrivalAt)
+        assertEquals(EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            route.segments[1].rideTiming?.basis)
+        assertEquals(now.plusSeconds(1450), route.segments[3].transferTiming?.previousArrivalAt)
     }
 
     @Test
@@ -74,21 +77,54 @@ class TransitTimetableCalculationIntegrationTest {
     }
 
     @Test
-    fun `실제 관측이 첫 열차보다 이르면 가능한 기존 환승도 더 이른 시간표로 재연결한다`() {
+    fun `첫 승차역만 일찍 관측된 경우 원래 하차 시간표로 가능한 후속 열차를 유지한다`() {
         val searches = mutableListOf<Instant>()
         val result = calculate("4012", false, liveBoardingSeconds = 197, firstBoardingSeconds = 330,
             firstArrivalSeconds = 1530, nextTransferTrain = true, searchedDepartures = searches,
-            targetArrivalAt = now.plusSeconds(2452))
-        // 기존 시간표만으로는 2014를 선택한다. 검증한 133초 조기 관측으로는
-        // 원래 도보243초+여유60초를 유지해도 2012를 탈 수 있으며 5분 일찍 도착한다.
+            targetArrivalAt = now.plusSeconds(2752))
         assertEquals(1, searches.size)
         assertTrue(result.accepted)
-        assertEquals(now.plusSeconds(2452), result.predictedArrivalAt)
-        assertEquals("2012", result.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.timetable?.trainNumber)
+        assertEquals(now.plusSeconds(2752), result.predictedArrivalAt)
+        assertEquals("2014", result.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.timetable?.trainNumber)
         assertEquals(listOf(111L, 243L, 171L), result.effectiveTransitRoute?.segments
             ?.filter { it.kind.name == "WALK" }?.map { it.durationSeconds })
         assertEquals(now.plusSeconds(330), result.effectiveTransitRoute?.segments?.get(1)?.rideTiming?.timetable?.boardingAt)
         assertEquals(now.plusSeconds(197), result.effectiveTransitRoute?.segments?.get(1)?.rideTiming?.predictedBoardingAt)
+    }
+
+    @Test
+    fun `신선한 동일 열차의 하차 예측으로 여유가 확인되는 경우만 빠른 환승을 연결한다`() {
+        fun calculateWithAlighting(alighting: Long) = calculate("4012", false, liveBoardingSeconds = 197,
+            firstBoardingSeconds = 330, firstArrivalSeconds = 800, nextTransferTrain = true,
+            transferBoardingSeconds = 1050, firstAlightingObservationSeconds = alighting,
+            targetArrivalAt = now.plusSeconds(2752))
+
+        val possible = calculateWithAlighting(700)
+        val short = calculateWithAlighting(760)
+        assertTrue(possible.accepted)
+        assertEquals(now.plusSeconds(1702), possible.predictedArrivalAt)
+        val route = requireNotNull(possible.effectiveTransitRoute)
+        val first = requireNotNull(route.segments[1].rideTiming)
+        assertEquals(EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME, first.basis)
+        assertEquals(now.plusSeconds(197), first.predictedBoardingAt)
+        assertEquals(now.plusSeconds(700), first.predictedArrivalAt)
+        assertEquals(now, first.observationSourceUpdatedAt)
+        assertEquals(first.predictedArrivalAt, route.segments[3].transferTiming?.previousArrivalAt)
+        assertEquals("2012", route.segments[3].rideTiming?.timetable?.trainNumber)
+        assertTrue(short.accepted)
+        assertEquals("2014", short.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.timetable?.trainNumber)
+    }
+
+    @Test
+    fun `첫 열차가 시간표대로 왔어도 하차역의 지연 예측이 환승 여유보다 크면 확정하지 않는다`() {
+        val delayed = calculate("4012", false, liveBoardingSeconds = 330,
+            firstBoardingSeconds = 330, firstArrivalSeconds = 800, nextTransferTrain = true,
+            transferBoardingSeconds = 1150, firstAlightingObservationSeconds = 870,
+            targetArrivalAt = now.plusSeconds(2752))
+
+        assertFalse(delayed.accepted)
+        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, delayed.failureReason)
+        assertNull(delayed.predictedArrivalAt)
     }
 
     @Test
@@ -353,6 +389,8 @@ class TransitTimetableCalculationIntegrationTest {
         odsay: Boolean = false,
         evaluatedAt: Instant = now,
         failAfterSuccessfulSearches: Int? = null,
+        transferBoardingSeconds: Long = 1800,
+        firstAlightingObservationSeconds: Long? = null,
     ) = run {
         val mapper = jacksonObjectMapper()
         val response = mapper.readTree("""
@@ -398,8 +436,8 @@ class TransitTimetableCalculationIntegrationTest {
                 }
                 val original = TransitLegTimetable("fixture-timetable", query.line, LocalDate.of(2026, 10, 4),
                     if (first) "4012" else "2012", "DOWN", TransitServiceClass.LOCAL, "FROM", "TO",
-                    if (first) "오이도" else "성수", now.plusSeconds(if (first) firstBoardingSeconds else 1800),
-                    now.plusSeconds(if (first) firstArrivalSeconds else 2281), now)
+                    if (first) "오이도" else "성수", now.plusSeconds(if (first) firstBoardingSeconds else transferBoardingSeconds),
+                    now.plusSeconds(if (first) firstArrivalSeconds else transferBoardingSeconds + 481), now)
                 return listOf(original) + if (!first && nextTransferTrain) {
                     listOf(original.copy(trainNumber = "2014", boardingAt = now.plusSeconds(2100),
                         arrivalAt = now.plusSeconds(2581)))
@@ -413,11 +451,20 @@ class TransitTimetableCalculationIntegrationTest {
                 sourceUpdatedAt = now.minusSeconds(sourceAgeSeconds).toString(), freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
                 express = false, subwayLineId = "1004", trainNumber = liveTrain),
         ))
+        firstAlightingObservationSeconds?.let { seconds ->
+            whenever(arrivals.getSubwayArrivalsForEta("사당", "4호선", null, "DOWN", 10)).thenReturn(listOf(
+                TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "4호선", stationName = "사당",
+                    direction = "하행", destinationName = "오이도", expectedAt = now.plusSeconds(seconds).toString(),
+                    sourceUpdatedAt = now.toString(), freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
+                    express = false, subwayLineId = "1004", trainNumber = liveTrain),
+            ))
+        }
         val matcher = TransitJourneyMatcher()
         val service = TransitEtaCalculationService(SelectedTransitRouteDecoder(mapper), listOf(routeProvider),
             // 이 fixture는 한 응답의 환승 재연결을 검증한다. 전체 경로 재검색은 별도 resolver 테스트가 소유한다.
             SafeDepartureResolver(matcher, maxSearches = if (plateauFixture || failAfterSuccessfulSearches != null) 3 else 1), FirstBoardingRealtimeOverlay(arrivals, Clock.fixed(now, ZoneOffset.UTC)),
-            matcher, TransitTransferFeasibilityEvaluator(), TransitJourneyTimetableEnricher(listOf(timetable)))
+            matcher, TransitTransferFeasibilityEvaluator(), TransitJourneyTimetableEnricher(listOf(timetable)),
+            transferRealtimeGuard = firstAlightingObservationSeconds?.let { TransitTransferRealtimeGuard(arrivals) })
         service.calculate(TrafficRequest(37.55, 126.97, 37.48, 126.93, ScheduleTravelMode.TRANSIT, 65,
             selectedRouteTravelMinutes = 65, evaluatedAt = evaluatedAt, plannedDepartureAt = if (plateauFixture) now.plusSeconds(660) else now,
             targetArrivalAt = targetArrivalAt,

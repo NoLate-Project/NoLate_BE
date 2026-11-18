@@ -97,7 +97,18 @@ class MixedWalkingActivityDeliveryTest {
             fixture("jdbc:h2:mem:mixed-activity-$mode-${UUID.randomUUID()};MODE=MySQL;DB_CLOSE_DELAY=-1",clock).use { f ->
                 val (p,w)=active(f);val offline=MixedWalkingActivityFixture(f)
                 offline.delivery.update(7,9001,2,p.sessionId,body(f,p));clock.now=clock.now.plusSeconds(1)
-                when(mode){"cancel"->f.service.cancel(7,9001,2,w);"replace"->f.service.issue(7,9001,2,1);else->f.revision++}
+                when(mode){
+                    "cancel" -> f.service.cancel(7,9001,2,w)
+                    "replace" -> f.service.issue(7,9001,2,1)
+                    else -> {
+                        // An ACTIVE route tolerates a push-field-only plan version bump.
+                        // Change the saved transit destination to exercise actual route revocation.
+                        val changed = f.fixture.plan.route!!.deepCopy<ObjectNode>()
+                        (changed.path("transitLegs")[1] as ObjectNode).put("endName", "다른 하차 정류장")
+                        f.fixture.plan = f.fixture.plan.copy(route = changed)
+                        f.revision++
+                    }
+                }
                 assertThatThrownBy{offline.delivery.update(7,9001,2,p.sessionId,body(f,p))}.isInstanceOf(RuntimeException::class.java)
                 assertThat(offline.sent).hasSize(1)
                 offline.delivery.end(7,9001,2,p.sessionId,stop(p))

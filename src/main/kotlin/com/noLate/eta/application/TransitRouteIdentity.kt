@@ -2,6 +2,8 @@ package com.noLate.eta.application
 
 import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitJourneyLeg
+import com.noLate.eta.domain.TransitLegMode
+import com.noLate.eta.domain.SelectedTransitRoute
 import com.noLate.eta.domain.TransitLine
 import com.noLate.eta.domain.TransitStop
 import java.nio.charset.StandardCharsets
@@ -15,14 +17,18 @@ import java.util.HexFormat
  * 없을 때만 범위가 포함된 이름으로 내려가, 표시명 변경에는 안정적이면서 legacy 응답끼리도
  * 가능한 한 충돌하지 않게 한다.
  */
-internal fun TransitJourney.stableRouteIdentity(): String {
+internal fun TransitJourney.stableRouteIdentity(matchedSelectedRoute: SelectedTransitRoute? = null): String {
     val canonicalFields = buildList {
         tagged("provider", provider.normalizedIdentityField())
         tagged("ride-count", rideLegs.size.toString())
         rideLegs.forEachIndexed { rideIndex, leg ->
             tagged("ride-index", rideIndex.toString())
             tagged("mode", leg.mode.name)
-            addAll(leg.line.stableLineIdentity())
+            // A Tmap subway candidate accepted by the ordered stops retains the
+            // selected route's ID in the hash so provider ID changes do not trigger a route change.
+            val selectedLineId = matchedSelectedRoute?.rides?.getOrNull(rideIndex)?.providerRouteId
+                .takeIf { provider.equals("tmap", ignoreCase = true) && leg.mode == TransitLegMode.SUBWAY }
+            addAll(leg.line.stableLineIdentity(selectedLineId))
             addAll(leg.from.stableStopIdentity("from"))
             addAll(leg.to.stableStopIdentity("to"))
             addAll(leg.stableDirectionIdentity())
@@ -33,9 +39,9 @@ internal fun TransitJourney.stableRouteIdentity(): String {
     return HexFormat.of().formatHex(digest)
 }
 
-private fun TransitLine?.stableLineIdentity(): List<String> {
+private fun TransitLine?.stableLineIdentity(selectedLineId: String?): List<String> {
     if (this == null) return listOf(taggedField("line-kind", "missing"))
-    providerRouteId.normalizedIdentityField().takeIf(String::isNotBlank)?.let { routeId ->
+    (selectedLineId ?: providerRouteId).normalizedIdentityField().takeIf(String::isNotBlank)?.let { routeId ->
         return listOf(
             taggedField("line-kind", "provider-route-id"),
             taggedField("line-id", routeId),

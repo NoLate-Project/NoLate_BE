@@ -319,6 +319,7 @@ class ScheduleController(
     @Operation(
         summary = "일정 검색/필터 조회",
         description = "키워드는 생략하거나 공백으로 보낼 수 있으며, 실제 검색어는 공백 제거 후 최소 2자여야 합니다. " +
+            "calendarScope에는 personal 또는 캘린더 ID를 전달할 수 있습니다. " +
             "결과는 기본 20개, 최대 50개로 제한됩니다.",
     )
     @GetMapping("/search")
@@ -329,6 +330,7 @@ class ScheduleController(
         @RequestParam(required = false) startAt: String?,
         @RequestParam(required = false) endAt: String?,
         @RequestParam(required = false) limit: Int? = null,
+        @RequestParam(required = false) calendarScope: String? = null,
     ): ApiResponse<List<ScheduleDto>> {
         val result = scheduleUseCase.searchScheduleList(
             memberId = requireMemberId(principal),
@@ -337,6 +339,7 @@ class ScheduleController(
             startAt = startAt,
             endAt = endAt,
             limit = limit,
+            calendarScope = calendarScope,
         )
         return ApiResponse.success(result)
     }

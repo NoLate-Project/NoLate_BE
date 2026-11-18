@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.eta.domain.*
+import com.noLate.eta.application.port.WalkingPathRefinement
 import com.sun.net.httpserver.HttpServer
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -125,6 +126,106 @@ class OdsayWalkingTimeClientTest {
         assertNull(OdsayWalkingTimeClient("key", "http://127.0.0.1:1", enabled = false).refine(geometry(), 3))
         assertNull(client().refine(geometry().copy(providerQueryEndpoints = null), 3))
         assertThrows(IllegalArgumentException::class.java) { OdsayWalkingTimeClient("key", "https://attacker.example") }
+    }
+
+    @Test
+    fun `누락된 출발 도보와 기존 도착 도보를 한 HTTP로 확인한다`() {
+        val start = TransitWalkingCoordinate(37.656274, 127.063183)
+        val entrance = TransitWalkingCoordinate(37.65608284381637, 127.06277898570954)
+        val endpoints = TransitWalkingQueryEndpoints(start, entrance)
+        val access = json.readTree("""{"hasPathResult":true,"recommend":{
+            "summary":{"start":{"x":${start.lng},"y":${start.lat}},"end":{"x":${entrance.lng},"y":${entrance.lat}},
+                       "distance":50,"duration":47},
+            "routes":[{"distance":50,"duration":47,"coordinate":[{"x":${start.lng},"y":${start.lat}},
+                       {"x":${entrance.lng},"y":${entrance.lat}}]}]}}""")
+        val batch = response()
+        (batch.path("result").path("path") as com.fasterxml.jackson.databind.node.ArrayNode).insert(0, access)
+        val calls = AtomicInteger()
+        val server = server { exchange ->
+            calls.incrementAndGet()
+            val query = URLDecoder.decode(exchange.requestURI.rawQuery, Charsets.UTF_8)
+            assertEquals(1, query.count { it == '@' })
+            batch.toString()
+        }
+        try {
+            val client = OdsayWalkingTimeClient("key", "http://127.0.0.1:${server.address.port}",
+                clock = Clock.fixed(now, ZoneOffset.UTC))
+            val original = WalkingPathRefinement(geometry(), 3)
+            val result = client.refineBoundaries(endpoints, null, listOf(original))
+            assertEquals(47L, result.access?.seconds)
+            assertEquals(50L, result.access?.distanceMeters)
+            assertEquals(157L, result.unchanged[original]?.seconds)
+            assertEquals(result, client.refineBoundaries(endpoints, null, listOf(original)))
+            assertEquals(1, calls.get())
+        } finally { server.stop(0) }
+    }
+
+    @Test
+    fun `거리 검증에 실패한 배치는 성공한 구간을 보존하고 다른 계산의 도보 요청을 막지 않는다`() {
+        val clock = MutableClock(now)
+        val calls = AtomicInteger()
+        val original = geometry()
+        val incomplete = original.copy(distanceMeters = requireNotNull(original.distanceMeters) - 1)
+        val sameRoute = response()
+        val batch = sameRoute.deepCopy<JsonNode>()
+        (batch.path("result").path("path") as com.fasterxml.jackson.databind.node.ArrayNode)
+            .add(sameRoute.path("result").path("path").single())
+        // The second response path belongs to another exact coordinate set, with the same test link shape.
+        val nextEndpoints = requireNotNull(incomplete.providerQueryEndpoints)
+        val changedEnd = nextEndpoints.end.copy(lng = nextEndpoints.end.lng + 1e-8)
+        val alternate = incomplete.copy(providerQueryEndpoints = nextEndpoints.copy(end = changedEnd))
+        val server = server { if (calls.incrementAndGet() == 1) batch.toString() else sameRoute.toString() }
+        try {
+            val client = OdsayWalkingTimeClient("key", "http://127.0.0.1:${server.address.port}", clock = clock)
+            val validRequest = WalkingPathRefinement(original, 3)
+            val rejectedRequest = WalkingPathRefinement(alternate, 3)
+            val result = client.refineBoundaries(null, null, listOf(validRequest, rejectedRequest))
+            assertEquals(157L, result.unchanged[validRequest]?.seconds)
+            assertNull(result.unchanged[rejectedRequest])
+            assertEquals(mapOf("DISTANCE_MISMATCH" to 1L), client.diagnostics()["failureCounts"])
+
+            clock.value = now.plusSeconds(2)
+            assertEquals(157L, client.refine(alternate.copy(distanceMeters = original.distanceMeters), 3)?.seconds)
+            assertEquals(2, calls.get())
+        } finally { server.stop(0) }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["missing", "different", "corroborated", "too-far"])
+    fun `5미터 경계의 마지막 도보는 원래 응답과 같은 끝점일 때만 미터 단위로 대조한다`(evidence: String) {
+        val source = TransitWalkingCoordinate(37.50052405353462, 127.03668707226018)
+        val destination = TransitWalkingCoordinate(37.500622, 127.036456)
+        val originalEnd = TransitWalkingCoordinate(
+            if (evidence == "too-far") 37.500675 else 37.500664663016906, 127.03643547041254,
+        )
+        val endpoints = TransitWalkingQueryEndpoints(source, destination, when (evidence) {
+            "missing" -> null
+            "different" -> originalEnd.copy(lat = originalEnd.lat + 1e-5)
+            else -> originalEnd
+        })
+        val observed = """{"result":{"path":[{"hasPathResult":true,"recommend":{
+            "summary":{"start":{"x":${source.lng},"y":${source.lat}},
+                       "end":{"x":${destination.lng},"y":${destination.lat}},"distance":99,"duration":93},
+            "routes":[{"distance":99,"duration":93,"coordinate":[
+                {"x":127.03670039032285,"y":37.500509926290135},
+                {"x":${originalEnd.lng},"y":${originalEnd.lat}}]}]
+        }}]}}"""
+        val server = server { observed }
+        try {
+            val client = OdsayWalkingTimeClient("key", "http://127.0.0.1:${server.address.port}",
+                clock = Clock.fixed(now, ZoneOffset.UTC))
+            val result = client.refineBoundaries(null, endpoints, emptyList()).exit
+            if (evidence == "corroborated") {
+                assertEquals(93L, result?.seconds)
+                assertEquals(99L, result?.distanceMeters)
+                assertEquals(TransitWalkingCoordinate(37.500509926290135, 127.03670039032285), result?.pathStart)
+                assertEquals(originalEnd, result?.pathEnd)
+                assertNotEquals(endpoints.end, result?.pathEnd)
+            } else {
+                assertNull(result)
+                assertEquals(mapOf("BOUNDARY_ENDPOINT_GAP" to 1L), client.diagnostics()["failureCounts"])
+            }
+        } finally { server.stop(0) }
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.noLate.eta.application.transit
 
 import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitLegMode
+import com.noLate.eta.domain.TransitWalkingTimingSource
 import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -27,24 +28,27 @@ object ObservedFirstBoardingDepartureProjector {
             observation.trainNumber.isNullOrBlank() || observation.trainNumber !in setOfNotNull(timetable.trainNumber, timetable.realtimeTrainNumber) ||
             observation.departureAt != journey.departureAt || observation.evaluatedAt != evaluatedAt ||
             observation.expectedBoardingAt != overlay.boardingAt || readySpan.seconds < accessSeconds) return null
-        // The span includes the configured boarding buffer. Keep it exactly,
-        // floor the anchor and re-evaluate the whole journey before adoption.
+        // The verified ODsay entrance walk already has seconds. Reprojecting
+        // that same walk and train does not query ODsay's minute-based search.
+        val verifiedEntranceSeconds = access.singleOrNull()?.walkingTiming?.source ==
+            TransitWalkingTimingSource.ODSAY_ENTRANCE_WALK_SECONDS
+        val resolutionUnit = if (secondPrecision || verifiedEntranceSeconds) ChronoUnit.SECONDS else ChronoUnit.MINUTES
+        // Keep the boarding buffer in the span and never round past the ready deadline.
         val departure = observation.expectedBoardingAt.minus(readySpan)
-            .truncatedTo(if (secondPrecision) ChronoUnit.SECONDS else ChronoUnit.MINUTES)
+            .truncatedTo(resolutionUnit)
         if (departure <= journey.departureAt || departure < evaluatedAt) return null
         val shift = Duration.between(journey.departureAt, departure)
         val updatedObservation = observation.copy(departureAt = departure, readyAt = departure.plus(readySpan))
         val embedded = updatedObservation.takeIf { it.expectedBoardingAt >= timetable.boardingAt }
-        val oldEmbeddedDelay = first.firstBoardingObservation?.let { Duration.between(timetable.boardingAt, it.expectedBoardingAt) } ?: Duration.ZERO
-        val newEmbeddedDelay = embedded?.let { Duration.between(timetable.boardingAt, it.expectedBoardingAt) } ?: Duration.ZERO
+        val oldEmbeddedDelay = first.firstBoardingObservation?.let { timetable.shiftFromObservedBoardingArrival(it.expectedBoardingAt) } ?: Duration.ZERO
+        val newEmbeddedDelay = embedded?.let { timetable.shiftFromObservedBoardingArrival(it.expectedBoardingAt) } ?: Duration.ZERO
         val legs = journey.legs.mapIndexed { index, leg ->
             when {
                 index < firstIndex -> leg.copy(scheduledDepartureAt = leg.scheduledDepartureAt?.plus(shift),
                     scheduledArrivalAt = leg.scheduledArrivalAt?.plus(shift))
                 index == firstIndex -> {
                     val start = departure.plusSeconds(accessSeconds)
-                    val arrival = TransitRideArrivalPredictor.baseline(timetable,
-                        timetable.boardingAt.plus(newEmbeddedDelay)).arrivalAt
+                    val arrival = timetable.arrivalAt.plus(newEmbeddedDelay)
                     val seconds = Duration.between(start, arrival).seconds
                     if (seconds <= 0) return null
                     leg.copy(durationSeconds = seconds, durationMinutes = ceilMinutes(seconds),

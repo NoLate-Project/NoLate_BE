@@ -17,12 +17,14 @@ internal class SeoulSubwayTrainHttpTransport(private val timeout: Duration = Dur
         .followRedirects(HttpClient.Redirect.NEVER).build()
     private val permits = Semaphore(2)
 
-    fun fetch(uri: URI): ByteArray {
+    fun fetch(uri: URI, budget: Duration = timeout): ByteArray {
+        val requestTimeout = minOf(timeout, budget)
+        if (requestTimeout.isZero || requestTimeout.isNegative) throw unavailable()
         if (!permits.tryAcquire()) throw IllegalStateException("Subway observation busy")
         val subscriber = Body()
         var future: CompletableFuture<HttpResponse<ByteArray>>? = null
         try {
-            val request = HttpRequest.newBuilder(uri).timeout(timeout).header("Accept", "application/json")
+            val request = HttpRequest.newBuilder(uri).timeout(requestTimeout).header("Accept", "application/json")
                 .header("Accept-Encoding", "identity").GET().build()
             future = client.sendAsync(request) { info ->
                 if (info.statusCode() != 200) subscriber.fail(RestClientResponseException(
@@ -35,7 +37,7 @@ internal class SeoulSubwayTrainHttpTransport(private val timeout: Duration = Dur
                 }
                 subscriber
             }
-            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS).body()
+            return future.get(requestTimeout.toNanos(), TimeUnit.NANOSECONDS).body()
         } catch (failure: Exception) {
             if (failure is InterruptedException) Thread.currentThread().interrupt()
             val cause = (failure as? ExecutionException)?.cause

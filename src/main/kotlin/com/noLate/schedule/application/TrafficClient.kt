@@ -15,6 +15,8 @@ enum class TransitRouteProvenance {
 }
 
 enum class TransitTimingBasis {
+    SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME,
+    BUS_TRANSFER_BOARDING_AND_ALIGHTING_REALTIME,
     FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
     /** 동일 환승 열차의 신선한 승차 또는 하차역 도착 예측을 일부 구간에 반영했다. */
     FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED,
@@ -72,6 +74,8 @@ enum class EffectiveTransitRouteSegmentKind {
 enum class EffectiveTransitRideTimingBasis {
     TIMETABLE,
     FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+    FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+    FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME,
     TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
     TRANSFER_ALIGHTING_REALTIME,
 }
@@ -86,18 +90,36 @@ data class EffectiveTransitRideTiming(
 ) {
     init {
         require(predictedArrivalAt.isAfter(predictedBoardingAt))
-        // 첫 열차의 관측 지연만 승하차 양쪽에 한 번 적용한다. 운행시간을 임의 보정하지 않는다.
-        val shift = java.time.Duration.between(timetable.boardingAt, predictedBoardingAt)
-        if (basis != EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME) {
-            require(predictedArrivalAt == timetable.arrivalAt.plus(shift))
-        } else require(shift.isZero)
+        val shift = when (basis) {
+            EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+            EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE ->
+                timetable.shiftFromObservedBoardingArrival(predictedBoardingAt)
+            else -> java.time.Duration.between(timetable.boardingAt, predictedBoardingAt)
+        }
+        when (basis) {
+            EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME -> Unit
+            EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING ->
+                require(shift.isNegative && predictedArrivalAt == timetable.arrivalAt)
+            EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME -> require(shift.isZero)
+            else -> require(predictedArrivalAt == timetable.arrivalAt.plus(shift))
+        }
         require(basis != EffectiveTransitRideTimingBasis.TIMETABLE || shift.isZero)
         require(
             (basis == EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME ||
+                basis == EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME ||
                 basis == EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE) ==
                 (observationSourceUpdatedAt != null)
         )
     }
+}
+
+data class EffectiveBusRidePrediction(
+    val boardingAt: Instant,
+    val alightingAt: Instant,
+    val sourceUpdatedAt: Instant,
+) {
+    init { require(sourceUpdatedAt <= boardingAt && boardingAt < alightingAt) }
 }
 
 data class EffectiveTransitRouteSegment(
@@ -118,6 +140,7 @@ data class EffectiveTransitRouteSegment(
     val rideTiming: EffectiveTransitRideTiming? = null,
     val walkingTiming: com.noLate.eta.domain.TransitWalkingTimingEvidence? = null,
     val transferTiming: com.noLate.eta.domain.TransitTransferTimingEvidence? = null,
+    val busRidePrediction: EffectiveBusRidePrediction? = null,
 ) {
     init {
         require(sequence >= 0) { "effective transit segment sequence는 0 이상이어야 합니다." }
@@ -128,6 +151,7 @@ data class EffectiveTransitRouteSegment(
         require(kind == EffectiveTransitRouteSegmentKind.WALK ||
             (walkingScope == null && durationSeconds == null && walkingGeometry == null))
         require(rideTiming == null || kind == EffectiveTransitRouteSegmentKind.SUBWAY)
+        require(busRidePrediction == null || kind == EffectiveTransitRouteSegmentKind.BUS)
         require(walkingTiming == null || (kind == EffectiveTransitRouteSegmentKind.WALK &&
             walkingTiming.movementSeconds == (durationSeconds ?: durationMinutes.toLong() * 60)))
         require(transferTiming == null || kind == EffectiveTransitRouteSegmentKind.SUBWAY || kind == EffectiveTransitRouteSegmentKind.BUS)

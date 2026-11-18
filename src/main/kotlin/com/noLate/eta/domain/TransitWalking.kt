@@ -10,8 +10,8 @@ data class TransitWalkingCoordinate(val lat: Double, val lng: Double) {
     }
 }
 
-/** 명목 구간 끝점은 실제 도보 polyline 끝점이나 승강장 좌표와 구분한다. */
-enum class TransitWalkingEndpointBasis { UNKNOWN, PROVIDER_LEG_ENDPOINTS }
+/** 명목 구간 끝점과 공급자 도보 경로의 실제 끝점을 구분한다. 둘 다 승강장 좌표를 뜻하지 않는다. */
+enum class TransitWalkingEndpointBasis { UNKNOWN, PROVIDER_LEG_ENDPOINTS, PROVIDER_PATH_ENDPOINTS }
 
 enum class TransitWalkingPathStatus { PROVIDED, UNAVAILABLE, INVALID, LIMIT_EXCEEDED }
 
@@ -67,9 +67,16 @@ data class TransitWalkingGeometry(
     init { require(distanceMeters == null || distanceMeters >= 0) }
 }
 
-data class TransitWalkingQueryEndpoints(val start: TransitWalkingCoordinate, val end: TransitWalkingCoordinate)
+data class TransitWalkingQueryEndpoints(
+    val start: TransitWalkingCoordinate,
+    val end: TransitWalkingCoordinate,
+    /** Exact end of the original ODsay egress geometry, distinct from the selected destination pin. */
+    val originalEgressEndpoint: TransitWalkingCoordinate? = null,
+)
 
-enum class TransitWalkingTimingSource { ROUTE_MINUTES, PROVIDER_LINK_SECONDS, ODSAY_FULL_PATH_SECONDS }
+enum class TransitWalkingTimingSource {
+    ROUTE_MINUTES, PROVIDER_LINK_SECONDS, ODSAY_FULL_PATH_SECONDS, ODSAY_ENTRANCE_WALK_SECONDS, ODSAY_EXIT_WALK_SECONDS,
+}
 
 /** 공식 기준값은 방향·승강장·경로 포함 범위가 확인되지 않아 계산값으로 자동 대체하지 않는다. */
 data class TransitTransferReference(
@@ -98,6 +105,8 @@ data class TransitWalkingTimingEvidence(
         require(originalDurationMinutes >= 0 && movementSeconds >= 0)
         require(source != TransitWalkingTimingSource.ODSAY_FULL_PATH_SECONDS ||
             (fetchedAt != null && sameOrderedPathVerified))
+        require(source !in setOf(TransitWalkingTimingSource.ODSAY_ENTRANCE_WALK_SECONDS, TransitWalkingTimingSource.ODSAY_EXIT_WALK_SECONDS) ||
+            (fetchedAt != null && !sameOrderedPathVerified))
     }
 }
 

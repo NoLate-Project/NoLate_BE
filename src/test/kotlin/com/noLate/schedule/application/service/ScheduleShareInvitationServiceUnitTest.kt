@@ -164,6 +164,7 @@ class ScheduleShareInvitationServiceUnitTest {
         assertEquals(ScheduleShareInvitationStatus.ACCEPTED, invitation.status)
         assertEquals(2L, invitation.acceptedMemberId)
         assertEquals("80", result.share.id)
+        assertEquals("공유 일정", result.scheduleTitle)
     }
 
     @Test
@@ -297,6 +298,7 @@ class ScheduleShareInvitationServiceUnitTest {
         val result = service.acceptInvitation(2L, "plain-token", 0L)
 
         assertEquals("80", result.share.id)
+        assertEquals("공유 일정", result.scheduleTitle)
         assertEquals(1, invitation.acceptedCount)
         verify(invitationRepository, never()).saveAndFlush(any())
         verify(invitationAcceptanceRepository, never()).saveAndFlush(any())

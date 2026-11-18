@@ -112,6 +112,7 @@ class SeoulTransitTimetableProvider(
                     fromStationCode = from, toStationCode = to, terminalName = start.terminalName,
                     boardingAt = boardingAt, arrivalAt = arrivalAt, fetchedAt = minOf(start.fetchedAt, end.fetchedAt),
                     realtimeTrainNumber = realtimeNumber(start.train),
+                    boardingStationArrivalAt = start.arrival?.takeUnless { it > boardingAt },
                 )
             }
         }

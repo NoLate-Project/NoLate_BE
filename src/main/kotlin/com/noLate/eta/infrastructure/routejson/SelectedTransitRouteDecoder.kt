@@ -52,6 +52,7 @@ class SelectedTransitRouteDecoder(
                     toName = step.toName,
                     directionName = step.directionName,
                     directionCode = step.directionCode,
+                    orderedStopIds = step.orderedStopIds,
                 )
             }
         if (rides.isEmpty()) return null
@@ -192,6 +193,12 @@ class SelectedTransitRouteDecoder(
             toName = firstText(node, "endName", "toName")
                 ?: firstText(lastStop, "name", "stationName"),
             directionName = firstText(node, "directionName", "way"),
+            orderedStopIds = if (provider == "tmap" && mode == TransitLegMode.SUBWAY && passStops != null) {
+                passStops.mapNotNull { stop ->
+                    firstText(stop, "code", "stationID", "stationId")?.normalizedStopCode(provider)
+                        ?.takeIf { it.startsWith("PROVIDER:tmap:", ignoreCase = true) }
+                }.takeIf { it.size == passStops.size() }.orEmpty()
+            } else emptyList(),
             directionCode = firstText(node, "directionCode")
                 ?.uppercase()
                 ?.takeIf { it == "UP" || it == "DOWN" }
@@ -326,6 +333,7 @@ class SelectedTransitRouteDecoder(
         val toName: String?,
         val directionName: String?,
         val directionCode: String?,
+        val orderedStopIds: List<String>,
     )
 
     private companion object {

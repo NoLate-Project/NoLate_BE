@@ -71,6 +71,7 @@ class AutomaticJourneyService(
     @Value("\${journey.automatic.extended-navigation-enabled:false}") private val extendedNavigationEnabled: Boolean = false,
     private val busDeviceAdmission: JourneyBusDeviceAdmissionVerifier? = null,
     private val subwayDeviceAdmission: JourneySubwayDeviceAdmissionVerifier? = null,
+    @Value("\${journey.automatic.simulator-official-bus-admission-enabled:false}") private val simulatorOfficialBusAdmissionEnabled: Boolean = false,
 ) {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     fun prepareSaved(memberId: Long, scheduleId: Long, loginGeneration: Long, command: com.noLate.journey.domain.AutomaticJourneySavedPrepareCommand): AutomaticJourneyPreparationDto {
@@ -90,13 +91,17 @@ class AutomaticJourneyService(
         val validator = SavedJourneyInputValidator(objectMapper)
         validator.validate(plan, command.routeInputJSON, command.routeInputDigest, revision, walking)
         val snapshot = JourneyRouteSnapshot.from(plan, objectMapper)
+        val isolatedOfficialBus = command.execution == AutomaticJourneyExecution.SIMULATOR &&
+            simulatorOfficialBusAdmissionEnabled && isolatedTestScope && !productionProfile() &&
+            activeProfiles.split(',').map(String::trim).any { it in setOf("test", "journey-isolated-fixture") } &&
+            snapshot.legs.map { it.kind } == listOf("WALK", "BUS", "WALK")
         val (officialBus, officialSubway) = if (command.execution == AutomaticJourneyExecution.DEVICE &&
             snapshot.legs.map { it.kind } == listOf("WALK", "SUBWAY", "WALK")) {
             val verified = subwayDeviceAdmission?.verify(snapshot) ?: throw BusinessException(ErrorCode.FEATURE_DISABLED)
             validator.requireDeviceReady(plan, command.routeInputJSON, walking, officialSubway = verified)
             null to verified
-        } else if (command.execution == AutomaticJourneyExecution.DEVICE) {
-            if (busDeviceAdmission == null && activeProfiles.split(',').map(String::trim).contains("test")) {
+        } else if (command.execution == AutomaticJourneyExecution.DEVICE || isolatedOfficialBus) {
+            if (busDeviceAdmission == null && !isolatedOfficialBus && activeProfiles.split(',').map(String::trim).contains("test")) {
                 // Existing synthetic fixture admission is test-only; production never infers
                 // official route proof from saved/provider metadata alone.
                 validator.requireDeviceReady(plan, command.routeInputJSON, walking)
@@ -206,7 +211,12 @@ class AutomaticJourneyService(
         requireDigest(command.routeInputDigest)
         lockActor(memberId, loginGeneration)
         travelPlanService.getTravelPlan(memberId, scheduleId, memberId)
-        val preparation = owned(sessionId, memberId, scheduleId, loginGeneration)
+        // A fresh login revokes the old access token, but the same account must
+        // still be able to deliver a durable stop for its previous session.
+        // Observation and departure paths retain exact login-generation fences.
+        val preparation = repository.findBySessionId(sessionId) ?: throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
+        if (preparation.memberId != memberId || preparation.scheduleId != scheduleId ||
+            preparation.loginSessionGeneration > loginGeneration) throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
         preparation.fence(command.generation, command.routeRevision, command.clientOwnerId, command.routeInputDigest)
         preparation.stop(Instant.now(clock))
         return dto(repository.saveAndFlush(preparation))
@@ -330,8 +340,16 @@ class AutomaticJourneyService(
         val id = value.walkingSnapshotId ?: return
         lockActor(member, login)
         val (plan, revision) = travelPlanService.getMyJourneyWalkingTravelPlanForStart(member, schedule)
-        if (revision != value.routeRevision) invalid("도보 경로 버전이 변경되었습니다.")
-        val contract = walkingSnapshots?.currentForAdmission(member, schedule, login, OwnedWalkingRoute(plan, revision), id, value.preparedAt)
+        // Automatic departure disables the schedule's push notification fields. That write
+        // increments the plan row version, although its route/geometry stays identical.
+        // Keep ARMED strict; after a committed departure only the exact saved route identity
+        // can continue using the already admitted walking snapshot and its original revision.
+        if (revision != value.routeRevision && (value.state != AutomaticJourneyState.ACTIVE ||
+                JourneyRouteSnapshot.from(plan, objectMapper).fingerprint != value.routeFingerprint)) {
+            invalid("도보 경로 버전이 변경되었습니다.")
+        }
+        val contract = walkingSnapshots?.currentForAdmission(member, schedule, login,
+            OwnedWalkingRoute(plan, value.routeRevision), id, value.preparedAt)
             ?: throw BusinessException(ErrorCode.FEATURE_DISABLED)
         if (contract.schemaVersion == 4 && !extendedNavigationEnabled) throw BusinessException(ErrorCode.FEATURE_DISABLED)
     }

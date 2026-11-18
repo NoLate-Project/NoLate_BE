@@ -7,6 +7,7 @@ import com.noLate.eta.domain.TransitLegTimingBasis
 import com.noLate.eta.domain.TransitServiceClass
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assertions.assertNull
@@ -17,6 +18,30 @@ class OdsayTransitJourneyMapperTest {
     private val objectMapper = jacksonObjectMapper()
     private val mapper = OdsayTransitJourneyMapper()
     private val fetchedAt = Instant.parse("2026-07-29T02:59:30Z")
+
+    @Test
+    fun `일요일의 평일 전용 버스만 제외하고 같은 정류장 대안을 사용한다`() {
+        val restricted = """{"busNo":"8146(새벽맞춤버스.평일운행)","busID":2822539}"""
+        val normal = """{"busNo":"360","busID":1440}"""
+        fun route(start: String, end: String, lanes: String) = objectMapper.readTree(
+            """{"result":{"paths":[{"pathType":2,"totalTime":6,"startDateTime":"$start","endDateTime":"$end",
+                "rps":[{"trafficType":2,"duration":6,"startDateTime":"$start","endDateTime":"$end",
+                         "startID":30,"endID":40,"lane":[$lanes]}]}]}}""",
+        )
+        val query = request().copy(departureAt = Instant.parse("2026-11-14T15:00:00Z"))
+        val sunday = mapper.map(route("202611152223", "202611152229", "$restricted,$normal"), query, fetchedAt)
+        assertEquals("1440", sunday.single().rideLegs.single().line?.providerRouteId)
+        assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, sunday.single().rideLegs.single().timingBasis)
+        assertTrue(mapper.map(route("202611152223", "202611152229", restricted), query, fetchedAt).isEmpty())
+        for ((start, end) in listOf(
+            "202611150130" to "202611150136",
+            "202611152357" to "202611160003",
+            "202611160450" to "202611160456",
+        )) {
+            assertEquals("2822539", mapper.map(route(start, end, "$restricted,$normal"), query, fetchedAt)
+                .single().rideLegs.single().line?.providerRouteId)
+        }
+    }
 
     @Test
     fun `maasRP의 표시용 시각과 대기 노선 및 정류장 식별자를 canonical 여정으로 보존한다`() {
@@ -498,6 +523,43 @@ class OdsayTransitJourneyMapperTest {
             assertTrue(leg.isRide)
             assertEquals(TransitLegTimingBasis.ROUTE_ESTIMATE, leg.timingBasis)
         }
+    }
+
+    @Test
+    fun `명시 출구까지의 거리를 충족하지 못하는 끝 도보만 보완 대상으로 삼는다`() {
+        val observed = requireNotNull(javaClass.getResourceAsStream("/eta/odsay-maas-walking-20261012.json"))
+            .use { objectMapper.readTree(it) }.path("walks")
+        val ride = objectMapper.readTree("""{
+            "trafficType":1,"duration":48,"startID":411,"endID":230,
+            "startDateTime":"202607291201","endDateTime":"202607291249",
+            "startExitNo":"10","startExitY":37.656590053614906,"startExitX":127.06400007271506,
+            "endExitNo":"2","endExitY":37.48392182495826,"endExitX":126.92989416822,
+            "lane":{"name":"수도권 4호선","subwayCode":4,"subwayCityCode":1000}
+        }""")
+        val response = objectMapper.readTree("""{"result":{"paths":[{
+            "pathType":2,"totalTime":50,"startDateTime":"202607291200","endDateTime":"202607291250"
+        }]}}""")
+        val path = response.path("result").path("paths").get(0) as com.fasterxml.jackson.databind.node.ObjectNode
+        path.putArray("rps")
+            .add(observed.first().deepCopy<com.fasterxml.jackson.databind.node.ObjectNode>()
+                .put("startDateTime", "202607291200").put("endDateTime", "202607291201"))
+            .add(ride)
+            .add(observed.last().deepCopy<com.fasterxml.jackson.databind.node.ObjectNode>()
+                .put("startDateTime", "202607291249").put("endDateTime", "202607291250"))
+        val request = request().copy(originLat = 37.65636195, originLng = 127.06342739,
+            destinationLat = 37.48426844, destinationLng = 126.92977778)
+        val journey = mapper.map(response, request, fetchedAt).single()
+
+        assertEquals(request.originLng, journey.entranceWalkEndpoints?.start?.lng)
+        assertEquals(127.06400007271506, journey.entranceWalkEndpoints?.end?.lng)
+        assertEquals(126.92989416822, journey.exitWalkEndpoints?.start?.lng)
+        assertEquals(request.destinationLng, journey.exitWalkEndpoints?.end?.lng)
+        assertNotNull(journey.exitWalkEndpoints?.originalEgressEndpoint)
+        assertEquals(journey.legs.last().walkingGeometry?.pathEvidence?.steps?.last()?.coordinates?.last(),
+            journey.exitWalkEndpoints?.originalEgressEndpoint)
+        assertNull(journey.entranceWalkEndpoints?.originalEgressEndpoint)
+        assertNull(mapper.map(response, request.copy(originLat = 37.656590053614906,
+            originLng = 127.06400007271506), fetchedAt).single().entranceWalkEndpoints)
     }
 
     private fun request() = TransitJourneySearchRequest(

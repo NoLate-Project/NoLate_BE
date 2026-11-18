@@ -65,6 +65,13 @@ class ScheduleCalendarInvitationIntegrationTest @Autowired constructor(
         assertEquals(calendar.id.toString(), accepted.share.resourceId)
         assertEquals(ScheduleShareContentMode.SCHEDULE_AND_TRAVEL, accepted.share.contentMode)
         assertEquals(ScheduleCalendarRole.EDITOR, accepted.calendarMembership?.role)
+        assertEquals(calendar.title, accepted.calendarTitle)
+        val reopened = shareService.acceptInvitation(
+            requireNotNull(target.id),
+            invitation.token,
+            target.sessionGeneration,
+        )
+        assertEquals(calendar.title, reopened.calendarTitle)
         assertNotNull(
             calendarMemberRepository.findByCalendarIdAndMemberId(calendar.id, requireNotNull(target.id))
         )

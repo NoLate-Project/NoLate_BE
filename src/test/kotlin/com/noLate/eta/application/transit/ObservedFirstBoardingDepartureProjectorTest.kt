@@ -38,6 +38,40 @@ class ObservedFirstBoardingDepartureProjectorTest {
     }
 
     @Test
+    fun `ODsay 출입구 도보 초와 동일 열차 관측으로 출발 초를 보존한다`() {
+        // 실제 기록과 같은 접근 도보 137초, 승차 여유 60초, 열차 도착까지 255초.
+        val observed = observation.copy(readyAt = start.plusSeconds(197), expectedBoardingAt = start.plusSeconds(255))
+        val original = journey().let { route ->
+            val access = route.legs.first().copy(durationMinutes = 3, durationSeconds = 137,
+                scheduledArrivalAt = start.plusSeconds(137), walkingTiming = TransitWalkingTimingEvidence(
+                    TransitWalkingTimingSource.ODSAY_ENTRANCE_WALK_SECONDS, 1, 137, evaluated,
+                ))
+            val originalRide = route.legs[1]
+            val table = requireNotNull(originalRide.timetable).copy(boardingAt = start.plusSeconds(240),
+                boardingStationArrivalAt = start.plusSeconds(210))
+            val ride = originalRide.copy(timetable = table, scheduledDepartureAt = access.scheduledArrivalAt,
+                scheduledArrivalAt = table.arrivalAt.plusSeconds(45), firstBoardingObservation = observed,
+                durationSeconds = 2788, durationMinutes = 47)
+            route.copy(provider = "odsay", legs = listOf(access, ride) + route.legs.drop(2))
+        }
+        val resolved = resolution().copy(firstBoardingObservation = observed,
+            overlay = resolution().overlay!!.copy(boardingAt = observed.expectedBoardingAt))
+        val withoutEvidence = original.copy(legs = listOf(original.legs.first().copy(walkingTiming = null)) + original.legs.drop(1))
+        assertNull(ObservedFirstBoardingDepartureProjector.project(withoutEvidence, resolved, evaluated, false))
+        val projected = requireNotNull(ObservedFirstBoardingDepartureProjector.project(original, resolved, evaluated, false))
+        val updatedObservation = requireNotNull(projected.resolution.firstBoardingObservation)
+        assertEquals(start.plusSeconds(58), projected.journey.departureAt)
+        assertEquals(observed.expectedBoardingAt, updatedObservation.readyAt)
+        assertEquals(197, java.time.Duration.between(updatedObservation.departureAt, updatedObservation.readyAt).seconds)
+        assertEquals(original.arrivalAt, projected.journey.arrivalAt)
+        assertEquals(original.legs.drop(2), projected.journey.legs.drop(2))
+        assertEquals(original.rideLegs.map { it.timetable }, projected.journey.rideLegs.map { it.timetable })
+        val checked = TransitTransferFeasibilityEvaluator().evaluate(projected.journey, projected.resolution.overlay, evaluated)
+        assertTrue(checked.eligible)
+        assertEquals(original.arrivalAt, checked.predictedArrivalAt)
+    }
+
+    @Test
     fun `조기 관측도 같은 시간표와 후속 열차를 유지한 채 안전한 출발만 옮긴다`() {
         val early = observation.copy(expectedBoardingAt = start.plusSeconds(140))
         val original = journey().let { value ->

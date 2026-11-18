@@ -22,6 +22,28 @@ class ScheduleHybridParserServiceTest {
     private val ruleParser = ScheduleTextParserService()
 
     @Test
+    fun `does not merge an AI destination that only repeats the OCR title`() {
+        val aiParser = RecordingAiParser(
+            ScheduleAiParseOutcome(
+                attempted = true,
+                result = ScheduleAiParseResult(destinationName = "PHOTO FIXTURE MARIGOLD", destinationConfidence = 0.99),
+            ),
+        )
+        val result = ScheduleHybridParserService(ruleParser, aiParser).parse(
+            text = "2026-11-26 14:00\nPhoto Fixture Marigold",
+            inputType = ScheduleParseInputType.IMAGE_OCR,
+            referenceDate = "2026-11-16",
+            defaultDurationMinutes = 60,
+        )
+
+        assertEquals(1, aiParser.calls)
+        assertEquals("Photo Fixture Marigold", result.title)
+        assertEquals("14:00", result.time)
+        assertNull(result.destination)
+        assertTrue(result.needsReview)
+    }
+
+    @Test
     fun `removes exhibition purpose from voice destination`() {
         val service = ScheduleHybridParserService(
             ruleParser,

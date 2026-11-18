@@ -84,6 +84,10 @@ data class ScheduleDto(
     val updatedAt: String? = null,
 ) {
 
+    /** All-day schedules can carry an exclusive end date without a clock time. */
+    internal fun usesSuppliedEndAt(): Boolean =
+        (hasEndTime ?: (endAt != null)) || (allDay == true && endAt != null)
+
     /**
      * ScheduleDto의 값을 Schedule Entity로 변환한다.
      *
@@ -93,7 +97,7 @@ data class ScheduleDto(
         val parsedStartAt = parseInstant(startAt)
         val parsedHasEndTime = hasEndTime ?: (endAt != null)
 
-        val parsedEndAt = if (parsedHasEndTime) {
+        val parsedEndAt = if (usesSuppliedEndAt()) {
             parseInstant(requireNotNull(endAt) { "endAt is required." })
         } else {
             parsedStartAt

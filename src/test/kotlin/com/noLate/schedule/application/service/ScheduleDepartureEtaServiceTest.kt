@@ -13,6 +13,7 @@ import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TransitRouteProvenance
 import com.noLate.schedule.application.TransitTimingBasis
+import com.noLate.schedule.application.savedOdsayTimetableFixture
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleEtaConfidence
 import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
@@ -193,8 +194,13 @@ class ScheduleDepartureEtaServiceTest {
     }
 
     @ParameterizedTest
-    @CsvSource("60,true", "121,false")
-    fun `환승 차량 관측이 만료되면 계산된 도착 ETA도 정상 응답에서 제외한다`(ageSeconds: Long, fresh: Boolean) {
+    @CsvSource(
+        "60,true,TRANSFER_ALIGHTING_REALTIME", "121,false,TRANSFER_ALIGHTING_REALTIME",
+        "60,true,FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME", "121,false,FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME",
+    )
+    fun `하차역 관측이 만료되면 계산된 도착 ETA도 정상 응답에서 제외한다`(
+        ageSeconds: Long, fresh: Boolean, basis: EffectiveTransitRideTimingBasis,
+    ) {
         val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
         val job = job(schedule)
         val checkedAt = queryAt.minusSeconds(60)
@@ -215,7 +221,7 @@ class ScheduleDepartureEtaServiceTest {
                 EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.SUBWAY, 11,
                     rideTiming = EffectiveTransitRideTiming(
                         table, table.boardingAt, queryAt.plusSeconds(600),
-                        EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME,
+                        basis,
                         observationSourceUpdatedAt = queryAt.minusSeconds(ageSeconds),
                     )),
             ))
@@ -248,13 +254,14 @@ class ScheduleDepartureEtaServiceTest {
     }
 
     @ParameterizedTest
-    @CsvSource("CURRENT,true", "WRONG_CHECK,false", "WRONG_GENERATION,false", "INCOMPLETE,false", "PAST,false", "API_ERROR,false", "LATE,false")
+    @CsvSource("CURRENT,true", "STALE_SOURCE,true", "WRONG_CHECK,false", "WRONG_GENERATION,false",
+        "INCOMPLETE,false", "PAST,false", "API_ERROR,false", "LATE,false", "STALE_SOURCE_LATE,false")
     fun `미래 시간표 미리보기는 정상 ETA 및 알람 시각과 분리하고 현재 완전한 평가만 제공한다`(boundary: String, expose: Boolean) {
         val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
         val job = job(schedule)
         val checkedAt = queryAt.minusSeconds(60)
         val departure = if (boundary == "PAST") queryAt.minusSeconds(1) else queryAt.plusSeconds(600)
-        val arrival = if (boundary == "LATE") schedule.startAt.plusSeconds(60) else departure.plusSeconds(1200)
+        val arrival = if (boundary.endsWith("LATE")) schedule.startAt.plusSeconds(60) else departure.plusSeconds(1200)
         val table = com.noLate.eta.domain.TransitLegTimetable("fixture", com.noLate.eta.domain.SeoulSubwayLine.LINE_4,
             java.time.LocalDate.of(2026, 7, 24), "4012", "DOWN", com.noLate.eta.domain.TransitServiceClass.LOCAL,
             "FROM", "TO", "오이도", departure.plusSeconds(120), arrival, checkedAt)
@@ -267,8 +274,11 @@ class ScheduleDepartureEtaServiceTest {
             evaluationNotificationGeneration = if (boundary == "WRONG_GENERATION") 1 else job.notificationGeneration,
             accepted = false, transitTimingBasis = TransitTimingBasis.TIMETABLE_ONLY, effectiveTransitRoute = route)
         finish(job, 40, TrafficSource.TIMETABLE_PROVIDER, checkedAt, liveFetchedAt = checkedAt,
-            failureReason = if (boundary == "API_ERROR") TrafficFailureReasons.TRANSIT_ARRIVAL_API_ERROR
-                else TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED,
+            failureReason = when {
+                boundary == "API_ERROR" -> TrafficFailureReasons.TRANSIT_ARRIVAL_API_ERROR
+                boundary.startsWith("STALE_SOURCE") -> TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_STALE
+                else -> TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED
+            },
             snapshotSchedule = schedule, etaStale = true,
             effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot))
         stubVisible(schedule)
@@ -946,6 +956,7 @@ class ScheduleDepartureEtaServiceTest {
         assertEquals(source, result.source)
         assertEquals(failure, result.failureReason)
         assertEquals(preservedDeparture, result.recommendedDepartureAt)
+        assertEquals(schedule.startAt.minusSeconds(65 * 60L), result.savedRouteEstimatedDepartureAt)
         assertEquals(71, result.travelMinutes)
         assertEquals(checkedAt, result.evaluatedAt)
         assertEquals(job.nextCheckAt, result.nextCheckAt)
@@ -1398,6 +1409,56 @@ class ScheduleDepartureEtaServiceTest {
     }
 
     @Test
+    fun `재조회 전 ODsay 출발 안내에 일치하는 초 단위 추정을 유지한다`() {
+        val target = queryAt.plus(2, ChronoUnit.HOURS)
+        val expectedDeparture = target.minusSeconds(877)
+        val schedule = schedule(
+            travelMode = ScheduleTravelMode.TRANSIT,
+            travelMinutes = 15,
+            departureAt = expectedDeparture,
+            routeJson = """{"provider":"odsay","routeInfo":{"provider":"odsay","timeBasis":"estimated",
+                "providerTimeBasis":"route_estimate","totalDurationMinutes":15,"totalDurationSeconds":877,
+                "departureTime":"$expectedDeparture","arrivalTime":"$target","steps":[]}}""",
+        )
+        stubVisible(schedule)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(expectedDeparture, result.recommendedDepartureAt)
+        assertEquals(15, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertTrue(result.stale)
+        assertNull(result.predictedArrivalAt)
+    }
+
+    @ParameterizedTest
+    @CsvSource("true", "false")
+    fun `저장된 ODsay 버스 예측은 같은 일정에서 초 단위 출발을 유지한다`(hasStoredDeparture: Boolean) {
+        val target = queryAt.plus(12, ChronoUnit.MINUTES)
+        val arrival = target.minusSeconds(5)
+        val departure = arrival.minusSeconds(663)
+        val observedAt = departure.minusSeconds(95)
+        val routeJson = """
+            {"provider":"odsay","minutes":15,"transitLegs":[{"kind":"WALK"},{"kind":"BUS"},{"kind":"WALK"}],
+             "routeInfo":{"provider":"odsay","timeBasis":"estimated","providerTimeBasis":"route_estimate",
+               "totalDurationMinutes":12,"totalDurationSeconds":663,"departureTime":"$departure","arrivalTime":"$arrival",
+               "busPreviewObservation":{"targetArrivalAt":"$target","sourceUpdatedAt":"$observedAt"}}}
+        """.trimIndent()
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT, travelMinutes = 12,
+            departureAt = departure.takeIf { hasStoredDeparture }, startAt = target, routeJson = routeJson)
+        stubVisible(schedule)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(departure, result.recommendedDepartureAt)
+        assertEquals(12, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertTrue(result.stale)
+        assertNull(result.liveFetchedAt)
+        assertNull(result.predictedArrivalAt)
+    }
+
+    @Test
     fun `route-level 시간이 없으면 step 시간이 아니라 저장 travelMinutes를 사용한다`() {
         val schedule = schedule(
             routeJson = """{"routeInfo":{"steps":[{"durationMinutes":5}]}}""",
@@ -1410,6 +1471,25 @@ class ScheduleDepartureEtaServiceTest {
         assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
         assertEquals(ScheduleEtaConfidence.LOW, result.confidence)
         assertTrue(result.failureReason.orEmpty().startsWith("SAVED_ROUTE_SNAPSHOT:"))
+    }
+
+    @ParameterizedTest
+    @CsvSource("true", "false")
+    fun `저장된 ODsay 시간표는 출발 상태에서 분 단위 추정으로 돌아가지 않는다`(hasStoredDeparture: Boolean) {
+        val target = queryAt.plus(2, ChronoUnit.HOURS)
+        val arrival = target.minusSeconds(360)
+        val departure = arrival.minusSeconds(1771)
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT,
+            departureAt = departure.takeIf { hasStoredDeparture },
+            routeJson = savedOdsayTimetableFixture(departure, arrival))
+        stubVisible(schedule)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(departure, result.recommendedDepartureAt)
+        assertEquals(30, result.travelMinutes)
+        assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+        assertNull(result.liveFetchedAt)
     }
 
     @Test
@@ -1833,13 +1913,14 @@ class ScheduleDepartureEtaServiceTest {
         notificationEnabled: Boolean = true,
         travelMode: ScheduleTravelMode = ScheduleTravelMode.CAR,
         departureAt: Instant? = null,
+        startAt: Instant = queryAt.plus(2, ChronoUnit.HOURS),
     ): Schedule =
         Schedule(
             id = 10L,
             memberId = memberId,
             title = "회의",
-            startAt = queryAt.plus(2, ChronoUnit.HOURS),
-            endAt = queryAt.plus(3, ChronoUnit.HOURS),
+            startAt = startAt,
+            endAt = startAt.plus(1, ChronoUnit.HOURS),
         ).apply {
             updateRoute(
                 travelMinutes = travelMinutes,

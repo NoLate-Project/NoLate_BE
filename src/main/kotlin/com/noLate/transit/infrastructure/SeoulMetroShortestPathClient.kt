@@ -11,6 +11,8 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.Duration
 import java.time.format.DateTimeFormatter
 
 /** The public-data-portal path API has its own credential and station-code namespace.
@@ -49,16 +51,20 @@ internal class SeoulMetroShortestPathClient(
         }
     }
 
-    fun fetch(query: Query): SeoulMetroShortestPath {
+    fun fetch(query: Query): SeoulMetroShortestPath = fetch(query, false, Duration.ofSeconds(4))
+
+    fun fetchScheduled(query: Query, budget: Duration): SeoulMetroShortestPath = fetch(query, true, budget)
+
+    private fun fetch(query: Query, withTimetable: Boolean, budget: Duration): SeoulMetroShortestPath {
         fun encoded(value: String) = URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
         val parameters = listOf(
             "serviceKey" to normalizedServiceKey, "dataType" to "JSON", "dptreStn" to query.departure,
             "arvlStn" to query.arrival, "searchDt" to query.atSeoul.format(DATE_TIME),
-            "searchType" to "duration", "schInclYn" to "N",
+            "searchType" to "duration", "schInclYn" to if (withTimetable) "Y" else "N",
             "stationValueType" to query.stationValueType.wire,
         ).joinToString("&") { (key,value) -> "$key=${encoded(value)}" }
         val uri = URI.create("$origin/getShtrmPath2?$parameters")
-        return try { SeoulMetroShortestPathParser.parse(transport.fetch(uri)) }
+        return try { SeoulMetroShortestPathParser.parse(transport.fetch(uri, budget), withTimetable) }
         catch (_: Exception) { throw IllegalStateException("Metro shortest path unavailable") }
     }
 
@@ -69,7 +75,13 @@ internal class SeoulMetroShortestPathClient(
 internal class SeoulMetroShortestPath(val sections: List<Section>, val reportedTransferCount: Int?) {
     data class Station(val code: String, val line: String, val name: String)
     data class Section(val departure: Station, val arrival: Station, val terminalCode: String?,
-        val direction: String?, val transfer: String?, val express: String?)
+        val direction: String?, val transfer: String?, val express: String?, val scheduled: ScheduledSection? = null)
+    data class ScheduledSection(
+        val trainNumber: String,
+        val terminalName: String,
+        val departureTime: LocalTime,
+        val arrivalTime: LocalTime,
+    )
     // A caller must independently verify this code namespace against realtimePosition.statnId.
     val trainStationCodeCompatibilityVerified = false
     val passengerBoardingConfirmed = false
@@ -85,7 +97,7 @@ internal object SeoulMetroShortestPathParser {
     // train API's statnId. Preserve their exact spelling; never coerce to a number.
     private val code = Regex("[0-9]{1,20}")
 
-    fun parse(bytes: ByteArray): SeoulMetroShortestPath {
+    fun parse(bytes: ByteArray, withTimetable: Boolean = false): SeoulMetroShortestPath {
         require(bytes.size in 1..SeoulSubwayTrainObservationParser.MAX_RESPONSE_BYTES)
         val root = try {
             val text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -102,14 +114,17 @@ internal object SeoulMetroShortestPathParser {
         // Confirmed against a credentialed 2026-10-13 response. HTTP 200 alone is not success.
         require(resultCode.isTextual && resultCode.asText() == "00")
         val body = root.path("body")
+        require(!withTimetable || body.path("schInclYn").asText() == "Y")
         val rows = body.path("paths")
         require(rows.isArray && rows.size() in 1..500)
         val sections = rows.map { row ->
             require(row.isObject)
+            val transfer = optionalText(row.path("trsitYn"))
             SeoulMetroShortestPath.Section(
                 station(row.path("dptreStn")), station(row.path("arvlStn")),
                 optionalCode(row.path("tmnlStnCd")), optionalText(row.path("upbdnbSe")),
-                optionalText(row.path("trsitYn")), optionalText(row.path("etrnYn")),
+                transfer, optionalText(row.path("etrnYn")),
+                if (withTimetable && transfer == "N") scheduledSection(row) else null,
             )
         }
         require(sections.all { section ->
@@ -124,6 +139,21 @@ internal object SeoulMetroShortestPathParser {
         return SeoulMetroShortestPath(sections, transfers)
     }
 
+    private fun scheduledSection(row: JsonNode): SeoulMetroShortestPath.ScheduledSection {
+        val train = requiredText(row.path("trainno"))
+        require(train.matches(Regex("[A-Z0-9]{1,20}")) && row.path("nonstopYn").asText() == "N")
+        val departure = scheduledTime(row.path("trainDptreTm"))
+        val arrival = scheduledTime(row.path("trainArvlTm"))
+        require(arrival.seoulServiceDaySecond() > departure.seoulServiceDaySecond())
+        return SeoulMetroShortestPath.ScheduledSection(train, requiredText(row.path("tmnlStnNm")), departure, arrival)
+    }
+
+    private fun scheduledTime(node: JsonNode): LocalTime {
+        val value = requiredText(node)
+        require(value.matches(Regex("[0-9]{2}:[0-9]{2}:[0-9]{2}")))
+        return LocalTime.parse(value)
+    }
+
     private fun station(row: JsonNode): SeoulMetroShortestPath.Station {
         require(row.isObject)
         val id = row.path("stnCd").asText("")
@@ -136,3 +166,7 @@ internal object SeoulMetroShortestPathParser {
     private fun optionalCode(node: JsonNode): String? = node.takeIf { it.isTextual || it.isIntegralNumber }
         ?.asText()?.takeIf { code.matches(it) && it.any { digit -> digit != '0' } }
 }
+
+/** The dated API returns 00:xx for the continuation of a train that boarded before midnight. */
+internal fun LocalTime.seoulServiceDaySecond(): Long = toSecondOfDay().toLong() +
+    if (hour < 3) 86_400L else 0L

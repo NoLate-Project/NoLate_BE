@@ -1,6 +1,8 @@
 package com.noLate.eta.application.transit
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.noLate.eta.application.port.DatedTransitTimetableProvider
+import com.noLate.eta.application.port.SEOUL_DATED_TIMETABLE_PROVIDER_ID
 import com.noLate.eta.application.port.TransitTimetableProvider
 import com.noLate.eta.application.port.TransitTimetableQuery
 import com.noLate.eta.domain.*
@@ -101,6 +103,47 @@ class TransitJourneyTimetableEnricherTest {
         assertEquals(2, enriched.rideLegs[0].waitingMinutes) // 실제86초; overlay는 이 표시 분을 계산에 쓰지 않는다.
         assertTrue(enriched.rideLegs.all { it.timingBasis == TransitLegTimingBasis.TIMETABLE })
         assertEquals(65, journey().totalMinutes)
+    }
+
+    @Test
+    fun `출발 재조회는 2호선 인접 환승을 날짜 지정 시간표로 검증하고 지연 뒤 같은 출처로 다시 연결한다`() {
+        val original = journey().let { journey ->
+            journey.copy(provider = "odsay", legs = journey.legs.map { leg ->
+                when (leg.line?.seoulSubwayLine) {
+                    SeoulSubwayLine.LINE_4 -> leg.copy(orderedStopNames = listOf("서울역", "숙대입구", "사당"),
+                        nextStopName = "숙대입구")
+                    SeoulSubwayLine.LINE_2 -> leg.copy(to = TransitStop("227", name = "낙성대"),
+                        directionCode = null, nextStopName = "낙성대", orderedStopNames = listOf("사당", "낙성대"))
+                    else -> leg
+                }
+            })
+        }
+        val forwardCalls = mutableListOf<Pair<TransitTimetableQuery, List<String>>>()
+        val dated = DatedTransitTimetableProvider { query, stops ->
+            forwardCalls += query to stops
+            val scheduled = ride(query.line).copy(provider = SEOUL_DATED_TIMETABLE_PROVIDER_ID)
+            if (query.line == SeoulSubwayLine.LINE_2 && scheduled.boardingAt < query.notBefore) {
+                scheduled.copy(trainNumber = "2014", boardingAt = now.plusSeconds(2100), arrivalAt = now.plusSeconds(2280))
+            } else scheduled
+        }
+        val ordinary = object : TransitTimetableProvider {
+            override fun findRides(query: TransitTimetableQuery): List<TransitLegTimetable> =
+                fail("Do not mix station tables with the dated trip")
+        }
+        assertSame(original, TransitJourneyTimetableEnricher(listOf(ordinary)).enrich(original, now, 180))
+
+        val enricher = TransitJourneyTimetableEnricher(listOf(ordinary), datedTimetableProvider = dated)
+        val planned = enricher.enrich(original, now, 180) { fail("The forward API must start at the actual boarding boundary") }
+        assertEquals(listOf(now.plusSeconds(171), now.plusSeconds(1700)), forwardCalls.map { it.first.notBefore })
+        assertEquals(listOf("4012", "2012"), planned.rideLegs.map { it.timetable?.trainNumber })
+        assertEquals(now.plusSeconds(2452), planned.arrivalAt)
+
+        val reconnected = enricher.reconnectTransfers(planned, delayedOverlay(), 180)
+        assertEquals(now.plusSeconds(1910), forwardCalls.last().first.notBefore)
+        assertEquals(listOf("사당", "낙성대"), forwardCalls.last().second)
+        assertEquals(listOf("4012", "2014"), reconnected.rideLegs.map { it.timetable?.trainNumber })
+        assertEquals(SEOUL_DATED_TIMETABLE_PROVIDER_ID, reconnected.rideLegs.last().timetable?.provider)
+        assertEquals(now.plusSeconds(2451), reconnected.arrivalAt)
     }
 
     @Test

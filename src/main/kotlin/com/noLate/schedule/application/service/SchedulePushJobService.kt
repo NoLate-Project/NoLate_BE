@@ -289,9 +289,9 @@ class SchedulePushJobService private constructor(
         savedRoute: JsonNode?,
     ): Instant {
         val estimatedDepartureAt = scheduleAt.minusSeconds(travelMinutes.toLong() * 60)
-        return savedDepartureAt?.let {
-            SelectedRouteMetadata.guardSavedDeparture(scheduleAt, it, travelMinutes, travelMode, savedRoute)
-        } ?: estimatedDepartureAt
+        return SelectedRouteMetadata.guardSavedDeparture(
+            scheduleAt, savedDepartureAt, travelMinutes, travelMode, savedRoute,
+        ) ?: estimatedDepartureAt
     }
 
     private fun register(

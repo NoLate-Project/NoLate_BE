@@ -3,6 +3,9 @@ package com.noLate.schedule.infrastructure
 import com.noLate.member.domain.member.Member
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.schedule.domain.Schedule
+import com.noLate.schedule.domain.ScheduleCalendar
+import com.noLate.schedule.domain.ScheduleCalendarMember
+import com.noLate.schedule.domain.ScheduleCalendarRole
 import com.noLate.schedule.domain.ScheduleCategory
 import com.noLate.schedule.domain.ScheduleCategoryShare
 import com.noLate.schedule.domain.ScheduleShare
@@ -32,6 +35,8 @@ class ScheduleSharingAccessRepositoryIntegrationTest @Autowired constructor(
     private val categoryRepository: ScheduleCategoryRepository,
     private val scheduleShareRepository: ScheduleShareRepository,
     private val categoryShareRepository: ScheduleCategoryShareRepository,
+    private val calendarRepository: ScheduleCalendarRepository,
+    private val calendarMemberRepository: ScheduleCalendarMemberRepository,
 ) {
 
     @Test
@@ -106,6 +111,42 @@ class ScheduleSharingAccessRepositoryIntegrationTest @Autowired constructor(
 
         assertEquals(listOf(fixture.directScheduleId), sharedResult.map { it.id })
         assertEquals(listOf(fixture.directScheduleId), ownedResult.map { it.id })
+    }
+
+    @Test
+    fun `calendar scope is applied before limiting matches and does not grant visibility`() {
+        val fixture = createFixture()
+        val calendar = calendarRepository.saveAndFlush(
+            ScheduleCalendar(ownerMemberId = fixture.ownerId, title = "공유 검토"),
+        )
+        val calendarId = requireNotNull(calendar.id)
+        calendarMemberRepository.saveAndFlush(
+            ScheduleCalendarMember(calendarId = calendarId, memberId = fixture.ownerId, role = ScheduleCalendarRole.OWNER),
+        )
+        val startAt = Instant.parse("2026-07-12T01:00:00Z")
+        val scopedItem = scheduleRepository.saveAndFlush(
+            Schedule(
+                memberId = fixture.ownerId,
+                calendarId = calendarId,
+                title = "선택한 캘린더 일정",
+                startAt = startAt,
+                endAt = startAt.plusSeconds(3600),
+            ),
+        )
+        val first = PageRequest.of(0, 1)
+
+        assertEquals(listOf(scopedItem.id), scheduleRepository.searchScheduleList(
+            fixture.ownerId, "일정", null, null, null, first, calendarId,
+        ).map { it.id })
+        assertEquals(listOf(scopedItem.id), scheduleRepository.searchOwnedScheduleList(
+            fixture.ownerId, "일정", null, null, null, first, calendarId,
+        ).map { it.id })
+        assertEquals(listOf(fixture.directScheduleId), scheduleRepository.searchScheduleList(
+            fixture.ownerId, "일정", null, null, null, first, 0L,
+        ).map { it.id })
+        assertEquals(emptyList<Schedule>(), scheduleRepository.searchScheduleList(
+            fixture.targetId, "일정", null, null, null, first, calendarId,
+        ))
     }
 
     private fun createFixture(): AccessFixture {

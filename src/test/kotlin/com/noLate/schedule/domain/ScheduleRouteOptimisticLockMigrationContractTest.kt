@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.io.IOException
 import java.nio.file.Files
@@ -49,6 +50,7 @@ class ScheduleRouteOptimisticLockMigrationContractTest {
     }
 
     @Test
+    @Tag("mysql")
     fun `mysql 84 backfills existing rows and safely accepts reapplication`() {
         assumeTrue(dockerAvailable(), "Docker is required for MySQL 8.4 verification")
         val containerName = "nolate-route-version-migration-${UUID.randomUUID()}"

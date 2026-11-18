@@ -59,6 +59,27 @@ class EffectiveTransitRouteSnapshotTest {
             delayedTransfer.rideTiming!!.copy(timetable = transferTable.copy(trainNumber = "2465")))))
         assertEquals(plan.arrivalAt, degraded.copy(effectiveTransitRoute = wrongTrain)
             .plannedJourneyArrivalPrediction(readAt, 120)?.predictedArrivalAt)
+        val latestDirect = PlannedJourneyArrivalObservation(plan.identity, plan.arrivalAt.plusSeconds(240), readAt)
+        assertEquals(latestDirect.predictedArrivalAt, degraded.copy(plannedArrivalObservation = latestDirect)
+            .plannedJourneyArrivalPrediction(readAt, 120)?.predictedArrivalAt)
+        assertEquals(candidate.arrivalAt, degraded.copy(
+            plannedArrivalObservation = latestDirect.copy(sourceUpdatedAt = readAt.minusSeconds(21)),
+        ).plannedJourneyArrivalPrediction(readAt, 120)?.predictedArrivalAt)
+
+        val finalTable = transferTable.copy(trainNumber = "2510", fromStationCode = "0230", toStationCode = "0232",
+            boardingAt = fetchedAt.plusSeconds(3600), arrivalAt = fetchedAt.plusSeconds(3780))
+        val finalRide = transfer.copy(sequence = 2, rideTiming = EffectiveTransitRideTiming(
+            finalTable, finalTable.boardingAt, finalTable.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE,
+        ))
+        val threeRidePlan = plan.copy(segments = listOf(first, transfer, finalRide))
+        val intermediateObservation = degraded.copy(
+            inProgressPlannedRoute = threeRidePlan,
+            effectiveTransitRoute = threeRidePlan.copy(segments = listOf(first, delayedTransfer, finalRide)),
+        )
+        assertEquals(com.noLate.schedule.domain.PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN,
+            intermediateObservation.plannedJourneyArrivalPrediction(readAt, 120)?.basis)
+        assertEquals(latestDirect.predictedArrivalAt, intermediateObservation.copy(plannedArrivalObservation = latestDirect)
+            .plannedJourneyArrivalPrediction(readAt, 120)?.predictedArrivalAt)
         val roundTrip = EffectiveTransitRouteSnapshot.parse(objectMapper, objectMapper.writeValueAsString(degraded))
         assertEquals(plan, roundTrip?.inProgressPlannedRoute)
         assertNull(accepted.plannedJourneyArrivalPrediction(readAt, 120))

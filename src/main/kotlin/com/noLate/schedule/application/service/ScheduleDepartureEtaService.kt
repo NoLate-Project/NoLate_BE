@@ -84,7 +84,7 @@ class ScheduleDepartureEtaService(
         val job = pushJobRepository.findByScheduleIdAndMemberId(scheduleId, memberId)
         val anchored = route?.let { SelectedRouteMetadata.parse(objectMapper, it.routeJson, it.travelMode, maxTravelMinutes).anchoredDepartureAt }
         if (anchored == null && job != null && route != null && job.isUsableSnapshot(schedule, route)) {
-            return statusFromJob(schedule, scheduleId, job)
+            return statusFromJob(schedule, scheduleId, job, route)
         }
 
         return statusFromSavedRoute(
@@ -265,6 +265,7 @@ class ScheduleDepartureEtaService(
         schedule: Schedule,
         scheduleId: Long,
         job: SchedulePushJob,
+        savedRoute: DepartureRoute,
     ): ScheduleDepartureEtaStatusDto {
         val travelMinutes = requireNotNull(job.lastTravelMinutes)
         val source = requireNotNull(job.lastEtaSource)
@@ -291,16 +292,22 @@ class ScheduleDepartureEtaService(
         val expiredTransferObservation = effectiveRouteSnapshot?.effectiveTransitRoute?.segments
             ?.any { segment ->
                 val timing = segment.rideTiming
-                val hasRealtimeTransfer = timing?.basis in setOf(
+                val hasRealtimeRideObservation = timing?.basis in setOf(
                     EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
                     EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME,
+                    EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME,
                 )
-                hasRealtimeTransfer && (timing?.observationSourceUpdatedAt?.let {
+                val expiredBus = segment.busRidePrediction?.sourceUpdatedAt?.let {
+                    it.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds)) || it.isAfter(readAt.plusSeconds(5))
+                } == true
+                expiredBus || hasRealtimeRideObservation && (timing?.observationSourceUpdatedAt?.let {
                     it.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds)) || it.isAfter(readAt.plusSeconds(5))
                 } ?: true)
             } == true
         val expiredRealtimeJourney = effectiveRouteSnapshot?.accepted == true &&
             (expiredTransferObservation || (effectiveRouteSnapshot.transitTimingBasis in setOf(
+                TransitTimingBasis.SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME,
+                TransitTimingBasis.BUS_TRANSFER_BOARDING_AND_ALIGHTING_REALTIME,
                 TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
                 TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED,
                 TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_UNKNOWN,
@@ -320,6 +327,11 @@ class ScheduleDepartureEtaService(
         val evaluatedAt = listOfNotNull(job.lastCheckedAt, job.lastLiveFetchedAt)
             .maxOrNull()
             ?: Instant.now(clock)
+        val stale = inProgressPlan != null || expiredRealtimeJourney || requireNotNull(job.lastEtaStale)
+        val savedRouteEstimatedDepartureAt = if (savedRoute.travelMode == ScheduleTravelMode.TRANSIT &&
+            stale && inProgressPlan == null && !onTimeUnavailableDiagnostic) {
+            statusFromSavedRoute(schedule, scheduleId, savedRoute).recommendedDepartureAt
+        } else null
         return ScheduleDepartureEtaStatusDto(
             scheduleId = scheduleId,
             // 출발 후에는 최신 TrafficResult가 '원래 출발지에서 지금 다시 출발'하는 가상 경로다.
@@ -330,7 +342,7 @@ class ScheduleDepartureEtaService(
             evaluatedAt = evaluatedAt,
             liveFetchedAt = job.lastLiveFetchedAt.takeUnless { inProgressPlan != null },
             source = source.takeUnless { inProgressPlan != null },
-            stale = inProgressPlan != null || expiredRealtimeJourney || requireNotNull(job.lastEtaStale),
+            stale = stale,
             confidence = if (
                 inProgressPlan != null || expiredRealtimeJourney || onTimeUnavailableDiagnostic ||
                 job.lastEtaStale == true ||
@@ -363,7 +375,10 @@ class ScheduleDepartureEtaService(
             // 이 미리보기를 통해 보호 중인 출발시각이나 알람 예약을 늦추지 않는다.
             futureTimetablePrediction = effectiveRouteSnapshot
                 ?.takeIf { inProgressPlan == null && !it.accepted && source == TrafficSource.TIMETABLE_PROVIDER &&
-                    job.lastEtaFailureReason == TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED &&
+                    job.lastEtaFailureReason in setOf(
+                        TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED,
+                        TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_STALE,
+                    ) &&
                     it.transitTimingBasis == TransitTimingBasis.TIMETABLE_ONLY && job.checkCount > 0 &&
                     it.evaluationCheckCount == job.checkCount - 1 &&
                     it.evaluationNotificationGeneration == job.notificationGeneration }
@@ -399,6 +414,7 @@ class ScheduleDepartureEtaService(
                     providerFetchedAt = job.lastEtaProviderFetchedAt,
                 )
             },
+            savedRouteEstimatedDepartureAt = savedRouteEstimatedDepartureAt,
         )
     }
 
@@ -431,7 +447,10 @@ class ScheduleDepartureEtaService(
                 failureReason = route.fallbackReason ?: EtaStatusFailureReasons.TRAVEL_TIME_INVALID,
             )
         }
-        val trustedSelectedMinutes = selectedRoute.travelMinutes
+        val savedBusPreview = selectedRoute.odsayBusPreview?.takeIf {
+            route.current && it.matches(schedule.startAt, route.savedDepartureAt, canonicalMinutes)
+        }
+        val trustedSelectedMinutes = (savedBusPreview?.travelMinutes ?: selectedRoute.travelMinutes)
             ?.takeIf { canonicalMinutes == null || it == canonicalMinutes }
         val travelMinutes = canonicalMinutes ?: trustedSelectedMinutes
         if (travelMinutes == null) {
@@ -446,14 +465,18 @@ class ScheduleDepartureEtaService(
         } else {
             TrafficSource.SAVED_FALLBACK
         }
-        val estimatedDeparture = schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
-        val earlierSavedDeparture = route.savedDepartureAt?.takeIf {
-            route.current && route.travelMode == ScheduleTravelMode.TRANSIT && it < estimatedDeparture
-        }
+        val estimatedDeparture = selectedRoute.odsayEstimatedDepartureAt(schedule.startAt, travelMinutes)
+            ?.takeIf { route.current && trustedSelectedMinutes == travelMinutes }
+            ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
+        val protectedSavedDeparture = if (route.current && route.travelMode == ScheduleTravelMode.TRANSIT) {
+            route.savedDepartureAt?.takeIf { it < estimatedDeparture }
+                ?: selectedRoute.odsayTimetable?.departureIfCompatible(schedule.startAt, route.savedDepartureAt, travelMinutes)
+        } else null
         return ScheduleDepartureEtaStatusDto(
             scheduleId = scheduleId,
             travelMinutes = travelMinutes,
-            recommendedDepartureAt = selectedRoute.anchoredDepartureAt ?: earlierSavedDeparture ?: estimatedDeparture,
+            recommendedDepartureAt = selectedRoute.anchoredDepartureAt ?: savedBusPreview?.departureAt
+                ?: protectedSavedDeparture ?: estimatedDeparture,
             evaluatedAt = evaluatedAt,
             liveFetchedAt = null,
             source = source,
@@ -506,6 +529,8 @@ class ScheduleDepartureEtaService(
         // 첫 승차가 실시간이어도 미래 환승편은 시간표 예측이다. 전체 ETA를 HIGH로 표시하지 않는다.
         source == TrafficSource.LIVE_PROVIDER &&
             transitTimingBasis in setOf(
+                TransitTimingBasis.SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME,
+                TransitTimingBasis.BUS_TRANSFER_BOARDING_AND_ALIGHTING_REALTIME,
                 TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
                 TransitTimingBasis.FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED,
             ) ->

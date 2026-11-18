@@ -31,6 +31,7 @@ class TransitJourneyMatcher {
         candidates
             .asSequence()
             .filter { it.provider.equals(selected.provider, ignoreCase = true) }
+            .map { candidate -> candidate.withSelectedOdsayBusLine(selected) }
             .filter { candidate ->
                 matches(
                     selectedRides = selected.rides,
@@ -44,6 +45,20 @@ class TransitJourneyMatcher {
             )
             .toList()
 
+    private fun TransitJourney.withSelectedOdsayBusLine(selected: SelectedTransitRoute): TransitJourney {
+        if (!provider.equals("odsay", ignoreCase = true)) return this
+        val rides = rideLegs
+        if (rides.size != selected.rides.size || rides.size !in 1..2 ||
+            rides.any { it.mode != TransitLegMode.BUS } || selected.rides.any { it.mode != TransitLegMode.BUS }) return this
+        val ride = rides.first()
+        val id = selected.rides.first().providerRouteId?.normalizeIdentity() ?: return this
+        if (ride.line?.providerRouteId?.normalizeIdentity() == id) return this
+        val selectedLine = ride.alternativeBusLines.singleOrNull {
+            it.providerRouteId?.normalizeIdentity() == id
+        } ?: return this
+        return copy(legs = legs.map { if (it === ride) it.copy(line = selectedLine) else it })
+    }
+
     internal fun matches(
         selectedRides: List<TransitRideSignature>,
         candidateRides: List<TransitJourneyLeg>,
@@ -52,7 +67,7 @@ class TransitJourneyMatcher {
         if (selectedRides.size != candidateRides.size || selectedRides.isEmpty()) return false
         return selectedRides.zip(candidateRides).all { (selected, candidate) ->
             selected.mode == candidate.mode &&
-                sameLine(selected, candidate) &&
+                sameLine(selected, candidate, candidateProvider) &&
                 sameServiceClass(selected, candidate) &&
                 sameStop(selected.fromIds, selected.fromName, candidate.from, candidateProvider) &&
                 sameStop(selected.toIds, selected.toName, candidate.to, candidateProvider) &&
@@ -60,14 +75,23 @@ class TransitJourneyMatcher {
         }
     }
 
-    private fun sameLine(selected: TransitRideSignature, candidate: TransitJourneyLeg): Boolean {
+    private fun sameLine(
+        selected: TransitRideSignature,
+        candidate: TransitJourneyLeg,
+        provider: String,
+    ): Boolean {
         val selectedId = selected.providerRouteId?.normalizeIdentity()
         val candidateId = candidate.line?.providerRouteId?.normalizeIdentity()
-        if (selectedId != null && candidateId != null) return selectedId == candidateId
-
         val selectedName = selected.lineName.normalizeRouteName()
         val candidateName = candidate.line?.name.normalizeRouteName()
-        return selectedName != null && candidateName != null && selectedName == candidateName
+        val sameName = selectedName != null && selectedName == candidateName
+        if (selectedId == null || candidateId == null) return sameName
+        if (selectedId == candidateId) return true
+
+        // Tmap can return different route IDs for the same subway boarding-to-alighting
+        // path. Ordered provider station IDs also distinguish the two paths on a loop.
+        return provider.equals("tmap", ignoreCase = true) && selected.mode == TransitLegMode.SUBWAY && sameName &&
+            selected.orderedStopIds.size >= 2 && selected.orderedStopIds == candidate.orderedStopIds
     }
 
     /**

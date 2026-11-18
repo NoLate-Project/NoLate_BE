@@ -1,9 +1,11 @@
 package com.noLate.schedule.application.service
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.member.infrastructure.MemberRepository
 import com.noLate.member.domain.member.Member
+import com.noLate.schedule.application.savedOdsayTimetableFixture
 import com.noLate.schedule.domain.ScheduleCategoryDto
 import com.noLate.schedule.domain.ScheduleDto
 import com.noLate.schedule.domain.SchedulePlaceDto
@@ -210,6 +212,35 @@ class SchedulePushJobServiceTest {
             assertNotNull(result)
             assertEquals(Instant.parse("2026-11-01T05:07:00Z"), result?.departureAt)
             assertEquals(Instant.parse("2026-11-01T04:07:00Z"), result?.monitorStartAt)
+        }
+    }
+
+    @Test
+    fun `상위 출발 시각이 없는 ODsay 일정도 오너와 참가자의 선택 열차 출발로 등록한다`() {
+        whenever(repository.save(any<SchedulePushJob>())).thenAnswer { it.getArgument(0) }
+        val service = SchedulePushJobService(repository)
+        val target = Instant.parse("2026-11-16T09:06:00Z")
+        val arrival = target.minusSeconds(360)
+        val departure = arrival.minusSeconds(1771)
+        val route = ObjectMapper().readTree(savedOdsayTimetableFixture(departure, arrival))
+        val schedule = ScheduleDto(
+            id = 10L, title = "교통 일정", startAt = target.toString(),
+            travelMinutes = 30, travelMode = ScheduleTravelMode.TRANSIT,
+            route = route, notificationEnabled = true,
+            origin = SchedulePlaceDto(lat = 37.1, lng = 127.1),
+            destination = SchedulePlaceDto(lat = 37.2, lng = 127.2),
+            category = ScheduleCategoryDto(id = "1", title = "업무", color = "#000000"),
+        )
+        val plan = com.noLate.schedule.domain.ScheduleTravelPlanDto(
+            scheduleId = 10L, memberId = 2L,
+            status = com.noLate.schedule.domain.ScheduleTravelPlanStatus.READY,
+            travelMinutes = 30, travelMode = ScheduleTravelMode.TRANSIT,
+            route = route, notificationEnabled = true,
+        )
+        listOf(service.registerFromScheduleDto(1L, schedule), service.registerFromTravelPlanDto(2L, schedule, plan)).forEach { result ->
+            assertNotNull(result)
+            assertEquals(departure, result?.departureAt)
+            assertEquals(departure.minusSeconds(3600), result?.monitorStartAt)
         }
     }
 

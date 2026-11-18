@@ -349,20 +349,28 @@ class ScheduleTextParserService(
         val explicitTitle = chooseExplicitTitle(lines)
         val origin = chooseOrigin(lines)
             ?: routeExpressionFields?.originName?.let { SchedulePlaceDto(name = it) }
-        val destination = chooseDestination(lines)
+        val structuredDestination = chooseDestination(lines)
             ?: compactFields?.destinationName?.let { SchedulePlaceDto(name = it) }
             ?: dotAssignmentFields?.destinationName?.let { SchedulePlaceDto(name = it) }
             ?: routeExpressionFields?.destinationName?.let { SchedulePlaceDto(name = it) }
-            ?: chooseNaturalDestination(lines, inputType)
-        val title = explicitTitle ?: if (prefersVoiceCompanionTitle) {
+        val standaloneTitle = if (inputType == ScheduleParseInputType.IMAGE_OCR && explicitTitle == null && structuredDestination == null) {
+            chooseTwoLineOcrTitle(lines)
+        } else {
+            null
+        }
+        val destination = structuredDestination ?: if (standaloneTitle == null) {
+            val locationLines = if (explicitTitle == null) lines else lines.filterNot { chooseExplicitTitle(listOf(it)) != null }
+            chooseNaturalDestination(locationLines, inputType)
+        } else {
+            null
+        }
+        val sourceTitle = explicitTitle ?: standaloneTitle ?: if (prefersVoiceCompanionTitle) {
             chooseVoiceTitle(lines, destination, inputType)
         } else {
             null
-        } ?: buildTitle(
-                destination = destination,
-                selectedTime = selectedTime,
-                purpose = chooseSharedTextPurpose(lines, inputType),
-            )
+        }
+        val purpose = if (sourceTitle == null) chooseSharedTextPurpose(lines, inputType) else null
+        val title = sourceTitle ?: buildTitle(destination, selectedTime, purpose)
         val notes = buildNotes(
             customerName = customerName,
             eventType = eventType,
@@ -401,6 +409,7 @@ class ScheduleTextParserService(
 
         return ScheduleParseDto(
             title = title,
+            titleDerivedFromTimeOrPlace = title != null && sourceTitle == null && purpose == null,
             notes = notes,
             date = selectedDate?.date?.toString(),
             time = selectedTime?.time?.toString(),
@@ -1271,6 +1280,22 @@ class ScheduleTextParserService(
             ),
         )
 
+    private fun chooseTwoLineOcrTitle(lines: List<String>): String? {
+        if (lines.size != 2) return null
+        val dateTimeIndex = lines.indexOfFirst { line ->
+            fullDatePattern.containsMatchIn(line) &&
+                colonTimePattern.containsMatchIn(line) &&
+                removeMediaScheduleContext(line).isBlank()
+        }
+        if (dateTimeIndex < 0) return null
+
+        val heading = lines[1 - dateTimeIndex]
+        if (heading.any { it.isDigit() || it == ':' || it == '：' } || removeMediaScheduleContext(heading) != heading) return null
+        if (!heading.any { it.isLetter() } || looksLikePlaceToken(heading) || hasNaturalDestinationSuffix(heading)) return null
+        if (Regex("""(?:에서|으로|까지)(?:\s|$)|오피스$|(?i:\b(?:center|centre|office|station|hall|hotel|cafe|restaurant|park|clinic|school|church|airport|studio|library)$)""").containsMatchIn(heading)) return null
+        return heading
+    }
+
     // 명시 제목이 없으면 일정 시각(도착 목표 시각)과 장소 순서로 기본 제목을 만든다.
     // 자연어에서 `회의`, `술약속`처럼 제목 역할을 하는 목적어가 있으면 장소와 함께 보존한다.
     private fun buildTitle(
@@ -1752,10 +1777,13 @@ class ScheduleTextParserService(
         if (tokens.size !in 1..5) return false
         if (tokens.size >= 2) return true
 
-        return value.matches(
+        return hasNaturalDestinationSuffix(value)
+    }
+
+    private fun hasNaturalDestinationSuffix(value: String): Boolean =
+        value.matches(
             Regex(""".*(?:역|점|관|원|센터|카페|식당|학교|회사|병원|치과|의원|미용실|공원|호수|호텔|웨딩홀|스튜디오|교회|성당|공항|터미널|마트|백화점|선생)$"""),
         )
-    }
 
     private fun isSafeNaturalDestinationPhrase(value: String): Boolean {
         val normalizedTokens = value

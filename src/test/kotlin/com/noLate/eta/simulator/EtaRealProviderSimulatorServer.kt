@@ -73,6 +73,20 @@ object EtaRealProviderSimulatorServer {
     private fun run(args: Array<String>) {
         check(System.getProperty("nolate.eta.real-isolated") == "true")
         val automaticDelivery = System.getProperty("nolate.eta.real-automatic-delivery") == "true"
+        val port = System.getProperty("nolate.eta.real-isolated.port", "5523").toInt()
+        val datedTimetableTarget = System.getProperty("nolate.eta.real-isolated.timetable-target")?.let(Instant::parse)
+        val directEgress = System.getProperty("nolate.eta.real-isolated.direct-egress") == "true"
+        val overnightTimetable = System.getProperty("nolate.eta.real-isolated.overnight-timetable") == "true"
+        val adjacentRingTimetable = System.getProperty("nolate.eta.real-isolated.adjacent-ring-timetable") == "true"
+        val seolleungAccess = System.getProperty("nolate.eta.real-isolated.seolleung-access") == "true"
+        val omitStationTimetable = System.getProperty("nolate.eta.real-isolated.omit-station-timetable") == "true"
+        val datedTimetablePort = port in setOf(5529, 5533) && datedTimetableTarget != null
+        require(port == 5523 || (!automaticDelivery && (port == 5527 || datedTimetablePort)))
+        require(!directEgress || datedTimetablePort)
+        require(!overnightTimetable || datedTimetablePort && !directEgress)
+        require(!adjacentRingTimetable || datedTimetablePort && !directEgress && !overnightTimetable)
+        require(!seolleungAccess || datedTimetablePort && !adjacentRingTimetable && !directEgress && !overnightTimetable)
+        require(!omitStationTimetable || seolleungAccess)
         require(args.size in 2..6)
         val journeyProviderId = args.getOrNull(2) ?: "tmap"
         require(journeyProviderId in setOf("tmap", "odsay"))
@@ -95,6 +109,21 @@ object EtaRealProviderSimulatorServer {
             require(it.isAfter(Instant.now()) && !it.isAfter(Instant.now().plusSeconds(3 * 3600)))
             require(it == it.truncatedTo(ChronoUnit.MINUTES))
         }
+        datedTimetableTarget?.let {
+            val seoul = ZoneId.of("Asia/Seoul")
+            val target = it.atZone(seoul)
+            val now = Instant.now()
+            val daysAhead = when {
+                adjacentRingTimetable || seolleungAccess -> 0L
+                overnightTimetable -> 2L
+                else -> 1L
+            }
+            val expectedDate = now.atZone(seoul).toLocalDate().plusDays(daysAhead)
+            require(!automaticDelivery && journeyProviderId == "odsay" && comparisonDepartureAt == null &&
+                comparisonTargetAt == null && target.toLocalDate() == expectedDate)
+            require(it > now && (!overnightTimetable || target.hour == 0))
+            require(it == it.truncatedTo(ChronoUnit.MINUTES))
+        }
         val output = Path.of(args[0]).toRealPath()
         val input = Path.of(args[1]).toRealPath()
         require(output.toString().startsWith("/private/tmp/nolate-eta-real-e2e."))
@@ -109,6 +138,21 @@ object EtaRealProviderSimulatorServer {
         require(route.path("schedule_id").asText() == "367" && personal.path("schedule_id").asText() == "367")
         val copiedSelectedJson = personal.path("route_json").asText()
         require(jacksonObjectMapper().readTree(copiedSelectedJson).path("provider").asText() == "tmap")
+        // Seoul Metro's published line-4 station coordinates, scoped to the private timetable test.
+        val (originLat, originLng) = when {
+            seolleungAccess -> 37.497958 to 127.027539
+            adjacentRingTimetable -> 37.497952 to 127.027619
+            overnightTimetable -> 37.476563 to 126.981746
+            directEgress -> 37.656274 to 127.063183
+            else -> personal.path("origin_lat").asDouble() to personal.path("origin_lng").asDouble()
+        }
+        val (destinationLat, destinationLng) = when {
+            seolleungAccess -> 37.504257 to 127.048174
+            adjacentRingTimetable -> 37.500622 to 127.036456
+            overnightTimetable -> 37.315381459929 to 126.82309002079
+            directEgress -> 37.476563 to 126.981746
+            else -> route.path("destination_lat").asDouble() to route.path("destination_lng").asDouble()
+        }
         val settings = Properties().apply { Files.newBufferedReader(Path.of("env.local.properties")).use(::load) }
         val app = SpringApplication(NoLateApplication::class.java, RealProviderIsolationConfiguration::class.java)
         app.setAdditionalProfiles("test")
@@ -117,6 +161,11 @@ object EtaRealProviderSimulatorServer {
             val providerSettings = Properties().apply {
                 settings.stringPropertyNames().filter { it.startsWith("TMAP_") || it.startsWith("SEOUL_") || it.startsWith("ODSAY_") }
                     .forEach { setProperty(it, settings.getProperty(it)) }
+                if (datedTimetableTarget != null) {
+                    val key = settings.getProperty("DATA_GO_KR_SUBWAY_PATH_API_KEY", "")
+                    require(key.isNotBlank()) { "Dated timetable key required for this fixture." }
+                    setProperty("DATA_GO_KR_SUBWAY_PATH_API_KEY", key)
+                }
                 // Test resources intentionally replace main application.yml and contain blank keys.
                 // Map only the real-adapter leaves; never import datasource/JWT/production flags.
                 mapOf(
@@ -144,7 +193,7 @@ object EtaRealProviderSimulatorServer {
             }
         })
         app.run(
-            "--server.address=127.0.0.1", "--server.port=5523",
+            "--server.address=127.0.0.1", "--server.port=$port",
             "--spring.datasource.url=jdbc:h2:mem:nolate-eta-real-isolated;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
             "--spring.datasource.driver-class-name=org.h2.Driver", "--spring.datasource.username=sa",
             "--spring.datasource.password=", "--spring.jpa.hibernate.ddl-auto=create-drop",
@@ -158,7 +207,8 @@ object EtaRealProviderSimulatorServer {
             "--schedule.sharing.enabled=true", "--schedule.push.enabled=true",
             "--routing.tmap.enabled=${journeyProviderId == "tmap"}", "--eta.transit.tmap.enabled=${journeyProviderId == "tmap"}",
             "--routing.tmap.transit-enabled=${journeyProviderId == "tmap"}",
-            "--eta.transit.odsay.enabled=${journeyProviderId == "odsay"}", "--eta.transit.seoul-timetable.enabled=true",
+            "--eta.transit.odsay.enabled=${journeyProviderId == "odsay"}",
+            "--eta.transit.seoul-timetable.enabled=${!omitStationTimetable}",
             // Actual acceptance needs the normal bounded search, not the old one-shot diagnostic.
             // This remains test-only and does not change production search/cadence settings.
             "--eta.transit.safe-departure.max-searches=3",
@@ -176,7 +226,9 @@ object EtaRealProviderSimulatorServer {
             val journeyProvider = context.getBeansOfType(TransitJourneyProvider::class.java).values.single()
             check(journeyProvider.providerId == journeyProviderId)
             check(journeyProvider.javaClass.name.contains(if (journeyProviderId == "tmap") "TmapTransitJourneyProvider" else "OdsayTransitJourneyClient"))
-            check(context.getBeansOfType(TransitTimetableProvider::class.java).values.single().javaClass.name.contains("SeoulTransitTimetableProvider"))
+            val timetableProviders = context.getBeansOfType(TransitTimetableProvider::class.java).values
+            if (omitStationTimetable) check(timetableProviders.isEmpty())
+            else check(timetableProviders.single().javaClass.name.contains("SeoulTransitTimetableProvider"))
             val mapper = context.getBean(ObjectMapper::class.java)
             // Verify calendar evidence BEFORE consuming a route call. Missing/stale production
             // cache may be refreshed only in this already-verified memory-only database.
@@ -195,15 +247,15 @@ object EtaRealProviderSimulatorServer {
             val seed = if (journeyProviderId == "odsay" && !automaticDelivery) {
                 val departure = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(60)
                 val candidates = journeyProvider.search(TransitJourneySearchRequest(
-                    personal.path("origin_lat").asDouble(), personal.path("origin_lng").asDouble(),
-                    route.path("destination_lat").asDouble(), route.path("destination_lng").asDouble(), departure, 180))
-                RealOdsaySelectedRouteFixture.select(candidates)
+                    originLat, originLng, destinationLat, destinationLng, departure, 180))
+                RealOdsaySelectedRouteFixture.select(candidates, direct = directEgress, overnight = overnightTimetable,
+                    adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess)
             } else null
             val selectedJson = seed?.let { RealOdsaySelectedRouteFixture.encode(mapper, it) } ?: copiedSelectedJson
             val selectedMinutes = seed?.totalMinutes ?: personal.path("travel_minutes").asInt()
             val requestedCoordinates = mapOf(
-                "origin" to mapOf("lat" to personal.path("origin_lat").asDouble(), "lng" to personal.path("origin_lng").asDouble()),
-                "destination" to mapOf("lat" to route.path("destination_lat").asDouble(), "lng" to route.path("destination_lng").asDouble()),
+                "origin" to mapOf("lat" to originLat, "lng" to originLng),
+                "destination" to mapOf("lat" to destinationLat, "lng" to destinationLng),
             )
             mapper.writeValue(output.resolve("selected-route.json").toFile(), mapper.readTree(selectedJson))
             seed?.let { mapper.writeValue(output.resolve("odsay-seed-journey.json").toFile(), it) }
@@ -219,7 +271,7 @@ object EtaRealProviderSimulatorServer {
             Files.createFile(credentialFile, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
             mapper.writeValue(credentialFile.toFile(), mapOf("memberId" to 296,
                 "email" to "eta-real-isolated@example.test", "password" to password))
-            val target = comparisonTargetAt
+            val target = comparisonTargetAt ?: datedTimetableTarget
                 ?: Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(targetLeadMinutes * 60)
             val savedDeparture = comparisonDepartureAt ?: target.minusSeconds(selectedMinutes.toLong() * 60)
             val evidenceState = context.getBean(RealProviderEvidenceState::class.java)
@@ -242,12 +294,29 @@ object EtaRealProviderSimulatorServer {
             if (!automaticDelivery) {
             val schedule = requireNotNull(schedules.findScheduleDetail(363, 296))
             schedule.updateCategorySnapshot(requireNotNull(category.id).toString(), category.title, category.color)
+            val locationName = when {
+                seolleungAccess -> "강남역 → 선릉역"
+                adjacentRingTimetable -> "강남역 → 역삼역"
+                overnightTimetable -> "사당역 → 제이엠컨벤션"
+                directEgress -> "노원역 → 사당역"
+                else -> route.path("location_name").asText()
+            }
+            val destinationName = when {
+                seolleungAccess -> "선릉역"
+                adjacentRingTimetable -> "역삼역"
+                overnightTimetable -> "제이엠컨벤션"
+                directEgress -> "사당역"
+                else -> route.path("destination_name").asText()
+            }
+            val originName = when {
+                adjacentRingTimetable || seolleungAccess -> "강남역"
+                overnightTimetable -> "사당역"
+                else -> personal.path("origin_name").asText()
+            }
             schedule.updateRoute(selectedMinutes, savedDeparture, null,
-                ScheduleTravelMode.TRANSIT, route.path("location_name").asText(),
-                personal.path("origin_name").asText(), null,
-                personal.path("origin_lat").asDouble(), personal.path("origin_lng").asDouble(),
-                route.path("destination_name").asText(), null, route.path("destination_lat").asDouble(),
-                route.path("destination_lng").asDouble(), selectedJson, true, 15, 10, ScheduleAlertMode.STANDARD)
+                ScheduleTravelMode.TRANSIT, locationName, originName, null,
+                originLat, originLng, destinationName, null,
+                destinationLat, destinationLng, selectedJson, true, 15, 10, ScheduleAlertMode.STANDARD)
             schedules.saveAndFlush(schedule)
             }
             val jobs = context.getBean(SchedulePushJobRepository::class.java)
@@ -263,6 +332,7 @@ object EtaRealProviderSimulatorServer {
                 "comparisonRequestedDepartureAt" to comparisonDepartureAt,
                 "comparisonTargetArrivalAt" to comparisonTargetAt,
                 "requestedCoordinates" to requestedCoordinates,
+                "stationTimetableEnabled" to !omitStationTimetable,
                 "targetLeadMinutes" to targetLeadMinutes,
                 "clockMode" to "SYSTEM_WALL_CLOCK", "providersMocked" to false, "database" to "H2_MEMORY_ONLY"))
             println("REAL_ISOLATED_READY")
@@ -279,6 +349,8 @@ object EtaRealProviderSimulatorServer {
             val timetableTrace = RealTimetableSelectionTrace(
                 context.getBean(com.noLate.eta.application.transit.TransitJourneyTimetableEnricher::class.java))
             val journeyTimingTrace = RealJourneyTimingTrace(
+                context.getBean(com.noLate.eta.application.TransitEtaCalculationService::class.java))
+            val matchTrace = RealJourneyMatchTrace(
                 context.getBean(com.noLate.eta.application.TransitEtaCalculationService::class.java))
             var tracedDirectAccepted = false
             fun writeRequestTrace() {
@@ -297,9 +369,11 @@ object EtaRealProviderSimulatorServer {
                     "travelMode" to saved.route?.travelMode, "routeJson" to saved.route?.routeJson)
                 val evidence = mapOf("classification" to "REAL_PROVIDER_ISOLATED_WORKER",
                     "journeyProvider" to journeyProviderId, "requestedCoordinates" to requestedCoordinates,
+                    "comparisonRequestedDepartureAt" to comparisonDepartureAt,
                     "firstBoardingSelectionTrace" to selectionTrace.snapshot(),
                     "plannedRideObservationTrace" to plannedRideTrace.snapshot(),
                     "timetableSelectionTrace" to timetableTrace.snapshot(), "journeyTimingTrace" to journeyTimingTrace.snapshot(),
+                    "journeyMatchTrace" to matchTrace.snapshot(),
                     "database" to "H2_MEMORY_ONLY", "providersMocked" to false,
                     "pushAcknowledgementMocked" to true, "clockMode" to "SYSTEM_WALL_CLOCK",
                     "memberId" to 296, "scheduleId" to 363, "processed" to processed,
@@ -404,6 +478,37 @@ object EtaRealProviderSimulatorServer {
                     }
                     continue // Never call either manual Worker entry point in automatic mode.
                 }
+                if (command == "audit-timetable-reservation") {
+                    check(datedTimetablePort && count == 0 && !diagnosticUsed)
+                    val job = requireNotNull(jobs.findByScheduleIdAndMemberId(363, 296))
+                    mapper.writeValue(output.resolve("timetable-reservation.json").toFile(), mapOf(
+                        "scheduleId" to job.scheduleId, "memberId" to job.memberId,
+                        "appointmentAt" to job.scheduleAt, "departureAt" to job.departureAt,
+                        "status" to job.status, "checkCount" to job.checkCount,
+                    ))
+                    continue
+                }
+                if (command == "audit-timetable-without-stored-departure") {
+                    check(datedTimetablePort && directEgress && count == 0 && !diagnosticUsed)
+                    val outputPath = output.resolve("timetable-without-stored-departure.json")
+                    check(Files.notExists(outputPath))
+                    val saved = requireNotNull(schedules.findScheduleDetail(363, 296))
+                    val before = saved.toDto(mapper)
+                    check(before.departAt != null && before.route?.path("routeInfo")?.path("providerTimeBasis")?.asText() == "timetable")
+                    // Simulate an old row with the original dated ODsay itinerary but no depart_at.
+                    check(jdbc.update("UPDATE schedule_routes SET depart_at = NULL WHERE schedule_id = 363") == 1)
+                    jdbc.update("UPDATE schedule_travel_plans SET depart_at = NULL WHERE schedule_id = 363 AND member_id = 296")
+                    val fixture = requireNotNull(schedules.findScheduleDetail(363, 296)).toDto(mapper)
+                    check(fixture.departAt == null && fixture.route == before.route)
+                    val registered = requireNotNull(context.getBean(
+                        com.noLate.schedule.application.service.SchedulePushJobService::class.java,
+                    ).registerFromScheduleDto(296, fixture))
+                    mapper.writeValue(outputPath.toFile(), mapOf(
+                        "storedDepartureAt" to fixture.departAt, "departureAt" to registered.departureAt,
+                        "appointmentAt" to registered.scheduleAt, "status" to registered.status, "checkCount" to registered.checkCount,
+                    ))
+                    continue
+                }
                 if (command == "trace-start" && count == 0 && !diagnosticUsed && requestTrace == null) {
                     requestTrace = SeoulArrivalRequestTrace(context.getBean(SeoulTransitArrivalClient::class.java))
                     writeRequestTrace()
@@ -469,10 +574,12 @@ object EtaRealProviderSimulatorServer {
                 val evidence = mapOf("classification" to "REAL_PROVIDER_ISOLATED_WORKER",
                     "journeyProvider" to journeyProviderId,
                     "requestedCoordinates" to requestedCoordinates,
+                    "comparisonRequestedDepartureAt" to comparisonDepartureAt,
                     "firstBoardingSelectionTrace" to selectionTrace.snapshot(),
                     "plannedRideObservationTrace" to plannedRideTrace.snapshot(),
                     "timetableSelectionTrace" to timetableTrace.snapshot(),
                     "journeyTimingTrace" to journeyTimingTrace.snapshot(),
+                    "journeyMatchTrace" to matchTrace.snapshot(),
                     "database" to "H2_MEMORY_ONLY", "providersMocked" to false,
                     "pushAcknowledgementMocked" to true, "clockMode" to "SYSTEM_WALL_CLOCK",
                     "memberId" to 296, "scheduleId" to 363, "processed" to processed,
@@ -511,7 +618,14 @@ object EtaRealProviderSimulatorServer {
                 println("REAL_ISOLATED_EVALUATED " + count)
                 System.out.flush()
                 if (requestTrace != null) break // At most one actual Worker comparison, no quota retry loop.
-            } } finally { requestTrace?.close(); journeyTimingTrace.close(); timetableTrace.close(); plannedRideTrace.close(); selectionTrace.close() }
+            } } finally {
+                requestTrace?.close()
+                matchTrace.close()
+                journeyTimingTrace.close()
+                timetableTrace.close()
+                plannedRideTrace.close()
+                selectionTrace.close()
+            }
         }
     }
 
@@ -598,7 +712,11 @@ class RealProviderIsolationConfiguration {
         on { sendToMemberFencedWithNativeAlarmCoverage(any(), any(), any(), any(), any(), any(), any()) } doReturn
             NotificationSendResult(requestedCount = 1, sentCount = 1)
     }
-    @Bean fun realProviderEvidenceFilter(state: RealProviderEvidenceState, mapper: ObjectMapper): FilterRegistrationBean<Filter> =
+    @Bean fun realProviderEvidenceFilter(
+        state: RealProviderEvidenceState,
+        mapper: ObjectMapper,
+        walkingClients: org.springframework.beans.factory.ObjectProvider<com.noLate.eta.infrastructure.odsay.OdsayWalkingTimeClient>,
+    ): FilterRegistrationBean<Filter> =
         FilterRegistrationBean<Filter>().apply { automaticState = state; setFilter(Filter { request, response, chain ->
             val http = request as HttpServletRequest
             val wrapped = ContentCachingResponseWrapper(response as HttpServletResponse)
@@ -624,6 +742,28 @@ class RealProviderIsolationConfiguration {
                             put("finishedAt", Instant.now().toString())
                         }
                         mapper.writeValue(it.resolve("ui-status.json").toFile(), data)
+                    }
+                }
+                if (http.method == "POST" && http.requestURI == "/api/routes/transit/timetable-preview") {
+                    val data = runCatching { mapper.readTree(wrapped.contentAsByteArray).path("data") }.getOrNull()
+                    state.output?.let {
+                        val evidence = mapOf(
+                            "observedAt" to Instant.now(), "httpStatus" to wrapped.status,
+                            "preview" to data?.get("preview")?.takeUnless { it.isNull },
+                            "missingEntranceWalk" to data?.get("missingEntranceWalk")?.takeUnless { it.isNull },
+                            "walkingRefinement" to walkingClients.ifAvailable?.diagnostics(),
+                        )
+                        val previewFile = it.resolve("ui-timetable-preview.json").toFile()
+                        if (!previewFile.exists()) mapper.writeValue(it.resolve("ui-timetable-preview-first.json").toFile(), evidence)
+                        mapper.writeValue(previewFile, evidence)
+                    }
+                }
+                if (http.method == "POST" && http.requestURI == "/api/routes/transit/bus-preview") {
+                    val preview = runCatching {
+                        mapper.readTree(wrapped.contentAsByteArray).path("data").path("preview")
+                    }.getOrNull()
+                    if (preview != null && !preview.isMissingNode && !preview.isNull) state.output?.let {
+                        mapper.writeValue(it.resolve("ui-live-bus-preview.json").toFile(), preview)
                     }
                 }
             } finally { wrapped.copyBodyToResponse() }

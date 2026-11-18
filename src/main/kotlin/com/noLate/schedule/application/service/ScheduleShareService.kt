@@ -815,9 +815,11 @@ class ScheduleShareService(
         invitation.permission = normalizeInvitationPermissionForAcceptance(invitation.permission)
 
         var calendarMembership: ScheduleCalendarMemberDto? = null
+        var calendarTitle: String? = null
+        var scheduleTitle: String? = null
         val share: ScheduleShareDto = when (invitation.resourceType) {
             ScheduleShareResourceType.SCHEDULE -> {
-                requireScheduleShareManager(invitation.resourceId, invitation.ownerMemberId)
+                scheduleTitle = requireScheduleShareManager(invitation.resourceId, invitation.ownerMemberId).title
                 grantScheduleShare(
                     ownerMemberId = invitation.ownerMemberId,
                     scheduleId = invitation.resourceId,
@@ -854,6 +856,7 @@ class ScheduleShareService(
                 val calendar = requireCalendarRepository()
                     .findByIdAndStatusAndDeletedFalse(invitation.resourceId)
                     ?: throw BusinessException(ErrorCode.SCHEDULE_CALENDAR_NOT_FOUND)
+                calendarTitle = calendar.title
                 ScheduleShareDto(
                     id = membership.id.toString(),
                     resourceId = invitation.resourceId.toString(),
@@ -892,6 +895,8 @@ class ScheduleShareService(
             invitation = savedInvitation.toDto(),
             share = share,
             calendarMembership = calendarMembership,
+            calendarTitle = calendarTitle,
+            scheduleTitle = scheduleTitle,
         )
     }
 
@@ -901,10 +906,12 @@ class ScheduleShareService(
     ): ScheduleShareInvitationAcceptDto {
         val memberId = requireNotNull(targetMember.id)
         var calendarMembership: ScheduleCalendarMemberDto? = null
+        var calendarTitle: String? = null
+        var scheduleTitle: String? = null
         val share = when (invitation.resourceType) {
             ScheduleShareResourceType.SCHEDULE -> {
-                try {
-                    requireScheduleShareManager(invitation.resourceId, invitation.ownerMemberId)
+                scheduleTitle = try {
+                    requireScheduleShareManager(invitation.resourceId, invitation.ownerMemberId).title
                 } catch (_: BusinessException) {
                     throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
                 }
@@ -948,6 +955,7 @@ class ScheduleShareService(
                     .findByIdAndStatusAndDeletedFalse(invitation.resourceId)
                     ?.takeIf { it.ownerMemberId == invitation.ownerMemberId }
                     ?: throw BusinessException(ErrorCode.SCHEDULE_SHARE_INVITATION_NOT_FOUND)
+                calendarTitle = calendar.title
                 calendarMembership = ScheduleCalendarMemberDto(
                     id = requireNotNull(membership.id),
                     calendarId = membership.calendarId,
@@ -978,6 +986,8 @@ class ScheduleShareService(
             invitation = invitation.toDto(),
             share = share,
             calendarMembership = calendarMembership,
+            calendarTitle = calendarTitle,
+            scheduleTitle = scheduleTitle,
         )
     }
 

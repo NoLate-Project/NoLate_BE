@@ -6,9 +6,16 @@ import com.noLate.eta.domain.TransitServiceClass
 import java.time.Instant
 import java.time.LocalDate
 
+internal const val SEOUL_DATED_TIMETABLE_PROVIDER_ID = "seoul-dated-path"
+
 /** 경로 공급자(Tmap/ODsay)와 운행 시간표 공급자를 분리한다. */
 interface TransitTimetableProvider {
     fun findRides(query: TransitTimetableQuery): List<TransitLegTimetable>
+}
+
+/** Returns one date-specific ride starting at or after the supplied station-ready time. */
+fun interface DatedTransitTimetableProvider {
+    fun findRide(query: TransitTimetableQuery, orderedStopNames: List<String>): TransitLegTimetable?
 }
 
 data class TransitTimetableQuery(

@@ -6,12 +6,23 @@ import com.noLate.eta.domain.TransitLegMode
 
 /** Test-only saved route built from an actual ODsay response, never a relabelled Tmap route. */
 object RealOdsaySelectedRouteFixture {
-    fun select(candidates: List<TransitJourney>): TransitJourney = requireNotNull(candidates.firstOrNull { journey ->
+    fun select(
+        candidates: List<TransitJourney>,
+        direct: Boolean = false,
+        overnight: Boolean = false,
+        adjacentRing: Boolean = false,
+        seolleungAccess: Boolean = false,
+    ): TransitJourney = requireNotNull(candidates.firstOrNull { journey ->
         val rides = journey.rideLegs
-        journey.provider == "odsay" && rides.size == 2 && rides.all { it.mode == TransitLegMode.SUBWAY } &&
-            rides[0].from?.name == "노원" && rides[0].to?.name == "사당" &&
-            rides[1].from?.name == "사당" && rides[1].to?.name == "신림"
-    }) { "Actual ODsay Nowon-Sadang-Sillim journey required" }
+        journey.provider == "odsay" && rides.all { it.mode == TransitLegMode.SUBWAY } &&
+            rides.map { it.from?.name to it.to?.name } == when {
+                seolleungAccess -> listOf("강남" to "선릉")
+                adjacentRing -> listOf("강남" to "역삼")
+                overnight -> listOf("사당" to "고잔")
+                direct -> listOf("노원" to "사당")
+                else -> listOf("노원" to "사당", "사당" to "신림")
+            } && (!seolleungAccess || rides.single().orderedStopNames == listOf("강남", "역삼", "선릉"))
+    }) { "Actual ODsay journey for the scoped stations required" }
 
     fun encode(mapper: ObjectMapper, journey: TransitJourney): String {
         require(journey.provider == "odsay")
@@ -30,7 +41,8 @@ object RealOdsaySelectedRouteFixture {
             "provider" to "odsay", "mode" to "TRANSIT", "minutes" to journey.totalMinutes,
             "providerTimeBasis" to "route_estimate", "transitLegs" to legs,
             "routeInfo" to mapOf("id" to "actual-odsay-public-stations", "provider" to "odsay",
-                "originName" to "노원역", "destinationName" to "신림역",
+                "originName" to (journey.rideLegs.first().from?.name + "역"),
+                "destinationName" to (journey.rideLegs.last().to?.name + "역"),
                 "totalDurationMinutes" to journey.totalMinutes,
                 "departureTime" to journey.departureAt.toString(), "arrivalTime" to journey.arrivalAt.toString(),
                 "timeBasis" to "estimated", "providerTimeBasis" to "route_estimate", "steps" to legs),

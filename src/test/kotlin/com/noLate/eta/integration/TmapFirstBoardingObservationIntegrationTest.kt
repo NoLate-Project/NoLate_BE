@@ -101,7 +101,10 @@ class TmapFirstBoardingObservationIntegrationTest {
             assertFalse(restored.accepted)
             assertNull(result.recommendedDepartureAt)
             assertNull(result.predictedArrivalAt)
-            assertNull(result.firstBoardingWaitMinutes)
+            // The 360s station observation includes 111s of access. The remaining
+            // 249s are shown as five minutes of first-train waiting only.
+            assertEquals(5, result.firstBoardingWaitMinutes)
+            assertEquals(5, restored.firstBoardingWaitMinutes)
             assertNull(restored.acceptedRoute())
         } finally {
             server.stop(0)

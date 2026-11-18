@@ -5,6 +5,7 @@ import com.noLate.journey.application.JourneyRouteSnapshot
 import com.noLate.journey.application.LiveOfficialSubwayServicePatternCatalog
 import com.noLate.journey.application.SavedJourneySubwayObservationCheck
 import com.noLate.journey.application.SavedSubwayOfficialPathComparison
+import com.noLate.journey.application.SavedSubwayWaitingArrival
 import com.noLate.journey.application.JourneySubwaySavedLegEvidence
 import com.noLate.transit.domain.SeoulSubwayTrainStatus
 import com.noLate.transit.infrastructure.SeoulMetroShortestPathClient
@@ -60,10 +61,33 @@ class LiveOfficialSubwayServicePatternCatalogLiveTest {
                 val catalog = LiveOfficialSubwayServicePatternCatalog({ path.fetch(it) }, { coordinates.fetch() })
                 val pattern = assertNotNull(catalog.resolve(saved, subwayIndex),
                     "The persisted ODsay station sequence must match the official path")
-                assertEquals(1, pattern.alightingIndex)
+                assertEquals(calls.lastIndex, pattern.alightingIndex)
                 assertEquals(calls.map { it.code }, pattern.stationCalls.take(calls.size))
                 assertEquals(full.sections.size + 1, pattern.stationCalls.size)
                 println("PERSISTED_ODSAY_OFFICIAL_PATH_MATCHED savedStations=${calls.size} terminalBoundStations=${pattern.stationCalls.size}")
+                val arrivalsKey = System.getenv("SEOUL_SUBWAY_API_KEY")
+                if (!arrivalsKey.isNullOrBlank()) {
+                    SeoulTransitArrivalClient("", arrivalsKey, "",
+                        "http://swopenapi.seoul.go.kr/api/subway", "http://ws.bus.go.kr/api/rest", true).use { trains ->
+                        val boarding = requireNotNull(pattern.officialStationNames)[pattern.boardingIndex]
+                        val arrivals = trains.getSubwayArrivals(boarding, pattern.line.requestName,
+                            pattern.officialStationNames.last(), if (pattern.direction == 0) "UP" else "DOWN", 40)
+                        val selected = SavedSubwayWaitingArrival.select(listOf(pattern), arrivals, java.time.Instant.now())
+                        println("PERSISTED_ODSAY_LIVE_ARRIVAL rows=${arrivals.size} selected=${selected != null} " +
+                            "direction=${pattern.direction} terminal=${pattern.officialStationNames.last()}")
+                        var providerStatus: SeoulSubwayTrainStatus? = null
+                        val result = SavedJourneySubwayObservationCheck(f.mapper, null, catalog,
+                            { query -> trains.getSubwayTrainObservations(query).also { providerStatus = it.status } },
+                            enabled = true).checkWithFence(7, 9001, 2, 1, subwayIndex) { saved }
+                        println("PERSISTED_ODSAY_LIVE_TRAIN provider=$providerStatus status=${result.status} nativeInput=${result.nativeInput != null}")
+                        assertTrue(providerStatus in setOf(SeoulSubwayTrainStatus.AVAILABLE,
+                            SeoulSubwayTrainStatus.NO_USABLE_OBSERVATIONS, SeoulSubwayTrainStatus.NO_TRAINS))
+                        assertTrue(result.status in setOf("TRAIN_REFERENCES_ONLY", "SERVICE_PATTERN_OR_FRESHNESS_MISMATCH",
+                            "TRAIN_OBSERVATIONS_UNAVAILABLE"), result.status)
+                        if (result.status == "TRAIN_REFERENCES_ONLY") assertNotNull(result.nativeInput)
+                        else assertNull(result.nativeInput)
+                    }
+                }
             }
         }
     }

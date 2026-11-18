@@ -16,6 +16,7 @@ import com.noLate.schedule.domain.SchedulePlaceDto
 import com.noLate.schedule.domain.SchedulePushJobStatus
 import com.noLate.schedule.domain.ScheduleSharePermission
 import com.noLate.schedule.domain.ScheduleShareStatus
+import com.noLate.schedule.domain.ScheduleTravelMode
 import com.noLate.schedule.domain.ScheduleTravelPlan
 import com.noLate.schedule.domain.ScheduleTravelPlanDto
 import com.noLate.schedule.domain.ScheduleTravelPlanFingerprint
@@ -346,7 +347,7 @@ class ScheduleTravelPlanService(
             val legacyOwner = memberId == schedule.memberId && plan == null && schedule.route != null
             val status = when {
                 plan != null -> plan.statusFor(schedule)
-                legacyOwner -> ScheduleTravelPlanStatus.READY
+                legacyOwner -> legacyOwnerPlanStatus(schedule)
                 else -> ScheduleTravelPlanStatus.NOT_CONFIGURED
             }
             val canViewDetails = canManage || requesterMemberId == memberId
@@ -370,8 +371,10 @@ class ScheduleTravelPlanService(
             }
             val departAt = when {
                 !canViewDetails -> null
-                plan != null -> plan.departAt?.toString()
-                legacyOwner -> schedule.route?.departAt?.toString()
+                plan != null -> guardedDepartureAt(schedule, plan.departAt, plan.travelMinutes, plan.travelMode, parseRoute(plan.routeJson))
+                legacyOwner -> schedule.route?.let { route ->
+                    guardedDepartureAt(schedule, route.departAt, route.travelMinutes, route.travelMode, parseRoute(route.routeJson))
+                }
                 else -> null
             }
 
@@ -388,7 +391,7 @@ class ScheduleTravelPlanService(
                 originName = originName,
                 travelMode = travelMode,
                 travelMinutes = travelMinutes,
-                departAt = departAt,
+                departAt = departAt?.toString(),
             )
         }
 
@@ -472,6 +475,8 @@ class ScheduleTravelPlanService(
         if (memberId == schedule.memberId) {
             val legacy = schedule.route?.let { legacyOwnerPlanDto(schedule, canManage) }
             return base.copy(
+                departAt = if (legacy != null) legacy.departAt else base.departAt,
+                route = if (legacy != null) legacy.route else base.route,
                 routeSetupRequired = routeSetupReminderPolicy?.requiresOwnerSetup(
                     schedule = schedule,
                     travelEnabled = true,
@@ -531,11 +536,12 @@ class ScheduleTravelPlanService(
         val routeJson = normalizeRouteJson(command.routeJson)
         val route = routeJson?.let(objectMapper::readTree)
         IntercityJourneyValidator.validate(route, requestedDeparture, command.travelMinutes, schedule.startAt)
-        val departAt = requestedDeparture?.let {
-            SelectedRouteMetadata.guardSavedDeparture(
-                schedule.startAt, it, command.travelMinutes, command.travelMode, route,
-            )
-        }
+        val departAt = SelectedRouteMetadata.guardSavedDeparture(
+            schedule.startAt, requestedDeparture, command.travelMinutes, command.travelMode, route,
+        )
+        val aligned = SelectedRouteMetadata.alignOdsayRouteTiming(
+            schedule.startAt, departAt, command.travelMinutes, command.travelMode, route,
+        )
         val plan = existing ?: ScheduleTravelPlan(scheduleId = scheduleId, memberId = memberId)
         val alertMode = command.alertMode
             ?: existing?.takeUnless { it.deleted }?.alertMode
@@ -544,7 +550,7 @@ class ScheduleTravelPlanService(
             command = command,
             scheduleFingerprint = ScheduleTravelPlanFingerprint.calculate(schedule),
             departAt = departAt,
-            routeJson = routeJson,
+            routeJson = if (aligned === route) routeJson else aligned?.toString(),
             notificationLeadMinutes = normalizedNotification.leadMinutes,
             notificationIntervalMinutes = normalizedNotification.intervalMinutes,
             alertMode = alertMode,
@@ -836,6 +842,8 @@ class ScheduleTravelPlanService(
 
     private fun ScheduleTravelPlan.toDto(schedule: Schedule, canManage: Boolean): ScheduleTravelPlanDto {
         val destination = destination(schedule)
+        val route = parseRoute(routeJson)
+        val departure = guardedDepartureAt(schedule, departAt, travelMinutes, travelMode, route)
         return ScheduleTravelPlanDto(
             id = id,
             scheduleId = scheduleId,
@@ -843,11 +851,11 @@ class ScheduleTravelPlanService(
             status = statusFor(schedule),
             canManageSchedule = canManage,
             travelMinutes = travelMinutes,
-            departAt = departAt?.toString(),
+            departAt = departure?.toString(),
             travelMode = travelMode,
             origin = place(originName, originAddress, originLat, originLng),
             destination = destination,
-            route = parseRoute(routeJson),
+            route = SelectedRouteMetadata.alignOdsayRouteTiming(schedule.startAt, departure, travelMinutes, travelMode, route),
             notificationEnabled = notificationEnabled,
             notificationLeadMinutes = notificationLeadMinutes,
             notificationIntervalMinutes = notificationIntervalMinutes,
@@ -868,19 +876,32 @@ class ScheduleTravelPlanService(
         }
     }
 
+    // A name-only destination also has a ScheduleRoute row. Its mere existence
+    // must not advertise READY in either participant overview or personal detail.
+    private fun legacyOwnerPlanStatus(schedule: Schedule): ScheduleTravelPlanStatus =
+        if (RouteSetupReminderPolicy.isCompleteLegacyOwnerRoute(schedule)) {
+            ScheduleTravelPlanStatus.READY
+        } else {
+            ScheduleTravelPlanStatus.NOT_CONFIGURED
+        }
+
     private fun legacyOwnerPlanDto(schedule: Schedule, canManage: Boolean): ScheduleTravelPlanDto {
         val route = requireNotNull(schedule.route)
+        val routeMetadata = parseRoute(route.routeJson)
+        val departure = guardedDepartureAt(schedule, route.departAt, route.travelMinutes, route.travelMode, routeMetadata)
         return ScheduleTravelPlanDto(
             scheduleId = requireNotNull(schedule.id),
             memberId = schedule.memberId,
-            status = ScheduleTravelPlanStatus.READY,
+            status = legacyOwnerPlanStatus(schedule),
             canManageSchedule = canManage,
             travelMinutes = route.travelMinutes,
-            departAt = route.departAt?.toString(),
+            departAt = departure?.toString(),
             travelMode = route.travelMode,
             origin = place(route.originName, route.originAddress, route.originLat, route.originLng),
             destination = destination(schedule),
-            route = parseRoute(route.routeJson),
+            route = SelectedRouteMetadata.alignOdsayRouteTiming(
+                schedule.startAt, departure, route.travelMinutes, route.travelMode, routeMetadata,
+            ),
             notificationEnabled = route.notificationEnabled,
             notificationLeadMinutes = route.notificationLeadMinutes,
             notificationIntervalMinutes = route.notificationIntervalMinutes,
@@ -888,6 +909,17 @@ class ScheduleTravelPlanService(
             updatedAt = (schedule.updateDt ?: schedule.updatedAt)?.toString(),
         )
     }
+
+    // Legacy rows may predate write validation. Use the same departure policy when projecting them.
+    private fun guardedDepartureAt(
+        schedule: Schedule,
+        savedDeparture: Instant?,
+        travelMinutes: Int?,
+        travelMode: ScheduleTravelMode?,
+        route: JsonNode?,
+    ): Instant? = SelectedRouteMetadata.guardSavedDeparture(
+        schedule.startAt, savedDeparture, travelMinutes, travelMode, route,
+    )
 
     private fun destination(schedule: Schedule): SchedulePlaceDto? = schedule.route?.let {
         place(it.destinationName, it.destinationAddress, it.destinationLat, it.destinationLng)

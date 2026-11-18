@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.EnumSource
 import java.time.Instant
 import java.time.LocalDate
@@ -77,6 +78,40 @@ class TransitTransferFeasibilityEvaluatorTest {
         assertEquals(departureAt.plusSeconds(42 * 60), result.observedRideTimings[3]?.arrivalAt)
     }
 
+    @ParameterizedTest
+    @CsvSource("8, FEASIBLE, 0", "9, UNKNOWN, 1", "30, UNKNOWN, 22")
+    fun `사당 환승 여유 8초에서 조기 역 도착과 시간표 출발을 구분한다`(
+        earlyArrivalSeconds: Long,
+        expected: TransitTransferStatus,
+        shortfall: Long,
+    ) {
+        val original = observedTransferJourney()
+        val firstArrival = requireNotNull(original.legs[1].timetable).arrivalAt
+        // Observed NoLate plan: 225s between rides, 157s of walking, 60s of
+        // safety margin, and 60s of scheduled dwell on the connecting train.
+        val transferDeparture = firstArrival.plusSeconds(225)
+        val stationArrival = transferDeparture.minusSeconds(60)
+        val alighting = transferDeparture.plusSeconds(450)
+        val route = original.copy(arrivalAt = alighting.plusSeconds(120), legs = original.legs.map { leg ->
+            when (leg.sequence) {
+                2 -> leg.copy(durationMinutes = 3, durationSeconds = 157)
+                3 -> leg.copy(scheduledDepartureAt = transferDeparture, scheduledArrivalAt = alighting,
+                    timetable = requireNotNull(leg.timetable).copy(boardingAt = transferDeparture,
+                        boardingStationArrivalAt = stationArrival, arrivalAt = alighting))
+                else -> leg
+            }
+        })
+        val observation = TransitRideRealtimeObservation(
+            3, TransitRideObservationPoint.BOARDING, stationArrival.minusSeconds(earlyArrivalSeconds),
+            departureAt, earlyBoardingArrival = true,
+        )
+
+        val result = requireNotNull(evaluator.evaluateWithObservedTransfers(route, null, departureAt, listOf(observation)))
+
+        assertEquals(expected, result.status)
+        assertEquals(shortfall, result.searchEarlierBySeconds ?: 0L)
+    }
+
     @Test
     fun `구간 시간표가 없으면 일부 실시간 관측으로 전체 ETA를 만들지 않는다`() {
         val journey = observedTransferJourney().let { it.copy(legs = it.legs.mapIndexed { index, leg ->
@@ -134,6 +169,42 @@ class TransitTransferFeasibilityEvaluatorTest {
 
         assertEquals(TransitTransferStatus.UNKNOWN, result.status)
         assertEquals(1L, result.searchEarlierBySeconds)
+    }
+
+    @ParameterizedTest
+    @CsvSource("28, 0, FEASIBLE", "29, 0, UNKNOWN", "89, 0, MISSED", "0, 29, UNKNOWN")
+    fun `실제 사당 경로의 245초 간격과 157초 도보를 재생하면 지연에 따라 환승 판정이 바뀐다`(
+        additionalDelaySeconds: Long,
+        scheduledDwellSeconds: Long,
+        expected: TransitTransferStatus,
+    ) {
+        // Replay the geometry of the accepted 10:30 public-feed journey.
+        // Additional delay is injected here to exercise the policy boundary.
+        val original = observedTransferJourney()
+        val first = requireNotNull(original.legs[1].timetable)
+        val transferAt = first.arrivalAt.plusSeconds(245)
+        val transferArrival = transferAt.plusSeconds(600)
+        val journey = original.copy(arrivalAt = transferArrival.plusSeconds(120), legs = original.legs.map { leg ->
+            when (leg.sequence) {
+                1 -> leg.copy(timetable = first.copy(
+                    boardingStationArrivalAt = first.boardingAt.minusSeconds(scheduledDwellSeconds),
+                ))
+                2 -> leg.copy(durationMinutes = 3, durationSeconds = 157)
+                3 -> leg.copy(scheduledDepartureAt = transferAt, scheduledArrivalAt = transferArrival,
+                    timetable = requireNotNull(leg.timetable).copy(boardingAt = transferAt, arrivalAt = transferArrival))
+                else -> leg
+            }
+        })
+        val overlay = firstOverlay(journey).copy(boardingAt = first.boardingAt.plusSeconds(additionalDelaySeconds))
+
+        val result = evaluator.evaluate(journey, overlay, departureAt)
+
+        assertEquals(expected, result.status)
+        if (expected == TransitTransferStatus.FEASIBLE) {
+            assertEquals(journey.arrivalAt, result.predictedArrivalAt)
+        } else {
+            assertEquals(1L, result.searchEarlierBySeconds)
+        }
     }
 
     @Test

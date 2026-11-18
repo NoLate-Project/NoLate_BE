@@ -755,7 +755,10 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
           and (:categoryId is null or sc.category_id = :categoryId)
           and (:rangeStart is null or s.end_at >= :rangeStart)
           and (:rangeEnd is null or s.start_at <= :rangeEnd)
-        order by s.start_at asc
+          and (:scopeCalendarId is null
+               or (:scopeCalendarId = 0 and s.calendar_id is null)
+               or s.calendar_id = :scopeCalendarId)
+        order by s.start_at asc, s.id asc
         """,
         nativeQuery = true
     )
@@ -766,6 +769,7 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         @Param("rangeStart") rangeStart: Instant?,
         @Param("rangeEnd") rangeEnd: Instant?,
         pageable: Pageable,
+        @Param("scopeCalendarId") scopeCalendarId: Long? = null,
     ): List<Schedule>
 
     @Query(
@@ -835,7 +839,10 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
           and (:categoryId is null or sc.category_id = :categoryId)
           and (:rangeStart is null or s.end_at >= :rangeStart)
           and (:rangeEnd is null or s.start_at <= :rangeEnd)
-        order by s.start_at asc
+          and (:scopeCalendarId is null
+               or (:scopeCalendarId = 0 and s.calendar_id is null)
+               or s.calendar_id = :scopeCalendarId)
+        order by s.start_at asc, s.id asc
         """,
         nativeQuery = true
     )
@@ -846,6 +853,7 @@ interface ScheduleRepository : JpaRepository<Schedule, Long> {
         @Param("rangeStart") rangeStart: Instant?,
         @Param("rangeEnd") rangeEnd: Instant?,
         pageable: Pageable,
+        @Param("scopeCalendarId") scopeCalendarId: Long? = null,
     ): List<Schedule>
 
     @Query(

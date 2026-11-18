@@ -162,7 +162,8 @@ class FirstBoardingRealtimeOverlayTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["future", "stale", "unverified", "badSource", "empty", "wrongDirection", "wrongClass", "badIdentity", "past"])
+    @ValueSource(strings = ["future", "freshPassedTrain", "freshDepartedTrain", "stalePassedTrain",
+        "stale", "unverified", "badSource", "empty", "wrongDirection", "wrongClass", "badIdentity", "past"])
     fun `미래 동일 열차 미관측은 API 실패 및 원천 freshness 거절과 구분한다`(case: String) {
         val original = canonicalJourney()
         val table = com.noLate.eta.domain.TransitLegTimetable("seoul-timetable", SeoulSubwayLine.LINE_4,
@@ -173,6 +174,11 @@ class FirstBoardingRealtimeOverlayTest {
             timetable = table, waitingMinutes = 3, scheduledDepartureAt = table.boardingAt.minusSeconds(180),
             scheduledArrivalAt = table.arrivalAt, timingBasis = com.noLate.eta.domain.TransitLegTimingBasis.TIMETABLE) })
         val other = canonicalArrival().copy(trainNumber = "4103").let { a -> when (case) {
+            "freshPassedTrain" -> a.copy(expectedAt = evaluatedAt.minusSeconds(75).toString(),
+                sourceUpdatedAt = evaluatedAt.minusSeconds(75).toString())
+            "freshDepartedTrain" -> a.copy(arrivalStatus = TransitArrivalStatus.DEPARTED)
+            "stalePassedTrain" -> a.copy(expectedAt = evaluatedAt.minusSeconds(130).toString(),
+                sourceUpdatedAt = evaluatedAt.minusSeconds(130).toString())
             "stale" -> a.copy(sourceUpdatedAt = evaluatedAt.minusSeconds(121).toString())
             "unverified" -> a.copy(freshnessEvidence = TransitArrivalFreshnessEvidence.LOCAL_RECEIPT_TIMESTAMP_ONLY)
             "badSource" -> a.copy(sourceUpdatedAt = "not-a-timestamp")
@@ -186,8 +192,8 @@ class FirstBoardingRealtimeOverlayTest {
         val result = FirstBoardingRealtimeOverlay(arrivalService, Clock.fixed(evaluatedAt, ZoneOffset.UTC))
             .resolve(journey, evaluatedAt, 1440)
         val expected = when (case) {
-            "future" -> "TRANSIT_TRAIN_NOT_YET_OBSERVED"
-            "stale" -> "TRANSIT_ARRIVAL_SOURCE_STALE"
+            "future", "freshPassedTrain", "freshDepartedTrain" -> "TRANSIT_TRAIN_NOT_YET_OBSERVED"
+            "stale", "stalePassedTrain" -> "TRANSIT_ARRIVAL_SOURCE_STALE"
             "unverified", "badSource" -> "TRANSIT_ARRIVAL_SOURCE_UNVERIFIED"
             else -> "TRANSIT_ARRIVAL_UNAVAILABLE"
         }
@@ -220,7 +226,7 @@ class FirstBoardingRealtimeOverlayTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["matchedAlias", "noVerifiedAlias", "wrongTrain", "shortTurn", "wrongDirection", "express", "stale"])
+    @ValueSource(strings = ["matchedAlias", "terminalSuffix", "noVerifiedAlias", "wrongTrain", "shortTurn", "wrongDirection", "express", "stale"])
     fun `서울 시간표 adapter가 검증한 K열차 별칭도 방향 종착역 종별 freshness를 모두 대조한다`(case: String) {
         val original = canonicalJourney()
         val timetable = com.noLate.eta.domain.TransitLegTimetable(
@@ -236,7 +242,8 @@ class FirstBoardingRealtimeOverlayTest {
         })
         val arrival = canonicalArrival().let { candidate -> when (case) {
             "wrongTrain" -> candidate.copy(trainNumber = "4999")
-            "shortTurn" -> candidate.copy(destinationName = "동작")
+            "shortTurn" -> candidate.copy(destinationName = "동작종착")
+            "terminalSuffix" -> candidate.copy(destinationName = "사당종착")
             "wrongDirection" -> candidate.copy(direction = "상행")
             "express" -> candidate.copy(express = true)
             "stale" -> candidate.copy(sourceUpdatedAt = evaluatedAt.minusSeconds(121).toString())
@@ -246,7 +253,7 @@ class FirstBoardingRealtimeOverlayTest {
             .thenReturn(listOf(arrival))
         val result = FirstBoardingRealtimeOverlay(arrivalService, Clock.fixed(evaluatedAt, ZoneOffset.UTC))
             .resolve(journey, evaluatedAt, 1440)
-        if (case == "matchedAlias") {
+        if (case == "matchedAlias" || case == "terminalSuffix") {
             assertNotNull(result.overlay)
             assertEquals("4012", result.firstBoardingObservation?.trainNumber)
             assertEquals("K4012", journey.rideLegs.first().timetable?.trainNumber)
@@ -730,6 +737,45 @@ class FirstBoardingRealtimeOverlayTest {
             directionCode = anyOrNull(),
             limit = any(),
         )
+    }
+
+    @Test
+    fun `서울 ODsay 저장 경로는 번호가 같아도 지역 노선 ID가 다른 차량을 건너뛴다`() {
+        val journey = transferJourney().let { original ->
+            original.copy(legs = original.legs.map { leg ->
+                if (leg.mode != TransitLegMode.BUS) leg else leg.copy(
+                    from = leg.from?.copy(
+                        arsId = "23287",
+                        cityCode = "1000",
+                        cityCodeNamespace = TransitCityCodeNamespace.ODSAY_CID,
+                    ),
+                    line = TransitLine(providerRouteId = "1440", localRouteId = "100100057", name = "360"),
+                )
+            })
+        }
+        val matching = TransitArrivalDto(
+            provider = "seoul-bus", kind = "BUS", routeName = "360", arsId = "23287",
+            providerRouteId = "100100057", expectedAt = evaluatedAt.plusSeconds(9 * 60).toString(),
+            sourceUpdatedAt = evaluatedAt.toString(),
+            freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP,
+        )
+        whenever(arrivalService.getBusArrivals(
+            arsId = anyOrNull(), routeName = anyOrNull(), cityCode = anyOrNull(), nodeId = anyOrNull(),
+            stationName = anyOrNull(), limit = any(), cityCodeNamespace = any(), providerCode = anyOrNull(),
+        )).thenReturn(listOf(
+            matching.copy(providerRouteId = "100100058", expectedAt = evaluatedAt.plusSeconds(6 * 60).toString()),
+            matching.copy(providerRouteId = null, expectedAt = evaluatedAt.plusSeconds(7 * 60).toString()),
+            matching,
+        ))
+
+        val result = FirstBoardingRealtimeOverlay(
+            transitArrivalService = arrivalService,
+            clock = Clock.fixed(evaluatedAt, ZoneOffset.UTC),
+            boardingBufferSeconds = 60,
+            arrivalLimit = 10,
+        ).resolve(journey, evaluatedAt, 1_440)
+
+        assertEquals(evaluatedAt.plusSeconds(9 * 60), result.overlay?.boardingAt)
     }
 
     @Test

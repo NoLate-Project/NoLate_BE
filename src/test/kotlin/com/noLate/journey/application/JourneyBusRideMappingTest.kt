@@ -19,6 +19,17 @@ class JourneyBusRideMappingTest {
         assertEquals(listOf(44,45,46), verified.stops.map { it.sequence }) // saved ODsay ordinals are 10,11,12
         assertEquals(3, verified.coordinates.size)
     }
+    @Test fun `verified binding collapses adjacent provider vertices for native route identity`() {
+        val f = fixture()
+        val bus = f.plan.route!!.path("transitLegs")[1] as ObjectNode
+        val points = bus.path("pathCoords") as com.fasterxml.jackson.databind.node.ArrayNode
+        val originalSize = points.size()
+        points.insert(2, points[1].deepCopy<ObjectNode>())
+
+        val result = mapping(f)
+        assertEquals("VERIFIED", result.status)
+        assertEquals(originalSize, assertNotNull(result.verified).coordinates.size)
+    }
     @Test fun `official catalog supplies direction and stop count omitted by real ODsay bus response`() {
         val f = fixture()
         val evidence = f.plan.route!!.path("transitLegs")[1].path("navigationEvidence") as ObjectNode
@@ -202,7 +213,7 @@ class JourneyBusRideMappingTest {
             SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE,
                 listOf(rideFixtureVehicle(now,alongMeters=target+100))),now).isEmpty())
     }
-    @Test fun `departure scope cannot bypass duplicates stale wrong route or looping complete shape`() {
+    @Test fun `departure scope rejects duplicates and stale fixes while marking remote loop ambiguity`() {
         val m=assertNotNull(JourneyBusRideMapping.resolve(snapshot(fixture()),rideDepartureFixtureStops(),rideDepartureFixtureShape()).verified)
         val now=java.time.Instant.parse("2026-10-08T00:00:00Z")
         val at=m.projections.last().alongShapeMeters+100
@@ -211,7 +222,14 @@ class JourneyBusRideMappingTest {
             assertTrue(JourneyBusRideMapping.vehicles(m,SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE,rows),now).isEmpty())
         val loop=rideDepartureFixtureShape()+rideDepartureFixtureShape().reversed().drop(1).mapIndexed { i,p -> p.copy(order=826+i) }
         val ambiguous=JourneyBusRideMapping.Verified(m.routeId,m.direction,m.coordinates,m.stops,m.projections,loop,m.catalog,m.departureWindowMeters,47)
-        assertTrue(JourneyBusRideMapping.vehicles(ambiguous,SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE,listOf(v)),now).isEmpty())
+        val scoped = JourneyBusRideMapping.vehicles(ambiguous,
+            SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE,listOf(v)),now).single()
+        assertEquals("AMBIGUOUS_AFTER_ALIGHTING",scoped.positionScope)
+        assertEquals(100.0,assertNotNull(scoped.metersPastAlighting),0.01)
+        val selected = JourneyBusRideMapping.vehicles(ambiguous,
+            SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE,
+                listOf(rideFixtureVehicle(now,alongMeters=100.0))),now).single()
+        assertEquals("AMBIGUOUS_SELECTED_SEGMENT",selected.positionScope)
     }
     @Test fun `departure query extends one verified stop without extra polls or side effects`() {
         val f=fixture(); val automatic=f.service(); automatic.prepare(7,9001,2,f.prepareCommand())

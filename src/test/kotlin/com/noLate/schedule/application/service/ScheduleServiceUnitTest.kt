@@ -1617,8 +1617,8 @@ class ScheduleServiceUnitTest {
         }
 
         assertEquals(com.noLate.global.error.ErrorCode.INVALID_INPUT, error.errorCode)
-        verify(scheduleRepository, never()).searchScheduleList(any(), any(), any(), any(), any(), any())
-        verify(scheduleRepository, never()).searchOwnedScheduleList(any(), any(), any(), any(), any(), any())
+        verify(scheduleRepository, never()).searchScheduleList(any(), any(), any(), any(), any(), any(), any())
+        verify(scheduleRepository, never()).searchOwnedScheduleList(any(), any(), any(), any(), any(), any(), any())
     }
 
     @Test
@@ -1722,6 +1722,47 @@ class ScheduleServiceUnitTest {
         })
         assertEquals(false, result.hasEndTime)
         assertEquals(result.startAt, result.endAt)
+    }
+
+    @Test
+    fun `create and edit preserve all-day dates without an end clock time`() {
+        val dto = scheduleDto(
+            startAt = "2026-11-28T00:00:00+09:00",
+            endAt = "2026-12-01T00:00:00+09:00",
+            travelMinutes = null,
+        ).copy(allDay = true, hasEndTime = false)
+        val scheduleId = 20L
+        whenever(scheduleRepository.save(any<Schedule>()))
+            .thenAnswer { invocation ->
+                invocation.getArgument<Schedule>(0).apply { id = scheduleId }
+            }
+
+        val created = scheduleService.addSchedule(1L, dto)
+        assertEquals(Instant.parse("2026-11-30T15:00:00Z"), Instant.parse(created.endAt))
+        assertEquals(false, created.hasEndTime)
+
+        val stored = created.toEntity(1L)
+        whenever(scheduleRepository.findOwnedScheduleDetail(scheduleId, 1L)).thenReturn(stored)
+        val edited = scheduleService.updateSchedule(1L, scheduleId, dto.copy(endAt = "2026-11-30T00:00:00+09:00"))
+
+        assertEquals(Instant.parse("2026-11-29T15:00:00Z"), stored.endAt)
+        assertEquals(created.startAt, edited.startAt)
+        assertEquals(false, edited.hasEndTime)
+        assertEquals(true, edited.allDay)
+    }
+
+    @Test
+    fun `addSchedule rejects reversed all-day dates without an end clock time`() {
+        val dto = scheduleDto(
+            startAt = "2026-11-28T00:00:00+09:00",
+            endAt = "2026-11-27T00:00:00+09:00",
+            travelMinutes = null,
+        ).copy(allDay = true, hasEndTime = false)
+
+        val exception = assertThrows<BusinessException> { scheduleService.addSchedule(1L, dto) }
+
+        assertEquals(ErrorCode.INVALID_INPUT, exception.errorCode)
+        verify(scheduleRepository, never()).save(any<Schedule>())
     }
 
     @Test
