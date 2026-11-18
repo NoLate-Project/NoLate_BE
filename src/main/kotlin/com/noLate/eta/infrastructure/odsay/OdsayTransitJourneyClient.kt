@@ -2,6 +2,7 @@ package com.noLate.eta.infrastructure.odsay
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.noLate.eta.application.port.TransitJourneyProvider
+import com.noLate.journey.application.JourneyRerouteRouteProvider
 import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitJourneySearchRequest
 import com.noLate.eta.resilience.EtaCalculationDeadline
@@ -46,7 +47,7 @@ class OdsayTransitJourneyClient(
         policyResolver = StaticEtaProviderResiliencePolicyResolver(),
         calculationDeadline = calculationDeadline,
     ),
-) : TransitJourneyProvider {
+) : TransitJourneyProvider, JourneyRerouteRouteProvider {
     init {
         require(apiKey.isNotBlank()) {
             "ODsay ETA 재조회를 활성화하려면 서버용 API 키가 필요합니다."
@@ -68,6 +69,10 @@ class OdsayTransitJourneyClient(
 
     override val providerId: String = PROVIDER_ID
 
+    /** Full ODsay geometry for a session-scoped reroute candidate search. */
+    override fun searchRaw(request: TransitJourneySearchRequest): JsonNode =
+        providerGuard.execute(providerId) { fetchRaw(request) }
+
     override fun search(request: TransitJourneySearchRequest): List<TransitJourney> =
         operationalMetrics.observeTransitEtaProviderCall(
             provider = TransitEtaProviderMetricId.ODSAY_ROUTE,
@@ -78,7 +83,11 @@ class OdsayTransitJourneyClient(
 
     private fun searchUnobserved(request: TransitJourneySearchRequest): List<TransitJourney> {
         val fetchedAt = Instant.now(clock)
-        val response = restClient.get()
+        return mapper.map(fetchRaw(request), request, fetchedAt)
+    }
+
+    private fun fetchRaw(request: TransitJourneySearchRequest): JsonNode {
+        return restClient.get()
             .uri { builder ->
                 builder
                     .path("/maasRP")
@@ -97,7 +106,6 @@ class OdsayTransitJourneyClient(
             .body(JsonNode::class.java)
             ?: throw IllegalStateException("ODsay 경로 응답이 비어 있습니다.")
 
-        return mapper.map(response, request, fetchedAt)
     }
 
     private companion object {

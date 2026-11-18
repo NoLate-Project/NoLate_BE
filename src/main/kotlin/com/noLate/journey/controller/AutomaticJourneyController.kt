@@ -5,16 +5,19 @@ import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.journey.application.AutomaticJourneyService
+import com.noLate.journey.application.JourneyRerouteSearchService
 import com.noLate.journey.domain.AutomaticJourneyDepartureCommand
 import com.noLate.journey.domain.AutomaticJourneyPrepareCommand
 import com.noLate.journey.domain.AutomaticJourneySavedPrepareCommand
 import com.noLate.journey.domain.AutomaticJourneyStopCommand
+import com.noLate.journey.domain.JourneyRerouteSearchCommand
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.*
 
 @RestController
 @RequestMapping("/api/schedules/{scheduleId}/automatic-journey")
-class AutomaticJourneyController(private val service: AutomaticJourneyService) {
+class AutomaticJourneyController(private val service: AutomaticJourneyService,
+    private val reroute: JourneyRerouteSearchService? = null) {
     @ExceptionHandler(com.noLate.journey.application.WalkingContractRejected::class)
     fun walkingRejected(error: com.noLate.journey.application.WalkingContractRejected) = org.springframework.http.ResponseEntity
         .status(if (error.reason == "FEATURE_DISABLED") 503 else 409)
@@ -46,6 +49,13 @@ class AutomaticJourneyController(private val service: AutomaticJourneyService) {
     @PostMapping("/{sessionId}/reconcile")
     fun reconcile(@AuthenticationPrincipal principal: MemberPrincipal?, @PathVariable scheduleId: Long, @PathVariable sessionId: String, @RequestBody command: AutomaticJourneyStopCommand) =
         authenticated(principal) { id, generation -> ApiResponse.success(service.reconcile(id, scheduleId, generation, sessionId, command)) }
+
+    @PostMapping("/{sessionId}/reroute-candidates")
+    fun rerouteCandidates(@AuthenticationPrincipal principal: MemberPrincipal?, @PathVariable scheduleId: Long,
+        @PathVariable sessionId: String, @RequestBody command: JourneyRerouteSearchCommand) =
+        authenticated(principal) { id, generation -> ApiResponse.success(
+            (reroute ?: throw BusinessException(ErrorCode.FEATURE_DISABLED))
+                .search(id, scheduleId, generation, sessionId, command)) }
 
     private fun <T> authenticated(principal: MemberPrincipal?, action: (Long, Long) -> T): T {
         val actor = principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)

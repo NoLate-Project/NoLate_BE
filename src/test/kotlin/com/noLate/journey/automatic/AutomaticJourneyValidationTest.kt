@@ -2,6 +2,7 @@ package com.noLate.journey.automatic
 
 import com.noLate.global.error.BusinessException
 import com.noLate.journey.domain.AutomaticJourneyState
+import com.noLate.schedule.domain.SchedulePlaceDto
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
@@ -9,6 +10,21 @@ import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 
 class AutomaticJourneyValidationTest {
+    @Test fun `reroute destination stays owned and rejects an armed or changed route`() {
+        val f = AutomaticJourneyFixture()
+        f.plan = f.plan.copy(destination = SchedulePlaceDto("경복궁", lat = 37.576, lng = 126.978))
+        val service = f.service()
+        service.prepare(7, 9001, 2, f.prepareCommand())
+        assertThatThrownBy { service.requireActiveRerouteDestination(7, 9001, 2, f.sessionId, f.stopCommand()) }
+            .isInstanceOf(BusinessException::class.java)
+        service.departure(7, 9001, 2, f.sessionId, f.event())
+        val destination = service.requireActiveRerouteDestination(7, 9001, 2, f.sessionId, f.stopCommand())
+        assertThat(destination.latitude).isEqualTo(37.576)
+        assertThat(destination.longitude).isEqualTo(126.978)
+        f.plan = f.plan.copy(destination = SchedulePlaceDto("다른 곳", lat = 37.58, lng = 126.99))
+        assertThatThrownBy { service.requireActiveRerouteDestination(7, 9001, 2, f.sessionId, f.stopCommand()) }
+            .isInstanceOf(BusinessException::class.java)
+    }
     @Test fun `disabled validation performs no authority reads`() {
         val f = AutomaticJourneyFixture()
         assertThatThrownBy { f.service(enabled = false).validate(7, 9001, 2, f.sessionId, f.stopCommand()) }

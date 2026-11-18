@@ -387,6 +387,8 @@ journey:
     isolated-test-scope: ${JOURNEY_AUTOMATIC_ISOLATED_TEST_SCOPE:false}
     expiry-enabled: ${JOURNEY_AUTOMATIC_EXPIRY_ENABLED:false}
     extended-navigation-enabled: ${JOURNEY_AUTOMATIC_EXTENDED_NAVIGATION_ENABLED:false}
+    # Candidate lookup is advisory until a versioned route replacement transaction exists.
+    reroute-search-enabled: ${JOURNEY_AUTOMATIC_REROUTE_SEARCH_ENABLED:false}
   activity:
     enabled: ${JOURNEY_ACTIVITY_ENABLED:false}
     encryption-key: ${JOURNEY_ACTIVITY_ENCRYPTION_KEY:}

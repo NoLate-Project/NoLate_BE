@@ -48,6 +48,7 @@ data class AutomaticJourneyReconciliationDto(
     val routeInputDigest: String, val execution: AutomaticJourneyExecution,
     val state: AutomaticJourneyState, val checkedAt: Instant, val endedAt: Instant?,
 )
+data class JourneyRerouteDestination(val latitude: Double, val longitude: Double)
 
 @Service
 class AutomaticJourneyService(
@@ -261,6 +262,24 @@ class AutomaticJourneyService(
             clientOwnerId = value.first.clientOwnerId, routeInputDigest = value.first.routeInputDigest,
             execution = value.first.execution, state = value.first.state, validatedAt = now,
             validUntil = minOf(now.plusSeconds(30), value.first.expiresAt))
+    }
+
+    /** Authorize an advisory ODsay lookup against the current owned route and destination. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    fun requireActiveRerouteDestination(memberId: Long, scheduleId: Long, loginGeneration: Long,
+        sessionId: String, command: AutomaticJourneyStopCommand): JourneyRerouteDestination {
+        val (value, _) = observationFence(memberId, scheduleId, loginGeneration, sessionId, command)
+        if (value.state != AutomaticJourneyState.ACTIVE)
+            invalid("활성화된 길안내만 새 경로를 조회할 수 있습니다.")
+        val plan = travelPlanService.getMyJourneyTravelPlanForStart(memberId, scheduleId)
+        if (JourneyRouteSnapshot.from(plan, objectMapper).fingerprint != value.routeFingerprint)
+            invalid("저장된 개인 경로가 변경되었습니다.")
+        val latitude = plan.destination?.lat
+        val longitude = plan.destination?.lng
+        if (latitude == null || longitude == null || !latitude.isFinite() || latitude !in -90.0..90.0 ||
+            !longitude.isFinite() || longitude !in -180.0..180.0)
+            invalid("기존 목적지 좌표를 확인할 수 없습니다.")
+        return JourneyRerouteDestination(latitude, longitude)
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
