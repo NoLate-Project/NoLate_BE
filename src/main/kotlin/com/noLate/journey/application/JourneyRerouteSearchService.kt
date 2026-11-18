@@ -47,9 +47,7 @@ class JourneyRerouteSearchService(
         }
         val paths = raw.path("result").path("paths")
         if (!paths.isArray) throw BusinessException(ErrorCode.INVALID_STATE, "새 경로를 확인하지 못했습니다.")
-        val candidates = paths.filter { path -> path.path("pathType").asInt(-1) == 2 &&
-            path.path("rps").isArray && path.path("rps").size() in 2..64 &&
-            path.path("totalTime").asDouble(-1.0) > 0.0 }.take(3)
+        val candidates = paths.filter(::hasNavigableTransitEvidence).take(3)
         if (candidates.isEmpty()) throw BusinessException(ErrorCode.INVALID_STATE, "새 경로를 확인하지 못했습니다.")
         val response = mapper.createObjectNode().apply {
             put("provider", "odsay")
@@ -65,6 +63,32 @@ class JourneyRerouteSearchService(
         if (mapper.writeValueAsBytes(response).size > 1_048_576)
             throw BusinessException(ErrorCode.INVALID_STATE, "새 경로 응답이 너무 큽니다.")
         return response
+    }
+
+    private fun hasNavigableTransitEvidence(path: JsonNode): Boolean {
+        if (path.path("pathType").asInt(-1) != 2 ||
+            path.path("totalTime").asDouble(-1.0) !in 0.01..1_440.0) return false
+        val legs = path.path("rps")
+        if (!legs.isArray || legs.size() !in 2..64) return false
+        var rides = 0
+        for (leg in legs) {
+            when (leg.path("trafficType").asInt(-1)) {
+                3 -> if (leg.path("duration").asDouble(-1.0) < 0.0) return false
+                1, 2 -> {
+                    rides++
+                    val graph = leg.path("graph")
+                    val stops = leg.path("passStopList").path("stations")
+                    val lane = leg.path("lane")
+                    if (leg.path("duration").asDouble(-1.0) <= 0.0 ||
+                        listOf("startX", "startY", "endX", "endY").any { !leg.path(it).isNumber } ||
+                        !graph.isTextual || graph.asText().length !in 7..100_000 ||
+                        !stops.isArray || stops.size() !in 2..500 ||
+                        !lane.isArray || lane.isEmpty) return false
+                }
+                else -> return false
+            }
+        }
+        return rides > 0
     }
 }
 

@@ -43,12 +43,15 @@ class JourneyRerouteSearchServiceTest {
             override fun searchRaw(request: TransitJourneySearchRequest): JsonNode {
                 calls++
                 requested = request
-                return mapper.readTree("""{"result":{"paths":[
-                    {"pathType":2,"totalTime":21,"rps":[{},{}]},
-                    {"pathType":1,"totalTime":8,"rps":[{},{}]},
-                    {"pathType":2,"totalTime":23,"rps":[{},{}]},
-                    {"pathType":2,"totalTime":26,"rps":[{},{}]},
-                    {"pathType":2,"totalTime":30,"rps":[{},{}]}]}}""")
+                val ride = """{"trafficType":2,"duration":15,"startX":126.99,"startY":37.565,
+                    "endX":126.978,"endY":37.576,"graph":"126.99 37.565|126.978 37.576",
+                    "passStopList":{"stations":[{},{}]},"lane":[{}]}"""
+                val walk = """{"trafficType":3,"duration":3}"""
+                fun path(minutes: Int) = """{"pathType":2,"totalTime":$minutes,"rps":[$walk,$ride,$walk]}"""
+                return mapper.readTree("""{"result":{"paths":[${path(21)},
+                    {"pathType":1,"totalTime":8,"rps":[$walk,$ride,$walk]},
+                    {"pathType":2,"totalTime":23,"rps":[$walk,{"trafficType":2,"duration":15},$walk]},
+                    ${path(26)},${path(30)},${path(35)}]}}""")
             }
         }
         val service = JourneyRerouteSearchService(automatic, listOf(odsay), mapper, clock, true)
@@ -61,6 +64,8 @@ class JourneyRerouteSearchServiceTest {
         assertThat(response.path("routeInputDigest").asText()).isEqualTo("a".repeat(64))
         assertThat(response.path("observedAt").asText()).isEqualTo(now.toString())
         assertThat(response.path("result").path("paths").size()).isEqualTo(3)
+        assertThat(response.path("result").path("paths").map { it.path("totalTime").asInt() })
+            .containsExactly(21, 26, 30)
         assertThatThrownBy { service.search(7, 41, 2, session, command()) }
             .isInstanceOf(BusinessException::class.java)
         assertThat(calls).isEqualTo(1)
