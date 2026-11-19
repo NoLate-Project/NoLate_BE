@@ -7,6 +7,7 @@ import com.noLate.transit.domain.SeoulBusVehicleQuery
 import com.noLate.transit.domain.SeoulBusVehicleRejection
 import com.noLate.transit.domain.SeoulBusVehicleSourceAgeSummary
 import com.noLate.transit.domain.SeoulBusVehicleCoordinate
+import com.noLate.transit.domain.SeoulBusVehicleFreshness
 import org.w3c.dom.Element
 import org.xml.sax.SAXException
 import org.xml.sax.SAXParseException
@@ -32,7 +33,7 @@ internal object SeoulBusVehicleObservationParser {
     private val sourceClock = DateTimeFormatter.ofPattern("uuuuMMddHHmmss")
         .withResolverStyle(ResolverStyle.STRICT)
     private val seoul = ZoneId.of("Asia/Seoul")
-    private val ttl = Duration.ofSeconds(15)
+    private val ttl = Duration.ofSeconds(SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS)
 
     fun parse(xml: ByteArray, query: SeoulBusVehicleQuery, receivedAt: Instant): SeoulBusVehicleObservationBatch {
         require(xml.size <= MAX_RESPONSE_BYTES) { "Seoul vehicle response too large" }

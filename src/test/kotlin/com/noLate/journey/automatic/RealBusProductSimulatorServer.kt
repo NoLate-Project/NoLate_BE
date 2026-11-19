@@ -280,10 +280,12 @@ class BusFixtureConfiguration {
             }
             val now = Instant.now()
             val age = startedAt?.let { now.epochSecond - it }
-            if (age == null || age !in 0..600) {
+            val delayedCadence = System.getProperty("nolate.journey.bus-delayed-source-cadence") == "true"
+            if (age == null || age !in 0..600 || (delayedCadence && age < 30)) {
                 SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.NO_VEHICLES, emptyList())
             } else {
-                val source = Instant.ofEpochSecond(now.epochSecond / 2 * 2)
+                val source = if (delayedCadence) Instant.ofEpochSecond(startedAt!! + (age - 30) / 28 * 28)
+                    else Instant.ofEpochSecond(now.epochSecond / 2 * 2)
                 // Keep the fixture coordinate at its declared source timestamp. The
                 // independent simulator GPS starts a few seconds after simctl returns,
                 // uses 8 m/s command speed, but the native route projection
@@ -293,7 +295,8 @@ class BusFixtureConfiguration {
                 val point = busPointAt(busPoints, (sourceAge.coerceAtLeast(0)) * 7.3)
                 SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE,
                     listOf(SeoulBusVehicleObservation("100000171", "100100185", "100000001", 501,
-                        0, false, stops.first().stationId, source, now, source.plusSeconds(15),
+                        0, false, stops.first().stationId, source, now,
+                        source.plusSeconds(if (delayedCadence) 45 else 15),
                         SeoulBusVehicleCoordinate(point.first, point.second))))
             }
         }

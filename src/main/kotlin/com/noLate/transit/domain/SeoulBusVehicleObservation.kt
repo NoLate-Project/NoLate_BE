@@ -3,6 +3,11 @@ package com.noLate.transit.domain
 import com.fasterxml.jackson.annotation.JsonIgnore
 import java.time.Instant
 
+/** Bounded provider-source freshness; never replace the source clock with receipt time. */
+object SeoulBusVehicleFreshness {
+    const val MAX_SOURCE_AGE_SECONDS = 45L
+}
+
 /** Stop occurrence ordinals in the request are NOT road-section ordinals in the response. */
 data class SeoulBusVehicleQuery(val routeId: String, val firstStopOrder: Int, val lastStopOrder: Int) {
     init {

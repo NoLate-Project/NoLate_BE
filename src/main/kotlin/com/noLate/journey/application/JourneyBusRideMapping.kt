@@ -114,7 +114,8 @@ internal object JourneyBusRideMapping {
             val coordinate = vehicle.wgs84Coordinate ?: return@mapNotNull null
             if (vehicle.vehicleId in duplicateIds || !vehicle.vehicleId.matches(Regex("[1-9][0-9]{8}")) || vehicle.routeId != mapping.routeId ||
                 vehicle.sourceUpdatedAt > vehicle.receivedAt || vehicle.receivedAt > now || vehicle.sourceUpdatedAt > now ||
-                vehicle.validUntil > vehicle.sourceUpdatedAt.plusSeconds(15) || !vehicle.validUntil.isAfter(now)) return@mapNotNull null
+                vehicle.validUntil > vehicle.sourceUpdatedAt.plusSeconds(SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS) ||
+                !vehicle.validUntil.isAfter(now)) return@mapNotNull null
             val point = Coordinate(coordinate.latitude, coordinate.longitude)
             val first = mapping.projections.first().alongShapeMeters
             val last = mapping.projections.last().alongShapeMeters
