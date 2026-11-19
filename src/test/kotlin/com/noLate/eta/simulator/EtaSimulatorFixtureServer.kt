@@ -136,6 +136,30 @@ object EtaSimulatorFixtureServer {
             System.`in`.bufferedReader().useLines { lines ->
                 for (command in lines) {
                     if (command == "stop") break
+                    if (command == "prepare-navigation-map") {
+                        // Layout E2E only: one real product schedule in private H2, no
+                        // provider call, native session or production database write.
+                        check(schedules.count() == 0L && jobs.count() == 0L)
+                        val target = Instant.now().plusSeconds(2 * 3600)
+                        jdbc.update("""INSERT INTO schedules (id,member_id,title,start_at,end_at,has_end_time,
+                            all_day,route_setup_required,schedule_type,deleted)
+                            VALUES (363,296,?,?,?,false,false,false,'NORMAL',false)""",
+                            "길안내 지도 배치 시험", target, target.plusSeconds(1800))
+                        val schedule = requireNotNull(schedules.findScheduleDetail(363, 296))
+                        val category = context.getBean(com.noLate.schedule.infrastructure.ScheduleCategoryRepository::class.java)
+                            .saveAndFlush(ScheduleCategory(memberId = 296, title = "격리 길안내", color = "#2F80FF"))
+                        schedule.updateCategorySnapshot(requireNotNull(category.id).toString(), category.title, category.color)
+                        schedule.updateRoute(travelMinutes = 65, departAt = target.minusSeconds(65 * 60), departedAt = null,
+                            travelMode = ScheduleTravelMode.TRANSIT, locationName = "신림역", originName = "노원역",
+                            originAddress = null, originLat = 37.6551, originLng = 127.0610,
+                            destinationName = "신림역", destinationAddress = null,
+                            destinationLat = 37.4842, destinationLng = 126.9297, routeJson = fixture.savedRoute,
+                            notificationEnabled = false, notificationLeadMinutes = null, notificationIntervalMinutes = null)
+                        schedules.saveAndFlush(schedule)
+                        println("ETA_FIXTURE_NAVIGATION_MAP_READY")
+                        System.out.flush()
+                        continue
+                    }
                     if (command == "prepare-incident-station-board") {
                         check(history.count() == 2L && fixture.phase == "provider-error")
                         if (incidentOdsayOnly) {
