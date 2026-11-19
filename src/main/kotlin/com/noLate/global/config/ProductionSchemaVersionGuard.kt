@@ -209,11 +209,13 @@ class ProductionSchemaVersionGuard(
             "2026-10-05-departure-alarm-cancellation-reason-v1"
         const val JOURNEY_GUIDANCE_SCHEMA_VERSION = "2026-10-03-journey-guidance-sessions-v1"
         const val AUTOMATIC_JOURNEY_SCHEMA_VERSION = "2026-10-04-automatic-journey-preparations-v1"
+        const val AUTOMATIC_JOURNEY_REROUTE_SCHEMA_VERSION = "2026-11-19-automatic-journey-reroute-v1"
         const val JOURNEY_ACTIVITY_SCHEMA_VERSION = "2026-10-06-journey-activity-lanes-v1"
         const val JOURNEY_WALKING_SCHEMA_VERSION = "2026-10-12-journey-walking-snapshots-v1"
         const val MIXED_WALKING_SCHEMA_VERSION = "2026-10-12-mixed-walking-binding-v1"
 
         val REQUIRED_SCHEMA_VERSIONS = listOf(
+            AUTOMATIC_JOURNEY_REROUTE_SCHEMA_VERSION,
             MIXED_WALKING_SCHEMA_VERSION,
             JOURNEY_WALKING_SCHEMA_VERSION,
             JOURNEY_ACTIVITY_SCHEMA_VERSION,

@@ -26,9 +26,14 @@ data class AutomaticJourneyPreparationDto(
     val sequence: Long, val state: AutomaticJourneyState, val clientOwnerId: String,
     val routeInputDigest: String, val preparedAt: Instant, val expiresAt: Instant,
     val execution: AutomaticJourneyExecution,
+    val routeFingerprint: String? = null,
     val savedRouteValidated: Boolean = false,
     val officialBusAdmission: JourneyBusDeviceAdmission? = null,
     val officialSubwayAdmission: JourneySubwayDeviceAdmission? = null,
+    val rerouteInputJSON: String? = null,
+    val rerouteSnapshotJSON: String? = null,
+    val rerouteBusAdmission: JourneyBusDeviceAdmission? = null,
+    val rerouteValidated: Boolean = false,
 )
 data class AutomaticJourneyDepartureAck(
     val sessionId: String, val generation: Long, val routeRevision: Long, val eventKey: String,
@@ -219,8 +224,25 @@ class AutomaticJourneyService(
         if (preparation.memberId != memberId || preparation.scheduleId != scheduleId ||
             preparation.loginSessionGeneration > loginGeneration) throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
         preparation.fence(command.generation, command.routeRevision, command.clientOwnerId, command.routeInputDigest)
-        preparation.stop(Instant.now(clock))
-        return dto(repository.saveAndFlush(preparation))
+        val now = Instant.now(clock)
+        preparation.stop(now)
+        val stopped = repository.saveAndFlush(preparation)
+        // A durable stop may arrive after reroute committed but before its response reached
+        // the device. Follow only the exact server-written parent chain, never a newer
+        // independent preparation for the same schedule.
+        var parent = stopped
+        while (true) {
+            val child = repository.findByParentSessionId(parent.sessionId) ?: break
+            if (child.memberId != memberId || child.scheduleId != scheduleId ||
+                child.loginSessionGeneration != parent.loginSessionGeneration ||
+                child.clientOwnerId != parent.clientOwnerId ||
+                child.generation != parent.generation + 1 ||
+                child.routeRevision != parent.routeRevision + 1) break
+            child.stop(now)
+            repository.saveAndFlush(child)
+            parent = child
+        }
+        return dto(stopped)
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -272,7 +294,7 @@ class AutomaticJourneyService(
         if (value.state != AutomaticJourneyState.ACTIVE)
             invalid("활성화된 길안내만 새 경로를 조회할 수 있습니다.")
         val plan = travelPlanService.getMyJourneyTravelPlanForStart(memberId, scheduleId)
-        if (JourneyRouteSnapshot.from(plan, objectMapper).fingerprint != value.routeFingerprint)
+        if (JourneyRouteSnapshot.from(plan, objectMapper).fingerprint != (value.sourceRouteFingerprint ?: value.routeFingerprint))
             invalid("저장된 개인 경로가 변경되었습니다.")
         val latitude = plan.destination?.lat
         val longitude = plan.destination?.lng
@@ -308,9 +330,12 @@ class AutomaticJourneyService(
         if (actor == null || actor.deleted || actor.sessionGeneration != loginGeneration) throw BusinessException(ErrorCode.INVALID_TOKEN)
         val plan = travelPlanService.getTravelPlan(memberId, scheduleId, memberId)
         val value = owned(sessionId, memberId, scheduleId, loginGeneration)
-        requireWalkingAdmission(value, memberId, scheduleId, loginGeneration)
-        val route = JourneyRouteSnapshot.from(plan, objectMapper)
-        if (route.fingerprint != value.routeFingerprint) invalid("저장된 개인 경로가 변경되었습니다.")
+        if (value.rerouteSnapshotJson == null) requireWalkingAdmission(value, memberId, scheduleId, loginGeneration)
+        val saved = JourneyRouteSnapshot.from(plan, objectMapper)
+        if (saved.fingerprint != (value.sourceRouteFingerprint ?: value.routeFingerprint))
+            invalid("저장된 개인 경로가 변경되었습니다.")
+        val route = value.rerouteSnapshotJson?.let { JourneyRouteSnapshot.fromReroute(it, value.routeFingerprint, objectMapper) }
+            ?: saved
         requireNoManualJourney(memberId, scheduleId)
         requireExecution(value.execution)
         value.fence(command.generation, command.routeRevision, command.clientOwnerId, command.routeInputDigest)
@@ -414,6 +439,13 @@ class AutomaticJourneyService(
     private fun dto(value: AutomaticJourneyPreparation) = AutomaticJourneyPreparationDto(
         value.sessionId, value.scheduleId.toString(), value.generation, value.routeRevision,
         value.sequence, value.state, value.clientOwnerId, value.routeInputDigest, value.preparedAt, value.expiresAt, value.execution,
+        routeFingerprint = value.routeFingerprint,
+        rerouteInputJSON = value.rerouteInputJson,
+        rerouteSnapshotJSON = value.rerouteSnapshotJson,
+        rerouteBusAdmission = value.rerouteBusAdmissionJson?.let {
+            objectMapper.readValue(it, JourneyBusDeviceAdmission::class.java)
+        },
+        rerouteValidated = value.rerouteInputJson != null,
     )
     private fun ack(value: AutomaticJourneyPreparation, duplicate: Boolean) = AutomaticJourneyDepartureAck(
         value.sessionId, value.generation, value.routeRevision, requireNotNull(value.acceptedEventKey),

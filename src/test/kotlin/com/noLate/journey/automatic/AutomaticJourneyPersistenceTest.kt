@@ -95,6 +95,69 @@ class AutomaticJourneyPersistenceTest @Autowired constructor(
         assertThat(tx { rows.findBySessionId(second.sessionId) }).isNull()
     }
 
+    @Test fun `versioned reroute evidence survives a real repository round trip`() {
+        val fixture = fixture()
+        val old = tx { rows.findBySessionId(fixture.sessionId)!! }
+        val newSession = UUID.randomUUID().toString()
+        tx {
+            rows.saveAndFlush(AutomaticJourneyPreparation(sessionId = newSession, memberId = fixture.memberId,
+                scheduleId = 9001, loginSessionGeneration = 2, clientOwnerId = old.clientOwnerId,
+                routeInputDigest = "c".repeat(64), routeFingerprint = "d".repeat(64),
+                generation = 2, routeRevision = 2, parentSessionId = old.sessionId,
+                sourceRouteFingerprint = old.routeFingerprint,
+                rerouteSnapshotJson = "{\"mode\":\"TRANSIT\"}",
+                rerouteInputJson = "{\"routeRevision\":2}",
+                rerouteBusAdmissionJson = "{\"routeId\":\"100100499\"}",
+                execution = AutomaticJourneyExecution.SIMULATOR, state = AutomaticJourneyState.ACTIVE,
+                sequence = 1, preparedAt = now, expiresAt = now.plusSeconds(600), departedAt = now))
+        }
+        val loaded = tx { rows.findBySessionId(newSession)!! }
+        assertThat(loaded.parentSessionId).isEqualTo(old.sessionId)
+        assertThat(loaded.sourceRouteFingerprint).isEqualTo(old.routeFingerprint)
+        assertThat(loaded.rerouteSnapshotJson).isEqualTo("{\"mode\":\"TRANSIT\"}")
+        assertThat(loaded.rerouteInputJson).isEqualTo("{\"routeRevision\":2}")
+        assertThat(loaded.rerouteBusAdmissionJson).contains("100100499")
+        assertThat(tx { rows.findFirstByMemberIdAndScheduleIdOrderByGenerationDesc(fixture.memberId, 9001)?.sessionId })
+            .isEqualTo(newSession)
+    }
+
+    @Test fun `delayed old stop terminates exact reroute descendants but not an independent journey`() {
+        val fixture = fixture()
+        val parent = tx { rows.findBySessionId(fixture.sessionId)!! }
+        val childId = UUID.randomUUID().toString()
+        val grandchildId = UUID.randomUUID().toString()
+        val independentId = UUID.randomUUID().toString()
+        tx {
+            parent.stop(now)
+            rows.saveAndFlush(parent)
+            rows.saveAndFlush(AutomaticJourneyPreparation(sessionId = childId, memberId = fixture.memberId,
+                scheduleId = 9001, loginSessionGeneration = 2, clientOwnerId = parent.clientOwnerId,
+                routeInputDigest = "c".repeat(64), routeFingerprint = "d".repeat(64),
+                generation = 2, routeRevision = 2, parentSessionId = parent.sessionId,
+                sourceRouteFingerprint = parent.routeFingerprint, rerouteInputJson = "{}",
+                execution = AutomaticJourneyExecution.SIMULATOR, state = AutomaticJourneyState.ACTIVE,
+                sequence = 1, preparedAt = now, expiresAt = now.plusSeconds(600), departedAt = now))
+            rows.saveAndFlush(AutomaticJourneyPreparation(sessionId = grandchildId, memberId = fixture.memberId,
+                scheduleId = 9001, loginSessionGeneration = 2, clientOwnerId = parent.clientOwnerId,
+                routeInputDigest = "e".repeat(64), routeFingerprint = "f".repeat(64),
+                generation = 3, routeRevision = 3, parentSessionId = childId,
+                sourceRouteFingerprint = parent.routeFingerprint, rerouteInputJson = "{}",
+                execution = AutomaticJourneyExecution.SIMULATOR, state = AutomaticJourneyState.ACTIVE,
+                sequence = 1, preparedAt = now, expiresAt = now.plusSeconds(600), departedAt = now))
+            rows.saveAndFlush(AutomaticJourneyPreparation(sessionId = independentId, memberId = fixture.memberId,
+                scheduleId = 9001, loginSessionGeneration = 2, clientOwnerId = UUID.randomUUID().toString(),
+                routeInputDigest = "1".repeat(64), routeFingerprint = "2".repeat(64),
+                generation = 4, routeRevision = 1,
+                execution = AutomaticJourneyExecution.SIMULATOR, state = AutomaticJourneyState.ACTIVE,
+                sequence = 1, preparedAt = now, expiresAt = now.plusSeconds(600), departedAt = now))
+        }
+        val command = AutomaticJourneyStopCommand(1, 1, parent.clientOwnerId, parent.routeInputDigest)
+        repeat(2) { tx { fixture.service.stop(fixture.memberId, 9001, 2, parent.sessionId, command) } }
+        assertThat(tx { rows.findBySessionId(childId)!!.state }).isEqualTo(AutomaticJourneyState.STOPPED)
+        assertThat(tx { rows.findBySessionId(grandchildId)!!.state }).isEqualTo(AutomaticJourneyState.STOPPED)
+        assertThat(tx { rows.findBySessionId(independentId)!!.state }).isEqualTo(AutomaticJourneyState.ACTIVE)
+    }
+
     private data class Fixture(val service: AutomaticJourneyService, val jobs: SchedulePushJobService,
         val memberId: Long, val sessionId: String, val command: AutomaticJourneyDepartureCommand)
 

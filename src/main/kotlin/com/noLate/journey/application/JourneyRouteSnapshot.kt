@@ -13,6 +13,21 @@ import com.noLate.schedule.domain.ScheduleTravelPlanStatus
 
 data class JourneyRouteSnapshot(val json: String, val legsJson: String, val fingerprint: String, val legs: List<JourneyLeg>) {
     companion object {
+        /** Rebuild only a server-persisted, previously admitted reroute snapshot. */
+        fun fromReroute(json: String, expectedFingerprint: String, mapper: ObjectMapper): JourneyRouteSnapshot {
+            if (json.toByteArray(Charsets.UTF_8).size !in 1..1_048_576 ||
+                OpaquePushIdentifier.fingerprint(json) != expectedFingerprint)
+                throw BusinessException(ErrorCode.INVALID_STATE, "새 경로 저장 내용이 변경되었습니다.")
+            val route = runCatching { mapper.readTree(json) }.getOrNull()
+                ?: throw BusinessException(ErrorCode.INVALID_STATE, "새 경로를 읽을 수 없습니다.")
+            val legs = route.path("transitLegs")
+            if (!legs.isArray || legs.size() !in 3..31 || legs.size() % 2 != 1 ||
+                legs.withIndex().any { (index, leg) ->
+                    leg.path("kind").asText() != if (index % 2 == 0) "WALK" else "BUS"
+                }) throw BusinessException(ErrorCode.INVALID_STATE, "새 경로 구간이 올바르지 않습니다.")
+            return JourneyRouteSnapshot(json, mapper.writeValueAsString(legs), expectedFingerprint, describe(legs))
+        }
+
         fun from(plan: ScheduleTravelPlanDto, mapper: ObjectMapper): JourneyRouteSnapshot {
             if (plan.status != ScheduleTravelPlanStatus.READY || plan.travelMode != ScheduleTravelMode.TRANSIT) {
                 throw BusinessException(ErrorCode.INVALID_STATE, "현재 사용할 수 있는 본인의 대중교통 경로가 필요합니다.")

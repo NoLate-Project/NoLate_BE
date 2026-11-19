@@ -1615,6 +1615,11 @@ CREATE TABLE IF NOT EXISTS automatic_journey_preparations (
     route_fingerprint VARCHAR(64) NOT NULL,
     generation BIGINT NOT NULL,
     route_revision BIGINT NOT NULL DEFAULT 1,
+    parent_session_id VARCHAR(36) NULL,
+    source_route_fingerprint VARCHAR(64) NULL,
+    reroute_snapshot_json LONGTEXT NULL,
+    reroute_input_json LONGTEXT NULL,
+    reroute_bus_admission_json VARCHAR(1000) NULL,
     execution VARCHAR(12) NOT NULL,
     state VARCHAR(12) NOT NULL,
     sequence BIGINT NOT NULL DEFAULT 0,
@@ -1629,9 +1634,10 @@ CREATE TABLE IF NOT EXISTS automatic_journey_preparations (
     PRIMARY KEY (id),
     UNIQUE KEY uk_auto_journey_session (session_id),
     UNIQUE KEY uk_auto_journey_generation (member_id, schedule_id, generation),
+    UNIQUE KEY uk_auto_journey_parent_session (parent_session_id),
     INDEX idx_auto_journey_expiry (state, expires_at),
     INDEX idx_auto_journey_retention (retention_expires_at)
-) COMMENT='Opt-in automatic departure preparations and receipts, no raw GPS or route snapshots';
+) COMMENT='Opt-in automatic departure and versioned reroute receipts; no raw GPS';
 
 CREATE TABLE IF NOT EXISTS journey_activity_lanes (
     id BIGINT NOT NULL AUTO_INCREMENT,

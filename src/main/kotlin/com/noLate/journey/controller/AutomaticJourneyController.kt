@@ -8,6 +8,8 @@ import com.noLate.journey.application.AutomaticJourneyService
 import com.noLate.journey.application.JourneyRerouteSearchService
 import com.noLate.journey.application.JourneyRerouteWalkingProofService
 import com.noLate.journey.application.JourneyRerouteTransitProofService
+import com.noLate.journey.application.JourneyRerouteCommitService
+import com.noLate.journey.application.JourneyRerouteCommitCommand
 import com.noLate.journey.domain.AutomaticJourneyDepartureCommand
 import com.noLate.journey.domain.AutomaticJourneyPrepareCommand
 import com.noLate.journey.domain.AutomaticJourneySavedPrepareCommand
@@ -21,7 +23,8 @@ import org.springframework.web.bind.annotation.*
 class AutomaticJourneyController(private val service: AutomaticJourneyService,
     private val reroute: JourneyRerouteSearchService? = null,
     private val rerouteWalking: JourneyRerouteWalkingProofService? = null,
-    private val rerouteTransit: JourneyRerouteTransitProofService? = null) {
+    private val rerouteTransit: JourneyRerouteTransitProofService? = null,
+    private val rerouteCommit: JourneyRerouteCommitService? = null) {
     @ExceptionHandler(com.noLate.journey.application.WalkingContractRejected::class)
     fun walkingRejected(error: com.noLate.journey.application.WalkingContractRejected) = org.springframework.http.ResponseEntity
         .status(when (error.reason) { "FEATURE_DISABLED" -> 503; "PROVIDER_BUSY" -> 429; else -> 409 })
@@ -49,6 +52,13 @@ class AutomaticJourneyController(private val service: AutomaticJourneyService,
     @GetMapping
     fun current(@AuthenticationPrincipal principal: MemberPrincipal?, @PathVariable scheduleId: Long, @RequestParam clientOwnerId: String) =
         authenticated(principal) { id, generation -> ApiResponse.success(service.current(id, scheduleId, generation, clientOwnerId)) }
+
+    data class CurrentCommand(val clientOwnerId: String)
+    @PostMapping("/current")
+    fun currentPost(@AuthenticationPrincipal principal: MemberPrincipal?, @PathVariable scheduleId: Long,
+        @RequestBody command: CurrentCommand) = authenticated(principal) { id, generation ->
+        ApiResponse.success(service.current(id, scheduleId, generation, command.clientOwnerId))
+    }
 
     @PostMapping("/{sessionId}/reconcile")
     fun reconcile(@AuthenticationPrincipal principal: MemberPrincipal?, @PathVariable scheduleId: Long, @PathVariable sessionId: String, @RequestBody command: AutomaticJourneyStopCommand) =
@@ -85,7 +95,16 @@ class AutomaticJourneyController(private val service: AutomaticJourneyService,
             "validUntil" to proof.validUntil,
             "routeId" to proof.busAdmission.routeId,
             "stationCount" to proof.busAdmission.stationCount,
+            "routeSnapshotJSON" to proof.snapshot.json,
             "navigationReady" to false, "reason" to "ATOMIC_REPLACEMENT_PENDING"))
+    }
+
+    @PostMapping("/{sessionId}/reroute-candidates/{candidateId}/commit")
+    fun commitReroute(@AuthenticationPrincipal principal: MemberPrincipal?, @PathVariable scheduleId: Long,
+        @PathVariable sessionId: String, @PathVariable candidateId: String,
+        @RequestBody command: JourneyRerouteCommitCommand) = authenticated(principal) { id, generation ->
+        ApiResponse.success((rerouteCommit ?: throw BusinessException(ErrorCode.FEATURE_DISABLED))
+            .commit(id, scheduleId, generation, sessionId, candidateId, command))
     }
 
     private fun <T> authenticated(principal: MemberPrincipal?, action: (Long, Long) -> T): T {
