@@ -6,6 +6,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.journey.application.AutomaticJourneyService
 import com.noLate.journey.application.JourneyRerouteSearchService
+import com.noLate.journey.application.JourneyRerouteWalkingProofService
 import com.noLate.journey.domain.AutomaticJourneyDepartureCommand
 import com.noLate.journey.domain.AutomaticJourneyPrepareCommand
 import com.noLate.journey.domain.AutomaticJourneySavedPrepareCommand
@@ -17,10 +18,11 @@ import org.springframework.web.bind.annotation.*
 @RestController
 @RequestMapping("/api/schedules/{scheduleId}/automatic-journey")
 class AutomaticJourneyController(private val service: AutomaticJourneyService,
-    private val reroute: JourneyRerouteSearchService? = null) {
+    private val reroute: JourneyRerouteSearchService? = null,
+    private val rerouteWalking: JourneyRerouteWalkingProofService? = null) {
     @ExceptionHandler(com.noLate.journey.application.WalkingContractRejected::class)
     fun walkingRejected(error: com.noLate.journey.application.WalkingContractRejected) = org.springframework.http.ResponseEntity
-        .status(if (error.reason == "FEATURE_DISABLED") 503 else 409)
+        .status(when (error.reason) { "FEATURE_DISABLED" -> 503; "PROVIDER_BUSY" -> 429; else -> 409 })
         .cacheControl(org.springframework.http.CacheControl.noStore())
         .body(ApiResponse.failure<Nothing>("도보 경로를 다시 확인해 주세요.", error.reason))
     @PostMapping("/prepare-saved")
@@ -56,6 +58,19 @@ class AutomaticJourneyController(private val service: AutomaticJourneyService,
         authenticated(principal) { id, generation -> ApiResponse.success(
             (reroute ?: throw BusinessException(ErrorCode.FEATURE_DISABLED))
                 .search(id, scheduleId, generation, sessionId, command)) }
+
+    @PostMapping("/{sessionId}/reroute-candidates/{candidateId}/walking-proof")
+    fun rerouteWalkingProof(@AuthenticationPrincipal principal: MemberPrincipal?, @PathVariable scheduleId: Long,
+        @PathVariable sessionId: String, @PathVariable candidateId: String,
+        @RequestBody command: AutomaticJourneyStopCommand) = authenticated(principal) { id, generation ->
+        val proof = (rerouteWalking ?: throw BusinessException(ErrorCode.FEATURE_DISABLED))
+            .verify(id, scheduleId, generation, sessionId, command, candidateId)
+        ApiResponse.success(mapOf("candidateId" to proof.candidateId,
+            "issuedAt" to proof.issuedAt, "validUntil" to proof.validUntil,
+            "walkCount" to proof.walkingPaths.size,
+            "pointCount" to proof.walkingPaths.values.sumOf { it.size },
+            "navigationReady" to false, "reason" to "TRANSIT_ADMISSION_PENDING"))
+    }
 
     private fun <T> authenticated(principal: MemberPrincipal?, action: (Long, Long) -> T): T {
         val actor = principal ?: throw BusinessException(ErrorCode.UNAUTHORIZED)

@@ -34,7 +34,8 @@ fun automaticJourneyFixtureMvc(fixture: AutomaticJourneyFixture, authenticated: 
     activityDelivery: com.noLate.journey.application.JourneyActivityDeliveryService? = null,
     rideProvider: com.noLate.transit.infrastructure.SeoulTransitArrivalClient? = null,
     rerouteProviders: List<com.noLate.journey.application.JourneyRerouteRouteProvider> = emptyList(),
-    rerouteEnabled: Boolean = false): MockMvc {
+    rerouteEnabled: Boolean = false,
+    rerouteWalkingProvider: com.noLate.journey.application.ServerPedestrianProvider? = null): MockMvc {
     fixture.mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
     val principal = MemberPrincipal(7, "fixture@example.invalid", "Synthetic fixture", accessTokenSessionGeneration = 2)
     val resolver = object : HandlerMethodArgumentResolver {
@@ -48,7 +49,10 @@ fun automaticJourneyFixtureMvc(fixture: AutomaticJourneyFixture, authenticated: 
         .thenAnswer { arrivalSource() }
     val reroute = if (rerouteEnabled) com.noLate.journey.application.JourneyRerouteSearchService(
         automatic, rerouteProviders, fixture.mapper, fixture.clock, true) else null
-    val controllers = mutableListOf<Any>(AutomaticJourneyController(automatic, reroute),
+    val rerouteWalking = if (reroute != null && rerouteWalkingProvider != null)
+        com.noLate.journey.application.JourneyRerouteWalkingProofService(
+            reroute, rerouteWalkingProvider, fixture.mapper, fixture.clock) else null
+    val controllers = mutableListOf<Any>(AutomaticJourneyController(automatic, reroute, rerouteWalking),
         JourneyBusArrivalController(JourneyBusArrivalService(automatic, arrivals, fixture.clock)))
     activityDelivery?.let { controllers.add(com.noLate.journey.controller.JourneyActivityController(it)) }
     rideProvider?.let { controllers.add(com.noLate.journey.controller.JourneyBusRideController(

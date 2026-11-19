@@ -3,6 +3,7 @@ package com.noLate.journey.automatic
 import com.fasterxml.jackson.databind.JsonNode
 import com.noLate.eta.domain.TransitJourneySearchRequest
 import com.noLate.journey.application.JourneyRerouteRouteProvider
+import com.noLate.journey.application.ServerPedestrianProvider
 import com.noLate.journey.domain.JourneyRerouteSearchCommand
 import com.noLate.schedule.domain.SchedulePlaceDto
 import org.assertj.core.api.Assertions.assertThat
@@ -11,6 +12,55 @@ import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*
 
 class AutomaticJourneyControllerTest {
+    @Test fun `authenticated candidate walking proof checks both walks without switching route`() {
+        val f = AutomaticJourneyFixture()
+        f.plan = f.plan.copy(destination = SchedulePlaceDto("경복궁", lat = 37.5765, lng = 126.9785))
+        val service = f.service()
+        service.prepare(7, 9001, 2, f.prepareCommand())
+        service.departure(7, 9001, 2, f.sessionId, f.event())
+        val provider = object : JourneyRerouteRouteProvider {
+            override val providerId = "odsay"
+            override fun searchRaw(request: TransitJourneySearchRequest): JsonNode = f.mapper.readTree("""
+                {"result":{"paths":[{"pathType":2,"totalTime":25,"rps":[
+                {"trafficType":3,"duration":5},
+                {"trafficType":2,"duration":15,"startX":126.9905,"startY":37.5655,
+                 "endX":126.978,"endY":37.576,"graph":"126.9905 37.5655|126.978 37.576",
+                 "passStopList":{"stations":[{},{}]},"lane":[{}]},
+                {"trafficType":3,"duration":5}]}]}}
+            """)
+        }
+        var walkCalls = 0
+        val walking = ServerPedestrianProvider { request ->
+            walkCalls++
+            """{"type":"FeatureCollection","features":[{"type":"Feature",
+                "properties":{"index":0},"geometry":{"type":"LineString","coordinates":[
+                [${request.origin.lng},${request.origin.lat}],
+                [${request.destination.lng},${request.destination.lat}]]}}]}"""
+        }
+        val mvc = automaticJourneyFixtureMvc(f, rerouteProviders = listOf(provider), rerouteEnabled = true,
+            rerouteWalkingProvider = walking)
+        val base = "/api/schedules/9001/automatic-journey/${f.sessionId}/reroute-candidates"
+        val searchCommand = JourneyRerouteSearchCommand(1, 1, f.owner, f.digest,
+            37.565, 126.990, 8.0, f.clock.instant())
+        val found = mvc.perform(post(base).contentType(MediaType.APPLICATION_JSON)
+            .content(f.mapper.writeValueAsBytes(searchCommand))).andReturn().response
+        assertThat(found.status).isEqualTo(200)
+        val candidateId = f.mapper.readTree(found.contentAsByteArray)
+            .path("data").path("result").path("paths")[0].path("candidateId").asText()
+        val proofPath = "$base/$candidateId/walking-proof"
+        val verified = mvc.perform(post(proofPath).contentType(MediaType.APPLICATION_JSON)
+            .content(f.mapper.writeValueAsBytes(searchCommand.fence()))).andReturn().response
+        assertThat(verified.status).isEqualTo(200)
+        val data = f.mapper.readTree(verified.contentAsByteArray).path("data")
+        assertThat(data.path("walkCount").asInt()).isEqualTo(2)
+        assertThat(data.path("navigationReady").asBoolean()).isFalse()
+        assertThat(walkCalls).isEqualTo(2)
+        val denied = mvc.perform(post(proofPath).contentType(MediaType.APPLICATION_JSON)
+            .content(f.mapper.writeValueAsBytes(searchCommand.copy(routeRevision = 2).fence()))).andReturn().response
+        assertThat(denied.status).isNotEqualTo(200)
+        assertThat(walkCalls).isEqualTo(2)
+        assertThat(service.current(7, 9001, 2, f.owner)?.sessionId).isEqualTo(f.sessionId)
+    }
     @Test fun `active session looks up ODsay reroute candidates through authenticated HTTP`() {
         val f = AutomaticJourneyFixture()
         f.plan = f.plan.copy(destination = SchedulePlaceDto("경복궁", lat = 37.576, lng = 126.978))

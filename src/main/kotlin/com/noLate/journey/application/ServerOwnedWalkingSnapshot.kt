@@ -105,7 +105,7 @@ class ServerOwnedWalkingSnapshotFactory(
             issued, issued.plusSeconds(300), paths.mapValues { it.value.toList() })
     }
 
-    private fun parse(body: String, request: ServerWalkingRequest, startTolerance: Double, endTolerance: Double): List<ServerWalkingCoordinate> {
+    internal fun parse(body: String, request: ServerWalkingRequest, startTolerance: Double, endTolerance: Double): List<ServerWalkingCoordinate> {
         if (body.toByteArray(Charsets.UTF_8).size !in 1..1_048_576) reject("INPUT_LIMIT")
         val root: JsonNode = try {
             mapper.factory.createParser(body).use { parser ->

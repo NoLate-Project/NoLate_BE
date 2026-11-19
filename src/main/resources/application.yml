@@ -389,6 +389,8 @@ journey:
     extended-navigation-enabled: ${JOURNEY_AUTOMATIC_EXTENDED_NAVIGATION_ENABLED:false}
     # Candidate lookup is advisory until a versioned route replacement transaction exists.
     reroute-search-enabled: ${JOURNEY_AUTOMATIC_REROUTE_SEARCH_ENABLED:false}
+    # Verifies candidate walking geometry only; route replacement remains a separate gate.
+    reroute-walking-enabled: ${JOURNEY_AUTOMATIC_REROUTE_WALKING_ENABLED:false}
   activity:
     enabled: ${JOURNEY_ACTIVITY_ENABLED:false}
     encryption-key: ${JOURNEY_ACTIVITY_ENCRYPTION_KEY:}

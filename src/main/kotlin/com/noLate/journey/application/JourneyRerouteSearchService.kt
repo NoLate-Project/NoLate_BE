@@ -29,7 +29,8 @@ class JourneyRerouteSearchService(
         val memberId: Long, val scheduleId: Long, val loginGeneration: Long,
         val sessionId: String, val generation: Long, val routeRevision: Long,
         val clientOwnerId: String, val routeInputDigest: String,
-        val expiresAt: Instant, val path: JsonNode,
+        val origin: ServerWalkingCoordinate, val destination: ServerWalkingCoordinate,
+        val issuedAt: Instant, val expiresAt: Instant, val path: JsonNode,
     )
     private val candidatesById = ConcurrentHashMap<String, OwnedCandidate>()
 
@@ -69,7 +70,9 @@ class JourneyRerouteSearchService(
                 val id = UUID.randomUUID().toString()
                 candidatesById[id] = OwnedCandidate(memberId, scheduleId, loginGeneration, sessionId,
                     command.generation, command.routeRevision, command.clientOwnerId, command.routeInputDigest,
-                    now.plusSeconds(120), path.deepCopy<JsonNode>())
+                    ServerWalkingCoordinate(command.latitude, command.longitude),
+                    ServerWalkingCoordinate(destination.latitude, destination.longitude),
+                    now, now.plusSeconds(120), path.deepCopy<JsonNode>())
                 path.deepCopy<com.fasterxml.jackson.databind.node.ObjectNode>().apply { put("candidateId", id) }
             }
         }
@@ -91,7 +94,14 @@ class JourneyRerouteSearchService(
 
     /** A later commit must use this server-owned path, never a path echoed from the device. */
     fun requireOwnedCandidate(memberId: Long, scheduleId: Long, loginGeneration: Long,
-        sessionId: String, fence: AutomaticJourneyStopCommand, candidateId: String): JsonNode {
+        sessionId: String, fence: AutomaticJourneyStopCommand, candidateId: String): JsonNode =
+        requireOwnedCandidateContext(memberId, scheduleId, loginGeneration, sessionId, fence, candidateId).path
+
+    data class CandidateContext(val path: JsonNode, val origin: ServerWalkingCoordinate,
+        val destination: ServerWalkingCoordinate, val issuedAt: Instant, val expiresAt: Instant)
+
+    fun requireOwnedCandidateContext(memberId: Long, scheduleId: Long, loginGeneration: Long,
+        sessionId: String, fence: AutomaticJourneyStopCommand, candidateId: String): CandidateContext {
         if (!enabled || runCatching { UUID.fromString(candidateId) }.isFailure)
             throw BusinessException(ErrorCode.INVALID_INPUT)
         val now = clock.instant()
@@ -107,8 +117,12 @@ class JourneyRerouteSearchService(
             candidate.routeRevision != fence.routeRevision || candidate.clientOwnerId != fence.clientOwnerId ||
             candidate.routeInputDigest != fence.routeInputDigest)
             throw BusinessException(ErrorCode.INVALID_STATE, "새 경로 후보가 변경되었습니다.")
-        automatic.requireActiveRerouteDestination(memberId, scheduleId, loginGeneration, sessionId, fence)
-        return candidate.path.deepCopy<JsonNode>()
+        val destination = automatic.requireActiveRerouteDestination(
+            memberId, scheduleId, loginGeneration, sessionId, fence)
+        if (candidate.destination != ServerWalkingCoordinate(destination.latitude, destination.longitude))
+            throw BusinessException(ErrorCode.INVALID_STATE, "도착지가 변경되었습니다.")
+        return CandidateContext(candidate.path.deepCopy<JsonNode>(), candidate.origin, candidate.destination,
+            candidate.issuedAt, candidate.expiresAt)
     }
 
     private fun hasNavigableTransitEvidence(path: JsonNode): Boolean {
