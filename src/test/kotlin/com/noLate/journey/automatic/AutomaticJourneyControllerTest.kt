@@ -53,7 +53,10 @@ class AutomaticJourneyControllerTest {
         assertThat(verified.status).isEqualTo(200)
         val data = f.mapper.readTree(verified.contentAsByteArray).path("data")
         assertThat(data.path("walkCount").asInt()).isEqualTo(2)
+        assertThat(data.path("issuedAt").isTextual).isTrue()
+        assertThat(data.path("validUntil").isTextual).isTrue()
         assertThat(data.path("navigationReady").asBoolean()).isFalse()
+        assertThat(data.path("reason").asText()).isEqualTo("TRANSIT_ADMISSION_PENDING")
         assertThat(walkCalls).isEqualTo(2)
         val denied = mvc.perform(post(proofPath).contentType(MediaType.APPLICATION_JSON)
             .content(f.mapper.writeValueAsBytes(searchCommand.copy(routeRevision = 2).fence()))).andReturn().response
