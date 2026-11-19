@@ -24,7 +24,12 @@ class AutomaticJourneyControllerTest {
                 providerCalls++
                 assertThat(request.destinationLat).isEqualTo(37.576)
                 assertThat(request.destinationLng).isEqualTo(126.978)
-                return f.mapper.readTree("""{"result":{"paths":[{"pathType":2,"totalTime":25,"rps":[{},{}]}]}}""")
+                return f.mapper.readTree("""{"result":{"paths":[{"pathType":2,"totalTime":25,"rps":[
+                    {"trafficType":3,"duration":5},
+                    {"trafficType":2,"duration":15,"startX":126.99,"startY":37.565,
+                     "endX":126.978,"endY":37.576,"graph":"126.99 37.565|126.978 37.576",
+                     "passStopList":{"stations":[{},{}]},"lane":[{}]},
+                    {"trafficType":3,"duration":5}]}]}}""")
             }
         }
         val command = JourneyRerouteSearchCommand(1, 1, f.owner, f.digest,
@@ -34,7 +39,9 @@ class AutomaticJourneyControllerTest {
         val response = mvc.perform(post(path).contentType(MediaType.APPLICATION_JSON)
             .content(f.mapper.writeValueAsBytes(command))).andReturn().response
         assertThat(response.status).isEqualTo(200)
-        assertThat(f.mapper.readTree(response.contentAsByteArray).path("data").path("result").path("paths").size()).isEqualTo(1)
+        val paths = f.mapper.readTree(response.contentAsByteArray).path("data").path("result").path("paths")
+        assertThat(paths.size()).isEqualTo(1)
+        assertThat(paths[0].path("candidateId").asText()).matches("[a-f0-9-]{36}")
         assertThat(providerCalls).isEqualTo(1)
         val unauthenticated = automaticJourneyFixtureMvc(f, false, rerouteProviders = listOf(provider), rerouteEnabled = true)
             .perform(post(path).contentType(MediaType.APPLICATION_JSON)
