@@ -7,6 +7,7 @@ import com.noLate.global.security.MemberPrincipal
 import com.noLate.journey.application.AutomaticJourneyService
 import com.noLate.journey.application.JourneyRerouteSearchService
 import com.noLate.journey.application.JourneyRerouteWalkingProofService
+import com.noLate.journey.application.JourneyRerouteTransitProofService
 import com.noLate.journey.domain.AutomaticJourneyDepartureCommand
 import com.noLate.journey.domain.AutomaticJourneyPrepareCommand
 import com.noLate.journey.domain.AutomaticJourneySavedPrepareCommand
@@ -19,7 +20,8 @@ import org.springframework.web.bind.annotation.*
 @RequestMapping("/api/schedules/{scheduleId}/automatic-journey")
 class AutomaticJourneyController(private val service: AutomaticJourneyService,
     private val reroute: JourneyRerouteSearchService? = null,
-    private val rerouteWalking: JourneyRerouteWalkingProofService? = null) {
+    private val rerouteWalking: JourneyRerouteWalkingProofService? = null,
+    private val rerouteTransit: JourneyRerouteTransitProofService? = null) {
     @ExceptionHandler(com.noLate.journey.application.WalkingContractRejected::class)
     fun walkingRejected(error: com.noLate.journey.application.WalkingContractRejected) = org.springframework.http.ResponseEntity
         .status(when (error.reason) { "FEATURE_DISABLED" -> 503; "PROVIDER_BUSY" -> 429; else -> 409 })
@@ -70,6 +72,20 @@ class AutomaticJourneyController(private val service: AutomaticJourneyService,
             "walkCount" to proof.walkingPaths.size,
             "pointCount" to proof.walkingPaths.values.sumOf { it.size },
             "navigationReady" to false, "reason" to "TRANSIT_ADMISSION_PENDING"))
+    }
+
+    @PostMapping("/{sessionId}/reroute-candidates/{candidateId}/transit-proof")
+    fun rerouteTransitProof(@AuthenticationPrincipal principal: MemberPrincipal?, @PathVariable scheduleId: Long,
+        @PathVariable sessionId: String, @PathVariable candidateId: String,
+        @RequestBody command: AutomaticJourneyStopCommand) = authenticated(principal) { id, generation ->
+        val proof = (rerouteTransit ?: throw BusinessException(ErrorCode.FEATURE_DISABLED))
+            .verify(id, scheduleId, generation, sessionId, command, candidateId)
+        ApiResponse.success(mapOf("candidateId" to proof.candidateId,
+            "routeFingerprint" to proof.routeFingerprint,
+            "validUntil" to proof.validUntil,
+            "routeId" to proof.busAdmission.routeId,
+            "stationCount" to proof.busAdmission.stationCount,
+            "navigationReady" to false, "reason" to "ATOMIC_REPLACEMENT_PENDING"))
     }
 
     private fun <T> authenticated(principal: MemberPrincipal?, action: (Long, Long) -> T): T {
