@@ -19,6 +19,10 @@ enum class TrafficSource {
 enum class PlannedJourneyArrivalBasis {
     LAST_ACCEPTED_PLAN,
     MATCHED_TRAIN_REALTIME,
+    /** 구간 관측으로 환승을 재판정했으며 관측되지 않은 후속 편은 시간표 기준이다. */
+    MATCHED_RIDE_AND_ONWARD_TIMETABLE,
+    /** 양 끝 역이 식별한 실제 차량을 선택했다. 원래 시간표 편의 별칭이나 탑승 확인이 아니다. */
+    OBSERVED_SERVICE_CONNECTION,
 }
 
 data class PlannedJourneyArrivalPrediction(
@@ -27,6 +31,8 @@ data class PlannedJourneyArrivalPrediction(
     val presentedAt: Instant,
     val routeIdentity: String,
     val basis: PlannedJourneyArrivalBasis,
+    val effectiveTransitRoute: EffectiveTransitRoute? = null,
+    val sourceUpdatedAt: Instant? = null,
 )
 
 /** 출발 후 원래 출발지에서 다시 출발한다고 가정한 조회 결과. 진행 중 계획의 도착 예측이 아니다. */
@@ -178,8 +184,11 @@ data class ScheduleDepartureEtaStatusDto(
     val futureTimetablePrediction: EffectiveTransitRoute? = null,
     /** 출발 후에도 동일 편을 확인한 경우만 보정한다. 실제 탑승·정시 도착 확정값이 아니다. */
     val plannedJourneyArrivalPrediction: PlannedJourneyArrivalPrediction? = null,
+    val plannedJourneyTimingFailureReason: String? = null,
     /** 출발 후 새 출발지 재검색의 진단. 위 잠정 도착이나 보호된 출발 알림에 적용하지 않는다. */
     val originReplanDiagnostic: OriginReplanDiagnostic? = null,
     /** 재조회가 불확실할 때 저장한 대중교통 경로 기준의 출발시각. 예약된 출발시각과 다를 수 있다. */
     val savedRouteEstimatedDepartureAt: Instant? = null,
+    /** 앱이 시간표를 저장 경로의 지도에 표시할 수 있는지 판단하는 근거. */
+    val futureTimetableRouteProvenance: TransitRouteProvenance? = null,
 )

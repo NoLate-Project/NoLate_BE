@@ -56,7 +56,8 @@ object RealBusProductSimulatorServer {
         val output = Path.of(args[0]).toRealPath()
         val captured = Path.of(args[1]).toRealPath()
         val port = System.getProperty("nolate.journey.real-bus-port", "5534").toInt()
-        require(port in setOf(5527, 5534))
+        require(port in setOf(5527, 5534, 5535))
+        require(port != 5535 || System.getProperty("nolate.journey.product-remote-e2e") == "true")
         require(output.toString().startsWith("/private/tmp/nolate-eta-real-e2e."))
         require(captured.toString() == "/private/tmp")
         System.setProperty("nolate.journey.real-bus-output-dir", output.toString())
@@ -67,13 +68,16 @@ object RealBusProductSimulatorServer {
         val privateSettings = Properties()
         Files.newInputStream(secretFile).use(privateSettings::load)
         require(!privateSettings.getProperty("TMAP_APP_KEY").isNullOrBlank())
-        val app = SpringApplication(NoLateApplication::class.java, BusFixtureConfiguration::class.java)
+        val app = SpringApplication(NoLateApplication::class.java, BusFixtureConfiguration::class.java,
+            ProductRemoteActivityFixture::class.java)
         app.setAdditionalProfiles("test")
         app.addInitializers({ context ->
             context.environment.propertySources.addFirst(PropertiesPropertySource("isolated-walking-key",
                 Properties().apply {
                     setProperty("TMAP_APP_KEY", privateSettings.getProperty("TMAP_APP_KEY"))
                     setProperty("routing.tmap.app-key", privateSettings.getProperty("TMAP_APP_KEY"))
+                    if (port == 5535) setProperty("journey.activity.encryption-key",
+                        requireNotNull(privateSettings.getProperty("JOURNEY_ACTIVITY_ENCRYPTION_KEY")))
                 }))
             context.addBeanFactoryPostProcessor { factory ->
                 (factory as BeanDefinitionRegistry).removeBeanDefinition("schedulePushJobBackfill")
@@ -204,6 +208,18 @@ class BusFixtureConfiguration {
                 val error = sequenceOf("errorCode", "error", "code", "message")
                     .mapNotNull { key -> tree?.path(key)?.takeIf { !it.isMissingNode && !it.isNull }?.asText() }
                     .firstOrNull(String::isNotBlank)
+                if (request.localPort == 5535 && path.endsWith("/live-activity") && wrapped.status >= 400 && command is ObjectNode) {
+                    // Private test evidence only; never persist either provider credential.
+                    val redacted = command.deepCopy().apply {
+                        put("fcmRegistrationToken", "isolated-contract-probe")
+                        put("liveActivityToken", "a".repeat(64))
+                        put("activityId", "isolated-contract-probe")
+                    }
+                    val directory = Path.of(requireNotNull(System.getProperty("nolate.journey.real-bus-output-dir")))
+                    Files.writeString(directory.resolve("rejected-activity-contract.json"),
+                        jacksonObjectMapper().writeValueAsString(mapOf("command" to redacted,
+                            "checkedAt" to Instant.now().toString(), "status" to wrapped.status, "errorCode" to error)))
+                }
                 println("ISOLATED_AUTOMATIC_HTTP=" + wrapped.status + " path=" + path.substringAfter("/api/") +
                     " execution=" + command?.path("execution")?.asText("unknown") + " dataStatus=" +
                     tree?.path("data")?.path("status")?.asText("none") + " error=" + (error ?: "none"))

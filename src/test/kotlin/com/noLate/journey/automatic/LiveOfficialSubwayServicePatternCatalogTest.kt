@@ -116,6 +116,21 @@ class LiveOfficialSubwayServicePatternCatalogTest {
         }) }
     }
 
+    @Test fun `transfer admission uses the selected subway occurrence for both official paths`() {
+        val catalog = LiveOfficialSubwayServicePatternCatalog({ query ->
+            if (query.stationValueType == SeoulMetroShortestPathClient.StationValueType.NAME)
+                path(stations.take(3)) else path(stations)
+        }, ::coordinates, clock)
+        val transfer = snapshot { root ->
+            val legs = root.path("transitLegs") as com.fasterxml.jackson.databind.node.ArrayNode
+            legs.add(legs[1].deepCopy<ObjectNode>()); legs.add(legs[2].deepCopy<ObjectNode>())
+            (legs[1] as ObjectNode).put("kind", "BUS")
+        }
+        val verifier = LiveJourneySubwayDeviceAdmissionVerifier(catalog)
+        assertEquals(3, verifier.verify(transfer, 3).subwayLegIndex)
+        for (index in listOf(0, 1, 2, 5)) assertFailsWith<BusinessException> { verifier.verify(transfer, index) }
+    }
+
     @Test fun `a changed official direction or saved stop cannot reach train provider`() {
         var trainCalls = 0
         val catalog = LiveOfficialSubwayServicePatternCatalog({ query ->

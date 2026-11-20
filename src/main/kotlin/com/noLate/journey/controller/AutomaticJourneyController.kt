@@ -25,9 +25,16 @@ class AutomaticJourneyController(private val service: AutomaticJourneyService,
     private val rerouteWalking: JourneyRerouteWalkingProofService? = null,
     private val rerouteTransit: JourneyRerouteTransitProofService? = null,
     private val rerouteCommit: JourneyRerouteCommitService? = null) {
+    /** A contended row cannot establish ownership. The client may retry within its existing lease. */
+    @ExceptionHandler(org.springframework.dao.PessimisticLockingFailureException::class,
+        jakarta.persistence.LockTimeoutException::class, jakarta.persistence.PessimisticLockException::class)
+    fun storageBusy() = org.springframework.http.ResponseEntity.status(503)
+        .cacheControl(org.springframework.http.CacheControl.noStore())
+        .body(ApiResponse.failure<Nothing>("잠시 후 경로를 다시 확인해 주세요.", "JOURNEY_STORAGE_BUSY"))
+
     @ExceptionHandler(com.noLate.journey.application.WalkingContractRejected::class)
     fun walkingRejected(error: com.noLate.journey.application.WalkingContractRejected) = org.springframework.http.ResponseEntity
-        .status(when (error.reason) { "FEATURE_DISABLED" -> 503; "PROVIDER_BUSY" -> 429; else -> 409 })
+        .status(when (error.reason) { "FEATURE_DISABLED", "ROUTE_BUSY" -> 503; "PROVIDER_BUSY" -> 429; else -> 409 })
         .cacheControl(org.springframework.http.CacheControl.noStore())
         .body(ApiResponse.failure<Nothing>("도보 경로를 다시 확인해 주세요.", error.reason))
     @PostMapping("/prepare-saved")

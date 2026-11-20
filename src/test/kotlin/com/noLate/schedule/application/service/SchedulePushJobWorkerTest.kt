@@ -1,6 +1,14 @@
 package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.noLate.eta.application.port.TransitTimetableProvider
+import com.noLate.eta.application.transit.PlannedTransitRouteRefresher
+import com.noLate.eta.application.transit.TransitJourneyTimetableEnricher
+import com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator
+import com.noLate.eta.application.transit.TransitTransferRealtimeGuard
+import com.noLate.eta.domain.TransitLegTimetable
+import com.noLate.transit.application.TransitArrivalService
+import com.noLate.transit.domain.TransitArrivalDto
 import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.useCase.NotificationUseCase
@@ -13,6 +21,8 @@ import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
 import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
 import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
+import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
+import com.noLate.schedule.application.PlannedTransitTimingFailure
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
 import com.noLate.schedule.application.TrafficResult
@@ -90,6 +100,195 @@ class SchedulePushJobWorkerTest {
         .ofPattern("HH:mm")
         .withZone(ZoneId.of("Asia/Seoul"))
     private val objectMapper = jacksonObjectMapper().findAndRegisterModules()
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource("600,60", "930,30", "1800,60", "1500,600")
+    fun `진행 중 계획의 하차 관측 창을 주기 조회가 건너뛰지 않는다`(secondsBeforeArrival: Long, expectedDelay: Long) {
+        val input = requireNotNull(javaClass.getResourceAsStream("/eta/reported-boarding-arrival-20261120.json"))
+            .use(objectMapper::readTree)
+        val plan = objectMapper.treeToValue(input["plan"], EffectiveTransitRoute::class.java)
+        val firstArrival = requireNotNull(plan.segments.first { it.rideTiming != null }.rideTiming).predictedArrivalAt
+        val now = firstArrival.minusSeconds(secondsBeforeArrival)
+        val schedule = schedule(now.plusSeconds(7200), travelMode = ScheduleTravelMode.TRANSIT)
+        val job = persistedJob(1L, 10L, schedule.startAt, plan.departureAt,
+            plan.departureAt.minusSeconds(600), notificationIntervalMinutes)
+        job.startProcessing("previous-worker")
+        job.finishCheck(travelMinutes = plan.totalMinutes, recommendedDepartureAt = plan.departureAt,
+            pushSent = true, notifiedDepartureAt = plan.departureAt, nextCheckAt = now, completeAfterCheck = false,
+            etaRouteFingerprint = routeFingerprint(schedule),
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan)),
+            now = now.minusSeconds(60))
+        stubDueJobLookup(job, schedule, now)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(travelMinutes = plan.totalMinutes,
+            source = TrafficSource.SELECTED_ROUTE, stale = true, failureReason = TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED))
+
+        worker(clock = Clock.fixed(now, ZoneOffset.UTC)).runDueJobs(now)
+
+        assertEquals(now, job.lastCheckedAt)
+        assertEquals(2, job.checkCount)
+        assertEquals(plan.departureAt, job.lastRecommendedDepartureAt)
+        assertEquals(now.plusSeconds(expectedDelay), job.nextCheckAt)
+        // 상태 API가 사용하는 갱신 경계도 실제 다음 조회시각과 함께 저장한다.
+        assertEquals(job.nextCheckAt, job.lastEtaRefreshDueAt)
+        val stored = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
+        assertEquals(plan, stored.inProgressPlannedRoute)
+        assertFalse(stored.accepted)
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = ["앞 열차 지연 회복", "환승 열차 지연 회복"])
+    fun `출발 후 먼저 도착하는 열차에 맞춰 Worker가 가능한 환승과 도착을 저장하고 출발 알람을 유지한다`(case: String) {
+        val input = requireNotNull(javaClass.getResourceAsStream("/eta/planned-transfer-recovery-synthetic.json")).use(objectMapper::readTree)
+        val original = objectMapper.treeToValue(input["plan"], EffectiveTransitRoute::class.java)
+        val rows = input["stationRows"].map { batch -> batch.map { objectMapper.treeToValue(it, TransitArrivalDto::class.java) } }
+        val lastRead = Instant.parse(input["evaluatedAt"].asText())
+        val firstRead = lastRead.minusSeconds(20)
+        val timetable = org.mockito.kotlin.mock<TransitTimetableProvider>()
+        whenever(timetable.findRides(any())).thenReturn(listOf(objectMapper.treeToValue(input["alternateTrain"], TransitLegTimetable::class.java)))
+        val arrivals = org.mockito.kotlin.mock<TransitArrivalService>()
+        val inboundRecovers = case == "앞 열차 지연 회복"
+        val transfer = rows.last().last()
+        var feed = if (inboundRecovers) rows.first() else rows.first() + transfer.copy(
+            expectedAt = "2026-11-19T12:18:20Z", sourceUpdatedAt = rows.first().single().sourceUpdatedAt)
+        whenever(arrivals.getSubwayArrivalsForEta(any(), anyOrNull(), anyOrNull(), anyOrNull(), any())).thenAnswer { query ->
+            feed.filter { it.stationName == query.arguments[0] && it.lineName == query.arguments[1] }
+        }
+        val refresher = PlannedTransitRouteRefresher(TransitTransferRealtimeGuard(arrivals),
+            TransitJourneyTimetableEnricher(listOf(timetable)), TransitTransferFeasibilityEvaluator())
+        val delayed = requireNotNull(refresher.refresh(original, firstRead))
+        assertEquals(if (inboundRecovers) "2014" else "2012", delayed.route?.segments?.get(3)?.rideTiming?.timetable?.trainNumber)
+        val previous = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = original, plannedRouteUpdate = delayed)
+        val schedule = schedule(lastRead.plusSeconds(3600), travelMode = ScheduleTravelMode.TRANSIT, alertMode = ScheduleAlertMode.ALARM)
+        val job = persistedJob(1L, 10L, schedule.startAt, original.departureAt,
+            original.departureAt.minusSeconds(600), notificationIntervalMinutes)
+        job.startProcessing("previous-worker")
+        job.finishCheck(travelMinutes = original.totalMinutes, recommendedDepartureAt = original.departureAt,
+            pushSent = false, notifiedDepartureAt = null, nextCheckAt = lastRead, completeAfterCheck = false,
+            etaRouteFingerprint = routeFingerprint(schedule), effectiveTransitRouteJson = objectMapper.writeValueAsString(previous),
+            now = firstRead)
+        feed = if (inboundRecovers) rows.last() else listOf(transfer)
+        stubDueJobLookup(job, schedule, lastRead)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(travelMinutes = original.totalMinutes,
+            source = TrafficSource.SELECTED_ROUTE, stale = true, failureReason = TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED))
+        worker(clock = Clock.fixed(lastRead, ZoneOffset.UTC), refresher = refresher,
+            alarmSyncService = departureAlarmSyncService).runDueJobs(lastRead)
+
+        val stored = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
+        val prediction = requireNotNull(stored.plannedJourneyArrivalPrediction(lastRead, 120))
+        val connected = requireNotNull(prediction.effectiveTransitRoute?.segments?.get(3)?.rideTiming)
+        assertEquals(if (inboundRecovers) "2012" else "2014", connected.timetable.trainNumber)
+        val expectedArrival = if (inboundRecovers) "2026-11-19T12:27:42Z" else "2026-11-19T12:32:32Z"
+        assertEquals(Instant.parse(expectedArrival), prediction.predictedArrivalAt)
+        if (!inboundRecovers) {
+            assertEquals(EffectiveTransitRideTimingBasis.TIMETABLE, connected.basis)
+            assertNull(connected.observationSourceUpdatedAt)
+        }
+        assertEquals(original.departureAt, job.lastRecommendedDepartureAt)
+        verifyNoInteractions(departureAlarmSyncService)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `Worker는 첫 승차 여유가 사라진 계획을 같은 승차역의 새 예보로만 재개한다`(firstTrainConfirmed: Boolean) {
+        val input = requireNotNull(javaClass.getResourceAsStream("/eta/planned-transfer-recovery-synthetic.json")).use(objectMapper::readTree)
+        val plan = objectMapper.treeToValue(input["plan"], EffectiveTransitRoute::class.java)
+        val firstRead = plan.departureAt.plusSeconds(72)
+        val ready = requireNotNull(plan.segments[1].rideTiming).predictedBoardingAt
+        // 이전 승차 예정시각을 지났지만 열차가 늦어졌다면 승차역 한 번의 조회로 확인할 수 있다.
+        val nextRead = ready.plusSeconds(1)
+        val delayedBoarding = ready.plusSeconds(30)
+        val firstRow = objectMapper.treeToValue(input["stationRows"][0][0], TransitArrivalDto::class.java)
+            .copy(stationName = "노원", sourceUpdatedAt = firstRead.toString(), expectedAt = ready.minusSeconds(1).toString())
+        val transferRow = objectMapper.treeToValue(input["stationRows"][1][1], TransitArrivalDto::class.java)
+            .copy(sourceUpdatedAt = nextRead.toString())
+        var rows = listOf(firstRow)
+        val arrivals = org.mockito.kotlin.mock<TransitArrivalService>()
+        whenever(arrivals.getSubwayArrivalsForEta(any(), anyOrNull(), anyOrNull(), anyOrNull(), any())).thenAnswer { query ->
+            rows.filter { it.stationName == query.arguments[0] && it.lineName == query.arguments[1] }
+        }
+        val refresher = PlannedTransitRouteRefresher(TransitTransferRealtimeGuard(arrivals),
+            TransitJourneyTimetableEnricher(emptyList()), TransitTransferFeasibilityEvaluator())
+        val conflict = requireNotNull(refresher.refresh(plan, firstRead))
+        assertTrue(conflict.requiresFirstBoardingRecheck)
+        val previous = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan, plannedRouteUpdate = conflict)
+        val schedule = schedule(nextRead.plusSeconds(3600), travelMode = ScheduleTravelMode.TRANSIT, alertMode = ScheduleAlertMode.ALARM)
+        val job = persistedJob(1L, 10L, schedule.startAt, plan.departureAt, plan.departureAt.minusSeconds(600), notificationIntervalMinutes)
+        job.startProcessing("previous-worker")
+        job.finishCheck(travelMinutes = plan.totalMinutes, recommendedDepartureAt = plan.departureAt,
+            pushSent = false, notifiedDepartureAt = null, nextCheckAt = nextRead, completeAfterCheck = false,
+            etaRouteFingerprint = routeFingerprint(schedule), effectiveTransitRouteJson = objectMapper.writeValueAsString(previous), now = firstRead)
+        rows = if (firstTrainConfirmed) listOf(transferRow, firstRow.copy(sourceUpdatedAt = nextRead.toString(),
+            expectedAt = delayedBoarding.toString())) else listOf(transferRow)
+        stubDueJobLookup(job, schedule, nextRead)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(plan.totalMinutes, TrafficSource.SELECTED_ROUTE, stale = true))
+        worker(clock = Clock.fixed(nextRead, ZoneOffset.UTC), refresher = refresher, alarmSyncService = departureAlarmSyncService).runDueJobs(nextRead)
+
+        val stored = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
+        val prediction = stored.plannedJourneyArrivalPrediction(nextRead, 120)
+        if (firstTrainConfirmed) {
+            assertNull(stored.plannedJourneyTimingFailureReason())
+            assertEquals(delayedBoarding, requireNotNull(prediction).effectiveTransitRoute?.segments?.get(1)?.rideTiming?.predictedBoardingAt)
+        } else {
+            assertEquals(PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED.name, stored.plannedJourneyTimingFailureReason())
+            assertEquals(firstRead, stored.plannedRouteUpdate?.sourceUpdatedAt)
+            assertNull(prediction)
+        }
+        assertEquals(plan.departureAt, job.lastRecommendedDepartureAt)
+        verify(arrivals, times(2)).getSubwayArrivalsForEta("노원", "4호선", null, "DOWN", 10)
+        verify(arrivals, never()).getSubwayArrivalsForEta("사당", "4호선", null, "DOWN", 10)
+        verifyNoInteractions(departureAlarmSyncService)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `완전한 미관측 시간표는 알림을 앞당길 수 있지만 뒤로 미루거나 정상 ETA가 되지 않는다`(earlier: Boolean) {
+        val schedule = schedule(testNow.plusSeconds(4200), travelMode = ScheduleTravelMode.TRANSIT,
+            alertMode = ScheduleAlertMode.ALARM)
+        val job = dueDepartureJob(schedule)
+        val before = job.departureAt
+        val departure = testNow.plusSeconds(if (earlier) 600 else 3000)
+        val arrival = testNow.plusSeconds(4033)
+        var responseClock = testNow
+        val advancingClock = object : Clock() {
+            override fun getZone() = ZoneOffset.UTC
+            override fun withZone(zone: ZoneId): Clock = this
+            override fun instant() = responseClock
+        }
+        val table = com.noLate.eta.domain.TransitLegTimetable("seoul-timetable",
+            com.noLate.eta.domain.SeoulSubwayLine.LINE_4, testNow.atZone(ZoneId.of("Asia/Seoul")).toLocalDate(),
+            "4012", "DOWN", com.noLate.eta.domain.TransitServiceClass.LOCAL, "0411", "0433", "사당",
+            departure.plusSeconds(180), arrival, testNow.plusSeconds(2))
+        val minutes = ((java.time.Duration.between(departure, arrival).seconds + 59) / 60).toInt()
+        val route = EffectiveTransitRoute("odsay", "a".repeat(64), departure, arrival, minutes,
+            listOf(EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.SUBWAY, minutes,
+                fromName = "노원", toName = "사당", rideTiming = com.noLate.schedule.application.EffectiveTransitRideTiming(
+                    table, table.boardingAt, table.arrivalAt, com.noLate.schedule.application.EffectiveTransitRideTimingBasis.TIMETABLE))))
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenAnswer {
+            responseClock = testNow.plusSeconds(3)
+            TrafficResult(60, TrafficSource.TIMETABLE_PROVIDER,
+                testNow.plusSeconds(2), stale = true, failureReason = TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED,
+                transitTimingBasis = TransitTimingBasis.TIMETABLE_ONLY,
+                transitRouteProvenance = TransitRouteProvenance.SELECTED_ROUTE_PRESERVED, effectiveTransitRoute = route)
+        }
+        if (earlier) whenever(notificationUseCase.sendToMemberFencedWithNativeAlarmCoverage(any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(NotificationSendResult(requestedCount = 1, sentCount = 1))
+
+        worker(alarmSyncService = departureAlarmSyncService, clock = advancingClock).runDueJobs(testNow)
+
+        assertEquals(if (earlier) departure else before, job.lastRecommendedDepartureAt)
+        assertEquals(true, job.lastEtaStale)
+        assertNull(job.lastPredictedArrivalAt)
+        val snapshot = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
+        assertFalse(snapshot.accepted)
+        assertEquals(route, snapshot.lastTimetablePlannedRoute)
+        if (earlier) verify(departureAlarmSyncService).synchronizeAutomaticEta(
+            memberId = eq(job.memberId), scheduleId = eq(job.scheduleId), notificationEnabled = eq(true),
+            alertMode = eq(ScheduleAlertMode.ALARM), recommendedDepartureAt = eq(departure),
+            scheduleTitle = eq(schedule.title), resumeCanceledAfterTransitTransferFailure = eq(false),
+            cancellationReason = eq(com.noLate.schedule.domain.DepartureAlarmCancellationReason.EXPLICIT_OR_TERMINAL))
+        else verifyNoInteractions(departureAlarmSyncService)
+    }
 
     @ParameterizedTest
     @ValueSource(strings = ["pending", "timeout", "late", "missingTiming", "expired"])
@@ -3332,6 +3531,7 @@ class SchedulePushJobWorkerTest {
         coordinator: SchedulePushJobCoordinator? = null,
         liveActivityService: ScheduleLiveActivityService? = null,
         departureStatusSnapshotGraceMinutes: Long = 5L,
+        refresher: PlannedTransitRouteRefresher? = null,
     ) = SchedulePushJobWorker(
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -3360,6 +3560,7 @@ class SchedulePushJobWorkerTest {
         departureAlarmSyncService = alarmSyncService,
         scheduleLiveActivityService = liveActivityService,
         departureStatusSnapshotGraceMinutes = departureStatusSnapshotGraceMinutes,
+        plannedTransitRouteRefresher = refresher,
     )
 
     private fun assertEtaProcessingExceptionCount(
@@ -3458,11 +3659,11 @@ class SchedulePushJobWorkerTest {
         whenever(trafficClient.getTravelMinutes(any())).thenReturn(liveTrafficResult(travelMinutes))
     }
 
-    private fun stubDueJobLookup(job: SchedulePushJob, schedule: Schedule) {
+    private fun stubDueJobLookup(job: SchedulePushJob, schedule: Schedule, dueAt: Instant = testNow) {
         whenever(
             pushJobRepository.findAllByStatusAndNextCheckAtLessThanEqualOrderByNextCheckAtAsc(
                 SchedulePushJobStatus.ACTIVE,
-                testNow,
+                dueAt,
                 org.springframework.data.domain.PageRequest.of(0, 1),
             )
         ).thenReturn(listOf(job), emptyList())

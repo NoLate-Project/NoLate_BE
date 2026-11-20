@@ -36,6 +36,12 @@ data class EffectiveTransitRouteSnapshot(
     val inProgressPlannedRoute: EffectiveTransitRoute? = null,
     /** 이번 평가에서 저장 계획의 동일 마지막 열차를 직접 대조한 결과. 다음 실패 회차로 승계하지 않는다. */
     val plannedArrivalObservation: PlannedJourneyArrivalObservation? = null,
+    /** 현재 계획의 구간별 관측 및 환승 재연결. 출발 알림의 정상 ETA와 분리한다. */
+    val plannedRouteUpdate: PlannedTransitRouteUpdate? = null,
+    /** 관측이 만료돼도 이미 재연결한 계획을 예전 환승편으로 되돌리지 않는다. */
+    val lastUpdatedPlannedRoute: EffectiveTransitRoute? = null,
+    /** 실시간 미관측이어도 완전한 시간표로 검증한 계획. 정상 ETA로 승격하지 않는다. */
+    val lastTimetablePlannedRoute: EffectiveTransitRoute? = null,
     val effectiveTransitRoute: EffectiveTransitRoute? = null,
     /** 현재 평가 관측만 저장한다. 이전 정상 관측은 degraded 회차로 승계하지 않는다. */
     val firstBoardingObservation: TransitFirstBoardingObservation? = null,
@@ -59,6 +65,7 @@ data class EffectiveTransitRouteSnapshot(
             evaluationCheckCount: Int,
             notificationGeneration: Long = 0,
             evaluatedAt: Instant? = null,
+            verifiedTimetablePlan: EffectiveTransitRoute? = null,
         ): EffectiveTransitRouteSnapshot? {
             require(notificationGeneration >= 0) {
                 "effective route notification generation은 0 이상이어야 합니다."
@@ -71,14 +78,17 @@ data class EffectiveTransitRouteSnapshot(
                 trafficResult.firstBoardingObservation != null
             val previousAcceptedIdentity = previous?.acceptedRouteIdentity()
             val previousAcceptedProvenance = previous?.acceptedRouteProvenance()
-            val previousAcceptedRoute = previous?.acceptedRoute()
+            val previousAcceptedRoute = previous?.acceptedRoute()?.let { saved ->
+                if (previous.accepted) saved.withAcceptedBoardingSource(previous.firstBoardingObservation) else saved
+            }
             val previousAcceptedWaitMinutes = previous?.acceptedFirstBoardingWaitMinutes()
             val previousAcceptedEtaSource = previous?.lastAcceptedEtaSource
             val inProgressPlannedRoute = previous?.inProgressPlannedRoute
-                ?: previousAcceptedRoute?.takeIf { route ->
+                ?: (previousAcceptedRoute ?: previous?.lastTimetablePlannedRoute)?.takeIf { route ->
                     evaluatedAt != null && !evaluatedAt.isBefore(route.departureAt)
                 }
-            if (!hasTransitDetails && previousAcceptedIdentity == null) return null
+            if (!hasTransitDetails && previousAcceptedIdentity == null && inProgressPlannedRoute == null &&
+                previous?.lastTimetablePlannedRoute == null) return null
 
             val accepted = trafficResult.accepted && route != null
             val currentRouteIdentity = route?.identity
@@ -136,6 +146,11 @@ data class EffectiveTransitRouteSnapshot(
                     previousAcceptedEtaSource
                 },
                 inProgressPlannedRoute = inProgressPlannedRoute,
+                lastTimetablePlannedRoute = verifiedTimetablePlan ?: previous?.lastTimetablePlannedRoute,
+                lastUpdatedPlannedRoute = previous?.plannedRouteUpdate?.route ?: previous?.lastUpdatedPlannedRoute,
+                // 같은 원본을 재조회해 새 관측이 없어도 출처 시각을 보존한다. 읽을 때 신선도를
+                // 다시 판단하므로 캐시를 새 실시간값으로 꾸미지 않으며, 확인된 모순도 지우지 않는다.
+                plannedRouteUpdate = previous?.plannedRouteUpdate?.takeIf { it.routeIdentity == inProgressPlannedRoute?.identity },
                 effectiveTransitRoute = route,
                 firstBoardingObservation = trafficResult.firstBoardingObservation,
             )
@@ -158,15 +173,31 @@ data class EffectiveTransitRouteSnapshot(
 
     /** 출발 후의 같은 편 실시간값만 잠정 도착시각에 반영한다. 실제 승차는 확인하지 않는다. */
     fun plannedJourneyArrivalPrediction(readAt: Instant, maxAgeSeconds: Long): PlannedJourneyArrivalPrediction? {
-        val plan = inProgressPlannedRoute ?: return null
+        val plan = plannedRouteAt(readAt) ?: return null
+        if (plannedJourneyTimingFailureReason() != null) return null
+        val updated = plannedRouteUpdate?.takeIf { it.routeIdentity == plan.identity && it.route != null &&
+            it.sourceUpdatedAt in readAt.minusSeconds(maxAgeSeconds)..readAt.plusSeconds(5) }
+        if (updated != null) {
+            val route = requireNotNull(updated.route)
+            if (route.arrivalAt <= readAt) return null
+            return PlannedJourneyArrivalPrediction(route.arrivalAt, readAt, plan.identity,
+                if (route.segments.any { it.rideTiming?.observedService != null }) PlannedJourneyArrivalBasis.OBSERVED_SERVICE_CONNECTION
+                else if (updated.onlyLastRideObserved) PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
+                else PlannedJourneyArrivalBasis.MATCHED_RIDE_AND_ONWARD_TIMETABLE,
+                effectiveTransitRoute = route, sourceUpdatedAt = updated.sourceUpdatedAt)
+        }
+        val preservedPlan = latestPreservedPlan(plan)
         val candidate = effectiveTransitRoute
         val oldestSourceAt = readAt.minusSeconds(maxAgeSeconds)
         val latestSourceAt = readAt.plusSeconds(5)
         // An intermediate train does not provide realtime evidence for arrival on the final train.
-        val finalRideObservedAt = candidate?.takeIf { it.sameTrainsAs(plan) }
+        val finalRideObservedAt = candidate?.takeIf { it.sameTrainsAs(preservedPlan) }
             ?.segments?.filter { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY }
             ?.maxByOrNull { it.sequence }
-            ?.rideTiming?.observationSourceUpdatedAt?.takeIf { it in oldestSourceAt..latestSourceAt }
+            // 이른 승차역 도착만 반영한 후보는 마지막 하차를 시간표대로 유지한다.
+            // 이 출처로 이미 확인된 목적지 지연을 지우거나 시간표를 실시간으로 표시할 수 없다.
+            ?.rideTiming?.takeUnless { it.basis.keepsTimetableAlightingAfterEarlyBoarding }
+            ?.observationSourceUpdatedAt?.takeIf { it in oldestSourceAt..latestSourceAt }
         val directObservation = plannedArrivalObservation?.takeIf { observation ->
             observation.routeIdentity == plan.identity &&
                 observation.sourceUpdatedAt in oldestSourceAt..latestSourceAt
@@ -175,7 +206,7 @@ data class EffectiveTransitRouteSnapshot(
             finalRideObservedAt != null && (directObservation == null || finalRideObservedAt > directObservation.sourceUpdatedAt) ->
                 candidate.arrivalAt
             directObservation != null -> directObservation.predictedArrivalAt
-            else -> plan.arrivalAt
+            else -> preservedPlan.arrivalAt
         }
         if (!arrivalAt.isAfter(readAt)) return null
         return PlannedJourneyArrivalPrediction(
@@ -184,9 +215,59 @@ data class EffectiveTransitRouteSnapshot(
             routeIdentity = plan.identity,
             basis = if (finalRideObservedAt != null || directObservation != null) PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
                 else PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN,
+            sourceUpdatedAt = listOfNotNull(finalRideObservedAt, directObservation?.sourceUpdatedAt).maxOrNull(),
+            effectiveTransitRoute = preservedPlan.asPlannedBaseline().takeIf {
+                finalRideObservedAt == null && directObservation == null
+            },
         )
     }
+
+    fun plannedJourneyTimingFailureReason(): String? = plannedRouteUpdate
+        ?.takeIf { it.routeIdentity == inProgressPlannedRoute?.identity }?.failure?.name
+
+    fun plannedRouteAt(readAt: Instant): EffectiveTransitRoute? = inProgressPlannedRoute
+        ?: lastTimetablePlannedRoute?.takeIf { it.departureAt <= readAt && it.arrivalAt > readAt }
+
+    fun hasActivePlannedRouteAt(readAt: Instant, predictedArrivalAt: Instant?): Boolean {
+        val original = plannedRouteAt(readAt) ?: return false
+        val arrivalAt = predictedArrivalAt ?: latestPreservedPlan(original).arrivalAt
+        return original.departureAt <= readAt && readAt < arrivalAt
+    }
+
+    private fun latestPreservedPlan(original: EffectiveTransitRoute): EffectiveTransitRoute =
+        plannedRouteUpdate?.route?.takeIf { it.identity == original.identity }
+            ?: lastUpdatedPlannedRoute?.takeIf { it.identity == original.identity } ?: original
 }
+
+/** 출발 전 응답에 따로 저장한 첫 승차 관측의 원본 시각을 같은 편의 재조회에 넘긴다. */
+private fun EffectiveTransitRoute.withAcceptedBoardingSource(observation: TransitFirstBoardingObservation?): EffectiveTransitRoute {
+    if (observation == null || observation.provider != "seoul-openapi" || observation.trainNumber == null ||
+        observation.departureAt != departureAt ||
+        observation.sourceUpdatedAt !in observation.evaluatedAt.minusSeconds(120)..observation.evaluatedAt.plusSeconds(5)) return this
+    val first = segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }.minByOrNull { it.sequence } ?: return this
+    val timing = first.rideTiming ?: return this
+    val table = timing.timetable
+    if (timing.boardingSourceAt() != null || first.fromName != observation.stationName ||
+        table.line.displayName != observation.lineName || timing.predictedBoardingAt != observation.expectedBoardingAt ||
+        observation.trainNumber !in setOfNotNull(table.trainNumber, table.realtimeTrainNumber)) return this
+    val withSource = when (timing.basis) {
+        EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE -> timing.copy(
+            basis = EffectiveTransitRideTimingBasis.PLANNED_RIDE_BOARDING_REALTIME, observationSourceUpdatedAt = observation.sourceUpdatedAt)
+        EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING ->
+            timing.copy(observationSourceUpdatedAt = observation.sourceUpdatedAt)
+        EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME ->
+            timing.copy(boardingObservationSourceUpdatedAt = observation.sourceUpdatedAt)
+        else -> return this
+    }
+    return copy(segments = segments.map { if (it === first) it.copy(rideTiming = withSource) else it })
+}
+
+/** 만료된 관측을 실시간으로 표시하지 않고, 마지막으로 연결한 열차와 계획 시각만 보존한다. */
+private fun EffectiveTransitRoute.asPlannedBaseline(): EffectiveTransitRoute = copy(segments = segments.map { segment ->
+    val timing = segment.rideTiming
+    if (timing == null || timing.basis == EffectiveTransitRideTimingBasis.TIMETABLE) segment else segment.copy(
+        rideTiming = timing.asPlannedBaseline())
+})
 
 data class PlannedJourneyArrivalObservation(
     val routeIdentity: String,
@@ -203,6 +284,9 @@ private fun EffectiveTransitRoute.sameTrainsAs(other: EffectiveTransitRoute): Bo
     return rides.zip(originalRides).all { (current, original) ->
         if (current.kind != EffectiveTransitRouteSegmentKind.SUBWAY ||
             original.kind != EffectiveTransitRouteSegmentKind.SUBWAY) return@all false
+        if (current.rideTiming?.observedService != original.rideTiming?.observedService ||
+            current.fromName != original.fromName || current.toName != original.toName ||
+            current.orderedStopNames != original.orderedStopNames) return@all false
         val a = current.rideTiming?.timetable ?: return@all false
         val b = original.rideTiming?.timetable ?: return@all false
         a.provider == b.provider && a.line == b.line && a.serviceDate == b.serviceDate &&

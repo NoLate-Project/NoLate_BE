@@ -93,8 +93,11 @@ class AutomaticJourneyFixture(val clock: Clock = Clock.fixed(Instant.parse("2026
         isolated: Boolean = true, deviceEnabled: Boolean = false, profiles: String = "test",
         walkingSnapshots: com.noLate.journey.application.SavedJourneyWalkingSnapshotService? = null,
         extendedNavigation: Boolean = false,
+        savedPrepareFence: com.noLate.journey.application.SavedJourneyPrepareFence = com.noLate.journey.application.SavedJourneyPrepareFence(members, mock()),
+        subwayVerifier: com.noLate.journey.application.JourneySubwayDeviceAdmissionVerifier? = null,
+        busVerifier: com.noLate.journey.application.JourneyBusDeviceAdmissionVerifier? = null,
     ) = AutomaticJourneyService(repository, members, plans, departure, jobs, schedules, manual, mapper, clock,
-        guidanceEnabled, enabled, simulatorEnabled, isolated, deviceEnabled, profiles, isolatedTtlSeconds, walkingSnapshots, extendedNavigation)
+        guidanceEnabled, enabled, simulatorEnabled, isolated, deviceEnabled, profiles, isolatedTtlSeconds, walkingSnapshots, extendedNavigation, subwayDeviceAdmission = subwayVerifier, busDeviceAdmission = busVerifier, savedPrepareFence = savedPrepareFence)
 
     fun prepareCommand() = AutomaticJourneyPrepareCommand(sessionId, owner, digest, AutomaticJourneyExecution.SIMULATOR)
     fun event(occurredAt: Instant = clock.instant()) = AutomaticJourneyDepartureCommand(

@@ -1,5 +1,7 @@
 package com.noLate.journey.automatic
 
+import com.noLate.global.error.BusinessException
+
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.noLate.journey.application.*
@@ -192,6 +194,103 @@ class MixedWalkingAdmissionTest {
             f.service.cancel(7,9001,2,w.snapshotId)
             assertThatThrownBy{bus.binding(7,9001,2,p.sessionId,c.copy(busLegIndex=3))}.isInstanceOf(RuntimeException::class.java)
             assertThat(f.fixture.departureCount.get()).isZero()
+        }
+    }
+    @Test fun `unknown single simulator rail service also requires its official crosswalk`() {
+        WalkingSnapshotDatabaseFixture("jdbc:h2:mem:unknown-rail-${UUID.randomUUID()};MODE=MySQL;DB_CLOSE_DELAY=-1",
+            connectorWalking=true, subwayFixture=true).use { f ->
+            (f.fixture.plan.route as ObjectNode).put("transitServiceState","unknown")
+            val walk = f.service.issue(7,9001,2,1)
+            val input = nativeInput(f,walk).put("serviceState","UNKNOWN")
+            val request = command(f,walk,input.toString())
+            assertThatThrownBy { f.automaticService().prepareSaved(7,9001,2,request) }.isInstanceOf(BusinessException::class.java)
+            assertThat(f.fixture.prepareCount.get()).isZero()
+            val receipt = f.automaticService(subwayVerifier=JourneySubwayDeviceAdmissionVerifier { _, index ->
+                JourneySubwayDeviceAdmission(subwayLegIndex=index, providerRouteId="1000:2",
+                    startRoutingStationId="222", endRoutingStationId="224", stationCount=2)
+            }).prepareSaved(7,9001,2,request)
+            assertThat(receipt.officialSubwayAdmission!!.subwayLegIndex).isOne()
+            assertThat(receipt.officialSubwayAdmissions).isNull()
+        }
+    }
+
+    @Test fun `mixed rail and bus crosswalks authorize and observe their own route occurrences`() {
+        WalkingSnapshotDatabaseFixture("jdbc:h2:mem:rail-bus-${UUID.randomUUID()};MODE=MySQL;DB_CLOSE_DELAY=-1",
+            transferFixture=true, subwayFixture=true).use { f ->
+            val walking = f.service.issue(7, 9001, 2, 1)
+            val buses = JourneyBusDeviceAdmissionVerifier(MixedWalkingRideFixture(f.fixture.clock, true).provider, true)
+            val subways = JourneySubwayDeviceAdmissionVerifier { _, index ->
+                JourneySubwayDeviceAdmission(subwayLegIndex=index, providerRouteId="1000:2",
+                    startRoutingStationId="222", endRoutingStationId="224", stationCount=2)
+            }
+            val service = f.automaticService(deviceEnabled=true, subwayVerifier=subways, busVerifier=buses)
+            val receipt = service.prepareSaved(7, 9001, 2, command(f,walking).copy(execution=AutomaticJourneyExecution.DEVICE))
+            assertThat(receipt.officialBusAdmissions!!.single().busLegIndex).isEqualTo(3)
+            assertThat(receipt.officialSubwayAdmissions!!.single().subwayLegIndex).isEqualTo(1)
+            val bus = JourneyBusBindingCommand(receipt.generation, receipt.routeRevision, receipt.clientOwnerId, receipt.routeInputDigest, 3)
+            val rail = JourneySubwayObservationCommand(receipt.generation, receipt.routeRevision, receipt.clientOwnerId, receipt.routeInputDigest, 1)
+            service.requireObservationFence(7,9001,2,receipt.sessionId,bus)
+            service.requireSubwayObservationFence(7,9001,2,receipt.sessionId,rail)
+            assertThatThrownBy { service.requireObservationFence(7,9001,2,receipt.sessionId,bus.copy(busLegIndex=1)) }.isInstanceOf(BusinessException::class.java)
+            assertThatThrownBy { service.requireSubwayObservationFence(7,9001,2,receipt.sessionId,rail.copy(subwayLegIndex=3)) }.isInstanceOf(BusinessException::class.java)
+        }
+    }
+
+    @Test fun `both subway occurrences must pass static verification before simulator or device can be armed`() {
+        for (execution in AutomaticJourneyExecution.entries) {
+            WalkingSnapshotDatabaseFixture("jdbc:h2:mem:subway-transfer-${UUID.randomUUID()};MODE=MySQL;DB_CLOSE_DELAY=-1",
+                transferFixture = true, subwayFixture = true).use { f ->
+                val route = f.fixture.plan.route!!.deepCopy<ObjectNode>()
+                val legs = route.path("transitLegs") as com.fasterxml.jackson.databind.node.ArrayNode
+                val second = legs[1].deepCopy<ObjectNode>()
+                val original = legs[3]
+                for (key in listOf("startCoord","endCoord","pathCoords")) second.set<JsonNode>(key, original.path(key))
+                val evidence = second.path("navigationEvidence") as ObjectNode
+                val ids = evidence.path("subwayIdentifiers") as ObjectNode
+                second.put("providerRouteId", "1000:3").put("startID","333").put("endID","335")
+                ids.put("startID","333").put("endID","335")
+                (ids.path("lanes")[0] as ObjectNode).put("subwayCode","3")
+                evidence.path("stopOccurrences").forEachIndexed { i, row ->
+                    (row as ObjectNode).put("routingStationID",(333 + i).toString())
+                        .set<JsonNode>("coord", second.path("pathCoords")[i])
+                }
+                legs.set(3, second)
+                route.put("transitServiceState","unknown")
+                f.fixture.plan = f.fixture.plan.copy(route = route)
+                val walk = f.service.issue(7, 9001, 2, 1)
+                val input = nativeInput(f, walk).put("serviceState", "UNKNOWN")
+                val request = command(f, walk, input.toString()).copy(execution = execution)
+                val calls = mutableListOf<Int>()
+                val correct = JourneySubwayDeviceAdmissionVerifier { _, index ->
+                    assertThat(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()).isFalse()
+                    calls += index
+                    if (index == 1) JourneySubwayDeviceAdmission(subwayLegIndex = 1, providerRouteId = "1000:2",
+                        startRoutingStationId = "222", endRoutingStationId = "224", stationCount = 2)
+                    else JourneySubwayDeviceAdmission(subwayLegIndex = 3, providerRouteId = "1000:3",
+                        startRoutingStationId = "333", endRoutingStationId = "335", stationCount = 2)
+                }
+                val missing = f.automaticService(deviceEnabled=true)
+                assertThatThrownBy { missing.prepareSaved(7, 9001, 2, request) }.isInstanceOf(BusinessException::class.java)
+                val swapped = f.automaticService(deviceEnabled=true,subwayVerifier=JourneySubwayDeviceAdmissionVerifier { snapshot, index ->
+                    correct.verify(snapshot, index).copy(subwayLegIndex = 1)
+                })
+                assertThatThrownBy { swapped.prepareSaved(7,9001,2,request) }.isInstanceOf(BusinessException::class.java)
+                val stale = f.automaticService(deviceEnabled=true,subwayVerifier=JourneySubwayDeviceAdmissionVerifier { snapshot, index ->
+                    if(index == 3) f.revision++
+                    correct.verify(snapshot,index)
+                })
+                assertThatThrownBy { stale.prepareSaved(7,9001,2,request) }.isInstanceOf(RuntimeException::class.java)
+                f.revision--; calls.clear()
+                assertThat(f.fixture.prepareCount.get()).isZero()
+                val receipt = f.automaticService(deviceEnabled=true, subwayVerifier=correct).prepareSaved(7,9001,2,request)
+                assertThat(calls).containsExactly(1,3)
+                val proofs = requireNotNull(receipt.officialSubwayAdmissions)
+                assertThat(proofs.map { it.subwayLegIndex }).containsExactly(1,3)
+                assertThat(proofs.map { it.providerRouteId }).containsExactly("1000:2","1000:3")
+                assertThat(receipt.officialBusAdmissions).isEmpty()
+                assertThat(receipt.officialSubwayAdmission).isNull()
+                assertThat(f.fixture.prepareCount.get()).isOne()
+            }
         }
     }
     @Test fun `durable mixed preparation survives fixture restart and cancelled snapshot still permits stop`() {

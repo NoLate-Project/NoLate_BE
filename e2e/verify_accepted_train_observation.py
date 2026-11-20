@@ -71,7 +71,8 @@ def terminal_key(name):
 def bound_station_event(window, records, order, reached_state='ARRIVED'):
     lower_window, upper_window = instant(window['from']), instant(window['until'])
     first_slot = lower_window.replace(second=0, microsecond=0)
-    scheduled = instant(window['scheduledAt'])
+    # A newly selected actual service has no proven timetable-number alias.
+    scheduled = instant(window.get('scheduledAt') or window['predictedAt'])
     target = order.index(station(window['station']))
     by_source = {}
     for response in records:
@@ -112,7 +113,10 @@ def bound_station_event(window, records, order, reached_state='ARRIVED'):
                 return {'result': 'UPPER_BOUND_ONLY', 'upper': source.isoformat()}
             width = (source - lower).total_seconds()
             if width > 150:
-                return {'result': 'OBSERVATION_GAP_TOO_WIDE', 'widthSeconds': width}
+                # A long gap cannot date the crossing, but the last pre-event state still
+                # proves that a prediction earlier than that snapshot was already too early.
+                return {'result': 'OBSERVATION_GAP_TOO_WIDE', 'widthSeconds': width,
+                        'lastConfirmedBeforeEventAt': lower.isoformat()}
             return {
                 'result': 'BOUNDED_PROVIDER_TRAIN_' + ('DEPARTURE' if reached_state == 'DEPARTED' else 'ARRIVAL'),
                 'lower': lower.isoformat(), 'upper': source.isoformat(), 'widthSeconds': width,
@@ -124,10 +128,24 @@ def bound_station_event(window, records, order, reached_state='ARRIVED'):
 
 
 def offsets(observed, reference):
-    if 'lower' not in observed or 'upper' not in observed:
+    if reference is None or 'lower' not in observed or 'upper' not in observed:
         return None
     at = instant(reference)
     return [(instant(observed[key]) - at).total_seconds() for key in ('lower', 'upper')]
+
+
+def paired_absolute_error_change(observed, before, after):
+    """Range of new minus old absolute error for the same event. Positive means worse."""
+    if before is None or 'lower' not in observed or 'upper' not in observed:
+        return None
+    baseline, candidate = instant(before), instant(after)
+    # For two fixed predictions this difference is monotone in the event time.
+    # Evaluating both ends preserves the uncertainty without inventing a midpoint.
+    changes = []
+    for boundary in ('lower', 'upper'):
+        event = instant(observed[boundary])
+        changes.append((abs(candidate - event) - abs(baseline - event)).total_seconds())
+    return sorted(changes)
 
 
 def minimum_offset_without_upper_bound(observed, reference):
@@ -135,6 +153,109 @@ def minimum_offset_without_upper_bound(observed, reference):
     if before_event is None:
         return None
     return (instant(before_event) - instant(reference)).total_seconds()
+
+
+def boarding_references_arrival(timing):
+    if timing['basis'] in ('PLANNED_RIDE_BASELINE', 'PLANNED_RIDE_ALIGHTING_REALTIME'):
+        return timing.get('plannedBoardingIsStationArrival') is True
+    return timing['basis'] in ('FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE', 'FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING',
+                               'FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME', 'PLANNED_RIDE_BOARDING_REALTIME',
+                               'TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE', 'TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING',
+                               'OBSERVED_SUBWAY_SERVICE_REALTIME', 'REPORTED_BOARDING_AND_ALIGHTING_REALTIME')
+
+
+def observation_bounds(event):
+    lower = event.get('lower') or event.get('lastConfirmedBeforeEventAt')
+    upper = event.get('upper')
+    return (instant(lower) if lower else None, instant(upper) if upper else None)
+
+
+def elapsed_bounds(start, end, *, same_train=False):
+    # Subtract opposite endpoints. A missing upper bound can still leave a useful lower bound.
+    lo = (end[0] - start[1]).total_seconds() if end[0] is not None and start[1] is not None else None
+    hi = (end[1] - start[0]).total_seconds() if end[1] is not None and start[0] is not None else None
+    if same_train:
+        if hi is not None and hi < 0:
+            raise ValueError('Station observations contradict the order of events on the selected train')
+        if lo is not None:
+            lo = max(0, lo)
+    return [lo, hi]
+
+
+def route_component_intervals(route, events):
+    """Bound each ride independently. Public station updates describe trains, not passenger walks."""
+    reports = []
+    access_end = instant(route['departureAt'])
+    for segment in sorted(route['segments'], key=lambda item: item['sequence']):
+        if segment['kind'] == 'WALK':
+            if access_end is not None:
+                seconds = segment.get('durationSeconds')
+                access_end = (access_end + dt.timedelta(seconds=seconds)
+                              if type(seconds) is int and seconds >= 0 else None)
+            continue
+        if segment['kind'] != 'SUBWAY' or not segment.get('rideTiming'):
+            access_end = None
+            continue
+        timing = segment['rideTiming']
+        table = timing['timetable']
+        service = timing.get('observedService')
+        if service and (service.get('provider') != 'seoul-openapi' or
+                        any(service.get(key) != table[key] for key in
+                            ('line', 'serviceDate', 'directionCode', 'serviceClass')) or
+                        terminal_key(service['terminalName']) != terminal_key(table['terminalName']) or
+                        station(service['boardingStationName']) != station(segment['fromName']) or
+                        station(service['alightingStationName']) != station(segment['toName'])):
+            raise ValueError('Observed service conflicts with the retained ride context')
+        number = service['trainNumber'] if service else table['trainNumber']
+        board, alight = map(instant, (timing['predictedBoardingAt'], timing['predictedArrivalAt']))
+        predicted = (alight - board).total_seconds()
+        assert predicted > 0
+        start_event = 'ARRIVAL' if boarding_references_arrival(timing) else 'DEPARTURE'
+        def station_event(kind, station_name, scheduled):
+            def same_reference(event):
+                # 실제로 새로 선택한 편은 비교 시간표의 편·정차시각과 연결하지 않는다.
+                # 같은 숫자여도 명시적인 실제 편에 가짜 시간표 기준을 만들지 않는다.
+                if service:
+                    return 'scheduledAt' in event and event['scheduledAt'] is None
+                return event.get('scheduledAt') is not None and instant(event['scheduledAt']) == instant(scheduled)
+            matches = [event for event in events if event['event'] == kind and event['line'] == table['line']
+                       and event['trainNumbers'][0] == number and event['direction'] == table['directionCode']
+                       and event['serviceClass'] == table['serviceClass'] and terminal_key(event['terminal']) == terminal_key(table['terminalName'])
+                       and event.get('serviceDate', table['serviceDate']) == table['serviceDate']
+                       and station(event['station']) == station(station_name) and same_reference(event)]
+            return matches[0] if len(matches) == 1 else {}
+
+        origin = station_event('BOARDING', segment['fromName'], table['boardingAt'])
+        origin_arrival = observation_bounds(origin)
+        origin_departure = observation_bounds(origin.get('departureObservation') or {})
+        alighting = observation_bounds(station_event('ALIGHTING', segment['toName'], table['arrivalAt']))
+        boarding = origin_arrival if start_event == 'ARRIVAL' else origin_departure
+        def difference(end, start):
+            return (end - start).total_seconds() if end is not None and start is not None else None
+        duration = elapsed_bounds(boarding, alighting, same_train=True)
+        scheduled_run = None if service else (instant(table['arrivalAt']) - instant(table['boardingAt'])).total_seconds()
+        observed_run = elapsed_bounds(origin_departure, alighting, same_train=True)
+        report = {'sequence': segment['sequence'], 'trainNumber': number, 'serviceDate': table['serviceDate'],
+                  'from': segment['fromName'], 'to': segment['toName'], 'startEvent': start_event, 'endEvent': 'ARRIVAL',
+                  'observedBoardingStationDwellBoundsSeconds': elapsed_bounds(origin_arrival, origin_departure, same_train=True),
+                  'timetableDepartureToAlightingSeconds': scheduled_run,
+                  'observedDepartureToAlightingBoundsSeconds': observed_run,
+                  'departureToAlightingMinusTimetableBoundsSeconds': [d - scheduled_run if d is not None and scheduled_run is not None else None for d in observed_run],
+                  'predictedStationToStationSeconds': predicted, 'observedStationToStationBoundsSeconds': duration,
+                  'stationToStationMinusPredictionBoundsSeconds': [d - predicted if d is not None else None for d in duration]}
+        if service:
+            report['comparisonTimetableTrainNumber'] = table['trainNumber']
+        if timing.get('reportedBoarding') is not None:
+            report['boardingClockRole'] = 'HISTORICAL_REPORTED_STATION_STATE'
+            report['stationToStationEstimateBasis'] = 'REPORTED_BOARDING_TO_FUTURE_ALIGHTING'
+        if access_end is not None:
+            report['firstBoardingWithModeledAccess'] = {
+                'modeledAccessEndAt': access_end.isoformat(), 'predictedGapSeconds': difference(board, access_end),
+                'observedGapBoundsSeconds': [difference(b, access_end) for b in boarding],
+                'gapMinusPredictionBoundsSeconds': [difference(b, board) for b in boarding]}
+        reports.append(report)
+        access_end = None
+    return reports
 
 
 def initial_departure_window(boarding_event, observation):
@@ -191,16 +312,24 @@ def audit_event(window, records, order, timing):
                 'minimumObservedMinusPredictionSeconds': minimum_offset_without_upper_bound(
                     arrival, window['predictedAt']),
                 'sameEventTimetableAt': window['scheduledAt'],
+                'absoluteErrorChangeFromTimetableSeconds': paired_absolute_error_change(
+                    arrival, window['scheduledAt'], window['predictedAt']),
                 'observedMinusSameEventTimetableSeconds': scheduled_offsets,
                 'observedMinusTimetableSeconds': scheduled_offsets}
     departure = bound_station_event(window, records, order, 'DEPARTED')
+    if timing.get('reportedBoarding') is not None or timing['basis'] == 'REPORTED_BOARDING_AND_ALIGHTING_REALTIME':
+        # 공급자가 이미 도착했다고 게시한 과거 상태다. 새 미래 승차 예측의 적중으로 세지 않는다.
+        return {**window, **arrival, 'departureObservation': departure,
+                'predictionRole': 'HISTORICAL_REPORTED_STATION_STATE', 'predictionReferenceEvent': 'ARRIVAL',
+                'reportedStationStateAt': window['predictedAt'],
+                'observedMinusReportedStationStateSeconds': offsets(arrival, window['predictedAt']),
+                'observedMinusPredictionSeconds': None, 'minimumObservedMinusPredictionSeconds': None,
+                'sameEventTimetableAt': None, 'absoluteErrorChangeFromTimetableSeconds': None,
+                'observedMinusSameEventTimetableSeconds': None, 'observedMinusTimetableSeconds': None}
     # Seoul's timetable boardingAt represents LEFTTIME. The first corrected
     # boarding estimate comes from the realtime station-arrival feed instead.
-    live_boarding = timing['basis'] in ('FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE',
-                                      'FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING',
-                                      'FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME',
-                                      'TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE')
-    scheduled_arrival = timing['timetable'].get('boardingStationArrivalAt')
+    live_boarding = boarding_references_arrival(timing)
+    scheduled_arrival = None if timing.get('observedService') else timing['timetable'].get('boardingStationArrivalAt')
     schedule_reference = scheduled_arrival if live_boarding else window['scheduledAt']
     prediction_observation = arrival if live_boarding else departure
     return {**window, **arrival, 'departureObservation': departure,
@@ -209,6 +338,8 @@ def audit_event(window, records, order, timing):
             'minimumObservedMinusPredictionSeconds': minimum_offset_without_upper_bound(
                 prediction_observation, window['predictedAt']),
             'sameEventTimetableAt': schedule_reference,
+            'absoluteErrorChangeFromTimetableSeconds': paired_absolute_error_change(
+                prediction_observation, schedule_reference, window['predictedAt']),
             'observedMinusSameEventTimetableSeconds': offsets(prediction_observation, schedule_reference)
                 if schedule_reference is not None else None,
             # Preserve the raw scheduled departure comparison even when the prediction represents arrival.
@@ -239,22 +370,32 @@ def identity_check_summary(window, records):
 def transfer_window(first_alighting, second_boarding, transfer_seconds, required_margin_seconds):
     predicted_gap = (instant(second_boarding['predictedAt']) - instant(first_alighting['predictedAt'])).total_seconds()
     second_departure = second_boarding['departureObservation']
-    first_arrival_lower = first_alighting.get('lower') or first_alighting.get('lastConfirmedBeforeEventAt')
     scheduled_transfer_departure = second_boarding.get('scheduledAt')
-    maximum_scheduled_slack = None
-    if first_arrival_lower is not None and scheduled_transfer_departure is not None:
-        maximum_walk_gap = (instant(scheduled_transfer_departure) - instant(first_arrival_lower)).total_seconds()
-        maximum_scheduled_slack = maximum_walk_gap - transfer_seconds - required_margin_seconds
-    observed_gap = None
-    if all('lower' in observation for observation in (first_alighting, second_departure)):
-        observed_gap = [
-            (instant(second_departure['lower']) - instant(first_alighting['upper'])).total_seconds(),
-            (instant(second_departure['upper']) - instant(first_alighting['lower'])).total_seconds(),
-        ]
-    walk_adjusted_gap = [bound - transfer_seconds for bound in observed_gap] if observed_gap is not None else None
+    # Departure is the last train event for a possible connection. A live boarding
+    # prediction can instead refer to station arrival; exclude dwell from its error.
+    incoming = observation_bounds(first_alighting)
+    # Hold the onward departure fixed to isolate the inbound train's contribution.
+    # This stays conditional even if both inbound bounds are known.
+    scheduled = instant(scheduled_transfer_departure) if scheduled_transfer_departure else None
+    until_scheduled = [seconds - transfer_seconds if seconds is not None and transfer_seconds is not None else None
+                       for seconds in elapsed_bounds(incoming, (scheduled, scheduled))]
+    maximum_scheduled_slack = (until_scheduled[1] - required_margin_seconds
+                               if until_scheduled[1] is not None and required_margin_seconds is not None else None)
+    departure_gap = elapsed_bounds(incoming, observation_bounds(second_departure))
+    observed_gap = departure_gap if None not in departure_gap else None
+    reference = second_boarding.get('predictionReferenceEvent', 'DEPARTURE')
+    if reference not in ('ARRIVAL', 'DEPARTURE'):
+        raise ValueError(f'Unknown transfer boarding event: {reference}')
+    same_event = elapsed_bounds(incoming, observation_bounds(second_boarding)) if reference == 'ARRIVAL' else departure_gap
+    referenced_gap = same_event if None not in same_event else None
+    walk_adjusted_gap = [bound - transfer_seconds for bound in observed_gap] if observed_gap is not None and transfer_seconds is not None else None
     margin_slack = None
     assessment = 'OBSERVATION_BOUNDS_MISSING'
-    if walk_adjusted_gap is not None:
+    if observed_gap is not None and transfer_seconds is None:
+        assessment = 'TRANSFER_WALK_NOT_RECORDED'
+    elif observed_gap is not None and required_margin_seconds is None:
+        assessment = 'TRANSFER_MARGIN_NOT_RECORDED'
+    if walk_adjusted_gap is not None and required_margin_seconds is not None:
         margin_slack = [bound - required_margin_seconds for bound in walk_adjusted_gap]
         if margin_slack[0] >= 0:
             assessment = 'MODELED_MARGIN_FITS_THROUGHOUT_INTERVAL'
@@ -264,8 +405,15 @@ def transfer_window(first_alighting, second_boarding, transfer_seconds, required
             assessment = 'INTERVAL_STRADDLES_MODELED_MARGIN'
     return {'predictedGapSeconds': predicted_gap, 'modeledWalkingSeconds': transfer_seconds,
             'requiredMarginSeconds': required_margin_seconds,
-            'predictedGapAfterModeledWalkSeconds': predicted_gap - transfer_seconds,
+            'predictedGapAfterModeledWalkSeconds': predicted_gap - transfer_seconds if transfer_seconds is not None else None,
+            'predictedGapEndEvent': reference,
+            'observedSameEventGapSeconds': referenced_gap,
+            'observedSameEventGapAfterModeledWalkBoundsSeconds': [
+                bound - transfer_seconds if bound is not None and transfer_seconds is not None else None for bound in same_event],
+            'observedMinusPredictedGapSeconds': [bound - predicted_gap for bound in referenced_gap]
+                if referenced_gap is not None else None,
             'maximumSlackAgainstScheduledDepartureSeconds': maximum_scheduled_slack,
+            'gapAfterModeledWalkToScheduledDepartureBoundsSeconds': until_scheduled,
             'observedTrainGapSeconds': observed_gap,
             'observedGapAfterModeledWalkSeconds': walk_adjusted_gap,
             'observedSlackAfterModeledWalkAndMarginSeconds': margin_slack,
@@ -485,6 +633,7 @@ def main():
         'stationOrderReference': SEOUL_NETWORK_REFERENCE,
         'stationOrderSource': stop_order_source,
         'sourceEvaluation': plan['sourceEvaluation'], 'events': events,
+        'rideComponents': route_component_intervals(route, events),
         'initialDepartureTiming': initial_departure_window(events[0], effective['firstBoardingObservation']),
         'transferTiming': transfer_window(events[1], events[2], transfer_seconds, margin),
         'destinationArrivalTiming': destination_arrival_window(events[3], route, segments[-1]),

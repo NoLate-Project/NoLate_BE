@@ -26,6 +26,6 @@ data class TransitTimetableQuery(
     val serviceClass: TransitServiceClass,
     val notBefore: Instant,
     val directionCode: String? = null,
-    /** 여정이 시작한 운행일. 자정 이후 환승을 다음 날의 다른 시간표와 섞지 않는다. */
+    /** 첫 승차 준비시각의 운행일. 자정 이후 환승에도 같은 운행일의 승하차역 행을 대조한다. */
     val serviceDate: LocalDate? = null,
 )

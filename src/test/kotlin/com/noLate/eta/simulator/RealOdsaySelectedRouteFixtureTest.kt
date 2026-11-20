@@ -45,4 +45,18 @@ class RealOdsaySelectedRouteFixtureTest {
             if (leg.sequence == 3) leg.copy(to = TransitStop(name = "강남")) else leg }) }
         assertThrows(IllegalArgumentException::class.java) { RealOdsaySelectedRouteFixture.select(listOf(other)) }
     }
+
+    @Test
+    fun `짧은 첫 승차 검증은 별도 동작 사당 신림 원본 ODsay 경로만 선택한다`() {
+        val short = journey().let { source -> source.copy(legs = source.legs.map { leg ->
+            if (leg.sequence == 1) leg.copy(from = TransitStop(providerStopId = "431", name = "동작")) else leg
+        }) }
+        assertThrows(IllegalArgumentException::class.java) { RealOdsaySelectedRouteFixture.select(listOf(short)) }
+        assertThrows(IllegalArgumentException::class.java) {
+            RealOdsaySelectedRouteFixture.select(listOf(journey()), shortFirstRide = true)
+        }
+        assertEquals(short, RealOdsaySelectedRouteFixture.select(listOf(journey(), short), shortFirstRide = true))
+        val decoded = requireNotNull(SelectedTransitRouteDecoder(mapper).decode(RealOdsaySelectedRouteFixture.encode(mapper, short)))
+        assertEquals(setOf("PROVIDER:odsay:431"), decoded.rides.first().fromIds)
+    }
 }

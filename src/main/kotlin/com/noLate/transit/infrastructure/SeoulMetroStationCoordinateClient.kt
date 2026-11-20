@@ -29,7 +29,11 @@ internal class SeoulMetroStationCoordinateCatalog private constructor(
     fun corroborates(official: SeoulMetroShortestPath.Station, savedLatitude: Double,
         savedLongitude: Double): Boolean {
         val reference = stations[official.line to official.code] ?: return false
-        return reference.name == official.name && savedLatitude.isFinite() && savedLongitude.isFinite() &&
+        // Seoul Metro's 2025-08-14 coordinate CSV uses 서울 for line 4 code 426.
+        // Its shortest-path API returns 서울역 for that same line and station code.
+        val matchingName = reference.name == official.name || (official.line == "4호선" && official.code == "0426" &&
+            reference.name == "서울" && official.name == "서울역")
+        return matchingName && savedLatitude.isFinite() && savedLongitude.isFinite() &&
             distanceMeters(reference.latitude, reference.longitude, savedLatitude, savedLongitude) <= MAX_OFFSET_METERS
     }
 

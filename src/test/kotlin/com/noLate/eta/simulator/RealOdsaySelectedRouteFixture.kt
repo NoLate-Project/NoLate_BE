@@ -12,6 +12,7 @@ object RealOdsaySelectedRouteFixture {
         overnight: Boolean = false,
         adjacentRing: Boolean = false,
         seolleungAccess: Boolean = false,
+        shortFirstRide: Boolean = false,
     ): TransitJourney = requireNotNull(candidates.firstOrNull { journey ->
         val rides = journey.rideLegs
         journey.provider == "odsay" && rides.all { it.mode == TransitLegMode.SUBWAY } &&
@@ -20,6 +21,7 @@ object RealOdsaySelectedRouteFixture {
                 adjacentRing -> listOf("강남" to "역삼")
                 overnight -> listOf("사당" to "고잔")
                 direct -> listOf("노원" to "사당")
+                shortFirstRide -> listOf("동작" to "사당", "사당" to "신림")
                 else -> listOf("노원" to "사당", "사당" to "신림")
             } && (!seolleungAccess || rides.single().orderedStopNames == listOf("강남", "역삼", "선릉"))
     }) { "Actual ODsay journey for the scoped stations required" }

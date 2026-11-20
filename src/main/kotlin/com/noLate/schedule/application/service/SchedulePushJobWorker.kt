@@ -1,6 +1,7 @@
 package com.noLate.schedule.application.service
 
 import com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicy
+import com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicy
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.observability.EtaJobMetricOutcome
@@ -91,9 +92,14 @@ class SchedulePushJobWorker(
     private val departureStatusSnapshotGraceMinutes: Long = 5L,
     @Value("\${eta.transit.arrival-source-max-age-seconds:120}")
     private val arrivalSourceMaxAgeSeconds: Long = 120L,
+    private val plannedTransitRouteRefresher: com.noLate.eta.application.transit.PlannedTransitRouteRefresher? = null,
+    @Value("\${eta.transit.boarding-buffer-seconds:60}") private val boardingBufferSeconds: Long = 60,
+    private val timetableTransferEvaluator: com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator =
+        com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator(),
 ) {
     init {
         require(arrivalSourceMaxAgeSeconds in 1..900)
+        require(boardingBufferSeconds in 0..600)
         EtaTravelTimePolicy.requireValidMaximum(maxTravelMinutes)
         require(
             liveComparatorMaxAgeMinutes in 1..SchedulePushJob.MAX_LIVE_COMPARATOR_AGE_MINUTES
@@ -319,6 +325,10 @@ class SchedulePushJobWorker(
                     evaluationCheckCount = job.checkCount,
                     notificationGeneration = job.notificationGeneration,
                     evaluatedAt = now,
+                    verifiedTimetablePlan = com.noLate.schedule.application.TimetableDeparturePlanPolicy.verifiedRoute(
+                        // 시간표 취득은 요청 시작 뒤에 일어난다. 실제 응답 완료 시계로 검증한다.
+                        trafficResult, currentAtOrAfter(now), schedule.startAt, boardingBufferSeconds,
+                        timetableTransferEvaluator.requiredTransferMarginSeconds),
                 )
             } else {
                 null
@@ -327,7 +337,13 @@ class SchedulePushJobWorker(
                 val plan = snapshot.inProgressPlannedRoute
                 val currentMatched = snapshot.plannedJourneyArrivalPrediction(now, arrivalSourceMaxAgeSeconds)
                     ?.basis == PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
-                if (plan == null || currentMatched) snapshot else {
+                if (plan == null) snapshot else if (plannedTransitRouteRefresher != null) {
+                    val baseline = snapshot.lastUpdatedPlannedRoute?.takeIf { it.identity == plan.identity } ?: plan
+                    val update = plannedTransitRouteRefresher.refresh(baseline, now, departurePlan = plan,
+                        previousUpdate = snapshot.plannedRouteUpdate)
+                    snapshot.copy(plannedRouteUpdate = update ?: snapshot.plannedRouteUpdate,
+                        lastUpdatedPlannedRoute = update?.route ?: snapshot.lastUpdatedPlannedRoute)
+                } else if (currentMatched) snapshot else {
                     // 출발 후 출발지 재검색이 지난 열차를 버려도, 저장한 동일 마지막 편은
                     // 별도로 1회만 확인한다. 이 값은 출발 알람/정상 ETA에 전달하지 않는다.
                     val observation = plannedRideRealtimeGuard?.observeLastPlannedRide(plan, now)
@@ -391,13 +407,21 @@ class SchedulePushJobWorker(
                         ?.takeIf { !trafficResult.accepted }
                     ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES)
 
+            val earlierTimetableDeparture = effectiveRouteSnapshot?.lastTimetablePlannedRoute
+                ?.takeIf { it == trafficResult.effectiveTransitRoute &&
+                    trafficResult.failureReason in setOf(TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED,
+                        TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_STALE) &&
+                    it.departureAt > now && selectedRoute.anchoredDepartureAt == null }
+                ?.departureAt?.truncatedTo(ChronoUnit.MINUTES)
+                ?.takeIf { previousRecommendedDepartureAt != null && it < previousRecommendedDepartureAt }
+
             // 대중교통 재조회 결과가 기존 알림을 뒤로 미루지 못하게 수정
             val recommendedDepartureAt = if (effectiveRouteSnapshot?.inProgressPlannedRoute != null) {
                 requireNotNull(previousRecommendedDepartureAt)
             } else selectedRoute.anchoredDepartureAt ?: preventUnsafeTransitPostponement(
                 travelMode = request.travelMode,
                 previousRecommendedDepartureAt = previousRecommendedDepartureAt,
-                candidateRecommendedDepartureAt = candidateRecommendedDepartureAt,
+                candidateRecommendedDepartureAt = earlierTimetableDeparture ?: candidateRecommendedDepartureAt,
             )
             val inProgressPlannedRoute = effectiveRouteSnapshot?.inProgressPlannedRoute
             val degradedTransitPresentation =
@@ -473,11 +497,13 @@ class SchedulePushJobWorker(
                 // Live Activity에 전달하기 직전에 유효시간을 반드시 채운다.
                 staleAt = null,
             )
-            // 조회 실패·시간표 부족·stale 결과는 알람 변경의 근거가 아니다.
+            // 완전한 시간표가 요구하는 더 이른 출발은 실시간 채택과 별개로 보호한다.
+            // 조회 실패·시간표 부족 등 나머지 stale 결과는 알람 변경의 근거가 아니다.
             // 기존 알람은 그대로 두고, 채택 가능한 ETA 또는 확정 환승 실패만 동기화한다.
             // 특히 첫 평가의 과거 fallback 출발시각으로 미래 알람을 취소하면 안 된다.
             val canSynchronizeAlarm = inProgressPlannedRoute == null &&
-                (trafficResult.accepted || etaFailureReason == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED)
+                (trafficResult.accepted || earlierTimetableDeparture != null ||
+                    etaFailureReason == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED)
             val alarmIntent = departureAlarmSyncService?.takeIf { canSynchronizeAlarm }?.let {
                 SchedulePushAlarmIntent.AutomaticEta(
                     memberId = job.memberId,
@@ -967,6 +993,8 @@ class SchedulePushJobWorker(
                         ?.rideTiming?.takeIf {
                             it.basis == EffectiveTransitRideTimingBasis.TIMETABLE
                         }?.predictedBoardingAt,
+                    // 출발 후에도 저장 경로의 승하차 관측 창을 건너뛰지 않는다. 알림 시각은 유지한다.
+                    plannedRouteRefreshAt = PlannedTransitRefreshCadencePolicy.nextRefreshAt(transitionAt, effectiveRouteSnapshot),
                     effectiveDepartureNoticeSentAt = if (
                         pushOutcome.notificationHandled &&
                         pushOutcome.decision == DepartureReminderDecision.DEPART_NOW &&
@@ -1201,6 +1229,7 @@ class SchedulePushJobWorker(
         observedBoardingAt: Instant?,
         pendingTimetableBoardingAt: Instant?,
         effectiveDepartureNoticeSentAt: Instant?,
+        plannedRouteRefreshAt: Instant?,
     ): Instant? {
         if (!now.isBefore(scheduleAt)) return null
 
@@ -1233,7 +1262,7 @@ class SchedulePushJobWorker(
             alertLeadMinutes = departureAlertLeadMinutes,
         )
 
-        return listOfNotNull(etaRefreshAt, trafficCheckAt, reminderCheckAt, scheduleAt)
+        return listOfNotNull(etaRefreshAt, plannedRouteRefreshAt, trafficCheckAt, reminderCheckAt, scheduleAt)
             .filter { it.isAfter(now) }
             .minOrNull()
     }

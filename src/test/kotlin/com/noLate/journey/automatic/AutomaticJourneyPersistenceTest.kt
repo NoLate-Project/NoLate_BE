@@ -216,7 +216,8 @@ class AutomaticJourneyPersistenceTest @Autowired constructor(
             departed.saveAndFlush(ScheduleDepartureStatus(scheduleId = 9001, memberId = memberId, departedAt = now))
         }
         val service = AutomaticJourneyService(rows, members, plans, departure, jobs, schedules, manual, mapper,
-            Clock.fixed(now, ZoneOffset.UTC), true, true, true, true, false, "test")
+            Clock.fixed(now, ZoneOffset.UTC), true, true, true, true, false, "test",
+            savedPrepareFence = com.noLate.journey.application.SavedJourneyPrepareFence(members, mock()))
         val sessionId = UUID.randomUUID().toString(); val owner = UUID.randomUUID().toString(); val digest = "b".repeat(64)
         tx { service.prepare(memberId, 9001, 2, AutomaticJourneyPrepareCommand(sessionId, owner, digest, AutomaticJourneyExecution.SIMULATOR)) }
         return Fixture(service, jobs, memberId, sessionId, AutomaticJourneyDepartureCommand(

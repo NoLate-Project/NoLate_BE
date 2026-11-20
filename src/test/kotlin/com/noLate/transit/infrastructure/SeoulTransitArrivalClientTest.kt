@@ -617,6 +617,37 @@ class SeoulTransitArrivalClientTest {
     }
 
     @Test
+    fun `종착역 결측은 같은 서울 응답에서 형식이 명확한 행선지로만 채운다`() {
+        val response = jacksonObjectMapper().readTree(
+            """
+            {
+              "realtimeArrivalList": [
+                {"subwayId":"1004","statnNm":"사당","updnLine":"하행","btrainNo":"4335",
+                 "bstatnNm":"-2","trainLineNm":"금정행 - 남태령방면","barvlDt":"510",
+                 "recptnDt":"2026-11-20 00:00:35","btrainSttus":"일반","arvlCd":"99"},
+                {"subwayId":"1004","statnNm":"사당","updnLine":"하행","btrainNo":"4336",
+                 "bstatnNm":"-2","trainLineNm":"남태령방면"},
+                {"subwayId":"1004","statnNm":"사당","updnLine":"하행","btrainNo":"4337",
+                 "bstatnNm":"오이도","trainLineNm":"금정행 - 남태령방면"},
+                {"subwayId":"1004","statnNm":"사당","updnLine":"하행","btrainNo":"4338",
+                 "bstatnNm":"-2","trainLineNm":"금정행 - 남태령방면 - 다른방면"},
+                {"subwayId":"1004","statnNm":"사당","updnLine":"하행","btrainNo":"4339","bstatnNm":"-2"}
+              ]
+            }
+            """.trimIndent(),
+        )
+        val rows = createClient().parseSubwayArrivals(
+            response, lineName = "4호선", directionName = null, directionCode = "DOWN", limit = 10,
+            observedAt = Instant.parse("2026-11-19T15:01:03Z"),
+        ).associateBy { requireNotNull(it.trainNumber) }
+
+        assertEquals(mapOf("4335" to "금정", "4336" to null, "4337" to "오이도", "4338" to null, "4339" to null),
+            rows.mapValues { (_, row) -> row.destinationName })
+        assertEquals("2026-11-19T15:00:35Z", rows["4335"]?.sourceUpdatedAt)
+        assertEquals("2026-11-19T15:09:05Z", rows["4335"]?.expectedAt)
+    }
+
+    @Test
     fun `서울 지하철 원천 관측시각이 없으면 로컬 수신시각만 있다는 증거를 보존한다`() {
         val client = createClient()
         val response = jacksonObjectMapper().readTree(

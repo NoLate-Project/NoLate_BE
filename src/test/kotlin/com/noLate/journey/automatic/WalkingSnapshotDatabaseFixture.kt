@@ -64,7 +64,8 @@ internal class WalkingSnapshotDatabaseFixture(url: String, clock: Clock = Clock.
         calls++; provider?.fetch(request) ?: syntheticPedestrianBody(request)
     }, authority, clock, true)
     val service = SavedJourneyWalkingSnapshotService(checker, authority, repository, em, fixture.mapper, clock, true,retainedNavigation,extendedNavigation)
-    fun automaticService(deviceEnabled:Boolean=false): AutomaticJourneyService {
+    fun automaticService(deviceEnabled:Boolean=false, subwayVerifier: JourneySubwayDeviceAdmissionVerifier? = null,
+        busVerifier: JourneyBusDeviceAdmissionVerifier? = null): AutomaticJourneyService {
         if(durablePreparations) {
             tx{preparations.findAll()}.forEach{fixture.rows[it.sessionId]=it}
             org.mockito.kotlin.whenever(fixture.repository.findBySessionId(org.mockito.kotlin.any())).thenAnswer { call ->
@@ -84,8 +85,11 @@ internal class WalkingSnapshotDatabaseFixture(url: String, clock: Clock = Clock.
         }
         val interceptor=org.springframework.transaction.interceptor.TransactionInterceptor(manager,
             org.springframework.transaction.annotation.AnnotationTransactionAttributeSource())
+        val savedFence = org.springframework.aop.framework.ProxyFactory(SavedJourneyPrepareFence(fixture.members, org.mockito.kotlin.mock())).apply {
+            isProxyTargetClass = true; addAdvice(interceptor)
+        }.proxy as SavedJourneyPrepareFence
         return org.springframework.aop.framework.ProxyFactory(fixture.service(walkingSnapshots=service,extendedNavigation=extendedNavigation,
-            deviceEnabled=deviceEnabled)).apply {
+            deviceEnabled=deviceEnabled, savedPrepareFence=savedFence, subwayVerifier=subwayVerifier, busVerifier=busVerifier)).apply {
             isProxyTargetClass=true;addAdvice(interceptor)
         }.proxy as AutomaticJourneyService
     }

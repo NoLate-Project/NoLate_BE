@@ -342,8 +342,63 @@ object EtaSimulatorFixtureServer {
                         System.out.flush()
                         continue
                     }
-                    if (command in setOf("planned-postdeparture", "planned-alighting")) {
+                    if (command == "reported-boarding") {
+                        check(System.getProperty("nolate.eta.reported-boarding-replay") == "true")
+                        check(fixture.phase == "transfer-observed" && history.count() == 1L)
+                        val beforeJob = requireNotNull(jobs.findByScheduleIdAndMemberId(363, 296))
+                        val before = requireNotNull(EffectiveTransitRouteSnapshot.parse(mapper, beforeJob.lastEffectiveTransitRouteJson))
+                        val original = requireNotNull(before.acceptedRoute())
+                        val departure = requireNotNull(beforeJob.lastRecommendedDepartureAt)
+                        val input = requireNotNull(schedules.findScheduleDetail(363, 296)).fixtureInput()
+                        val alarms = jdbc.queryForList("SELECT * FROM departure_alarm_sync_state WHERE member_id=296 AND schedule_id=363")
+                        // This explicitly synthetic clock begins before the later alighting frame.
+                        // A past forecast is never rewritten into a station ARRIVED state.
+                        fixture.logicalNow = fixture.epoch.plusSeconds(1036)
+                        check(requireNotNull(beforeJob.nextCheckAt) <= requireNotNull(fixture.logicalNow))
+                        fixture.phase = "reported-boarding-state"
+                        fixture.postDepartureStations.clear()
+                        val firstProcessed = worker.runDueJobForSchedule(296, 363, requireNotNull(fixture.logicalNow))
+                        val pendingJob = requireNotNull(jobs.findByScheduleIdAndMemberId(363, 296))
+                        val pending = requireNotNull(EffectiveTransitRouteSnapshot.parse(mapper, pendingJob.lastEffectiveTransitRouteJson))
+                        check(firstProcessed == 1 && history.count() == 2L)
+                        val pendingUpdate = requireNotNull(pending.plannedRouteUpdate)
+                        check(pendingUpdate.route == null && pendingUpdate.reportedBoardings.single().service.trainNumber == "3202")
+                        val pendingPrediction = requireNotNull(pending.plannedJourneyArrivalPrediction(requireNotNull(fixture.logicalNow), 120))
+                        check(pendingPrediction.basis == PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN)
+                        val pendingStations = fixture.postDepartureStations.toList()
+                        fixture.logicalNow = maxOf(Instant.now(), requireNotNull(pendingJob.nextCheckAt))
+                        fixture.phase = "reported-boarding-alighting"
+                        fixture.evidenceStem = command
+                        fixture.postDepartureStations.clear()
+                        val processed = worker.runDueJobForSchedule(296, 363, requireNotNull(fixture.logicalNow))
+                        val afterJob = requireNotNull(jobs.findByScheduleIdAndMemberId(363, 296))
+                        val after = requireNotNull(EffectiveTransitRouteSnapshot.parse(mapper, afterJob.lastEffectiveTransitRouteJson))
+                        val provisional = requireNotNull(after.plannedJourneyArrivalPrediction(requireNotNull(fixture.logicalNow), 120))
+                        check(processed == 1 && history.count() == 3L)
+                        check(provisional.basis == PlannedJourneyArrivalBasis.OBSERVED_SERVICE_CONNECTION)
+                        check(afterJob.lastRecommendedDepartureAt == departure)
+                        check(requireNotNull(schedules.findScheduleDetail(363, 296)).fixtureInput() == input)
+                        check(jdbc.queryForList("SELECT * FROM departure_alarm_sync_state WHERE member_id=296 AND schedule_id=363") == alarms)
+                        val safe = mapOf("classification" to "SYNTHETIC_REPORTED_BOARDING_WORKER_CHAIN",
+                            "phase" to command, "processed" to processed, "historyCount" to history.count(),
+                            "database" to "H2_MEMORY_ONLY", "providersMocked" to true,
+                            "physicalTransitHttpCalls" to 0, "productionDatabaseModified" to false,
+                            "epoch" to fixture.epoch, "evaluatedAt" to fixture.logicalNow,
+                            "targetArrivalAt" to afterJob.scheduleAt, "originalPlan" to original,
+                            "pendingUpdate" to pendingUpdate, "pendingPrediction" to pendingPrediction,
+                            "pendingStations" to pendingStations, "queriedStations" to fixture.postDepartureStations.toList(),
+                            "provisionalPrediction" to provisional, "plannedRouteUpdate" to after.plannedRouteUpdate,
+                            "beforeRecommendedDepartureAt" to departure, "recommendedDepartureAt" to afterJob.lastRecommendedDepartureAt,
+                            "savedScheduleInput" to input, "savedScheduleAfterEvaluation" to requireNotNull(schedules.findScheduleDetail(363, 296)).fixtureInput(),
+                            "alarmBeforeEvaluation" to alarms, "alarmStates" to jdbc.queryForList("SELECT * FROM departure_alarm_sync_state WHERE member_id=296 AND schedule_id=363"))
+                        mapper.writeValue(output.resolve("$command.json").toFile(), safe)
+                        println("ETA_FIXTURE_REPORTED_BOARDING_CHAIN_VERIFIED")
+                        System.out.flush()
+                        continue
+                    }
+                    if (command in setOf("planned-postdeparture", "planned-alighting", "planned-first-alighting")) {
                         val probeAlighting = command == "planned-alighting"
+                        val probeFirstAlighting = command == "planned-first-alighting"
                         check(fixture.phase == "transfer-observed" && history.count() == 1L)
                         val beforeJob = requireNotNull(jobs.findByScheduleIdAndMemberId(363, 296))
                         val before = requireNotNull(EffectiveTransitRouteSnapshot.parse(mapper,
@@ -354,15 +409,18 @@ object EtaSimulatorFixtureServer {
                         val rides = plan.segments.filter { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY }
                         val lastRide = requireNotNull(rides.last().rideTiming)
                         val clockAnchor = if (probeAlighting) lastRide.predictedBoardingAt else plan.departureAt
-                        val now = maxOf(requireNotNull(beforeJob.nextCheckAt), clockAnchor.plusSeconds(30))
+                        val now = if (probeFirstAlighting) maxOf(requireNotNull(beforeJob.nextCheckAt), Instant.now())
+                            else maxOf(requireNotNull(beforeJob.nextCheckAt), clockAnchor.plusSeconds(30))
                         check(now.isBefore(beforeJob.scheduleAt))
                         if (probeAlighting) {
                             check(now.isBefore(lastRide.timetable.boardingAt.plusSeconds(120)))
+                        } else if (probeFirstAlighting) {
+                            check(now > requireNotNull(rides.first().rideTiming).predictedBoardingAt && now < fixture.epoch.plusSeconds(700))
                         } else {
                             check(now.isBefore(requireNotNull(rides.first().rideTiming).timetable.boardingAt))
                         }
                         fixture.logicalNow = now
-                        fixture.phase = "transfer-first-unobserved"
+                        fixture.phase = if (probeFirstAlighting) "planned-first-alighting" else "transfer-first-unobserved"
                         fixture.evidenceStem = command
                         fixture.postDepartureProbe = true
                         fixture.postDepartureAlighting = probeAlighting
@@ -375,7 +433,7 @@ object EtaSimulatorFixtureServer {
                             afterJob.lastEffectiveTransitRouteJson))
                         val provisional = after.plannedJourneyArrivalPrediction(now, 120)
                         val safe = mapOf("classification" to "SYNTHETIC_POST_DEPARTURE_WORKER",
-                            "phase" to command, "processed" to processed,
+                            "phase" to command, "processed" to processed, "epoch" to fixture.epoch.toString(),
                             "database" to "H2_MEMORY_ONLY", "providersMocked" to true,
                             "physicalTransitHttpCalls" to 0, "productionDatabaseModified" to false,
                             "evaluatedAt" to now.toString(), "targetArrivalAt" to afterJob.scheduleAt.toString(),
@@ -387,6 +445,7 @@ object EtaSimulatorFixtureServer {
                             "stale" to afterJob.lastEtaStale,
                             "failureReason" to afterJob.lastEtaFailureReason,
                             "plannedArrivalObservation" to after.plannedArrivalObservation,
+                            "plannedRouteUpdate" to after.plannedRouteUpdate,
                             "provisionalPrediction" to provisional,
                             "currentAccepted" to after.accepted,
                             "inProgressPlanIdentity" to after.inProgressPlannedRoute?.identity,
@@ -543,7 +602,7 @@ object EtaSimulatorFixtureServer {
                         "optimization-timeout")
                     if (quotaScenario) check(schedules.findScheduleDetail(363, 296) != null && history.count() > 0)
                     if (command in nativeScenarios) check(nativeFixtureCategory != null) { "Explicit native delivery mode is required" }
-                    if (command !in setOf("success", "reconnect", "early-transfer", "dwell-transfer", "early-transfer-risk", "transfer-observed", "transfer-first-unobserved", "unknown", "missed", "recovered", "late", "evaluate-saved", "evaluate-created") && command !in recoveryScenarios && command !in nativeScenarios && !quotaScenario) continue
+                    if (command !in setOf("success", "reconnect", "early-transfer", "dwell-transfer", "first-alighting-late", "onward-delay", "early-transfer-risk", "transfer-observed", "transfer-first-unobserved", "unknown", "missed", "recovered", "late", "evaluate-saved", "evaluate-created") && command !in recoveryScenarios && command !in nativeScenarios && !quotaScenario) continue
                     val evaluateSaved = command in setOf("evaluate-saved", "evaluate-created") || quotaScenario
                     fixture.phase = if (quotaScenario && command !in setOf("quota-recovered", "optimization-timeout")) command else if (evaluateSaved) "success" else recoveryScenarios[command] ?: nativeScenarios[command] ?: command
                     fixture.failSecondRouteSearch = command == "optimization-timeout"
@@ -558,9 +617,13 @@ object EtaSimulatorFixtureServer {
                     check(deliveryLead in 60..600)
                     val seedForAlighting = command == "transfer-observed" &&
                         System.getProperty("nolate.eta.alighting-replay") == "true"
+                    val seedForFirstAlighting = command == "transfer-observed" &&
+                        System.getProperty("nolate.eta.first-alighting-replay") == "true"
+                    val seedForReported = command == "transfer-observed" &&
+                        System.getProperty("nolate.eta.reported-boarding-replay") == "true"
                     if (!quotaScenario) fixture.epoch = Instant.now().truncatedTo(ChronoUnit.MINUTES)
-                        .plusSeconds(if (seedForAlighting) -870L else deliveryLead)
-                    val fixtureEvaluationAt = if (seedForAlighting) fixture.epoch.minusSeconds(60) else Instant.now()
+                        .plusSeconds(if (seedForReported) -1240L else if (seedForAlighting) -870L else if (seedForFirstAlighting) -300L else deliveryLead)
+                    val fixtureEvaluationAt = if (seedForReported || seedForAlighting || seedForFirstAlighting) fixture.epoch.minusSeconds(60) else Instant.now()
                     fixture.queries.clear()
                     fixture.routeRequests.clear()
                     fixture.injectedFaults.clear()
@@ -587,13 +650,19 @@ object EtaSimulatorFixtureServer {
                         }
                         schedule.updateRoute(
                             travelMinutes = 65, departAt = fixture.epoch, departedAt = null, travelMode = ScheduleTravelMode.TRANSIT,
-                            locationName = "신림역", originName = "노원역", originAddress = null, originLat = 37.6551, originLng = 127.0610,
-                            destinationName = "신림역", destinationAddress = null, destinationLat = 37.4842, destinationLng = 126.9297,
-                            routeJson = if (command in setOf("transfer-observed", "early-transfer-risk")) fixture.savedRouteWithWalks(mapper) else fixture.savedRoute,
+                            locationName = if (command == "onward-delay") "영등포역" else "신림역", originName = "노원역", originAddress = null, originLat = 37.6551, originLng = 127.0610,
+                            destinationName = if (command == "onward-delay") "영등포역" else "신림역", destinationAddress = null,
+                            destinationLat = if (command == "onward-delay") 37.5156 else 37.4842,
+                            destinationLng = if (command == "onward-delay") 126.9074 else 126.9297,
+                            routeJson = when (command) {
+                                "onward-delay" -> fixture.onwardSavedRoute(mapper)
+                                "transfer-observed", "early-transfer-risk" -> fixture.savedRouteWithWalks(mapper)
+                                else -> fixture.savedRoute
+                            },
                             notificationEnabled = true, notificationLeadMinutes = 15,
                             notificationIntervalMinutes = 10,
                             // 조기 환승 품질 E2E는 OS 알람 예약/전달을 검사하지 않는다.
-                            alertMode = if (command in setOf("early-transfer", "dwell-transfer", "transfer-observed", "transfer-first-unobserved")) ScheduleAlertMode.STANDARD else ScheduleAlertMode.ALARM,
+                            alertMode = if (command in setOf("early-transfer", "dwell-transfer", "first-alighting-late", "onward-delay", "transfer-observed", "transfer-first-unobserved")) ScheduleAlertMode.STANDARD else ScheduleAlertMode.ALARM,
                         )
                         schedules.saveAndFlush(schedule)
                     }
@@ -839,7 +908,10 @@ class FixtureConfiguration {
                 state.epoch = java.time.LocalDateTime.parse(requireNotNull(request.searchDttm),
                     java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmm")).atZone(ZoneId.of("Asia/Seoul")).toInstant()
             }
-            return jacksonObjectMapper().readTree(state.routePayload)
+            val mapper = jacksonObjectMapper()
+            return if (state.phase == "onward-delay") state.onwardRoutePayload(mapper)
+                else if (System.getProperty("nolate.eta.reported-boarding-replay") == "true") state.reportedBoardingRoutePayload(mapper)
+                else mapper.readTree(state.routePayload)
         }
     }
     @Bean fun fixtureTimetableProvider(state: FixtureState): TransitTimetableProvider = object : TransitTimetableProvider {
@@ -848,6 +920,22 @@ class FixtureConfiguration {
             if (state.phase == "quota-timetable") {
                 state.injectedFaults += "timetable:ERROR-337"
                 throw TransitProviderApplicationException(TransitWireProvider.SEOUL_TIMETABLE, "ERROR-337")
+            }
+            if (state.phase == "onward-delay") {
+                val ride = when (query.line) {
+                    SeoulSubwayLine.LINE_4 -> listOf("4012", "N", "S4", "오이도", "197", "400")
+                    SeoulSubwayLine.LINE_2 -> listOf("2012", "S4", "D2", "성수", "600", "720")
+                    SeoulSubwayLine.LINE_1 -> listOf("1012", "D1", "Y1", "소요산", "900", "1020")
+                    else -> return emptyList()
+                }
+                val original = TransitLegTimetable("fixture-timetable", query.line,
+                    LocalDate.ofInstant(state.epoch, ZoneId.of("Asia/Seoul")), ride[0], "DOWN",
+                    TransitServiceClass.LOCAL, ride[1], ride[2], ride[3],
+                    state.epoch.plusSeconds(ride[4].toLong()), state.epoch.plusSeconds(ride[5].toLong()),
+                    state.logicalNow ?: Instant.now())
+                return listOf(original) + if (query.line == SeoulSubwayLine.LINE_1) listOf(original.copy(
+                    trainNumber = "1014", boardingAt = state.epoch.plusSeconds(1080),
+                    arrivalAt = state.epoch.plusSeconds(1200))) else emptyList()
             }
             val first = query.line == SeoulSubwayLine.LINE_4
             // Deliberately omit the onward timetable. A fresh first vehicle alone
@@ -859,36 +947,78 @@ class FixtureConfiguration {
                 if (first) "오이도" else "성수", state.epoch.plusSeconds(if (first) {
                     if (state.phase in setOf("early-transfer", "dwell-transfer")) 330 else 197
                 } else if (state.phase == "early-transfer") 1050
+                else if (state.phase == "first-alighting-late") 1000
                 else if (state.phase == "early-transfer-risk") 600
-                else if (state.phase in setOf("transfer-observed", "transfer-first-unobserved")) 840 else 1800),
+                else if (state.phase in setOf("transfer-observed", "transfer-first-unobserved", "planned-first-alighting")) 840 else 1800),
                 state.epoch.plusSeconds(if (first) {
                     when (state.phase) {
                         "early-transfer" -> 800
                         "dwell-transfer" -> 1490
                         "early-transfer-risk" -> 260
-                        "transfer-observed", "transfer-first-unobserved" -> 500
+                        "transfer-observed", "transfer-first-unobserved", "first-alighting-late", "planned-first-alighting" -> 500
                         else -> 1397
                     }
                 } else if (state.phase == "early-transfer") 1531
+                else if (state.phase == "first-alighting-late") 1481
                 else if (state.phase == "early-transfer-risk") 1081
-                else if (state.phase in setOf("transfer-observed", "transfer-first-unobserved")) 1321 else 2281), state.logicalNow ?: Instant.now(),
+                else if (state.phase in setOf("transfer-observed", "transfer-first-unobserved", "planned-first-alighting")) 1321 else 2281), state.logicalNow ?: Instant.now(),
                 boardingStationArrivalAt = when {
                     first && state.phase in setOf("early-transfer", "dwell-transfer") -> state.epoch.plusSeconds(310)
                     !first && state.phase == "early-transfer-risk" -> state.epoch.plusSeconds(580)
                     else -> null
                 })
-            return listOf(original) + if (!first && state.phase in setOf("reconnect", "recovered", "late", "early-transfer", "dwell-transfer")) {
-                listOf(original.copy(trainNumber = "2014", boardingAt = state.epoch.plusSeconds(2100),
-                    arrivalAt = state.epoch.plusSeconds(2581)))
+            return listOf(original) + if (!first && state.phase in setOf("reconnect", "recovered", "late", "early-transfer", "dwell-transfer", "first-alighting-late", "planned-first-alighting")) {
+                val boarding = if (state.phase in setOf("first-alighting-late", "planned-first-alighting")) 1300L else 2100L
+                listOf(original.copy(trainNumber = "2014", boardingAt = state.epoch.plusSeconds(boarding),
+                    arrivalAt = state.epoch.plusSeconds(boarding + 481)))
             } else emptyList()
         }
     }
     @Bean @Primary fun fixtureSeoulArrivalClient(state: FixtureState): SeoulTransitArrivalClient = mock {
         on { getSubwayArrivals(any(), anyOrNull(), anyOrNull(), anyOrNull(), any()) } doAnswer {
             val station = it.getArgument<String>(0)
+            if (state.phase in setOf("reported-boarding-state", "reported-boarding-alighting")) {
+                val name = station.removeSuffix("역")
+                val line = it.getArgument<String?>(1)
+                state.postDepartureStations += "$name/$line"
+                val now = requireNotNull(state.logicalNow)
+                val boarding = name == "사당" && line == "2호선" && state.phase == "reported-boarding-state"
+                val alighting = name == "신림" && line == "2호선"
+                if (!boarding && !alighting) return@doAnswer emptyList<TransitArrivalDto>()
+                val source = if (boarding) state.epoch.plusSeconds(1010) else now.minusSeconds(1)
+                return@doAnswer listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "2호선",
+                    stationName = name, direction = "외선", destinationName = "성수", express = false,
+                    subwayLineId = "1002", trainNumber = if (boarding || state.phase == "reported-boarding-alighting") "3202" else "3300",
+                    expectedAt = (if (boarding) source else now.plusSeconds(450)).toString(),
+                    sourceUpdatedAt = source.toString(), observedAt = now.plusMillis(250).toString(),
+                    waitSeconds = if (boarding) 0 else 451,
+                    arrivalStatus = if (boarding) com.noLate.transit.domain.TransitArrivalStatus.ARRIVED
+                        else com.noLate.transit.domain.TransitArrivalStatus.IN_TRANSIT,
+                    freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP))
+            }
+            if (state.phase == "planned-first-alighting") {
+                if (state.postDepartureProbe) state.postDepartureStations += station.removeSuffix("역")
+                if (station.removeSuffix("역") != "사당" || it.getArgument<String?>(1) != "4호선") return@doAnswer emptyList<TransitArrivalDto>()
+                return@doAnswer listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", stationName = "사당", lineName = "4호선",
+                    direction = "하행", destinationName = "오이도", express = false, subwayLineId = "1004", trainNumber = "4012",
+                    expectedAt = state.epoch.plusSeconds(700).toString(), sourceUpdatedAt = requireNotNull(state.logicalNow).toString(),
+                    freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP))
+            }
+            if (state.phase == "onward-delay") {
+                val first = station.removeSuffix("역") == "노원" && it.getArgument<String?>(1) == "4호선"
+                val second = station.removeSuffix("역") == "사당" && it.getArgument<String?>(1) == "2호선"
+                if (!first && !second) return@doAnswer emptyList<TransitArrivalDto>()
+                return@doAnswer listOf(TransitArrivalDto("seoul-openapi", "SUBWAY",
+                    stationName = station, lineName = if (first) "4호선" else "2호선", direction = "하행",
+                    destinationName = if (first) "오이도" else "성수", express = false,
+                    subwayLineId = if (first) "1004" else "1002", trainNumber = if (first) "4012" else "2012",
+                    expectedAt = state.epoch.plusSeconds(if (first) 210 else 740).toString(),
+                    sourceUpdatedAt = requireNotNull(state.logicalNow).toString(),
+                    freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP))
+            }
             val firstAlightingRisk = state.phase == "early-transfer-risk" &&
                 System.getProperty("nolate.eta.first-alighting-risk") == "true"
-            if ((firstAlightingRisk || state.phase == "early-transfer") && station.removeSuffix("역") == "사당") {
+            if ((firstAlightingRisk || state.phase in setOf("early-transfer", "first-alighting-late")) && station.removeSuffix("역") == "사당") {
                 if (it.getArgument<String?>(1) != "4호선") return@doAnswer emptyList<TransitArrivalDto>()
                 if (System.getProperty("nolate.eta.first-timetable-alighting") == "true") {
                     return@doAnswer emptyList<TransitArrivalDto>()
@@ -968,6 +1098,7 @@ class FixtureConfiguration {
             listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", lineName = "4호선", stationName = "노원역",
                 direction = "하행", destinationName = if (state.phase in setOf("early-transfer", "dwell-transfer")) "오이도종착" else "오이도",
                 expectedAt = state.epoch.plusSeconds(if (firstAlightingRisk) 190
+                    else if (state.phase == "first-alighting-late") 270
                     else if (state.phase == "early-transfer") 197
                     else if (state.phase == "dwell-transfer") 320
                     else if (state.phase in setOf("success", "unknown", "transfer-observed", "early-transfer-risk")) 210 else 407).toString(),
@@ -998,6 +1129,81 @@ class FixtureState {
     val clientMockRouteRequests = mutableListOf<Map<String, Double?>>()
     val queries = mutableListOf<Map<String, String>>()
     val injectedFaults = mutableListOf<String>()
+
+    /** Only this synthetic protocol fixture supplies ordered stop identity to the real mapper. */
+    fun reportedBoardingRoutePayload(mapper: ObjectMapper): com.fasterxml.jackson.databind.JsonNode {
+        val payload = mapper.readTree(routePayload)
+        val legs = payload.path("metaData").path("plan").path("itineraries")[0].path("legs")
+        for ((index, names) in listOf(1 to listOf("노원", "창동", "사당"),
+            3 to listOf("사당", "낙성대", "서울대입구", "봉천", "신림"))) {
+            val list = mapper.createArrayNode()
+            names.forEachIndexed { order, name -> list.add(mapper.createObjectNode().put("stationName", name).put("index", order)) }
+            (legs[index] as com.fasterxml.jackson.databind.node.ObjectNode).set<com.fasterxml.jackson.databind.JsonNode>(
+                "passStopList", mapper.createObjectNode().set<com.fasterxml.jackson.databind.JsonNode>("stationList", list))
+        }
+        return payload
+    }
+
+    /** 세 승차 구간의 후속 지연 재연결을 검증하는 합성 경로. 실제 운행시간이 아니다. */
+    fun onwardRoutePayload(mapper: ObjectMapper): com.fasterxml.jackson.databind.JsonNode {
+        val payload = mapper.readTree(routePayload)
+        val itinerary = payload.path("metaData").path("plan").path("itineraries")[0] as com.fasterxml.jackson.databind.node.ObjectNode
+        val legs = itinerary.path("legs") as com.fasterxml.jackson.databind.node.ArrayNode
+        fun point(name: String, lat: Double, lon: Double) = mapper.createObjectNode()
+            .put("name", name).put("lat", lat).put("lon", lon)
+        val interchange = point("신도림", 37.5088, 126.8913)
+        val destination = point("영등포", 37.5156, 126.9074)
+        (legs[1] as com.fasterxml.jackson.databind.node.ObjectNode).put("sectionTime", 203)
+        (legs[2] as com.fasterxml.jackson.databind.node.ObjectNode).put("sectionTime", 60)
+        (legs[3] as com.fasterxml.jackson.databind.node.ObjectNode).apply {
+            put("sectionTime", 120)
+            set<com.fasterxml.jackson.databind.JsonNode>("end", interchange)
+            set<com.fasterxml.jackson.databind.JsonNode>("passShape", mapper.createObjectNode()
+                .put("linestring", "126.9817,37.4766 126.8913,37.5088"))
+        }
+        val finalWalk = (legs.remove(4) as com.fasterxml.jackson.databind.node.ObjectNode).apply {
+            set<com.fasterxml.jackson.databind.JsonNode>("start", destination)
+            set<com.fasterxml.jackson.databind.JsonNode>("end", point("도착지", 37.5156, 126.9074))
+            remove("steps")
+            set<com.fasterxml.jackson.databind.JsonNode>("passShape", mapper.createObjectNode()
+                .put("linestring", "126.9074,37.5156 126.9074,37.5156"))
+        }
+        legs.add(mapper.createObjectNode().put("mode", "WALK").put("sectionTime", 60).put("distance", 50).apply {
+            set<com.fasterxml.jackson.databind.JsonNode>("start", interchange)
+            set<com.fasterxml.jackson.databind.JsonNode>("end", interchange)
+        })
+        legs.add(mapper.createObjectNode().put("mode", "SUBWAY").put("sectionTime", 120)
+            .put("service", 1).put("type", 1).put("route", "수도권 1호선").put("routeId", "11001").apply {
+                set<com.fasterxml.jackson.databind.JsonNode>("start", interchange)
+                set<com.fasterxml.jackson.databind.JsonNode>("end", destination)
+                set<com.fasterxml.jackson.databind.JsonNode>("passShape", mapper.createObjectNode()
+                    .put("linestring", "126.8913,37.5088 126.9074,37.5156"))
+            })
+        legs.add(finalWalk)
+        itinerary.put("transferCount", 2).put("totalTime", 845)
+        return payload
+    }
+
+    fun onwardSavedRoute(mapper: ObjectMapper): String {
+        val route = mapper.readTree(savedRoute) as com.fasterxml.jackson.databind.node.ObjectNode
+        val rides = route.path("transitLegs") as com.fasterxml.jackson.databind.node.ArrayNode
+        (rides[1] as com.fasterxml.jackson.databind.node.ObjectNode).put("endName", "신도림")
+            .set<com.fasterxml.jackson.databind.JsonNode>("endCoord", mapper.createObjectNode().put("lat", 37.5088).put("lng", 126.8913))
+        rides.add(mapper.createObjectNode().put("mode", "SUBWAY").put("routeId", "11001")
+            .put("lineName", "수도권 1호선").put("serviceClass", "LOCAL").put("durationMinutes", 2)
+            .put("startName", "신도림").put("endName", "영등포"))
+        val steps = mapper.createArrayNode()
+        rides.forEach { steps.add(it.deepCopy<com.fasterxml.jackson.databind.JsonNode>()) }
+        route.set<com.fasterxml.jackson.databind.JsonNode>("steps", steps)
+        (route.path("selectedRouteOption") as com.fasterxml.jackson.databind.node.ObjectNode).apply {
+            put("transferCount", 2)
+            set<com.fasterxml.jackson.databind.JsonNode>("steps", steps)
+        }
+        route.set<com.fasterxml.jackson.databind.JsonNode>("pathCoords", mapper.createArrayNode()
+            .add(mapper.createObjectNode().put("lat", 37.6551).put("lng", 127.0610))
+            .add(mapper.createObjectNode().put("lat", 37.5156).put("lng", 126.9074)))
+        return mapper.writeValueAsString(route)
+    }
     // Synthetic maasRP protocol, not a Tmap response relabeled as ODsay.
     // Mobile requests remain on the real ODsay parser and normal route-save UI.
     val mobileOdsayRoutePayload = """{"result":{"paths":[{"pathType":2,"totalTime":65,"totalDistance":30000,

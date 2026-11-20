@@ -74,31 +74,43 @@ class SavedJourneyInputValidator(private val mapper: ObjectMapper) {
         if (!same(actual, expected) || expected.path("origin").isNull || expected.path("destination").isNull) reject()
     }
 
-    /** DEVICE admission is narrower than a structurally valid saved route. Only a single
-     * transit leg may be prepared; a static official crosswalk never confirms boarding. */
     fun requireDeviceReady(plan: ScheduleTravelPlanDto, json: String, walking: WalkingSnapshotContract?,
-        officialBus: JourneyBusDeviceAdmission? = null,
-        officialSubway: JourneySubwayDeviceAdmission? = null) {
+        officialBus: JourneyBusDeviceAdmission? = null, officialSubway: JourneySubwayDeviceAdmission? = null) =
+        requireDeviceReady(JourneyRouteSnapshot.from(plan, mapper), json, walking,
+            listOfNotNull(officialBus), listOfNotNull(officialSubway))
+
+    /** Require exact coverage by occurrence, including repeated lines on the same itinerary. */
+    internal fun requireDeviceReady(snapshot: JourneyRouteSnapshot, json: String, walking: WalkingSnapshotContract?,
+        buses: List<JourneyBusDeviceAdmission>, subways: List<JourneySubwayDeviceAdmission>) {
         val input = runCatching { mapper.readTree(json) }.getOrNull() ?: rejectDevice()
         val legs = input.path("legs")
-        if (officialBus != null && officialSubway != null) rejectDevice()
-        val kind = if (officialSubway != null) "SUBWAY" else "BUS"
+        val legacyBus = buses.isEmpty() && subways.isEmpty() && legs.size() == 3 && legs.path(1).path("kind").asText() == "BUS"
         if (walking == null || input.path("provider").asText() != "odsay" || input.path("source").asText() != "api" ||
             input.path("plausibility").asText() != "normal" ||
-            input.path("serviceState").asText() !in (if (officialBus == null && officialSubway == null) setOf("operating") else setOf("operating", "UNKNOWN")) ||
+            input.path("serviceState").asText() !in (if (legacyBus) setOf("operating") else setOf("operating", "UNKNOWN")) ||
             input.path("reliability").asText() !in setOf("live_provider", "provider_estimate") ||
-            !legs.isArray || legs.size() != 3 || listOf("WALK", kind, "WALK").indices.any { index ->
-                legs[index].path("index").asInt(-1) != index || legs[index].path("kind").asText() != listOf("WALK", kind, "WALK")[index]
-            }) rejectDevice()
-        val transit = legs[1]
-        if (transit.path("geometrySource").asText() != "TRANSIT_PASS_SHAPE_LINESTRING" ||
-            !transit.path("exact").asBoolean(false) || !transit.path("geometryInputComplete").asBoolean(false) ||
-            transit.path("coordinates").size() !in 2..2000) rejectDevice()
-        if (transit.path("serviceAvailable").isBoolean && !transit.path("serviceAvailable").asBoolean()) rejectDevice()
+            !legs.isArray || legs.size() !in 3..31 || legs.size() % 2 != 1 ||
+            legs.withIndex().any { (i, leg) -> leg.path("index").asInt(-1) != i ||
+                if (i % 2 == 0) leg.path("kind").asText() != "WALK" else leg.path("kind").asText() !in setOf("BUS","SUBWAY") }) rejectDevice()
+        val transitIndices = 1 until legs.size() step 2
+        if (!legacyBus && (buses.map { it.busLegIndex } != transitIndices.filter { legs[it].path("kind").asText() == "BUS" } ||
+                subways.map { it.subwayLegIndex } != transitIndices.filter { legs[it].path("kind").asText() == "SUBWAY" })) rejectDevice()
+        for (index in transitIndices) {
+            val transit = legs[index]
+            if (transit.path("geometrySource").asText() != "TRANSIT_PASS_SHAPE_LINESTRING" ||
+                !transit.path("exact").asBoolean(false) || !transit.path("geometryInputComplete").asBoolean(false) ||
+                transit.path("coordinates").size() !in 2..2000 ||
+                transit.path("serviceAvailable").isBoolean && !transit.path("serviceAvailable").asBoolean()) rejectDevice()
+            requireTransitProof(snapshot, index, transit, buses.find { it.busLegIndex == index }, subways.find { it.subwayLegIndex == index })
+        }
+    }
+
+    private fun requireTransitProof(snapshot: JourneyRouteSnapshot, index: Int, transit: JsonNode,
+        officialBus: JourneyBusDeviceAdmission?, officialSubway: JourneySubwayDeviceAdmission?) {
         if (officialSubway != null) {
-            val raw = JourneySubwaySavedLegEvidence.resolve(JourneyRouteSnapshot.from(plan, mapper), 1).evidence ?: rejectDevice()
+            val raw = JourneySubwaySavedLegEvidence.resolve(snapshot, index).evidence ?: rejectDevice()
             if (officialSubway.schemaVersion != 1 || officialSubway.identityEvidence != "OFFICIAL_STATION_PATH_CROSSWALK" ||
-                officialSubway.subwayLegIndex != 1 || officialSubway.providerRouteId != "${raw.routingCity}:${raw.routingLine}" ||
+                officialSubway.providerRouteId != "${raw.routingCity}:${raw.routingLine}" ||
                 officialSubway.providerRouteId != transit.path("providerRouteId").asText() ||
                 officialSubway.startRoutingStationId != raw.startStationId ||
                 officialSubway.endRoutingStationId != raw.endStationId ||
@@ -108,14 +120,14 @@ class SavedJourneyInputValidator(private val mapper: ObjectMapper) {
                 transit.path("declaredStationCount").takeIf { it.isNumber }?.asInt()?.let { it != officialSubway.stationCount } == true)
                 rejectDevice()
         } else if (officialBus == null) {
-            val binding = JourneyBusRouteBindingResolver().resolve(JourneyRouteSnapshot.from(plan, mapper))
+            val binding = JourneyBusRouteBindingResolver().resolve(snapshot, index)
             if (binding.query?.providerRouteId?.matches(Regex("[1-9][0-9]{8}")) != true) rejectDevice()
         } else {
-            val raw = JourneyBusRouteBindingResolver().resolveRaw(JourneyRouteSnapshot.from(plan, mapper))
+            val raw = JourneyBusRouteBindingResolver().resolveRaw(snapshot, index)
             if (raw.evidence == null || officialBus.schemaVersion != 1 ||
-                officialBus.identityEvidence != "OFFICIAL_STOP_SHAPE_CROSSWALK" || officialBus.busLegIndex != 1 ||
+                officialBus.identityEvidence != "OFFICIAL_STOP_SHAPE_CROSSWALK" ||
                 officialBus.routeId != raw.evidence.routeId || officialBus.routeId != transit.path("localRouteId").asText() ||
-                officialBus.stationCount != legs[1].path("stops").size() - 1 ||
+                officialBus.stationCount != transit.path("stops").size() - 1 ||
                 officialBus.firstStopSequence < 0 || officialBus.lastStopSequence.toLong() - officialBus.firstStopSequence.toLong() != officialBus.stationCount.toLong() ||
                 officialBus.direction.isBlank() || officialBus.direction.length > 128 || officialBus.direction.any(Char::isISOControl) ||
                 raw.evidence.direction?.let { it != officialBus.direction } == true ||

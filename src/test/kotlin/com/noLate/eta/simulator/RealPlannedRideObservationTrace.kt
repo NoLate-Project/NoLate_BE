@@ -10,7 +10,8 @@ import org.springframework.test.util.ReflectionTestUtils
 import java.time.Instant
 
 /** 격리 E2E 전용. 마지막 환승편 조회의 반환값만 기록하며 공급자 요청을 추가하지 않는다. */
-internal class RealPlannedRideObservationTrace(private val guard: TransitTransferRealtimeGuard) : AutoCloseable {
+internal class RealPlannedRideObservationTrace(private val guard: TransitTransferRealtimeGuard,
+                                               private val refreshTrace: RealPlannedRouteRefreshTrace? = null) : AutoCloseable {
     private val originalService = ReflectionTestUtils.getField(guard, "arrivals") as TransitArrivalService
     private val seoulClient = runCatching {
         ReflectionTestUtils.getField(originalService, "seoulTransitArrivalClient") as? SeoulTransitArrivalClient
@@ -27,6 +28,7 @@ internal class RealPlannedRideObservationTrace(private val guard: TransitTransfe
                 try {
                     @Suppress("UNCHECKED_CAST")
                     val rows = invocation.proceed() as List<TransitArrivalDto>
+                    refreshTrace?.station(invocation.arguments, rows)
                     val stationName = invocation.arguments[0] as String
                     val lineName = invocation.arguments[1] as String?
                     // 기존 요청이 채운 역별 캐시만 확인한다. 방향 필터 또는 상위 10편에서
@@ -45,6 +47,7 @@ internal class RealPlannedRideObservationTrace(private val guard: TransitTransfe
                     ))
                     rows
                 } catch (failure: Exception) {
+                    refreshTrace?.incomplete()
                     record(mapOf("requestedAt" to requestedAt,
                         "stationName" to invocation.arguments[0],
                         "lineName" to invocation.arguments[1],

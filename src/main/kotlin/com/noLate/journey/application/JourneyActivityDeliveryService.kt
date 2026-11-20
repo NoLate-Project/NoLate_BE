@@ -51,10 +51,14 @@ class JourneyActivityDeliveryService(
             val saved=journeys.requireActivityObservationFence(member,schedule,login,session,binding,
                 command.path("contentState").path("activeLegIndex").asInt(),command.path("contentState").path("phase").asText(),
                 command.path("contentState").path("schemaVersion").asInt())
-            if(command.path("contentState").path("schemaVersion").asInt()==8)
+            if(command.path("contentState").path("schemaVersion").asInt() in 8..9)
                 JourneyActivityContract.validateSubwaySavedCalls(command.path("contentState"),saved,mapper)
             if(command.path("contentState").path("lastConfirmedSubway").isObject)
                 JourneyActivityContract.validateLastSubwaySavedCall(command.path("contentState"),saved,mapper)
+            if(command.path("contentState").path("lastConfirmedBus").isObject)
+                JourneyActivityContract.validateLastBusSavedLeg(command.path("contentState"),saved)
+            JourneyActivityContract.validateWaitingSavedLeg(command.path("contentState"),saved)
+            JourneyActivityContract.validateArrivalSavedLeg(command.path("contentState"),saved)
             val tokenHash = JourneyActivityCredentials.fingerprint(snapshot.token)
             val fcmHash = JourneyActivityCredentials.fingerprint(snapshot.fcm)
             val proof = routes.bind(member, snapshot.fcm)
@@ -135,6 +139,8 @@ class JourneyActivityDeliveryService(
                 val content = content(lane.contentJson).toMutableMap().apply {
                     put("status", lane.terminalReason); put("phase", lane.terminalReason); put("quality", "UNAVAILABLE")
                     put("schemaVersion", 1); put("boardingConfirmed", false); put("rideProgress", null); put("alighting", null); put("subway",null)
+                    put("lastConfirmedBus", null); put("lastConfirmedSubway", null)
+                    remove("subwaySegment")
                     put("instruction", "길안내 종료"); put("walkProgress", null); put("arrival", null)
                     put("arrivalStatus", "ENDED"); put("validUntil", time.epochSecond.toDouble())
                 }

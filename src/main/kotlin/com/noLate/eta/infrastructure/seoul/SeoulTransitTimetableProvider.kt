@@ -50,11 +50,14 @@ class SeoulTransitTimetableProvider(
         val date = query.serviceDate ?: requested.toLocalDate()
         // 오늘 출발한 여정의 환승은 자정을 넘을 수 있다. 명시적으로 전달된 운행일의
         // 24~26시 원본 행만 연결하며, 새벽 시각에서 전날 운행일을 임의 추정하지 않는다.
-        if (date != clock.instant().atZone(zone).toLocalDate()) return emptyList()
         val sameDay = requested.toLocalDate() == date && requested.hour >= 3
         val explicitOvernight = query.serviceDate != null &&
             requested.toLocalDate() == date.plusDays(1) && requested.hour < 3
         if (!sameDay && !explicitOvernight) return emptyList()
+        // 재조회 시각도 자정을 넘길 수 있다. 이전 운행일은 명시된 24~26시 환승에만 사용한다.
+        val now = clock.instant().atZone(zone)
+        val ongoingOvernight = explicitOvernight && now.toLocalDate() == requested.toLocalDate() && now.hour < 3
+        if (now.toLocalDate() != date && !ongoingOvernight) return emptyList()
         val weekTag = serviceDay.weekTag(date) ?: return emptyList()
         if (weekTag !in setOf("1", "2", "3")) return emptyList()
         return calculationDeadline.within {

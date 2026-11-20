@@ -26,17 +26,19 @@ class JourneyBusDeviceAdmissionVerifier(
     private val provider: SeoulTransitArrivalClient,
     @Value("\${journey.automatic.official-bus-admission-enabled:false}") private val enabled: Boolean = false,
 ) {
-    fun verify(snapshot: JourneyRouteSnapshot): JourneyBusDeviceAdmission {
+    fun verify(snapshot: JourneyRouteSnapshot): JourneyBusDeviceAdmission = verify(snapshot, 1)
+
+    fun verify(snapshot: JourneyRouteSnapshot, legIndex: Int): JourneyBusDeviceAdmission {
         if (!enabled) unavailable()
-        val raw = JourneyBusRouteBindingResolver().resolveRaw(snapshot)
+        val raw = JourneyBusRouteBindingResolver().resolveRaw(snapshot, legIndex)
         val routeId = raw.evidence?.routeId?.takeIf { it.matches(Regex("[1-9][0-9]{8}")) } ?: unavailable()
         val result = try {
             val catalog = provider.getBusRouteDiagnosticStops(routeId)
             if (catalog.isEmpty()) unavailable()
-            JourneyBusRideMapping.resolve(snapshot, catalog, provider.getBusRoutePath(routeId))
+            JourneyBusRideMapping.resolve(snapshot, catalog, provider.getBusRoutePath(routeId), legIndex)
         } catch (_: Exception) { unavailable() }
         val verified = result.verified ?: unavailable()
-        return JourneyBusDeviceAdmission(routeId = verified.routeId, direction = verified.direction,
+        return JourneyBusDeviceAdmission(busLegIndex = legIndex, routeId = verified.routeId, direction = verified.direction,
             stationCount = verified.stops.size - 1, firstStopSequence = verified.stops.first().sequence,
             lastStopSequence = verified.stops.last().sequence)
     }
