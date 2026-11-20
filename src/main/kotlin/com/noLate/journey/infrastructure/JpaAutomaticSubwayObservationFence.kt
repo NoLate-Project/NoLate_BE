@@ -33,11 +33,15 @@ internal class JpaAutomaticSubwayObservationFence(private val automatic: Automat
             em.refresh(actor,LockModeType.PESSIMISTIC_WRITE)
             if(actor.deleted || actor.sessionGeneration != login) throw BusinessException(ErrorCode.INVALID_TOKEN)
             val (plan,revision)=plans.getMyJourneyWalkingTravelPlanForStart(member,schedule)
-            if(plan.memberId != member || plan.scheduleId != schedule || revision != command.routeRevision) reject()
+            if(plan.memberId != member || plan.scheduleId != schedule) reject()
             val preparation=preparations.findBySessionId(session) ?: reject()
             // Immutable ownership columns are checked before taking another actor's row lock.
             if(preparation.memberId != member || preparation.scheduleId != schedule || preparation.loginSessionGeneration != login) reject()
             em.refresh(preparation,LockModeType.PESSIMISTIC_WRITE)
+            // Departure may disable notifications and increment the personal plan version.
+            // ACTIVE still requires the original session revision and the full saved fingerprint below.
+            if (revision != command.routeRevision &&
+                (preparation.state != com.noLate.journey.domain.AutomaticJourneyState.ACTIVE || revision < command.routeRevision)) reject()
             val result=automatic.requireSubwayObservationFence(member,schedule,login,session,command)
             val saved=JourneyRouteSnapshot.from(plan,mapper)
             if(result.fingerprint != saved.fingerprint || result.json != saved.json || result.legsJson != saved.legsJson) reject()

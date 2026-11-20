@@ -36,6 +36,18 @@ internal class SubwayNavigationFixture(private val clock:Clock) {
     }
     companion object {
         val ids=listOf("9990000001","9990000002","9990000003")
+        fun applyMeasuredTrack(f: AutomaticJourneyFixture) {
+            apply(f)
+            val leg = f.plan.route!!.path("transitLegs")[1] as ObjectNode
+            val original = leg.path("pathCoords").toList()
+            val shape = leg.putArray("pathCoords")
+            for ((start, end) in original.zipWithNext()) {
+                shape.add(start)
+                shape.addObject().put("lat", (start.path("lat").asDouble() + end.path("lat").asDouble()) / 2)
+                    .put("lng", (start.path("lng").asDouble() + end.path("lng").asDouble()) / 2)
+            }
+            shape.add(original.last())
+        }
         fun apply(f:AutomaticJourneyFixture){
             val route=f.plan.route!!.deepCopy<ObjectNode>();route.put("id","synthetic-subway-navigation")
                 .put("summary","합성 지하철 · 공식 자료 아님")

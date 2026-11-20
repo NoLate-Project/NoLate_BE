@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.eq
@@ -38,6 +40,178 @@ class TransitTransferRealtimeGuardTest {
     private val evaluatedAt = Instant.parse("2026-10-20T12:00:00Z")
     private val arrivals = mock<TransitArrivalService>()
     private val guard = TransitTransferRealtimeGuard(arrivals)
+
+    @ParameterizedTest
+    @CsvSource("ARRIVED,36,0,0,4012,true", "ARRIVED,120,0,0,4012,true",
+        "ARRIVED,121,0,0,4012,false", "DEPARTED,36,0,0,4012,false",
+        "IN_TRANSIT,36,0,0,4012,false", "ARRIVED,36,10,0,4012,false",
+        "ARRIVED,36,0,1,4012,false", "ARRIVED,36,0,0,4014,false")
+    fun `출발 뒤 늦게 게시된 같은 편의 도착 상태는 지난 미래 예보와 구분한다`(
+        status: TransitArrivalStatus, age: Long, wait: Int, expectedOffset: Long, train: String, accepted: Boolean,
+    ) {
+        val original = plannedRoute(evaluatedAt.plusSeconds(2400))
+        val segment = original.segments.first()
+        val table = requireNotNull(segment.rideTiming).timetable.copy(directionCode = "DOWN", terminalName = "오이도",
+            boardingAt = evaluatedAt.minusSeconds(180), boardingStationArrivalAt = evaluatedAt.minusSeconds(210),
+            arrivalAt = evaluatedAt.plusSeconds(1800))
+        val plan = original.copy(segments = listOf(segment.copy(rideTiming = EffectiveTransitRideTiming(
+            table, table.boardingAt, table.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE))) + original.segments.drop(1))
+        val source = evaluatedAt.minusSeconds(age)
+        whenever(arrivals.getSubwayArrivalsForEta(eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
+            .thenReturn(listOf(liveArrival().copy(stationName = "노원", subwayLineId = "1004", lineName = "4호선",
+                trainNumber = train, direction = "하행", destinationName = "오이도", arrivalStatus = status,
+                waitSeconds = wait, sourceUpdatedAt = source.toString(), expectedAt = source.plusSeconds(expectedOffset).toString())))
+
+        val observed = guard.observePlannedRideChanges(plan, evaluatedAt)
+
+        assertEquals(accepted, observed.isNotEmpty())
+        if (accepted) {
+            assertTrue(observed.single().reportedBoardingArrival)
+            assertEquals(source, observed.single().expectedAt)
+            assertEquals(source, observed.single().sourceUpdatedAt)
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource("180,0,4012,true,true", "180,121,4012,false,true", "180,0,4014,false,true",
+        "1200,0,4012,true,true", "1201,0,4012,false,false")
+    fun `첫 열차가 예정 승차를 지나 지연돼도 신선한 같은 편의 승차역 예보를 확인한다`(
+        elapsedSeconds: Long, sourceAgeSeconds: Long, train: String, accepted: Boolean, queried: Boolean,
+    ) {
+        val original = plannedRoute(evaluatedAt.plusSeconds(2400))
+        val first = original.segments.first()
+        val table = requireNotNull(first.rideTiming).timetable.copy(
+            directionCode = "DOWN", terminalName = "오이도",
+            boardingAt = evaluatedAt.minusSeconds(elapsedSeconds), arrivalAt = evaluatedAt.plusSeconds(1800),
+        )
+        val plan = original.copy(segments = listOf(first.copy(rideTiming = EffectiveTransitRideTiming(
+            table, table.boardingAt, table.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE,
+        ))) + original.segments.drop(1))
+        whenever(arrivals.getSubwayArrivalsForEta(eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
+            .thenReturn(listOf(liveArrival().copy(stationName = "노원", lineName = "4호선", subwayLineId = "1004",
+                trainNumber = train, direction = "하행", destinationName = "오이도",
+                expectedAt = evaluatedAt.plusSeconds(90).toString(),
+                sourceUpdatedAt = evaluatedAt.minusSeconds(sourceAgeSeconds).toString())))
+
+        val observed = guard.observePlannedRideChanges(plan, evaluatedAt)
+
+        assertEquals(accepted, observed.isNotEmpty())
+        if (accepted) {
+            assertEquals(TransitRideObservationPoint.BOARDING, observed.single().point)
+            assertEquals(0, observed.single().legIndex)
+            assertEquals(evaluatedAt.plusSeconds(90), observed.single().expectedAt)
+        }
+        verify(arrivals, times(if (queried) 1 else 0)).getSubwayArrivalsForEta(
+            eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10),
+        )
+    }
+
+    @Test
+    fun `긴 후속 구간도 예정 승차가 지연되면 같은 편의 승차역 예보를 확인한다`() {
+        whenever(arrivals.getSubwayArrivalsForEta(any(), anyOrNull(), anyOrNull(), anyOrNull(), any()))
+            .thenReturn(emptyList())
+        val original = plannedRoute()
+        val last = original.segments.last()
+        val table = requireNotNull(last.rideTiming).timetable.copy(directionCode = "DOWN", terminalName = "성수",
+            boardingAt = evaluatedAt.minusSeconds(180), arrivalAt = evaluatedAt.plusSeconds(1800))
+        val plan = original.copy(arrivalAt = table.arrivalAt.plusSeconds(300),
+            segments = original.segments.dropLast(1) + last.copy(rideTiming = EffectiveTransitRideTiming(
+                table, table.boardingAt, table.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE,
+            )))
+        whenever(arrivals.getSubwayArrivalsForEta(eq("사당"), eq("2호선"), anyOrNull(), eq("DOWN"), eq(10)))
+            .thenReturn(listOf(liveArrival().copy(direction = "하행", destinationName = "성수",
+                expectedAt = evaluatedAt.plusSeconds(90).toString())))
+
+        val observed = guard.observePlannedRideChanges(plan, evaluatedAt)
+
+        assertEquals(listOf(1), observed.map { it.legIndex })
+        assertEquals(TransitRideObservationPoint.BOARDING, observed.single().point)
+        verify(arrivals).getSubwayArrivalsForEta(eq("사당"), eq("2호선"), anyOrNull(), eq("DOWN"), eq(10))
+    }
+
+    @Test
+    fun `계획 하차 시각을 5분 지난 첫 열차도 신선한 같은 편 관측으로 확인한다`() {
+        whenever(arrivals.getSubwayArrivalsForEta(any(), anyOrNull(), anyOrNull(), anyOrNull(), any()))
+            .thenReturn(emptyList())
+        val original = plannedRoute()
+        val first = original.segments.first()
+        val timing = requireNotNull(first.rideTiming)
+        val plan = original.copy(segments = listOf(first.copy(rideTiming = timing.copy(timetable = timing.timetable.copy(
+            directionCode = "DOWN", terminalName = "오이도")))) + original.segments.drop(1))
+        val row = liveArrival().copy(stationName = "사당", lineName = "4호선", subwayLineId = "1004",
+            trainNumber = "4012", direction = "하행", destinationName = "오이도",
+            expectedAt = evaluatedAt.plusSeconds(180).toString())
+        whenever(arrivals.getSubwayArrivalsForEta(eq("사당"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
+            .thenReturn(listOf(row))
+
+        val observed = guard.observePlannedRideChanges(plan, evaluatedAt)
+
+        assertEquals(listOf(0), observed.map { it.legIndex })
+        assertEquals(TransitRideObservationPoint.ALIGHTING, observed.single().point)
+        assertEquals(evaluatedAt.plusSeconds(180), observed.single().expectedAt)
+        verify(arrivals).getSubwayArrivalsForEta(eq("사당"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10))
+    }
+
+    @Test
+    fun `접근 출발 뒤 첫 승차 전에도 같은 열차의 승차역 관측을 조회한다`() {
+        whenever(arrivals.getSubwayArrivalsForEta(any(), anyOrNull(), anyOrNull(), anyOrNull(), any()))
+            .thenReturn(emptyList())
+        val original = plannedRoute()
+        val first = original.segments.first()
+        val table = requireNotNull(first.rideTiming).timetable.copy(directionCode = "DOWN", terminalName = "오이도",
+            boardingAt = evaluatedAt.plusSeconds(180), arrivalAt = evaluatedAt.plusSeconds(1500))
+        val plan = original.copy(segments = listOf(first.copy(rideTiming = EffectiveTransitRideTiming(table,
+            table.boardingAt, table.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE))) + original.segments.drop(1))
+        val row = liveArrival().copy(stationName = "노원", lineName = "4호선", subwayLineId = "1004",
+            trainNumber = "4012", direction = "하행", destinationName = "오이도",
+            expectedAt = evaluatedAt.plusSeconds(240).toString())
+        whenever(arrivals.getSubwayArrivalsForEta(eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
+            .thenReturn(listOf(row))
+        val observed = guard.observePlannedRideChanges(plan, evaluatedAt)
+        assertEquals(listOf(0), observed.map { it.legIndex })
+        assertEquals(TransitRideObservationPoint.BOARDING, observed.single().point)
+        assertEquals(evaluatedAt.plusSeconds(240), observed.single().expectedAt)
+        val seen = observed.single()
+        val saved = EffectiveTransitRideTiming(table, seen.expectedAt,
+            table.arrivalAt.plus(table.shiftFromObservedBoardingArrival(seen.expectedAt)),
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_BOARDING_REALTIME, seen.sourceUpdatedAt)
+        val carried = plan.copy(segments = listOf(first.copy(rideTiming = saved)) + plan.segments.drop(1))
+        assertTrue(guard.observePlannedRideChanges(carried, evaluatedAt).isEmpty())
+    }
+
+    @Test
+    fun `두 역이 같은 시각에 게시해도 첫 하차 관측은 채택하고 동일 하차 응답의 재사용은 막는다`() {
+        val original = plannedRoute()
+        val segment = original.segments.first()
+        val timing = requireNotNull(segment.rideTiming)
+        val table = timing.timetable.copy(directionCode = "DOWN", terminalName = "오이도")
+        val source = evaluatedAt.minusSeconds(15)
+        val boarding = EffectiveTransitRideTiming(table, table.boardingAt, table.arrivalAt,
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_BOARDING_REALTIME, source)
+        fun withFirst(value: EffectiveTransitRideTiming) = original.copy(
+            segments = listOf(segment.copy(rideTiming = value)) + original.segments.drop(1))
+        val row = liveArrival().copy(stationName = "사당", lineName = "4호선", subwayLineId = "1004",
+            trainNumber = "4012", direction = "하행", destinationName = "오이도",
+            sourceUpdatedAt = source.toString(), expectedAt = evaluatedAt.plusSeconds(180).toString())
+        whenever(arrivals.getSubwayArrivalsForEta(eq("사당"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
+            .thenReturn(listOf(row))
+        assertEquals(TransitRideObservationPoint.ALIGHTING,
+            guard.observePlannedRideChanges(withFirst(boarding), evaluatedAt).single().point)
+        val both = boarding.copy(basis = EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME,
+            plannedBoardingIsStationArrival = true, boardingObservationSourceUpdatedAt = source)
+        assertTrue(guard.observePlannedRideChanges(withFirst(both), evaluatedAt).isEmpty())
+    }
+
+    @Test
+    fun `계획 관측도 오래된 원본 또는 다른 열차를 채택하지 않는다`() {
+        whenever(arrivals.getSubwayArrivalsForEta(any(), anyOrNull(), anyOrNull(), anyOrNull(), any()))
+            .thenReturn(emptyList())
+        val plan = plannedRoute()
+        val rows = listOf(liveArrival().copy(trainNumber = "OTHER"),
+            liveArrival().copy(sourceUpdatedAt = evaluatedAt.minusSeconds(121).toString()))
+        stub(rows)
+        assertTrue(guard.observePlannedRideChanges(plan, evaluatedAt).isEmpty())
+    }
 
     @Test
     fun `출발 후 저장한 마지막 환승편만 직접 관측해 잠정 도착을 늦춘다`() {
@@ -246,6 +420,24 @@ class TransitTransferRealtimeGuardTest {
     }
 
     @Test
+    fun `자정 후 출발한 일정도 전날 운행편의 신선한 하차 예측을 받는다`() {
+        val now = Instant.parse("2026-10-20T15:15:00Z")
+        val base = plannedRoute(now.minusSeconds(270))
+        val route = base.copy(departureAt = now.minusSeconds(540),
+            segments = listOf(base.segments.last().copy(sequence = 0)))
+        val timing = requireNotNull(route.segments.single().rideTiming)
+        val expected = timing.predictedArrivalAt.plusSeconds(75)
+        val row = liveArrival().copy(stationName = "신림역", sourceUpdatedAt = now.toString(),
+            expectedAt = expected.toString())
+        whenever(arrivals.getSubwayArrivalsForEta(eq("신림"), eq("2호선"), anyOrNull(), eq("UP"), eq(10)))
+            .thenReturn(listOf(row.copy(trainNumber = "2482")), listOf(row))
+
+        assertEquals(null, guard.observeLastPlannedRide(route, now))
+        assertEquals(route.arrivalAt.plusSeconds(75), guard.observeLastPlannedRide(route, now)?.predictedArrivalAt)
+        verify(arrivals, times(2)).getSubwayArrivalsForEta(eq("신림"), eq("2호선"), anyOrNull(), eq("UP"), eq(10))
+    }
+
+    @Test
     fun `자정 전 하차로 끝난 전날 편과 27시 이후 편의 번호는 재조회하지 않는다`() {
         val afterMidnight = Instant.parse("2026-10-20T15:01:00Z")
         val beforeMidnightArrival = plannedRoute(afterMidnight.minusSeconds(990))
@@ -280,14 +472,14 @@ class TransitTransferRealtimeGuardTest {
             scheduledArrivalAt = distantArrival,
             timetable = table.copy(arrivalAt = distantArrival),
         )) + original.legs.drop(1))
-        assertEquals(null, guard.observeFirstTransferAlighting(outsideWindow, table.boardingAt, evaluatedAt))
+        assertEquals(null, guard.observeFirstRideAlighting(outsideWindow, table.boardingAt, evaluatedAt))
         verifyNoInteractions(arrivals)
         whenever(arrivals.getSubwayArrivalsForEta(eq("사당"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
             .thenReturn(listOf(arrival.copy(trainNumber = "4014"),
                 arrival.copy(sourceUpdatedAt = evaluatedAt.minusSeconds(121).toString())), listOf(arrival))
 
-        assertEquals(null, guard.observeFirstTransferAlighting(route, table.boardingAt, evaluatedAt))
-        assertEquals(expectedAt, guard.observeFirstTransferAlighting(route, table.boardingAt, evaluatedAt)?.expectedAt)
+        assertEquals(null, guard.observeFirstRideAlighting(route, table.boardingAt, evaluatedAt))
+        assertEquals(expectedAt, guard.observeFirstRideAlighting(route, table.boardingAt, evaluatedAt)?.expectedAt)
         verify(arrivals, times(2)).getSubwayArrivalsForEta(eq("사당"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10))
     }
 

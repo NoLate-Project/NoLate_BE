@@ -325,6 +325,41 @@ class TransitTimetablePreviewServiceTest {
     }
 
     @Test
+    fun `오늘 밤 자정 직후의 도착 목표는 진행 중인 운행일 시간표로 미리 조회한다`() {
+        val now = Instant.parse("2026-11-15T14:00:00Z")
+        val regular = object : TransitTimetableProvider {
+            override fun findRides(query: TransitTimetableQuery): List<TransitLegTimetable> {
+                queries += query
+                return listOf(if (query.line == line4) ride(line4, "4317", "14:05:00", "14:50:00")
+                    else ride(line2, "2301", "14:55:00", "15:02:00"))
+            }
+        }
+        val atNight = Clock.fixed(now, ZoneOffset.UTC)
+        val previewService = service(evaluationClock = atNight, stationTables = regular)
+        val request = request().copy(targetArrivalAt = at("15:05:00"))
+        assertNull(previewService.preview(request).preview)
+        val withStops = request.copy(orderedStops = listOf(
+            listOf("노원", "창동", "사당"), listOf("사당", "낙성대", "신림"),
+        ))
+        val preview = previewService.preview(withStops).preview
+        assertEquals(at("14:02:00"), preview?.departureAt)
+        assertEquals(at("15:04:00"), preview?.arrivalAt)
+        assertEquals(listOf(date, date), queries.map { it.serviceDate })
+
+        queries.clear()
+        val noDatedRide = DatedTransitTimetableProvider { _, _ -> null }
+        assertEquals(preview, service(evaluationClock = atNight, stationTables = regular, datedTimetable = noDatedRide)
+            .preview(withStops).preview)
+        assertEquals(listOf(date, date), queries.map { it.serviceDate })
+
+        queries.clear()
+        val unavailable = DatedTransitTimetableProvider { _, _ -> error("provider unavailable") }
+        assertNull(service(evaluationClock = atNight, stationTables = regular, datedTimetable = unavailable)
+            .preview(withStops).preview)
+        assertEquals(emptyList<TransitTimetableQuery>(), queries)
+    }
+
+    @Test
     fun `자정 직후 도착 목표는 전날 운행일의 열차와 마지막 도보를 사용한다`() {
         val serviceDay = date.plusDays(1)
         val firstBoarding = Instant.parse("2026-11-16T13:55:00Z")
@@ -395,6 +430,8 @@ class TransitTimetablePreviewServiceTest {
         datedTimetable: DatedTransitTimetableProvider? = null,
         adjacentRingRide: Boolean = false,
         missingAccess: TransitWalkingQueryEndpoints? = null,
+        evaluationClock: Clock = clock,
+        stationTables: TransitTimetableProvider? = null,
     ): TransitTimetablePreviewService {
         val odsay = object : TransitJourneyProvider {
             override val providerId = "odsay"
@@ -444,7 +481,7 @@ class TransitTimetablePreviewServiceTest {
             }
         }
         return TransitTimetablePreviewService(listOf(odsay), SelectedTransitRouteDecoder(json), TransitJourneyMatcher(),
-            TransitJourneyTimetableEnricher(listOf(timetable)), clock, EtaCalculationDeadline(), walkingTimeEnricher, datedTimetable)
+            TransitJourneyTimetableEnricher(listOf(stationTables ?: timetable)), evaluationClock, EtaCalculationDeadline(), walkingTimeEnricher, datedTimetable)
     }
 
     private fun walk(index: Int, seconds: Long) =

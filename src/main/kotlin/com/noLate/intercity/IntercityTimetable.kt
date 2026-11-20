@@ -19,6 +19,7 @@ enum class IntercityKind(val service: String, val idPrefix: String) {
     TRAIN("TrainInfo", "NAT"), EXPRESS_BUS("ExpBusInfo", "NAEK"), INTERCITY_BUS("SuburbsBusInfo", "NAI")
 }
 enum class TimetableStatus { AVAILABLE, NO_SERVICES, DATE_UNSUPPORTED, KEY_MISSING, ACCESS_DENIED, RATE_LIMITED, PROVIDER_UNAVAILABLE }
+private const val TAGO_PAGE_SIZE = 100
 data class IntercityCity(val code: String, val name: String)
 data class IntercityStop(val id: String, val name: String, val cityName: String?)
 data class IntercityService(
@@ -51,14 +52,14 @@ class IntercityTimetableService(private val transport: IntercityTagoTransport) {
             IntercityCity(code, name)
         }
         if (items.size != payload.items.size) return TimetablePage(TimetableStatus.PROVIDER_UNAVAILABLE, fetchedAt = payload.fetchedAt)
-        return page(payload, 1, items)
+        return TimetablePage(status = payload.status, items = items, fetchedAt = payload.fetchedAt)
     }
 
     fun stops(kind: IntercityKind, cityCode: String?, query: String?, page: Int): TimetablePage<IntercityStop> {
         validatePage(page)
         val text = query?.trim().orEmpty()
         if (text.length > 40 || (kind != IntercityKind.TRAIN && text.length < 2)) invalid("터미널 이름을 2~40자로 입력해 주세요.")
-        val params = linkedMapOf("pageNo" to page.toString(), "numOfRows" to "100")
+        val params = linkedMapOf("pageNo" to page.toString(), "numOfRows" to TAGO_PAGE_SIZE.toString())
         val operation = when (kind) {
             IntercityKind.TRAIN -> {
                 if (cityCode == null || !cityCode.matches(Regex("\\d{2,3}"))) invalid("열차역의 시·도를 선택해 주세요.")
@@ -77,7 +78,8 @@ class IntercityTimetableService(private val transport: IntercityTagoTransport) {
             IntercityStop(id, name, it.text("cityName"))
         }
         if (items.size != payload.items.size) return TimetablePage(TimetableStatus.PROVIDER_UNAVAILABLE, fetchedAt = payload.fetchedAt)
-        return page(payload, page, items.filter { kind != IntercityKind.TRAIN || text.isBlank() || it.name.contains(text) })
+        val result = page(payload, page, items)
+        return result.copy(items = result.items.filter { kind != IntercityKind.TRAIN || text.isBlank() || it.name.contains(text) })
     }
 
     fun services(kind: IntercityKind, departureId: String, arrivalId: String, date: LocalDate, page: Int): TimetablePage<IntercityService> {
@@ -89,7 +91,7 @@ class IntercityTimetableService(private val transport: IntercityTagoTransport) {
         val params = linkedMapOf(
             (if (kind == IntercityKind.TRAIN) "depPlaceId" else "depTerminalId") to departureId,
             (if (kind == IntercityKind.TRAIN) "arrPlaceId" else "arrTerminalId") to arrivalId,
-            "depPlandTime" to date.format(DateTimeFormatter.BASIC_ISO_DATE), "pageNo" to page.toString(), "numOfRows" to "100",
+            "depPlandTime" to date.format(DateTimeFormatter.BASIC_ISO_DATE), "pageNo" to page.toString(), "numOfRows" to TAGO_PAGE_SIZE.toString(),
         )
         val operation = when (kind) {
             IntercityKind.TRAIN -> "GetStrtpntAlocFndTrainInfo"
@@ -101,8 +103,12 @@ class IntercityTimetableService(private val transport: IntercityTagoTransport) {
             val departure = parseTime(node.text("depplandtime", "depPlandTime")) ?: return@mapNotNull null
             val arrival = parseTime(node.text("arrplandtime", "arrPlandTime")) ?: return@mapNotNull null
             if (departure.toLocalDate() != date || !arrival.isAfter(departure)) return@mapNotNull null
-            val depName = node.text("depplacename", "depPlaceNm") ?: return@mapNotNull null
-            val arrName = node.text("arrplacename", "arrPlaceNm") ?: return@mapNotNull null
+            // Some intercity bus rows contain only the route ID and clocks. The
+            // request still identifies both terminals; never infer a different terminal.
+            val depName = node.text("depplacename", "depPlaceNm")
+                ?: departureId.takeIf { kind == IntercityKind.INTERCITY_BUS } ?: return@mapNotNull null
+            val arrName = node.text("arrplacename", "arrPlaceNm")
+                ?: arrivalId.takeIf { kind == IntercityKind.INTERCITY_BUS } ?: return@mapNotNull null
             val grade = node.text("traingradename", "gradeNm")
             val trainNumber = node.text("trainno")
             val identity = listOf(kind.name, date, departureId, arrivalId, departure, arrival, trainNumber, node.text("routeId"), grade).joinToString("|")
@@ -115,7 +121,8 @@ class IntercityTimetableService(private val transport: IntercityTagoTransport) {
         if (payload.status == TimetableStatus.AVAILABLE && payload.items.isNotEmpty() && parsed.size < payload.items.size) {
             return TimetablePage(TimetableStatus.PROVIDER_UNAVAILABLE, fetchedAt = payload.fetchedAt)
         }
-        return page(payload, page, parsed.distinctBy { it.id }.sortedBy { it.departureAt })
+        val services = parsed.distinctBy { it.id }.sortedWith(compareBy({ it.departureAt }, { it.id }))
+        return page(payload, page, services)
     }
 
     private fun parseTime(raw: String?): LocalDateTime? = try {
@@ -125,10 +132,16 @@ class IntercityTimetableService(private val transport: IntercityTagoTransport) {
     private fun validId(kind: IntercityKind, id: String) = id.startsWith(kind.idPrefix) && id.matches(Regex("[A-Z0-9]{5,24}"))
     private fun validatePage(page: Int) { if (page !in 1..100) invalid("조회 페이지 범위를 확인해 주세요.") }
     private fun invalid(message: String): Nothing = throw ResponseStatusException(HttpStatus.BAD_REQUEST, message)
-    private fun <T> page(payload: TagoPayload, page: Int, items: List<T>) = TimetablePage(
-        status = if (payload.status == TimetableStatus.AVAILABLE && items.isEmpty() && payload.total == 0) TimetableStatus.NO_SERVICES else payload.status,
-        items = items, page = page, hasMore = page * 100 < payload.total, fetchedAt = payload.fetchedAt,
-    )
+    private fun <T> page(payload: TagoPayload, page: Int, items: List<T>): TimetablePage<T> {
+        // Some TAGO endpoints return the full day on every page, even with numOfRows set.
+        val completeList = payload.items.size == payload.total
+        val total = if (completeList) items.size else payload.total
+        val pageItems = if (completeList) items.drop((page - 1) * TAGO_PAGE_SIZE).take(TAGO_PAGE_SIZE) else items
+        return TimetablePage(
+            status = if (payload.status == TimetableStatus.AVAILABLE && total == 0) TimetableStatus.NO_SERVICES else payload.status,
+            items = pageItems, page = page, hasMore = page * TAGO_PAGE_SIZE < total, fetchedAt = payload.fetchedAt,
+        )
+    }
 }
 
 internal fun JsonNode.text(vararg names: String): String? = names.firstNotNullOfOrNull { name ->

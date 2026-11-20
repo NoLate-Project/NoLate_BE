@@ -6,10 +6,58 @@ import com.noLate.schedule.domain.SchedulePlaceDto
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.whenever
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 
 class AutomaticJourneyValidationTest {
+    @Test fun `database row lock contention is retryable and releasing it validates the same owned session`() {
+        val f = AutomaticJourneyFixture()
+        f.service().prepare(7, 9001, 2, f.prepareCommand())
+        f.service().departure(7, 9001, 2, f.sessionId, f.event())
+        val url = "jdbc:h2:mem:lease-lock-${java.util.UUID.randomUUID()};MODE=MySQL;LOCK_TIMEOUT=120"
+        DurableJourneyFixtureDatabase(url).use { db ->
+            java.sql.DriverManager.getConnection(url, "sa", "").use { holder ->
+                holder.createStatement().use { setup ->
+                    setup.execute("create table lease_lock_member (id bigint primary key)")
+                    setup.execute("insert into lease_lock_member values (7)")
+                }
+                holder.autoCommit = false
+                holder.createStatement().use { it.executeQuery("select id from lease_lock_member where id=7 for update").close() }
+                // Exercise the Hibernate and Spring exception translation used by the member FOR UPDATE fence.
+                org.mockito.kotlin.whenever(f.members.findById(7L)).thenAnswer {
+                    val em = requireNotNull(db.manager.entityManagerFactory).createEntityManager()
+                    try {
+                        em.transaction.begin()
+                        em.createNativeQuery("select id from lease_lock_member where id=7 for update").singleResult
+                        em.transaction.commit()
+                    } catch (failure: RuntimeException) {
+                        if (em.transaction.isActive) em.transaction.rollback()
+                        throw org.springframework.orm.jpa.vendor.HibernateJpaDialect().translateExceptionIfPossible(failure) ?: failure
+                    } finally { em.close() }
+                    java.util.Optional.of(f.actor)
+                }
+                val mvc = automaticJourneyFixtureMvc(f)
+                val path = "/api/schedules/9001/automatic-journey/${f.sessionId}/validate"
+                fun validate() = mvc.perform(post(path).contentType(MediaType.APPLICATION_JSON)
+                    .content(f.mapper.writeValueAsBytes(f.stopCommand()))).andReturn().response
+                val busy = validate()
+                val payload = f.mapper.readTree(busy.contentAsByteArray)
+                assertThat(busy.status).describedAs("lock response %s", payload.path("errorCode").asText()).isEqualTo(503)
+                assertThat(payload.path("errorCode").asText()).isEqualTo("JOURNEY_STORAGE_BUSY")
+                assertThat(payload.path("data").isNull).isTrue()
+                holder.rollback()
+                val fresh = validate()
+                assertThat(fresh.status).isEqualTo(200)
+                assertThat(f.mapper.readTree(fresh.contentAsByteArray).path("data").path("state").asText()).isEqualTo("ACTIVE")
+                org.mockito.kotlin.doThrow(org.springframework.dao.OptimisticLockingFailureException("changed saved row"))
+                    .whenever(f.members).findById(7L)
+                val changed = validate()
+                assertThat(changed.status).isEqualTo(409)
+                assertThat(f.mapper.readTree(changed.contentAsByteArray).path("errorCode").asText()).isEqualTo("C003")
+            }
+        }
+    }
     @Test fun `reroute destination stays owned and rejects an armed or changed route`() {
         val f = AutomaticJourneyFixture()
         f.plan = f.plan.copy(destination = SchedulePlaceDto("경복궁", lat = 37.576, lng = 126.978))

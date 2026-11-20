@@ -16,6 +16,7 @@ enum class TransitRouteProvenance {
 
 enum class TransitTimingBasis {
     SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME,
+    SAME_SUBWAY_BOARDING_AND_ALIGHTING_REALTIME,
     BUS_TRANSFER_BOARDING_AND_ALIGHTING_REALTIME,
     FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
     /** 동일 환승 열차의 신선한 승차 또는 하차역 도착 예측을 일부 구간에 반영했다. */
@@ -53,6 +54,9 @@ data class EffectiveTransitRoute(
         require(segments.map(EffectiveTransitRouteSegment::sequence).distinct().size == segments.size) {
             "effective transit segment sequence는 중복될 수 없습니다."
         }
+        segments.forEach { segment -> segment.rideTiming?.reportedBoarding?.let {
+            require(it.matches(this, segment, it.checkedAt)) { "과거 승차역 관측은 같은 여정과 구간에만 적용합니다." }
+        } }
     }
 
     private companion object {
@@ -77,7 +81,21 @@ enum class EffectiveTransitRideTimingBasis {
     FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
     FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME,
     TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+    TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
     TRANSFER_ALIGHTING_REALTIME,
+    /** 출발 뒤 보존한 승차 계획 시각. 이번 회차의 신선한 관측을 뜻하지 않는다. */
+    PLANNED_RIDE_BASELINE,
+    /** 같은 열차 하차역의 직접 예측. 승차역에도 신선한 관측이 있으면 그 원본 시각을 함께 기록한다. */
+    PLANNED_RIDE_ALIGHTING_REALTIME,
+    /** 출발 후 같은 편의 승차역 도착 관측으로 해당 구간을 다시 계산한다. */
+    PLANNED_RIDE_BOARDING_REALTIME,
+    /** 양 끝 역의 직접 예보로 확인한 실제 편. 원래 시간표의 별칭으로 취급하지 않는다. */
+    OBSERVED_SUBWAY_SERVICE_REALTIME,
+    /** 과거 ARRIVED 상태와 현재 하차역 예보를 연결한다. 승차역의 현재 예보가 아니다. */
+    REPORTED_BOARDING_AND_ALIGHTING_REALTIME;
+
+    internal val keepsTimetableAlightingAfterEarlyBoarding: Boolean
+        get() = this == FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING || this == TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING
 }
 
 /** 비교용 원본 시간표와 이번 계산의 승하차 예측을 분리한다. 미래 환승은 실시간이 아니다. */
@@ -87,30 +105,119 @@ data class EffectiveTransitRideTiming(
     val predictedArrivalAt: Instant,
     val basis: EffectiveTransitRideTimingBasis,
     val observationSourceUpdatedAt: Instant? = null,
+    /** 계획 승차 기준이 원래 역 도착 예측이었는지 보존한다. 실제 출발시각으로 바꾸지 않는다. */
+    val plannedBoardingIsStationArrival: Boolean? = null,
+    /** 승하차역 모두 직접 예측을 제공한 경우 승차역의 원본 시각. observationSourceUpdatedAt은 하차역 값이다. */
+    val boardingObservationSourceUpdatedAt: Instant? = null,
+    /** 시간표는 비교 근거로 남긴다. 실제 선택 차량은 이 식별자를 우선 사용한다. */
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val observedService: ObservedTransitSubwayService? = null,
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val reportedBoarding: ReportedSubwayBoardingEvidence? = null,
 ) {
+    fun selectedTrainNumber(): String = observedService?.trainNumber ?: timetable.trainNumber
+
+    fun asPlannedBaseline(): EffectiveTransitRideTiming = copy(
+        basis = EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE,
+        observationSourceUpdatedAt = null,
+        boardingObservationSourceUpdatedAt = null,
+        plannedBoardingIsStationArrival = plannedBoardingIsStationArrival ?: when (basis) {
+            EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+            EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME,
+            EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
+            EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            EffectiveTransitRideTimingBasis.OBSERVED_SUBWAY_SERVICE_REALTIME,
+            EffectiveTransitRideTimingBasis.REPORTED_BOARDING_AND_ALIGHTING_REALTIME,
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_BOARDING_REALTIME -> true
+            else -> false
+        },
+    )
+
+    fun boardingSourceAt(): Instant? = when (basis) {
+        EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+        EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+        EffectiveTransitRideTimingBasis.PLANNED_RIDE_BOARDING_REALTIME,
+        EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE -> observationSourceUpdatedAt
+        else -> boardingObservationSourceUpdatedAt
+    }
+
+    fun alightingSourceAt(): Instant? = when (basis) {
+        EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME,
+        EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME,
+        EffectiveTransitRideTimingBasis.OBSERVED_SUBWAY_SERVICE_REALTIME,
+        EffectiveTransitRideTimingBasis.REPORTED_BOARDING_AND_ALIGHTING_REALTIME,
+        EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME -> observationSourceUpdatedAt
+        else -> null
+    }
+
     init {
+        require(boardingObservationSourceUpdatedAt == null ||
+            basis == EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME ||
+            basis == EffectiveTransitRideTimingBasis.OBSERVED_SUBWAY_SERVICE_REALTIME ||
+            basis == EffectiveTransitRideTimingBasis.REPORTED_BOARDING_AND_ALIGHTING_REALTIME ||
+            (basis == EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME && plannedBoardingIsStationArrival == true))
+        require(plannedBoardingIsStationArrival == null || basis in setOf(
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE,
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME))
         require(predictedArrivalAt.isAfter(predictedBoardingAt))
+        observedService?.let {
+            require(it.matchesReference(timetable))
+            require(basis in setOf(EffectiveTransitRideTimingBasis.OBSERVED_SUBWAY_SERVICE_REALTIME,
+                EffectiveTransitRideTimingBasis.REPORTED_BOARDING_AND_ALIGHTING_REALTIME,
+                EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE,
+                EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME))
+        }
+        if (basis == EffectiveTransitRideTimingBasis.OBSERVED_SUBWAY_SERVICE_REALTIME) {
+            require(observedService != null && boardingObservationSourceUpdatedAt != null)
+            require(java.time.Duration.between(boardingObservationSourceUpdatedAt,
+                requireNotNull(observationSourceUpdatedAt)).abs().seconds <= 125)
+        }
+        reportedBoarding?.let {
+            require(it.service == observedService && it.sourceUpdatedAt == predictedBoardingAt)
+            require(basis in setOf(EffectiveTransitRideTimingBasis.REPORTED_BOARDING_AND_ALIGHTING_REALTIME,
+                EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE, EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME))
+        }
+        if (basis == EffectiveTransitRideTimingBasis.REPORTED_BOARDING_AND_ALIGHTING_REALTIME) {
+            require(reportedBoarding != null && boardingObservationSourceUpdatedAt == reportedBoarding.sourceUpdatedAt)
+            require(requireNotNull(observationSourceUpdatedAt) <= predictedArrivalAt)
+        }
         val shift = when (basis) {
             EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
             EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_BOARDING_REALTIME,
             EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE ->
                 timetable.shiftFromObservedBoardingArrival(predictedBoardingAt)
             else -> java.time.Duration.between(timetable.boardingAt, predictedBoardingAt)
         }
         when (basis) {
-            EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME -> Unit
-            EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING ->
+            EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME,
+            EffectiveTransitRideTimingBasis.OBSERVED_SUBWAY_SERVICE_REALTIME,
+            EffectiveTransitRideTimingBasis.REPORTED_BOARDING_AND_ALIGHTING_REALTIME,
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE,
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME -> Unit
+            EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING ->
                 require(shift.isNegative && predictedArrivalAt == timetable.arrivalAt)
             EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME -> require(shift.isZero)
             else -> require(predictedArrivalAt == timetable.arrivalAt.plus(shift))
         }
         require(basis != EffectiveTransitRideTimingBasis.TIMETABLE || shift.isZero)
-        require(
-            (basis == EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME ||
-                basis == EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME ||
-                basis == EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE) ==
-                (observationSourceUpdatedAt != null)
+        val needsRideObservation = basis in setOf(
+            EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            EffectiveTransitRideTimingBasis.TRANSFER_ALIGHTING_REALTIME,
+            EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME,
+            EffectiveTransitRideTimingBasis.OBSERVED_SUBWAY_SERVICE_REALTIME,
+            EffectiveTransitRideTimingBasis.REPORTED_BOARDING_AND_ALIGHTING_REALTIME,
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME,
+            EffectiveTransitRideTimingBasis.PLANNED_RIDE_BOARDING_REALTIME,
+            EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_ADJUSTED_TIMETABLE,
         )
+        // 첫 역 관측은 출발 전에는 여정에, 출발 후 재조회에서는 이 승차 구간에 기록한다.
+        if (basis != EffectiveTransitRideTimingBasis.FIRST_BOARDING_REALTIME_TIMETABLE_ALIGHTING) {
+            require(needsRideObservation == (observationSourceUpdatedAt != null))
+        }
     }
 }
 
@@ -141,6 +248,9 @@ data class EffectiveTransitRouteSegment(
     val walkingTiming: com.noLate.eta.domain.TransitWalkingTimingEvidence? = null,
     val transferTiming: com.noLate.eta.domain.TransitTransferTimingEvidence? = null,
     val busRidePrediction: EffectiveBusRidePrediction? = null,
+    /** 저장 후 동일한 날짜 지정 시간표 구간을 재조회할 때 대조할 공급자의 정차역 순서. */
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+    val orderedStopNames: List<String> = emptyList(),
 ) {
     init {
         require(sequence >= 0) { "effective transit segment sequence는 0 이상이어야 합니다." }
@@ -151,6 +261,8 @@ data class EffectiveTransitRouteSegment(
         require(kind == EffectiveTransitRouteSegmentKind.WALK ||
             (walkingScope == null && durationSeconds == null && walkingGeometry == null))
         require(rideTiming == null || kind == EffectiveTransitRouteSegmentKind.SUBWAY)
+        rideTiming?.observedService?.let { require(it.matchesOrderedRide(fromName, toName, orderedStopNames)) }
+        rideTiming?.reportedBoarding?.let { require(it.segmentSequence == sequence) }
         require(busRidePrediction == null || kind == EffectiveTransitRouteSegmentKind.BUS)
         require(walkingTiming == null || (kind == EffectiveTransitRouteSegmentKind.WALK &&
             walkingTiming.movementSeconds == (durationSeconds ?: durationMinutes.toLong() * 60)))
@@ -195,6 +307,8 @@ data class TrafficResult(
     val effectiveTransitRoute: EffectiveTransitRoute? = null,
     /** 별도로 검증한 첫 차량. 전체 ETA 채택이나 총 소요시간에 합산된 대기를 의미하지 않는다. */
     val firstBoardingObservation: TransitFirstBoardingObservation? = null,
+    /** 현재 실패 진단과 분리해 같은 요청에서 확인한 미래 시간표 계획을 보존한다. */
+    val futureTimetablePlanEvidence: TransitTimetablePlanEvidence? = null,
 ) {
     /**
      * 추천 출발 판단에 정상 provider 결과로 채택할 수 있는지 나타낸다.

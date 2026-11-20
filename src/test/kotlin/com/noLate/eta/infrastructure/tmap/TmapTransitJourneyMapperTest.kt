@@ -48,6 +48,14 @@ class TmapTransitJourneyMapperTest {
         assertEquals(candidate, matcher.findSelected(saved, listOf(candidate)))
 
         val leg = candidate.rideLegs.single()
+        // 역 순서를 파싱하고도 이름을 버리면 이후 같은 차량의 승하차 관측을 연결할 수 없다.
+        assertEquals(listOf("사당", "서울대입구", "신림"), leg.orderedStopNames)
+        for (missingIndex in 0..2) {
+            val partial = payload.deepCopy()
+            val stops = ride(partial).path("passStopList").path("stationList") as ArrayNode
+            (stops[missingIndex] as ObjectNode).remove("stationName")
+            assertTrue(mapper.map(partial, request(), fetchedAt).single().rideLegs.single().orderedStopNames.isEmpty())
+        }
         val originalId = candidate.copy(legs = candidate.legs.map {
             if (it == leg) it.copy(line = it.line?.copy(providerRouteId = "110021006")) else it
         })

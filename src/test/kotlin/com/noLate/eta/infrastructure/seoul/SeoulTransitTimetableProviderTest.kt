@@ -2,8 +2,14 @@ package com.noLate.eta.infrastructure.seoul
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.eta.application.port.TransitTimetableQuery
+import com.noLate.eta.application.transit.TransitJourneyTimetableEnricher
 import com.noLate.eta.domain.SeoulSubwayLine
+import com.noLate.eta.domain.TransitJourney
+import com.noLate.eta.domain.TransitJourneyLeg
+import com.noLate.eta.domain.TransitLegMode
+import com.noLate.eta.domain.TransitLine
 import com.noLate.eta.domain.TransitServiceClass
+import com.noLate.eta.domain.TransitStop
 import com.sun.net.httpserver.HttpServer
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -115,6 +121,13 @@ class SeoulTransitTimetableProviderTest {
         }
     }
 
+    private fun stationJourney(departure: Instant, evaluated: Instant) =
+        TransitJourney("odsay", departure, departure, departure.plusSeconds(1800), 30, listOf(
+            TransitJourneyLeg(0, TransitLegMode.SUBWAY, 25, from = TransitStop(name = "서울역"),
+                to = TransitStop(name = "사당"), directionCode = "DOWN",
+                line = TransitLine(serviceClass = TransitServiceClass.LOCAL, seoulSubwayLine = SeoulSubwayLine.LINE_4)),
+        ), evaluated)
+
     private fun query() = TransitTimetableQuery(SeoulSubwayLine.LINE_4, "서울역", "사당", null,
         TransitServiceClass.LOCAL, now.plusSeconds(171))
 
@@ -127,6 +140,73 @@ class SeoulTransitTimetableProviderTest {
         assertEquals(Instant.parse("2026-10-04T15:03:00Z"), ride.boardingAt)
         assertEquals(Instant.parse("2026-10-04T15:25:00Z"), ride.arrivalAt)
         assertEquals(4, calls.get())
+    }
+
+    @Test
+    fun `자정 전 계획한 환승편은 자정 직후 재조회에서도 이전 운행일의 24시 행을 사용한다`() {
+        val originalDay = LocalDate.of(2026, 10, 4) // 일요일 운행이 월요일 새벽까지 이어진다.
+        val ready = Instant.parse("2026-10-04T15:02:51Z")
+        val transfer = query().copy(notBefore = ready, directionCode = "DOWN", serviceDate = originalDay)
+        val calendars = SeoulTimetableServiceDay { date -> if (date == originalDay) "3" else "1" }
+        for (at in listOf(ready.minusSeconds(200), ready.minusSeconds(10))) {
+            withServer("overnight", clockAt = at, serviceDay = calendars) { provider, calls ->
+                val ride = provider.findRides(transfer).single()
+                assertEquals(originalDay, ride.serviceDate)
+                assertEquals(ready.plusSeconds(9), ride.boardingAt)
+                assertEquals(Instant.parse("2026-10-04T15:25:00Z"), ride.arrivalAt)
+                assertEquals(4, calls.get())
+            }
+        }
+    }
+
+    @Test
+    fun `자정 후 새 출발과 도착 목표 모두 전날 24시 열차를 찾는다`() {
+        val evaluated = Instant.parse("2026-10-04T15:00:30Z")
+        val departure = evaluated.plusSeconds(30)
+        val journey = stationJourney(departure, evaluated)
+        val day = LocalDate.of(2026, 10, 4)
+        withServer("overnight", clockAt = evaluated, serviceDay = SeoulTimetableServiceDay { if (it == day) "3" else null }) { provider, _ ->
+            val planner = TransitJourneyTimetableEnricher(listOf(provider))
+            val scheduledArrival = Instant.parse("2026-10-04T15:25:00Z")
+            val forward = planner.planDepartingAt(journey, departure, evaluated, 60)
+            val backward = planner.planArrivalBy(journey, scheduledArrival, evaluated, 60)
+            assertAll(
+                { assertEquals(departure, forward?.departureAt) },
+                { assertEquals(Instant.parse("2026-10-04T15:02:00Z"), backward?.departureAt) },
+                { assertEquals(day, forward?.rides?.single()?.serviceDate) },
+                { assertEquals(scheduledArrival, forward?.arrivalAt) },
+                { assertEquals(forward?.rides, backward?.rides) },
+                { assertEquals("4012", planner.enrich(journey, evaluated, 60) { null }.rideLegs.single().timetable?.trainNumber) },
+            )
+        }
+    }
+
+    @Test
+    fun `새벽 3시 승차를 찾을 때 지연 조회 범위가 전날 시간표로 넘어가지 않는다`() {
+        val departure = Instant.parse("2026-10-03T17:59:00Z") // 일요일 02:59, 60초 뒤 승차 준비
+        val journey = stationJourney(departure, departure)
+        withServer("early-morning", clockAt = departure) { provider, _ ->
+            val planner = TransitJourneyTimetableEnricher(listOf(provider))
+            val ride = planner.enrich(journey, departure, 60) { null }.rideLegs.single().timetable
+            assertEquals(LocalDate.of(2026, 10, 4), ride?.serviceDate)
+            assertEquals(Instant.parse("2026-10-03T18:03:00Z"), ride?.boardingAt)
+            assertEquals(ride, planner.planArrivalBy(journey, departure.plusSeconds(1800), departure, 60)?.rides?.single())
+        }
+    }
+
+    @Test
+    fun `새벽에도 운행일 없는 요청이나 전날 주간편을 이전 운행의 환승으로 복원하지 않는다`() {
+        val originalDay = LocalDate.of(2026, 10, 4)
+        val ready = Instant.parse("2026-10-04T15:02:51Z")
+        withServer("overnight", clockAt = ready) { provider, calls ->
+            assertTrue(provider.findRides(query().copy(notBefore = ready)).isEmpty())
+            assertTrue(provider.findRides(query().copy(serviceDate = originalDay)).isEmpty())
+            assertEquals(0, calls.get())
+        }
+        withServer("overnight", clockAt = Instant.parse("2026-10-04T18:00:00Z")) { provider, calls ->
+            assertTrue(provider.findRides(query().copy(notBefore = ready, serviceDate = originalDay)).isEmpty())
+            assertEquals(0, calls.get())
+        }
     }
 
     @Test
@@ -153,6 +233,8 @@ class SeoulTransitTimetableProviderTest {
     private fun withServer(
         mismatch: String = "",
         boardingArrival: String = "15:02:40",
+        clockAt: Instant = now,
+        serviceDay: SeoulTimetableServiceDay = SeoulTimetableServiceDay { "3" },
         block: (SeoulTransitTimetableProvider, AtomicInteger) -> Unit,
     ) {
         val calls = AtomicInteger()
@@ -178,7 +260,12 @@ class SeoulTransitTimetableProviderTest {
                     if (direction == "1" && mismatch != "bothDirections") emptyList() else {
                         val end = station == "TO_CODE"
                         val row = row(station, end, mismatch, direction, boardingArrival).let {
-                            if (mismatch.startsWith("overnight")) it.replace("15:", if (mismatch == "overnight-zero") "00:" else "24:") else it
+                            when (mismatch) {
+                                "overnight" -> it.replace("15:", "24:")
+                                "overnight-zero" -> it.replace("15:", "00:")
+                                "early-morning" -> it.replace("15:", "03:")
+                                else -> it
+                            }
                         }
                         if (mismatch == "korailCollision") listOf(row, row.replace("K4012", "4012"))
                         else if (mismatch == "duplicateRun" && end) listOf(row, row.replace("15:25:00", "15:26:00")) else listOf(row)
@@ -193,7 +280,7 @@ class SeoulTransitTimetableProviderTest {
         }
         try {
             block(SeoulTransitTimetableProvider("fixture-key", "http://127.0.0.1:${server.address.port}",
-                SeoulTimetableServiceDay { "3" }, Clock.fixed(now, ZoneOffset.UTC), allowInsecureHttp = true), calls)
+                serviceDay, Clock.fixed(clockAt, ZoneOffset.UTC), allowInsecureHttp = true), calls)
         } finally { server.stop(0) }
     }
 

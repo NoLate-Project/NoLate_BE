@@ -116,15 +116,22 @@ class TransitTimetableCalculationIntegrationTest {
     }
 
     @Test
-    fun `첫 열차가 시간표대로 왔어도 하차역의 지연 예측이 환승 여유보다 크면 확정하지 않는다`() {
-        val delayed = calculate("4012", false, liveBoardingSeconds = 330,
-            firstBoardingSeconds = 330, firstArrivalSeconds = 800, nextTransferTrain = true,
+    fun `하차 지연으로 환승 여유가 부족하면 같은 경로의 다음 편이 있을 때만 확정한다`() {
+        fun withOnwardTrain(available: Boolean) = calculate("4012", false, liveBoardingSeconds = 330,
+            firstBoardingSeconds = 330, firstArrivalSeconds = 800, nextTransferTrain = available,
             transferBoardingSeconds = 1150, firstAlightingObservationSeconds = 870,
             targetArrivalAt = now.plusSeconds(2752))
 
-        assertFalse(delayed.accepted)
-        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, delayed.failureReason)
-        assertNull(delayed.predictedArrivalAt)
+        val withoutNext = withOnwardTrain(false)
+        assertFalse(withoutNext.accepted)
+        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, withoutNext.failureReason)
+        assertNull(withoutNext.predictedArrivalAt)
+
+        val withNext = withOnwardTrain(true)
+        assertTrue(withNext.accepted)
+        assertEquals(now.plusSeconds(870), withNext.effectiveTransitRoute?.segments?.get(1)?.rideTiming?.predictedArrivalAt)
+        assertEquals("2014", withNext.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.timetable?.trainNumber)
+        assertEquals(now.plusSeconds(2752), withNext.predictedArrivalAt)
     }
 
     @Test

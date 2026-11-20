@@ -108,6 +108,37 @@ class JourneyActivityDurabilityTest {
         }
     }
 
+    @Test fun `measured subway report reaches transport only for its saved pair then disappears on END`() {
+        db().use { db ->
+            val clock = AutomaticJourneyMutableClock()
+            val f = AutomaticJourneyFixture(clock, 600, db)
+            f.useRideGuidancePlan()
+            SubwayNavigationFixture.applyMeasuredTrack(f)
+            f.service().prepare(7, 9001, 2, f.prepareCommand())
+            f.service().departure(7, 9001, 2, f.sessionId, f.event())
+            val sent = mutableListOf<LiveActivityPushRequest>()
+            val delivery = service(db, f, sender(sent))
+            val request = body(f)
+            val content = request.path("contentState") as ObjectNode
+            content.put("schemaVersion", 9).put("phase", "RIDING_SEGMENT").put("instruction", "지하철 역 사이 이동 중")
+                .put("activeLegIndex", 1).put("rideProgress", 0.75).put("boardingConfirmed", true).putNull("walkProgress")
+            val segment = content.putObject("subwaySegment").put("fromStopIndex", 1).put("totalStops", 3)
+                .put("fromStopName", "합성 중간역").put("toStopName", "다른 목적지")
+                .put("progress", 0.5).put("confirmedAt", clock.instant().epochSecond - 8)
+            assertThatThrownBy { delivery.update(7, 9001, 2, f.sessionId, request) }.isInstanceOf(IllegalArgumentException::class.java)
+            assertThat(sent).isEmpty()
+            segment.put("toStopName", "합성 하차역")
+            delivery.update(7, 9001, 2, f.sessionId, request)
+            assertThat(sent.single().contentState).containsKey("subwaySegment").containsEntry("rideProgress", 0.75)
+            clock.now = clock.now.plusSeconds(1)
+            delivery.end(7, 9001, 2, f.sessionId, f.stopCommand())
+            assertThat(delivery.dispatchTerminal()).isEqualTo(1)
+            assertThat(sent.map { it.event }).containsExactly(LiveActivityPushEvent.UPDATE, LiveActivityPushEvent.END)
+            assertThat(sent.last().contentState).doesNotContainKey("subwaySegment").containsEntry("boardingConfirmed", false)
+                .containsEntry("schemaVersion", 1).containsEntry("rideProgress", null)
+        }
+    }
+
     @Test fun `v3 alighting notice is bounded still riding and removed by durable END`() {
         db().use { db ->
             val clock=AutomaticJourneyMutableClock(); val f=fixture(db,clock); val sent=mutableListOf<LiveActivityPushRequest>()
@@ -121,7 +152,7 @@ class JourneyActivityDurabilityTest {
                 {it.put("schemaVersion",2)}, {it.put("boardingConfirmed",false)}, {it.put("activeLegIndex",2)},
                 {it.putNull("alighting")}, {(it.path("alighting") as ObjectNode).put("kind","ARRIVED")},
                 {(it.path("alighting") as ObjectNode).put("remainingMeters",11)},
-                {(it.path("alighting") as ObjectNode).put("kind","NEAR_STOP").put("remainingMeters",60)},
+                {(it.path("alighting") as ObjectNode).put("kind","NEAR_STOP").put("remainingMeters",270)},
                 {(it.path("alighting") as ObjectNode).put("latitude",37.5)})) {
                 val bad=notice(); patch(bad.path("contentState") as ObjectNode)
                 assertThatThrownBy {delivery.update(7,9001,2,f.sessionId,bad)}.isInstanceOf(Exception::class.java)
@@ -132,6 +163,57 @@ class JourneyActivityDurabilityTest {
             clock.now=clock.now.plusSeconds(1); delivery.end(7,9001,2,f.sessionId,f.stopCommand())
             assertThat(delivery.dispatchTerminal()).isEqualTo(1)
             assertThat(sent.last().contentState).containsEntry("alighting",null).containsEntry("boardingConfirmed",false).containsEntry("schemaVersion",1)
+        }
+    }
+
+    @Test fun `native bus approach range reaches update transport and durable END clears it`() {
+        for (meters in listOf(60, 240, 260)) {
+            db().use { db ->
+                val clock = AutomaticJourneyMutableClock()
+                val f = fixture(db, clock)
+                val sent = mutableListOf<LiveActivityPushRequest>()
+                val report = body(f).also { root -> (root.path("contentState") as ObjectNode).apply {
+                    put("schemaVersion", 3); put("phase", "RIDING"); put("instruction", "버스로 이동 중")
+                    put("activeLegIndex", 1); putNull("walkProgress"); put("rideProgress", 0.9)
+                    put("boardingConfirmed", true)
+                    putObject("alighting").put("kind", "NEAR_STOP").put("remainingMeters", meters)
+                } }
+                val delivery = service(db, f, sender(sent))
+                delivery.update(7, 9001, 2, f.sessionId, report)
+                assertThat(sent.single().contentState).containsEntry("boardingConfirmed", true)
+                assertThat(f.mapper.valueToTree<com.fasterxml.jackson.databind.JsonNode>(
+                    sent.single().contentState["alighting"]).path("remainingMeters").asInt()).isEqualTo(meters)
+                clock.now = clock.now.plusSeconds(1)
+                delivery.end(7, 9001, 2, f.sessionId, f.stopCommand())
+                assertThat(delivery.dispatchTerminal()).isEqualTo(1)
+                assertThat(sent.last().contentState).containsEntry("alighting", null)
+                    .containsEntry("boardingConfirmed", false)
+            }
+        }
+    }
+
+    @Test fun `recent bus display reaches update transport and END clears its history`() {
+        for (index in listOf(1, 3)) {
+            db().use { db ->
+                val clock = AutomaticJourneyMutableClock()
+                val f = fixture(db, clock, transfer = true)
+                val sent = mutableListOf<LiveActivityPushRequest>()
+                val report = body(f).also { root -> (root.path("contentState") as ObjectNode).apply {
+                    put("phase", "UNAVAILABLE"); put("quality", "UNCERTAIN")
+                    put("instruction", "최근 버스 탑승 확인 · 현재 위치 재확인 중")
+                    put("activeLegIndex", index); putNull("walkProgress")
+                    putObject("lastConfirmedBus").put("legIndex", index)
+                        .put("confirmedAt", clock.instant().epochSecond - 5)
+                } }
+                val delivery = service(db, f, sender(sent))
+                delivery.update(7, 9001, 2, f.sessionId, report)
+                assertThat(sent.single().contentState).containsKey("lastConfirmedBus")
+                    .containsEntry("boardingConfirmed", false).containsEntry("walkProgress", null)
+                clock.now = clock.now.plusSeconds(1)
+                delivery.end(7, 9001, 2, f.sessionId, f.stopCommand())
+                assertThat(delivery.dispatchTerminal()).isEqualTo(1)
+                assertThat(sent.last().contentState["lastConfirmedBus"]).isNull()
+            }
         }
     }
 
@@ -206,6 +288,41 @@ class JourneyActivityDurabilityTest {
             assertThat(service(db,f,sender(sent)).dispatchTerminal()).isEqualTo(1)
             assertThat(sent.last().contentState).containsEntry("schemaVersion",1).containsEntry("rideProgress",null)
                 .containsEntry("walkProgress",null).containsEntry("boardingConfirmed",false).containsEntry("alighting",null)
+        }
+    }
+    @Test fun `native subway platform arrival reaches the push transport only for the saved line`() {
+        db().use { db ->
+            val clock=AutomaticJourneyMutableClock()
+            val f=AutomaticJourneyFixture(clock,600,db).apply {
+                useRideGuidancePlan(); SubwayNavigationFixture.apply(this)
+                val route=plan.route!!.deepCopy<ObjectNode>()
+                (route.path("transitLegs")[1] as ObjectNode).put("lineName","수도권 2호선")
+                plan=plan.copy(route=route)
+                service().prepare(7,9001,2,prepareCommand()); service().departure(7,9001,2,sessionId,event())
+            }
+            val sent=mutableListOf<LiveActivityPushRequest>()
+            val now=clock.instant().epochSecond
+            val report=body(f).also { (it.path("contentState") as ObjectNode).apply {
+                put("walkProgress",0.95); put("arrivalStatus","WAITING_INFORMATION")
+                putObject("arrival").put("busLegIndex",1).put("kind","SUBWAY")
+                    .put("providerRouteId","2호선").put("directionLabel","성수행")
+                    .put("sourceUpdatedAt",now-40).put("expectedAt",now+70).put("validUntil",now+70)
+            } }
+            val wrongLine=report.deepCopy().also {
+                (it.path("contentState").path("arrival") as ObjectNode).put("providerRouteId","4호선")
+            }
+            assertThatThrownBy { service(db,f,sender(sent)).update(7,9001,2,f.sessionId,wrongLine) }
+                .isInstanceOf(IllegalArgumentException::class.java)
+            assertThat(sent).isEmpty()
+            service(db,f,sender(sent)).update(7,9001,2,f.sessionId,report)
+            val arrival=sent.single().contentState["arrival"] as Map<*,*>
+            assertThat(arrival["kind"]).isEqualTo("SUBWAY")
+            assertThat(arrival["providerRouteId"]).isEqualTo("2호선")
+            clock.now=clock.now.plusSeconds(1)
+            val restarted=service(db,f,sender(sent))
+            restarted.end(7,9001,2,f.sessionId,f.stopCommand())
+            assertThat(restarted.dispatchTerminal()).isEqualTo(1)
+            assertThat(sent.last().contentState).containsEntry("arrival",null).containsEntry("boardingConfirmed",false)
         }
     }
     @Test fun `indexed ETA v7 stays occurrence bound across restart and terminal delivery clears it`() {

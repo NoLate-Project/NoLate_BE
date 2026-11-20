@@ -146,6 +146,11 @@ class TmapTransitJourneyMapper {
                 ?.takeIf { it == "UP" || it == "DOWN" },
             timingBasis = TransitLegTimingBasis.ROUTE_ESTIMATE,
             nextStopName = stations.getOrNull(1)?.text("stationName"),
+            // 정차 순서를 뒤의 구간 재계산까지 전달한다. 누락된 역 이름을 끝점으로 추정하지 않는다.
+            orderedStopNames = if (mode == TransitLegMode.SUBWAY) {
+                stations.mapNotNull { it.text("stationName") }
+                    .takeIf { it.size == stations.size }.orEmpty()
+            } else emptyList(),
             orderedStopIds = if (mode == TransitLegMode.SUBWAY) {
                 stations.mapNotNull { providerScopedStopId(PROVIDER_ID, it.identifier("stationID")) }
                     .takeIf { it.size == stations.size }.orEmpty()

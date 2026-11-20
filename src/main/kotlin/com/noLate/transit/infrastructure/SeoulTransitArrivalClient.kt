@@ -529,7 +529,7 @@ class SeoulTransitArrivalClient(
             lineName = subwayIdToLineName(path("subwayId").asText(null)),
             stationName = text("statnNm"),
             direction = text("updnLine"),
-            destinationName = text("bstatnNm"),
+            destinationName = subwayTerminalName(),
             arrivalMessage = message,
             waitSeconds = waitSeconds,
             waitMinutes = waitMinutes,
@@ -556,6 +556,18 @@ class SeoulTransitArrivalClient(
             subwayStationId = text("statnId"),
             trainNumber = text("btrainNo"),
         )
+    }
+
+    private fun JsonNode.subwayTerminalName(): String? {
+        val terminal = text("bstatnNm")
+        if (terminal != null && terminal != "-2") return terminal
+        // OA-12764의 trainLineNm은 "종착역행 - 다음역방면"이다. 결측 종착역만
+        // 같은 응답의 명시된 행선지로 채워 열차·방향·신선도 검증에 넘긴다.
+        val parts = text("trainLineNm")?.split(" - ") ?: return null
+        if (parts.size != 2 || !parts[0].endsWith("행") || !parts[1].endsWith("방면")) return null
+        return parts[0].removeSuffix("행").trim().takeIf { name ->
+            name.length <= 100 && name.any(Char::isLetter)
+        }
     }
 
     private fun Element.toBusArrivals(limit: Int): List<TransitArrivalDto> {

@@ -17,6 +17,7 @@ enum class TransitTransferStatus {
 
 enum class TransitJourneyTimingBasis {
     SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME,
+    SAME_SUBWAY_BOARDING_AND_ALIGHTING_REALTIME,
     BUS_TRANSFER_BOARDING_AND_ALIGHTING_REALTIME,
     FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE,
     FIRST_BOARDING_REALTIME_TRANSFER_OBSERVED,
@@ -208,7 +209,7 @@ class TransitTransferFeasibilityEvaluator(
     ): TransitTransferEvaluation? {
         if (observations.isEmpty() && !useFirstTimetableAlighting) return evaluate(journey, firstBoardingOverlay, evaluatedAt)
         val rideIndexes = journey.legs.indices.filter { journey.legs[it].isRide }
-        if (rideIndexes.size < 2 || rideIndexes.any { journey.legs[it].timetable == null } ||
+        if (rideIndexes.isEmpty() || rideIndexes.any { journey.legs[it].timetable == null } ||
             (firstBoardingOverlay == null && journey.legs[rideIndexes.first()].firstBoardingObservation != null) ||
             observations.map { it.legIndex }.distinct().size != observations.size ||
             observations.any {
@@ -227,7 +228,8 @@ class TransitTransferFeasibilityEvaluator(
             }
             val arrivalAt = if (observation?.point == TransitRideObservationPoint.ALIGHTING) {
                 observation.expectedAt
-            } else if (useFirstTimetableAlighting && index == rideIndexes.first()) {
+            } else if ((useFirstTimetableAlighting && index == rideIndexes.first()) ||
+                observation?.earlyBoardingArrival == true) {
                 timetable.arrivalAt
             } else if (observation?.point == TransitRideObservationPoint.BOARDING ||
                 (index == rideIndexes.first() && firstBoardingOverlay != null)) {
@@ -244,10 +246,14 @@ class TransitTransferFeasibilityEvaluator(
         val firstReadyAt = maxOf(evaluatedAt, journey.departureAt).plusSeconds(accessSeconds)
         if (firstReadyAt.isAfter(requireNotNull(timings[firstIndex]).boardingAt)) return null
 
-        val lastTable = requireNotNull(journey.legs[rideIndexes.last()].timetable)
-        val lastArrivalAt = requireNotNull(timings[rideIndexes.last()]).arrivalAt
-        val predictedArrivalAt = journey.arrivalAt.plus(Duration.between(lastTable.arrivalAt, lastArrivalAt))
-        val basis = if (firstBoardingOverlay == null) {
+        val lastIndex = rideIndexes.last()
+        // 마지막 도보는 그대로 둔다. 단일 열차는 기존 여정의 하차시각에 승차 지연이 이미 들어 있을 수 있다.
+        val plannedAlighting = journey.legs[lastIndex].scheduledArrivalAt ?: return null
+        val lastArrivalAt = requireNotNull(timings[lastIndex]).arrivalAt
+        val predictedArrivalAt = journey.arrivalAt.plus(Duration.between(plannedAlighting, lastArrivalAt))
+        val basis = if (rideIndexes.size == 1 && observations.singleOrNull()?.point == TransitRideObservationPoint.ALIGHTING) {
+            TransitJourneyTimingBasis.SAME_SUBWAY_BOARDING_AND_ALIGHTING_REALTIME
+        } else if (firstBoardingOverlay == null) {
             TransitJourneyTimingBasis.FIRST_BOARDING_TIMETABLE_TRANSFER_OBSERVED
         } else if (observations.isEmpty()) {
             TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE

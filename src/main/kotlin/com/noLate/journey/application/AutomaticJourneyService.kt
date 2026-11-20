@@ -1,5 +1,6 @@
 package com.noLate.journey.application
 
+import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
@@ -26,9 +27,18 @@ data class AutomaticJourneyPreparationDto(
     val sequence: Long, val state: AutomaticJourneyState, val clientOwnerId: String,
     val routeInputDigest: String, val preparedAt: Instant, val expiresAt: Instant,
     val execution: AutomaticJourneyExecution,
+    val routeFingerprint: String? = null,
     val savedRouteValidated: Boolean = false,
     val officialBusAdmission: JourneyBusDeviceAdmission? = null,
     val officialSubwayAdmission: JourneySubwayDeviceAdmission? = null,
+    val rerouteInputJSON: String? = null,
+    val rerouteSnapshotJSON: String? = null,
+    val rerouteBusAdmission: JourneyBusDeviceAdmission? = null,
+    val rerouteValidated: Boolean = false,
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
+    val officialBusAdmissions: List<JourneyBusDeviceAdmission>? = null,
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
+    val officialSubwayAdmissions: List<JourneySubwayDeviceAdmission>? = null,
 )
 data class AutomaticJourneyDepartureAck(
     val sessionId: String, val generation: Long, val routeRevision: Long, val eventKey: String,
@@ -73,53 +83,76 @@ class AutomaticJourneyService(
     private val busDeviceAdmission: JourneyBusDeviceAdmissionVerifier? = null,
     private val subwayDeviceAdmission: JourneySubwayDeviceAdmissionVerifier? = null,
     @Value("\${journey.automatic.simulator-official-bus-admission-enabled:false}") private val simulatorOfficialBusAdmissionEnabled: Boolean = false,
+    private val savedPrepareFence: SavedJourneyPrepareFence,
 ) {
-    @Transactional(isolation = Isolation.READ_COMMITTED)
-    fun prepareSaved(memberId: Long, scheduleId: Long, loginGeneration: Long, command: com.noLate.journey.domain.AutomaticJourneySavedPrepareCommand): AutomaticJourneyPreparationDto {
+    private data class SavedInput(val route: JourneyRouteSnapshot, val walking: WalkingSnapshotContract?)
+
+    /** Static provider lookups run between two short ownership transactions. A changed plan,
+     * walking snapshot, login or membership invalidates the whole admission. */
+    fun prepareSaved(memberId: Long, scheduleId: Long, loginGeneration: Long, command: AutomaticJourneySavedPrepareCommand): AutomaticJourneyPreparationDto {
         requireExecution(command.execution)
         requireUuid(command.requestId)
         requireUuid(command.clientOwnerId)
         requireDigest(command.routeInputDigest)
-        lockActor(memberId, loginGeneration)
         if (command.routeInputJSON.toByteArray().size !in 1..1_048_576) invalid("안내 입력 크기가 올바르지 않습니다.")
-        val mixed = runCatching { objectMapper.readTree(command.routeInputJSON).has("walkingSnapshot") }.getOrElse { false }
-        val selected = if (mixed) travelPlanService.getMyJourneyWalkingTravelPlanForStart(memberId, scheduleId)
-            else travelPlanService.getMyJourneyTravelPlanForStart(memberId, scheduleId) to 1L
-        val (plan, revision) = selected
-        if (plan.memberId != memberId || plan.scheduleId != scheduleId) invalid("저장 경로 소유자가 일치하지 않습니다.")
-        val walking = if (mixed) walkingSnapshots?.currentForAdmission(memberId, scheduleId, loginGeneration,
-            OwnedWalkingRoute(plan, revision)) ?: throw BusinessException(ErrorCode.FEATURE_DISABLED) else null
+        val input = runCatching { objectMapper.readTree(command.routeInputJSON) }.getOrNull()
+            ?: invalid("안내 입력이 올바르지 않습니다.")
+        val hasWalkingSnapshot = input.has("walkingSnapshot")
         val validator = SavedJourneyInputValidator(objectMapper)
-        validator.validate(plan, command.routeInputJSON, command.routeInputDigest, revision, walking)
-        val snapshot = JourneyRouteSnapshot.from(plan, objectMapper)
-        val isolatedOfficialBus = command.execution == AutomaticJourneyExecution.SIMULATOR &&
-            simulatorOfficialBusAdmissionEnabled && isolatedTestScope && !productionProfile() &&
-            activeProfiles.split(',').map(String::trim).any { it in setOf("test", "journey-isolated-fixture") } &&
-            snapshot.legs.map { it.kind } == listOf("WALK", "BUS", "WALK")
-        val (officialBus, officialSubway) = if (command.execution == AutomaticJourneyExecution.DEVICE &&
-            snapshot.legs.map { it.kind } == listOf("WALK", "SUBWAY", "WALK")) {
-            val verified = subwayDeviceAdmission?.verify(snapshot) ?: throw BusinessException(ErrorCode.FEATURE_DISABLED)
-            validator.requireDeviceReady(plan, command.routeInputJSON, walking, officialSubway = verified)
-            null to verified
-        } else if (command.execution == AutomaticJourneyExecution.DEVICE || isolatedOfficialBus) {
-            if (busDeviceAdmission == null && !isolatedOfficialBus && activeProfiles.split(',').map(String::trim).contains("test")) {
-                // Existing synthetic fixture admission is test-only; production never infers
-                // official route proof from saved/provider metadata alone.
-                validator.requireDeviceReady(plan, command.routeInputJSON, walking)
-                null to null
-            } else {
-                val verified = busDeviceAdmission?.verify(snapshot)
-                    ?: throw BusinessException(ErrorCode.FEATURE_DISABLED)
-                validator.requireDeviceReady(plan, command.routeInputJSON, walking, verified)
-                verified to null
+        fun capture(): SavedInput {
+            val (plan, revision) = if (hasWalkingSnapshot) travelPlanService.getMyJourneyWalkingTravelPlanForStart(memberId, scheduleId)
+                else travelPlanService.getMyJourneyTravelPlanForStart(memberId, scheduleId) to 1L
+            if (plan.memberId != memberId || plan.scheduleId != scheduleId) invalid("저장 경로 소유자가 일치하지 않습니다.")
+            val walking = if (hasWalkingSnapshot) walkingSnapshots?.currentForAdmission(memberId, scheduleId, loginGeneration,
+                OwnedWalkingRoute(plan, revision)) ?: throw BusinessException(ErrorCode.FEATURE_DISABLED) else null
+            validator.validate(plan, command.routeInputJSON, command.routeInputDigest, revision, walking)
+            return SavedInput(JourneyRouteSnapshot.from(plan, objectMapper), walking)
+        }
+        fun prepare(input: SavedInput): AutomaticJourneyPreparationDto {
+            val result = prepareOwned(memberId, scheduleId, loginGeneration, AutomaticJourneyPrepareCommand(
+                command.requestId, command.clientOwnerId, command.routeInputDigest, command.execution), input.walking)
+            if (result.routeFingerprint != input.route.fingerprint) invalid("저장 경로가 변경되었습니다.")
+            return result.copy(savedRouteValidated = true)
+        }
+        val legs = input.path("legs")
+        val subwayTransfer = legs.size() > 3 && legs.any { it.path("kind").asText() == "SUBWAY" }
+        val isolatedBus = simulatorOfficialBusAdmissionEnabled && legs.any { it.path("kind").asText() == "BUS" }
+        // requireExecution has already restricted SIMULATOR to isolated, non-production profiles.
+        val unknownService = hasWalkingSnapshot && input.path("serviceState").asText() == "UNKNOWN"
+        val needsAdmission = command.execution == AutomaticJourneyExecution.DEVICE || subwayTransfer || isolatedBus || unknownService
+        if (!needsAdmission) return savedPrepareFence.withActor(memberId, loginGeneration) { prepare(capture()) }
+
+        val before = savedPrepareFence.withActor(memberId, loginGeneration) { capture() }
+        val route = before.route
+        if (before.walking == null || route.legs.size !in 3..31 || route.legs.size % 2 != 1 ||
+            route.legs.withIndex().any { (i, leg) -> if (i % 2 == 0) leg.kind != "WALK" else leg.kind !in setOf("BUS", "SUBWAY") })
+            invalid("각 대중교통 구간과 도보 연결 경로를 확인할 수 없습니다.")
+        val legacyTestBus = command.execution == AutomaticJourneyExecution.DEVICE && !isolatedBus &&
+            busDeviceAdmission == null && !productionProfile() && activeProfiles.split(',').map(String::trim).contains("test") &&
+            route.legs.size == 3 && route.legs[1].kind == "BUS"
+        val buses = mutableListOf<JourneyBusDeviceAdmission>()
+        val subways = mutableListOf<JourneySubwayDeviceAdmission>()
+        if (!legacyTestBus) {
+            check(!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+                "Official transit admission requires completed ownership capture"
             }
-        } else null to null
-        val fingerprint = snapshot.fingerprint
-        val result = prepareOwned(memberId, scheduleId, loginGeneration, AutomaticJourneyPrepareCommand(command.requestId, command.clientOwnerId, command.routeInputDigest, command.execution), walking)
-        if (owned(result.sessionId, memberId, scheduleId, loginGeneration).routeFingerprint != fingerprint) invalid("저장 경로가 변경되었습니다.")
-        return result.copy(savedRouteValidated = true, officialBusAdmission = officialBus,
-            officialSubwayAdmission = officialSubway)
+            for (index in 1 until route.legs.size step 2) {
+                when (route.legs[index].kind) {
+                    "SUBWAY" -> subways += subwayDeviceAdmission?.verify(route, index) ?: throw BusinessException(ErrorCode.FEATURE_DISABLED)
+                    "BUS" -> buses += busDeviceAdmission?.verify(route, index) ?: throw BusinessException(ErrorCode.FEATURE_DISABLED)
+                }
+            }
+        }
+        validator.requireDeviceReady(route, command.routeInputJSON, before.walking, buses, subways)
+        return savedPrepareFence.withActor(memberId, loginGeneration) {
+            val after = capture()
+            if (after.route.fingerprint != route.fingerprint || after.walking != before.walking) invalid("저장된 경로나 도보 경로가 변경되었습니다.")
+            val result = prepare(after)
+            if (route.legs.size == 3) result.copy(officialBusAdmission = buses.singleOrNull(), officialSubwayAdmission = subways.singleOrNull())
+            else result.copy(officialBusAdmissions = buses, officialSubwayAdmissions = subways)
+        }
     }
+
     @Transactional(isolation = Isolation.READ_COMMITTED)
     fun prepare(memberId: Long, scheduleId: Long, loginGeneration: Long, command: AutomaticJourneyPrepareCommand): AutomaticJourneyPreparationDto {
         // Only the attested saved-route endpoint may arm a real device in production.
@@ -219,8 +252,25 @@ class AutomaticJourneyService(
         if (preparation.memberId != memberId || preparation.scheduleId != scheduleId ||
             preparation.loginSessionGeneration > loginGeneration) throw BusinessException(ErrorCode.SCHEDULE_NOT_FOUND)
         preparation.fence(command.generation, command.routeRevision, command.clientOwnerId, command.routeInputDigest)
-        preparation.stop(Instant.now(clock))
-        return dto(repository.saveAndFlush(preparation))
+        val now = Instant.now(clock)
+        preparation.stop(now)
+        val stopped = repository.saveAndFlush(preparation)
+        // A durable stop may arrive after reroute committed but before its response reached
+        // the device. Follow only the exact server-written parent chain, never a newer
+        // independent preparation for the same schedule.
+        var parent = stopped
+        while (true) {
+            val child = repository.findByParentSessionId(parent.sessionId) ?: break
+            if (child.memberId != memberId || child.scheduleId != scheduleId ||
+                child.loginSessionGeneration != parent.loginSessionGeneration ||
+                child.clientOwnerId != parent.clientOwnerId ||
+                child.generation != parent.generation + 1 ||
+                child.routeRevision != parent.routeRevision + 1) break
+            child.stop(now)
+            repository.saveAndFlush(child)
+            parent = child
+        }
+        return dto(stopped)
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -272,7 +322,7 @@ class AutomaticJourneyService(
         if (value.state != AutomaticJourneyState.ACTIVE)
             invalid("활성화된 길안내만 새 경로를 조회할 수 있습니다.")
         val plan = travelPlanService.getMyJourneyTravelPlanForStart(memberId, scheduleId)
-        if (JourneyRouteSnapshot.from(plan, objectMapper).fingerprint != value.routeFingerprint)
+        if (JourneyRouteSnapshot.from(plan, objectMapper).fingerprint != (value.sourceRouteFingerprint ?: value.routeFingerprint))
             invalid("저장된 개인 경로가 변경되었습니다.")
         val latitude = plan.destination?.lat
         val longitude = plan.destination?.lng
@@ -308,9 +358,12 @@ class AutomaticJourneyService(
         if (actor == null || actor.deleted || actor.sessionGeneration != loginGeneration) throw BusinessException(ErrorCode.INVALID_TOKEN)
         val plan = travelPlanService.getTravelPlan(memberId, scheduleId, memberId)
         val value = owned(sessionId, memberId, scheduleId, loginGeneration)
-        requireWalkingAdmission(value, memberId, scheduleId, loginGeneration)
-        val route = JourneyRouteSnapshot.from(plan, objectMapper)
-        if (route.fingerprint != value.routeFingerprint) invalid("저장된 개인 경로가 변경되었습니다.")
+        if (value.rerouteSnapshotJson == null) requireWalkingAdmission(value, memberId, scheduleId, loginGeneration)
+        val saved = JourneyRouteSnapshot.from(plan, objectMapper)
+        if (saved.fingerprint != (value.sourceRouteFingerprint ?: value.routeFingerprint))
+            invalid("저장된 개인 경로가 변경되었습니다.")
+        val route = value.rerouteSnapshotJson?.let { JourneyRouteSnapshot.fromReroute(it, value.routeFingerprint, objectMapper) }
+            ?: saved
         requireNoManualJourney(memberId, scheduleId)
         requireExecution(value.execution)
         value.fence(command.generation, command.routeRevision, command.clientOwnerId, command.routeInputDigest)
@@ -330,11 +383,12 @@ class AutomaticJourneyService(
         when(route.legs.getOrNull(transitIndex)?.kind) {
             "SUBWAY" -> {
                 require(phase!="RIDING" || version==8)
+                require((phase == "RIDING_SEGMENT") == (version == 9))
                 requireSubwayObservationFence(member,schedule,login,session,JourneySubwayObservationCommand(
                     command.generation,command.routeRevision,command.clientOwnerId,command.routeInputDigest,transitIndex))
             }
             "BUS" -> {
-                require(version!=8)
+                require(version !in 8..9 && phase != "RIDING_SEGMENT")
                 requireObservationFence(member,schedule,login,session,com.noLate.journey.domain.JourneyBusBindingCommand(
                     command.generation,command.routeRevision,command.clientOwnerId,command.routeInputDigest,transitIndex))
             }
@@ -414,6 +468,13 @@ class AutomaticJourneyService(
     private fun dto(value: AutomaticJourneyPreparation) = AutomaticJourneyPreparationDto(
         value.sessionId, value.scheduleId.toString(), value.generation, value.routeRevision,
         value.sequence, value.state, value.clientOwnerId, value.routeInputDigest, value.preparedAt, value.expiresAt, value.execution,
+        routeFingerprint = value.routeFingerprint,
+        rerouteInputJSON = value.rerouteInputJson,
+        rerouteSnapshotJSON = value.rerouteSnapshotJson,
+        rerouteBusAdmission = value.rerouteBusAdmissionJson?.let {
+            objectMapper.readValue(it, JourneyBusDeviceAdmission::class.java)
+        },
+        rerouteValidated = value.rerouteInputJson != null,
     )
     private fun ack(value: AutomaticJourneyPreparation, duplicate: Boolean) = AutomaticJourneyDepartureAck(
         value.sessionId, value.generation, value.routeRevision, requireNotNull(value.acceptedEventKey),

@@ -97,6 +97,32 @@ internal object JourneySubwaySavedLegEvidence {
         return Result("RAW_SAVED_SUBWAY_METADATA_ONLY", Evidence(legIndex, city, line, way, start, end, stations))
     }
 
+    /** A segment display may reference only complete, owned ODsay track geometry.
+     * GPS projection and passenger/train correlation remain native decisions. */
+    fun hasMeasuredTrack(leg: JsonNode): Boolean {
+        val evidence = leg.path("navigationEvidence")
+        val raw = leg.path("pathCoords")
+        if (leg.path("pathCoordsIsExact").booleanValue() != true ||
+            leg.text("pathGeometrySource") != "TRANSIT_PASS_SHAPE_LINESTRING" ||
+            evidence.text("provider") != "odsay" || evidence.path("version").integer() != 1 ||
+            !evidence.path("geometryInputComplete").booleanValue() || !raw.isArray || raw.size() !in 2..2000) return false
+        val seen = mutableSetOf<Pair<Double, Double>>()
+        var previous: Pair<Double, Double>? = null
+        for (row in raw) {
+            val point = coordinate(row) ?: return false
+            if (point == previous) continue
+            if (!seen.add(point)) return false
+            if (previous != null) {
+                val north = Math.toRadians(point.first - previous.first)
+                val east = Math.toRadians(point.second - previous.second) * cos(Math.toRadians((point.first + previous.first) / 2))
+                if (6_371_000 * hypot(north, east) > 300) return false
+            }
+            previous = point
+        }
+        val stops = evidence.path("stopOccurrences")
+        return stops.isArray && stops.size() in 3..64 && seen.size > stops.size()
+    }
+
     private fun validId(value: String) = value.matches(Regex("[0-9]{1,20}")) && value.any { it != '0' }
     private fun sameStationPoint(leg: Pair<Double, Double>?, stop: Station): Boolean {
         if (leg == null) return false

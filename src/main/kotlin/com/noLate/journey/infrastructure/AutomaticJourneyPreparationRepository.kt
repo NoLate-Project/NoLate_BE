@@ -11,6 +11,7 @@ import java.time.Instant
 /** Writes are serialized by the existing actor/recipient member fence before schedule access. */
 interface AutomaticJourneyPreparationRepository : JpaRepository<AutomaticJourneyPreparation, Long> {
     fun findBySessionId(sessionId: String): AutomaticJourneyPreparation?
+    fun findByParentSessionId(parentSessionId: String): AutomaticJourneyPreparation?
     fun findFirstByMemberIdAndScheduleIdOrderByGenerationDesc(memberId: Long, scheduleId: Long): AutomaticJourneyPreparation?
     fun deleteAllByMemberId(memberId: Long)
     fun deleteAllByScheduleIdIn(scheduleIds: Collection<Long>)

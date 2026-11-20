@@ -12,6 +12,7 @@ import com.noLate.eta.application.transit.TransitTimetableEntranceWalk
 import com.noLate.eta.application.transit.TransitWalkingTimeEnricher
 import com.noLate.eta.application.transit.requiresDatedTimetableForAdjacentRingRide
 import com.noLate.eta.domain.TransitJourneySearchRequest
+import com.noLate.eta.domain.SeoulSubwayServiceDay
 import com.noLate.eta.domain.TransitLegMode
 import com.noLate.eta.domain.TransitWalkingTimingSource
 import com.noLate.eta.infrastructure.routejson.SelectedTransitRouteDecoder
@@ -22,7 +23,6 @@ import org.springframework.stereotype.Service
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.CancellationException
 
@@ -208,10 +208,12 @@ class TransitTimetablePreviewService(
         if (departure != null && departure.nano != 0) return unavailable
         val anchor = target ?: requireNotNull(departure)
         if (anchor <= now) return unavailable
-        val laterDate = anchor.atZone(SEOUL).toLocalDate() != now.atZone(SEOUL).toLocalDate()
-        if (laterDate && datedTimetable == null) return unavailable
+        val zone = SeoulSubwayServiceDay.zone
+        val differentCalendarDate = anchor.atZone(zone).toLocalDate() != now.atZone(zone).toLocalDate()
+        val needsDatedTable = !SeoulSubwayServiceDay.hasCurrentStationTables(SeoulSubwayServiceDay.dateAt(anchor), now)
+        if (needsDatedTable && datedTimetable == null) return unavailable
         val orderedStops = request.orderedStops
-        if (laterDate && (orderedStops == null ||
+        if (differentCalendarDate && (orderedStops == null ||
                 orderedStops.size != request.nextStops.size || orderedStops.any { stops ->
                     stops.size !in 2..512 || stops.any { it.isBlank() || it.length > 80 }
                 })) return unavailable
@@ -232,7 +234,7 @@ class TransitTimetablePreviewService(
             deadline.within {
                 // ODsay SearchTime and the returned route timestamp are minute-granular.
                 // This lookup verifies only the route; the timetable keeps the exact anchor below.
-                val routeLookupAt = if (departure != null || laterDate) anchor.truncatedTo(ChronoUnit.MINUTES)
+                val routeLookupAt = if (departure != null || differentCalendarDate) anchor.truncatedTo(ChronoUnit.MINUTES)
                 else now.truncatedTo(ChronoUnit.MINUTES).plusSeconds(60)
                 val candidates = provider.search(TransitJourneySearchRequest(
                     endpoints.startY, endpoints.startX, endpoints.endY, endpoints.endX,
@@ -241,7 +243,7 @@ class TransitTimetablePreviewService(
                 ))
                 val verified = matcher.findSelectedCandidates(route, candidates).firstOrNull { candidate ->
                     candidate.rideLegs.map { it.nextStopName } == request.nextStops &&
-                        (!laterDate || candidate.rideLegs.map { it.orderedStopNames } == orderedStops)
+                        (!differentCalendarDate || candidate.rideLegs.map { it.orderedStopNames } == orderedStops)
                 } ?: return@within unavailable
                 // For adjacent stops on the ring, the station tables alone cannot prove direction.
                 // The dated path verifies the exact ordered ODsay hop, including on the current day.
@@ -253,13 +255,17 @@ class TransitTimetablePreviewService(
                 }?.let { walk ->
                     walk.walkingGeometry?.distanceMeters?.let { TransitTimetableEntranceWalk(walk.movementDurationSeconds, it) }
                 }
-                val requiresDatedProvider = laterDate || hasAdjacentRingRide
-                val datedProvider = datedTimetable.takeIf { requiresDatedProvider }
+                val requiresDatedProvider = needsDatedTable || hasAdjacentRingRide
+                fun planWith(tables: DatedTransitTimetableProvider?): TransitTimetablePreview? =
+                    if (departure != null) planner.planDepartingAt(timed, departure, now, MAX_TRAVEL_MINUTES, tables)
+                    else planner.planArrivalBy(timed, anchor, now, MAX_TRAVEL_MINUTES, tables)
                 val preview = try {
                     when {
-                        requiresDatedProvider && datedProvider == null -> null
-                        departure != null -> planner.planDepartingAt(timed, departure, now, MAX_TRAVEL_MINUTES, datedProvider)
-                        else -> planner.planArrivalBy(timed, anchor, now, MAX_TRAVEL_MINUTES, datedProvider)
+                        requiresDatedProvider -> datedTimetable?.let(::planWith)
+                        // A dated itinerary may start before midnight and reach a next-date appointment.
+                        // Keep a complete dated plan; station tables can cover the remaining 24–26h service.
+                        differentCalendarDate && datedTimetable != null -> planWith(datedTimetable) ?: planWith(null)
+                        else -> planWith(null)
                     }
                 } catch (failure: Exception) {
                     if (failure is CancellationException || failure is InterruptedException ||
@@ -277,7 +283,6 @@ class TransitTimetablePreviewService(
 
     private companion object {
         val logger = LoggerFactory.getLogger(TransitTimetablePreviewService::class.java)
-        val SEOUL: ZoneId = ZoneId.of("Asia/Seoul")
         const val MAX_TRAVEL_MINUTES = 180
     }
 }

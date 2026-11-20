@@ -9,6 +9,8 @@ import com.noLate.calendar.infrastructure.CalendarDayCacheRepository
 import com.noLate.calendar.infrastructure.PublicHolidayRepository
 import com.noLate.eta.application.port.TransitJourneyProvider
 import com.noLate.eta.application.port.TransitTimetableProvider
+import com.noLate.eta.application.port.TransitTrainPositionProvider
+import com.noLate.eta.domain.SeoulSubwayLine
 import com.noLate.eta.domain.TransitJourneySearchRequest
 import com.noLate.eta.infrastructure.seoul.SeoulTimetableServiceDayResolver
 import com.noLate.notification.application.useCase.NotificationSendResult
@@ -80,6 +82,7 @@ object EtaRealProviderSimulatorServer {
         val adjacentRingTimetable = System.getProperty("nolate.eta.real-isolated.adjacent-ring-timetable") == "true"
         val seolleungAccess = System.getProperty("nolate.eta.real-isolated.seolleung-access") == "true"
         val omitStationTimetable = System.getProperty("nolate.eta.real-isolated.omit-station-timetable") == "true"
+        val shortFirstRide = System.getProperty("nolate.eta.real-isolated.short-first-ride") == "true"
         val datedTimetablePort = port in setOf(5529, 5533) && datedTimetableTarget != null
         require(port == 5523 || (!automaticDelivery && (port == 5527 || datedTimetablePort)))
         require(!directEgress || datedTimetablePort)
@@ -89,7 +92,11 @@ object EtaRealProviderSimulatorServer {
         require(!omitStationTimetable || seolleungAccess)
         require(args.size in 2..6)
         val journeyProviderId = args.getOrNull(2) ?: "tmap"
+        val observeJourneyPositions = System.getProperty("nolate.eta.real-isolated.observe-positions") == "true"
+        require(!observeJourneyPositions || (journeyProviderId == "odsay" && !automaticDelivery && port == 5523 &&
+            !shortFirstRide && datedTimetableTarget == null))
         require(journeyProviderId in setOf("tmap", "odsay"))
+        require(!shortFirstRide || port == 5523 && journeyProviderId == "odsay" && !automaticDelivery && datedTimetableTarget == null)
         // Test target selection only: a nearer future appointment lets the actual
         // observed first train enter scope without relaxing any acceptance rule.
         val targetLeadMinutes = args.getOrNull(3)?.toLong() ?: 75L
@@ -245,11 +252,14 @@ object EtaRealProviderSimulatorServer {
             // Do not relabel copied Tmap station/route IDs as ODsay. Select a NEW ODsay
             // journey at the same approved public coordinates, then freeze its real IDs.
             val seed = if (journeyProviderId == "odsay" && !automaticDelivery) {
-                val departure = Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(60)
+                val now = Instant.now()
+                val departure = comparisonDepartureAt ?: now.truncatedTo(ChronoUnit.MINUTES).plusSeconds(60)
+                // 지도와 맞춘 출발 입력을 최초 ODsay SearchTime에도 사용한다.
+                require(departure > now) { "Comparison departure expired before ODsay route selection" }
                 val candidates = journeyProvider.search(TransitJourneySearchRequest(
                     originLat, originLng, destinationLat, destinationLng, departure, 180))
                 RealOdsaySelectedRouteFixture.select(candidates, direct = directEgress, overnight = overnightTimetable,
-                    adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess)
+                    adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess, shortFirstRide = shortFirstRide)
             } else null
             val selectedJson = seed?.let { RealOdsaySelectedRouteFixture.encode(mapper, it) } ?: copiedSelectedJson
             val selectedMinutes = seed?.totalMinutes ?: personal.path("travel_minutes").asInt()
@@ -338,16 +348,25 @@ object EtaRealProviderSimulatorServer {
             println("REAL_ISOLATED_READY")
             System.out.flush()
             var count = 0
+            var positionReads = 0
+            var positionCollectionFailed = false
             var diagnosticUsed = false
             val selectionTrace = RealFirstBoardingSelectionTrace(
                 context.getBean(com.noLate.eta.application.TransitEtaCalculationService::class.java),
                 context.getBean(com.noLate.eta.application.transit.FirstBoardingRealtimeOverlay::class.java),
             )
+            val futurePlanTrace = RealFutureTimetablePlanTrace(context.getBean(SchedulePushJobWorker::class.java))
+            val automaticAlarmTrace = if (automaticDelivery) RealAutomaticAlarmTrace(
+                context.getBean(com.noLate.schedule.application.service.DepartureAlarmSyncExpiryScheduler::class.java), jdbc,
+                context.environment.getProperty("schedule.push.departure-alarm-expiry-grace-minutes", Long::class.java, 10L),
+            ) else null
+            val plannedRefreshTrace = if (!automaticDelivery && journeyProviderId == "odsay")
+                RealPlannedRouteRefreshTrace(context.getBean(SchedulePushJobWorker::class.java)) else null
             val plannedRideTrace = RealPlannedRideObservationTrace(
-                context.getBean(com.noLate.eta.application.transit.TransitTransferRealtimeGuard::class.java))
+                context.getBean(com.noLate.eta.application.transit.TransitTransferRealtimeGuard::class.java), plannedRefreshTrace)
             var requestTrace: SeoulArrivalRequestTrace? = null
             val timetableTrace = RealTimetableSelectionTrace(
-                context.getBean(com.noLate.eta.application.transit.TransitJourneyTimetableEnricher::class.java))
+                context.getBean(com.noLate.eta.application.transit.TransitJourneyTimetableEnricher::class.java), plannedRefreshTrace)
             val journeyTimingTrace = RealJourneyTimingTrace(
                 context.getBean(com.noLate.eta.application.TransitEtaCalculationService::class.java))
             val matchTrace = RealJourneyMatchTrace(
@@ -370,7 +389,7 @@ object EtaRealProviderSimulatorServer {
                 val evidence = mapOf("classification" to "REAL_PROVIDER_ISOLATED_WORKER",
                     "journeyProvider" to journeyProviderId, "requestedCoordinates" to requestedCoordinates,
                     "comparisonRequestedDepartureAt" to comparisonDepartureAt,
-                    "firstBoardingSelectionTrace" to selectionTrace.snapshot(),
+                    "firstBoardingSelectionTrace" to selectionTrace.snapshot(), "futureTimetablePlanTrace" to futurePlanTrace.snapshot(),
                     "plannedRideObservationTrace" to plannedRideTrace.snapshot(),
                     "timetableSelectionTrace" to timetableTrace.snapshot(), "journeyTimingTrace" to journeyTimingTrace.snapshot(),
                     "journeyMatchTrace" to matchTrace.snapshot(),
@@ -381,7 +400,9 @@ object EtaRealProviderSimulatorServer {
                     "source" to job.lastEtaSource, "stale" to job.lastEtaStale, "failureReason" to job.lastEtaFailureReason,
                     "recommendedDepartureAt" to job.lastRecommendedDepartureAt, "predictedArrivalAt" to job.lastPredictedArrivalAt,
                     "travelMinutes" to job.lastTravelMinutes, "nextCheckAt" to job.nextCheckAt,
+                    "etaRefreshDueAt" to job.lastEtaRefreshDueAt,
                     "effectiveSnapshot" to snapshot, "latestHistoryId" to history.firstOrNull()?.id,
+                    "providerFetchedAt" to history.firstOrNull()?.fetchedAt,
                     "historyCount" to context.getBean(ScheduleEtaEvaluationHistoryRepository::class.java).count(),
                     "alertMode" to saved.route?.alertMode?.name,
                     "retryCount" to job.retryCount, "workerFailure" to job.failureReason,
@@ -390,6 +411,8 @@ object EtaRealProviderSimulatorServer {
                     "automaticScheduling" to automaticDelivery, "executionThread" to executionThread,
                     "successfulUiCreateCount" to evidenceState.successfulUiCreateCount,
                     "alarmStates" to jdbc.queryForList("SELECT * FROM departure_alarm_sync_state WHERE member_id=296 AND schedule_id=363"),
+                    "automaticAlarmBoundary" to automaticAlarmTrace?.tickBoundary(executionThread),
+                    "alarmLifecycleTrace" to automaticAlarmTrace?.snapshot(),
                     "walkingRefinement" to context.getBeansOfType(com.noLate.eta.infrastructure.odsay.OdsayWalkingTimeClient::class.java)
                         .values.singleOrNull()?.diagnostics(),
                     "providerFailures" to context.getBean(TransitProviderWireMetrics::class.java).failureDiagnostics(),
@@ -406,6 +429,7 @@ object EtaRealProviderSimulatorServer {
                 System.out.flush()
             }
             if (automaticDelivery) evidenceState.capture = { processed, thread -> captureEvaluation(processed, thread) }
+            if (automaticDelivery) evidenceState.beforeAutomaticTick = { thread -> requireNotNull(automaticAlarmTrace).beforeTick(thread) }
             if (automaticDelivery) {
                 fun scheduledMethod(runnable: Runnable): org.springframework.scheduling.support.ScheduledMethodRunnable? {
                     if (runnable is org.springframework.scheduling.support.ScheduledMethodRunnable) return runnable
@@ -439,6 +463,35 @@ object EtaRealProviderSimulatorServer {
             }
             try { for (command in System.`in`.bufferedReader().lineSequence()) {
                 if (command == "stop") break
+                check(!positionCollectionFailed) { "Position collection stopped; no further provider calls" }
+                if (command == "position LINE_4" || command == "position LINE_2") {
+                    check(observeJourneyPositions && count in 1..3 && positionReads < 16)
+                    val line = SeoulSubwayLine.valueOf(command.substringAfter(' '))
+                    val metrics = context.getBean(TransitProviderWireMetrics::class.java)
+                    check(metrics.failureDiagnostics().isEmpty()) { "Stop after an earlier provider error" }
+                    val timers = context.getBean(MeterRegistry::class.java)
+                        .find("nolate.eta.transit.provider.wire.duration").tags("provider", "seoul_subway", "operation", "position").timers()
+                    val before = timers.sumOf { it.count() }
+                    val file = output.resolve("train-position-${++positionReads}.json")
+                    check(Files.notExists(file))
+                    val result = runCatching { context.getBean(TransitTrainPositionProvider::class.java).positions(line) }
+                    val response = result.getOrNull()
+                    val failure = result.exceptionOrNull()
+                    val after = timers.sumOf { it.count() }
+                    val failureCode = when {
+                        failure is TransitProviderApplicationException -> failure.code
+                        failure != null -> failure.javaClass.simpleName
+                        response?.positions?.none { it.isFresh(120) } != false -> "NO_FRESH_POSITION_SOURCE"
+                        after != before + 1 -> "NO_INDEPENDENT_WIRE_READ"
+                        else -> null
+                    }
+                    val record = mapOf("line" to line, "receivedAt" to response?.receivedAt,
+                        "positions" to response?.positions, "rejectedRows" to response?.rejectedRows,
+                        "physicalHttpCalls" to after, "physicalHttpCallsThisRead" to after - before, "failureCode" to failureCode)
+                    Files.writeString(file, mapper.writeValueAsString(record), java.nio.file.StandardOpenOption.CREATE_NEW)
+                    positionCollectionFailed = failureCode != null
+                    continue
+                }
                 if (automaticDelivery) {
                     when (command) {
                         "arm" -> {
@@ -565,17 +618,32 @@ object EtaRealProviderSimulatorServer {
                     check(diagnosticUsed && tracedDirectAccepted && count == 0) { "Successful direct lookup is required" }
                     requestTrace.begin(SeoulArrivalRequestTrace.Phase.WORKER)
                 }
+                // 프로세스 누계의 두 경계를 기록해 화면 대기 시간대의 호출과 평가 시간대를 구분한다.
+                val arrivalTimers = context.getBean(MeterRegistry::class.java)
+                    .find("nolate.eta.transit.provider.wire.duration").tags("provider", "seoul_subway", "operation", "arrival")
+                    .timers()
+                val arrivalCallsBefore = arrivalTimers.sumOf { it.count() }
                 val processed = context.getBean(SchedulePushJobWorker::class.java)
                     .runDueJobForSchedule(296, 363, Instant.now())
+                val arrivalCallsAfter = arrivalTimers.sumOf { it.count() }
                 val job = jobs.findAll().single()
                 val history = context.getBean(ScheduleEtaEvaluationHistoryRepository::class.java)
                     .findAllByScheduleIdAndMemberIdOrderByEvaluatedAtDescIdDesc(363, 296, PageRequest.of(0, 1)).content
                 val snapshot = EffectiveTransitRouteSnapshot.parse(mapper, job.lastEffectiveTransitRouteJson)
                 val evidence = mapOf("classification" to "REAL_PROVIDER_ISOLATED_WORKER",
                     "journeyProvider" to journeyProviderId,
+                    "subwayArrivalCallsBeforeWorker" to arrivalCallsBefore,
+                    "subwayArrivalCallsAfterWorker" to arrivalCallsAfter,
+                    "plannedRefreshReplay" to plannedRefreshTrace?.let { trace -> mapOf(
+                        "frames" to trace.snapshot(), "timetableProviderCount" to timetableTrace.providerCount,
+                        "boardingBufferSeconds" to context.environment.getProperty("eta.transit.boarding-buffer-seconds", Long::class.java, 60L),
+                        "transferBufferSeconds" to context.environment.getProperty("eta.transit.transfer-buffer-seconds", Long::class.java, 0L),
+                        "transferConfidenceMarginSeconds" to context.environment.getProperty("eta.transit.transfer-confidence-margin-seconds", Long::class.java, 60L),
+                        "maxTravelMinutes" to context.environment.getProperty("schedule.traffic.max-travel-minutes", Int::class.java, 1440),
+                    ) },
                     "requestedCoordinates" to requestedCoordinates,
                     "comparisonRequestedDepartureAt" to comparisonDepartureAt,
-                    "firstBoardingSelectionTrace" to selectionTrace.snapshot(),
+                    "firstBoardingSelectionTrace" to selectionTrace.snapshot(), "futureTimetablePlanTrace" to futurePlanTrace.snapshot(),
                     "plannedRideObservationTrace" to plannedRideTrace.snapshot(),
                     "timetableSelectionTrace" to timetableTrace.snapshot(),
                     "journeyTimingTrace" to journeyTimingTrace.snapshot(),
@@ -592,6 +660,9 @@ object EtaRealProviderSimulatorServer {
                     "effectiveSnapshot" to snapshot, "latestHistoryId" to history.firstOrNull()?.id,
                     "historyCount" to context.getBean(ScheduleEtaEvaluationHistoryRepository::class.java).count(),
                     "alertMode" to "STANDARD",
+                    "providerFetchedAt" to job.lastEtaProviderFetchedAt,
+                    "etaRefreshDueAt" to job.lastEtaRefreshDueAt,
+                    "etaSnapshotGraceMinutes" to context.environment.getProperty("schedule.traffic.departure-status-snapshot-grace-minutes", Long::class.java, 5L),
                     "alarmStates" to jdbc.queryForList("SELECT * FROM departure_alarm_sync_state WHERE member_id=296 AND schedule_id=363"),
                     "journeyAdapterCalls" to context.getBean(MeterRegistry::class.java)
                         .find("nolate.eta.transit.provider.duration").timers()
@@ -624,6 +695,9 @@ object EtaRealProviderSimulatorServer {
                 journeyTimingTrace.close()
                 timetableTrace.close()
                 plannedRideTrace.close()
+                plannedRefreshTrace?.close()
+                automaticAlarmTrace?.close()
+                futurePlanTrace.close()
                 selectionTrace.close()
             }
         }
@@ -666,6 +740,7 @@ class RealProviderEvidenceState {
     @Volatile var savedInput: Map<String, Any?>? = null
     val automaticTicks = java.util.concurrent.atomic.AtomicInteger()
     val unarmedTicks = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile var beforeAutomaticTick: ((String) -> Unit)? = null
     @Volatile var afterAutomaticTick: ((String) -> Unit)? = null
     @Volatile var capture: ((Int, String) -> Unit)? = null
 }
@@ -690,6 +765,7 @@ class RealProviderIsolationConfiguration {
                         val tick = state.automaticTicks.incrementAndGet()
                         if (tick <= 3) {
                             try {
+                                state.beforeAutomaticTick?.invoke(thread)
                                 invocation.callRealMethod()
                                 // Inline Mockito spies suppress interception of self-calls.
                                 // Observe persisted history after the REAL scheduled entry,

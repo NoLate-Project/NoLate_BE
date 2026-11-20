@@ -2,7 +2,8 @@ import unittest
 
 from verify_accepted_train_observation import (
     audit_event, bound_station_event, compare_first_ride_shifts, destination_arrival_window,
-    identity_check_summary, initial_departure_window, odsay_station_orders, replay_timetable_alighting, transfer_window,
+    identity_check_summary, initial_departure_window, odsay_station_orders, offsets, paired_absolute_error_change,
+    replay_timetable_alighting, route_component_intervals, transfer_window,
 )
 
 
@@ -21,6 +22,55 @@ class AcceptedTrainObservationTest(unittest.TestCase):
             'state': state, 'directionCode': direction, 'serviceClass': 'LOCAL', 'terminalName': '성수행',
         }]}
 
+    def test_attributes_only_identified_train_intervals_and_keeps_one_sided_bounds(self):
+        at = lambda mmss: '2026-11-15T02:' + mmss + 'Z'
+        table = {'line': 'LINE_2', 'trainNumber': '2148', 'directionCode': 'UP', 'serviceClass': 'LOCAL',
+                 'terminalName': '성수', 'serviceDate': '2026-11-15', 'boardingAt': at('33:30'), 'arrivalAt': at('40:00')}
+        timing = {'timetable': table, 'predictedBoardingAt': at('33:10'), 'predictedArrivalAt': at('40:00'),
+                  'basis': 'PLANNED_RIDE_ALIGHTING_REALTIME', 'plannedBoardingIsStationArrival': True}
+        route = {'departureAt': at('29:00'), 'segments': [
+            {'kind': 'WALK', 'sequence': 0, 'durationSeconds': 120},
+            {'kind': 'SUBWAY', 'sequence': 1, 'fromName': '봉천', 'toName': '신림', 'rideTiming': timing}]}
+        board = dict(self.window, event='BOARDING', station='봉천', lower=at('33:20'), upper=at('34:00'),
+                     departureObservation={'lower': at('34:00'), 'upper': at('34:30')})
+        alight = dict(self.window, event='ALIGHTING', scheduledAt=at('40:00'), lastConfirmedBeforeEventAt=at('42:00'))
+        report, = route_component_intervals(route, [board, alight])
+        self.assertEqual(report['firstBoardingWithModeledAccess']['gapMinusPredictionBoundsSeconds'], [10, 50])
+        self.assertEqual(report['stationToStationMinusPredictionBoundsSeconds'], [70, None])
+        self.assertEqual(report['observedBoardingStationDwellBoundsSeconds'], [0, 70])
+        self.assertEqual(report['observedDepartureToAlightingBoundsSeconds'], [450, None])
+        self.assertEqual(report['timetableDepartureToAlightingSeconds'], 390)
+        self.assertEqual(report['departureToAlightingMinusTimetableBoundsSeconds'], [60, None])
+        timing.update(basis='TIMETABLE', predictedBoardingAt=table['boardingAt'], plannedBoardingIsStationArrival=None)
+        report, = route_component_intervals(route, [board, alight])
+        self.assertEqual(report['startEvent'], 'DEPARTURE')
+        self.assertEqual(report['observedStationToStationBoundsSeconds'], [450, None])
+        self.assertEqual(report['observedBoardingStationDwellBoundsSeconds'], [0, 70])
+        board['departureObservation'] = {'lower': at('34:05')}
+        self.assertEqual(route_component_intervals(route, [board, alight])[0]['observedBoardingStationDwellBoundsSeconds'],
+                         [5, None])
+        table['trainNumber'] = '2150'
+        report, = route_component_intervals(route, [board, alight])
+        for key in ('observedStationToStationBoundsSeconds', 'observedBoardingStationDwellBoundsSeconds',
+                    'observedDepartureToAlightingBoundsSeconds'):
+            self.assertEqual(report[key], [None, None])
+
+    def test_overlapping_train_position_intervals_allow_zero_dwell_but_not_negative_dwell(self):
+        events = [self.sample('33:00', '봉천', 'DEPARTED'), self.sample('34:00', '신림', 'DEPARTED')]
+        timing = {'basis': 'TIMETABLE', 'predictedBoardingAt': self.window['scheduledAt'],
+                  'predictedArrivalAt': '2026-11-15T02:40:00Z', 'timetable': {
+                      'line': 'LINE_2', 'trainNumber': '2148', 'directionCode': 'UP', 'serviceClass': 'LOCAL',
+                      'terminalName': '성수', 'serviceDate': '2026-11-15', 'boardingAt': self.window['scheduledAt'],
+                      'arrivalAt': '2026-11-15T02:40:00Z'}}
+        board = audit_event(dict(self.window, event='BOARDING'), events, self.order, timing)
+        route = {'departureAt': self.window['from'], 'segments': [
+            {'kind': 'SUBWAY', 'sequence': 0, 'fromName': '신림', 'toName': '신대방', 'rideTiming': timing}]}
+        ride, = route_component_intervals(route, [board])
+        self.assertEqual(ride['observedBoardingStationDwellBoundsSeconds'], [0, 60])
+        self.assertEqual(ride['observedDepartureToAlightingBoundsSeconds'], [None, None])
+        ride, = route_component_intervals(route, [dict(board, serviceDate='2026-11-14')])
+        self.assertEqual(ride['observedBoardingStationDwellBoundsSeconds'], [None, None])
+
     def test_brackets_arrival_without_counting_cached_sample_twice(self):
         before = self.sample('33:00', '신림', 'ENTERING')
         result = audit_event(dict(self.window, event='ALIGHTING'), [
@@ -29,6 +79,16 @@ class AcceptedTrainObservationTest(unittest.TestCase):
         self.assertEqual(result['result'], 'BOUNDED_PROVIDER_TRAIN_ARRIVAL')
         self.assertEqual(result['widthSeconds'], 60)
         self.assertEqual(result['observedMinusPredictionSeconds'], [-35, 25])
+        self.assertEqual(result['absoluteErrorChangeFromTimetableSeconds'], [-5, 5])
+
+    def test_later_feed_forecast_is_worse_throughout_recorded_sadang_interval(self):
+        bounds = {'lower': '2026-11-20T00:04:12+09:00', 'upper': '2026-11-20T00:06:17+09:00'}
+        table = '2026-11-20T00:06:00+09:00'
+        feed = '2026-11-20T00:09:05+09:00'
+        self.assertEqual(paired_absolute_error_change(bounds, table, feed), [151, 185])
+        self.assertEqual(paired_absolute_error_change(bounds, feed, table), [-185, -151])
+        self.assertIsNone(paired_absolute_error_change({'upper': bounds['upper']}, table, feed))
+        self.assertIsNone(paired_absolute_error_change(bounds, None, feed))
 
     def test_late_upstream_position_proves_minimum_delay_without_confirming_arrival(self):
         result = audit_event(dict(self.window, event='ALIGHTING'), [
@@ -121,6 +181,9 @@ class AcceptedTrainObservationTest(unittest.TestCase):
             self.sample('34:32', '신림', 'ARRIVED'),
         ], self.order)
         self.assertEqual(result['result'], 'OBSERVATION_GAP_TOO_WIDE')
+        self.assertEqual(result['lastConfirmedBeforeEventAt'], '2026-11-15T02:32:01+00:00')
+        self.assertNotIn('upper', result)
+        self.assertIsNone(offsets(result, self.window['predictedAt']))
 
     def test_identity_coverage_distinguishes_missing_number_from_direction_mismatch(self):
         event = dict(self.window, event='BOARDING')
@@ -187,7 +250,30 @@ class AcceptedTrainObservationTest(unittest.TestCase):
         scheduled_second = dict(second, departureObservation={}, scheduledAt=second['predictedAt'])
         partial = transfer_window(partial_first, scheduled_second, 120, 60)
         self.assertEqual(partial['maximumSlackAgainstScheduledDepartureSeconds'], -15)
+        self.assertEqual(partial['gapAfterModeledWalkToScheduledDepartureBoundsSeconds'], [None, 45])
+        self.assertEqual(transfer_window(partial_first, scheduled_second, None, 60)
+                         ['gapAfterModeledWalkToScheduledDepartureBoundsSeconds'], [None, None])
         self.assertIsNone(partial['observedTrainGapSeconds'])
+
+    def test_realtime_transfer_wait_error_excludes_station_dwell(self):
+        first = {'predictedAt': '2026-11-15T02:30:00Z', 'lower': '2026-11-15T02:30:00Z',
+                 'upper': '2026-11-15T02:30:15Z'}
+        next_train = {'predictedAt': '2026-11-15T02:33:00Z', 'predictionReferenceEvent': 'ARRIVAL',
+                      'lower': '2026-11-15T02:33:00Z', 'upper': '2026-11-15T02:33:15Z',
+                      'departureObservation': {'lower': '2026-11-15T02:33:30Z', 'upper': '2026-11-15T02:33:45Z'}}
+        value = transfer_window(first, next_train, 120, 60)
+        self.assertEqual(value['observedSameEventGapAfterModeledWalkBoundsSeconds'], [45, 75])
+        self.assertEqual(value['observedGapAfterModeledWalkSeconds'], [75, 105])
+        self.assertEqual(value['observedMinusPredictedGapSeconds'], [-15, 15])
+        self.assertEqual(value['observedSlackAfterModeledWalkAndMarginSeconds'], [15, 45])
+        self.assertEqual(transfer_window(first, next_train, None, 60)['observedSameEventGapAfterModeledWalkBoundsSeconds'],
+                         [None, None])
+        self.assertEqual(transfer_window(first, next_train, 0, 60)['observedSameEventGapAfterModeledWalkBoundsSeconds'],
+                         [165, 195])
+        del next_train['upper']
+        partial = transfer_window(first, next_train, 120, 60)
+        self.assertIsNone(partial['observedMinusPredictedGapSeconds'])
+        self.assertEqual(partial['observedSameEventGapAfterModeledWalkBoundsSeconds'], [45, None])
 
     def test_modeled_departure_window_uses_train_arrival_and_original_readiness_span(self):
         observed = {'predictedAt': '2026-11-18T05:39:40Z', 'lower': '2026-11-18T05:39:55Z',

@@ -2,6 +2,7 @@ package com.noLate.schedule.application
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.eta.domain.SeoulSubwayLine
+import com.noLate.eta.domain.TransitFirstBoardingObservation
 import com.noLate.eta.domain.TransitLegTimetable
 import com.noLate.eta.domain.TransitServiceClass
 import com.noLate.schedule.domain.SchedulePushJob
@@ -19,6 +20,103 @@ import java.time.temporal.ChronoUnit
 class EffectiveTransitRouteSnapshotTest {
     private val objectMapper = jacksonObjectMapper().findAndRegisterModules()
     private val fetchedAt = Instant.parse("2026-08-10T01:00:00Z")
+
+    @Test
+    fun `첫 승차 출처는 같은 편과 같은 예측을 수락한 계획에만 연결한다`() {
+        val fixture = requireNotNull(javaClass.getResourceAsStream("/eta/odsay-early-first-boarding-20261118.json"))
+            .use(objectMapper::readTree)
+        val route = objectMapper.treeToValue(fixture["plan"], EffectiveTransitRoute::class.java)
+        val observed = objectMapper.treeToValue(fixture["firstStationObservation"], TransitFirstBoardingObservation::class.java)
+        val diagnostic = TrafficResult(route.totalMinutes, TrafficSource.SELECTED_ROUTE, stale = true)
+        fun carry(row: TransitFirstBoardingObservation): EffectiveTransitRoute? {
+            val previous = EffectiveTransitRouteSnapshot(accepted = true, effectiveTransitRoute = route, firstBoardingObservation = row)
+            return EffectiveTransitRouteSnapshot.from(diagnostic, previous, 1, evaluatedAt = route.departureAt)?.inProgressPlannedRoute
+        }
+        for (other in listOf(observed.copy(trainNumber = null), observed.copy(trainNumber = "2276"),
+            observed.copy(stationName = "사당"), observed.copy(lineName = "2호선"),
+            observed.copy(expectedBoardingAt = observed.expectedBoardingAt.plusSeconds(1)),
+            observed.copy(sourceUpdatedAt = observed.evaluatedAt.minusSeconds(121)))) {
+            assertEquals(route, carry(other))
+        }
+        val carried = requireNotNull(carry(observed))
+        assertEquals(observed.sourceUpdatedAt, carried.segments[1].rideTiming?.boardingSourceAt())
+        assertNull(carried.segments[1].rideTiming?.alightingSourceAt())
+        assertEquals(route.departureAt, carried.departureAt)
+        assertEquals(route.arrivalAt, carried.arrivalAt)
+    }
+
+    @Test
+    fun `구간별 갱신의 전체 경로를 반환하고 관측 만료 후에도 이전 환승편으로 되돌리지 않는다`() {
+        val result = trafficResult("a".repeat(64))
+        val plan = requireNotNull(result.effectiveTransitRoute)
+        val now = plan.departureAt.plusSeconds(30)
+        val updatedRoute = plan.copy(arrivalAt = plan.arrivalAt.plusSeconds(300), totalMinutes = plan.totalMinutes + 5)
+        val snapshot = requireNotNull(EffectiveTransitRouteSnapshot.from(result, null, 0)).copy(
+            inProgressPlannedRoute = plan,
+            plannedRouteUpdate = PlannedTransitRouteUpdate(plan.identity, now, route = updatedRoute))
+        val fresh = requireNotNull(snapshot.plannedJourneyArrivalPrediction(now, 120))
+        assertEquals(com.noLate.schedule.domain.PlannedJourneyArrivalBasis.MATCHED_RIDE_AND_ONWARD_TIMETABLE, fresh.basis)
+        assertEquals(updatedRoute, fresh.effectiveTransitRoute)
+        assertEquals(plan.departureAt, fresh.effectiveTransitRoute?.departureAt)
+        val duplicateSourceCheck = requireNotNull(EffectiveTransitRouteSnapshot.from(result.copy(stale = true),
+            snapshot, 1, evaluatedAt = now.plusSeconds(60)))
+        val stillFresh = requireNotNull(duplicateSourceCheck.plannedJourneyArrivalPrediction(now.plusSeconds(60), 120))
+        assertEquals(fresh.basis, stillFresh.basis)
+        assertEquals(now, stillFresh.sourceUpdatedAt)
+        assertEquals(updatedRoute, stillFresh.effectiveTransitRoute)
+        val next = requireNotNull(EffectiveTransitRouteSnapshot.from(result.copy(stale = true,
+            failureReason = TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE), snapshot, 1, evaluatedAt = now.plusSeconds(121)))
+        val stale = requireNotNull(next.plannedJourneyArrivalPrediction(now.plusSeconds(121), 120))
+        assertEquals(updatedRoute.arrivalAt, stale.predictedArrivalAt)
+        assertEquals(com.noLate.schedule.domain.PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN, stale.basis)
+        assertEquals(updatedRoute.arrivalAt, stale.effectiveTransitRoute?.arrivalAt)
+        assertTrue(stale.effectiveTransitRoute?.segments?.all { it.rideTiming?.observationSourceUpdatedAt == null } == true)
+        assertEquals(plan, next.inProgressPlannedRoute)
+        val parsed = EffectiveTransitRouteSnapshot.parse(objectMapper, objectMapper.writeValueAsString(next))
+        assertEquals(updatedRoute, parsed?.lastUpdatedPlannedRoute)
+    }
+
+    @Test
+    fun `확인된 환승 연결 실패는 다음 미관측 회차에도 이전 도착 예측을 숨긴다`() {
+        val result = trafficResult("a".repeat(64))
+        val plan = requireNotNull(result.effectiveTransitRoute)
+        val now = plan.departureAt.plusSeconds(30)
+        val snapshot = requireNotNull(EffectiveTransitRouteSnapshot.from(result, null, 0)).copy(
+            inProgressPlannedRoute = plan, plannedRouteUpdate = PlannedTransitRouteUpdate(plan.identity, now,
+                failure = PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE))
+        assertNull(snapshot.plannedJourneyArrivalPrediction(now, 120))
+        val next = requireNotNull(EffectiveTransitRouteSnapshot.from(result.copy(stale = true), snapshot, 1, evaluatedAt = now))
+        assertNull(next.plannedJourneyArrivalPrediction(now.plusSeconds(121), 120))
+        assertEquals("TRANSFER_RECONNECTION_UNAVAILABLE", next.plannedJourneyTimingFailureReason())
+        val recovered = next.copy(plannedRouteUpdate = PlannedTransitRouteUpdate(plan.identity, now.plusSeconds(121), route = plan))
+        assertNull(recovered.plannedJourneyTimingFailureReason())
+        assertEquals(plan.arrivalAt, recovered.plannedJourneyArrivalPrediction(now.plusSeconds(121), 120)?.predictedArrivalAt)
+    }
+
+    @Test
+    fun `미수락 경로의 이른 환승역 도착만으로 목적지 실시간 예측을 덮어쓰지 않는다`() {
+        val fixture = requireNotNull(javaClass.getResourceAsStream("/eta/odsay-early-first-boarding-20261118.json"))
+            .use(objectMapper::readTree)
+        val plan = objectMapper.treeToValue(fixture["plan"], EffectiveTransitRoute::class.java)
+        val lastRide = plan.segments.last { it.rideTiming != null }
+        val timing = requireNotNull(lastRide.rideTiming)
+        val stationArrival = requireNotNull(timing.timetable.boardingStationArrivalAt).minusSeconds(20)
+        val now = stationArrival.minusSeconds(70)
+        val early = timing.copy(predictedBoardingAt = stationArrival,
+            basis = EffectiveTransitRideTimingBasis.TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING,
+            observationSourceUpdatedAt = now.minusSeconds(5))
+        val candidate = plan.copy(segments = plan.segments.map { if (it === lastRide) it.copy(rideTiming = early) else it })
+        val snapshot = EffectiveTransitRouteSnapshot(accepted = false, inProgressPlannedRoute = plan, effectiveTransitRoute = candidate)
+        val previous = PlannedJourneyArrivalObservation(plan.identity, plan.arrivalAt.plusSeconds(120), now.minusSeconds(20))
+        val live = requireNotNull(snapshot.copy(plannedArrivalObservation = previous).plannedJourneyArrivalPrediction(now, 120))
+        assertEquals(previous.predictedArrivalAt, live.predictedArrivalAt)
+        assertEquals(previous.sourceUpdatedAt, live.sourceUpdatedAt)
+        val saved = requireNotNull(snapshot.plannedJourneyArrivalPrediction(now, 120))
+        assertEquals(com.noLate.schedule.domain.PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN, saved.basis)
+        assertEquals(plan.arrivalAt, saved.predictedArrivalAt)
+        assertEquals(plan.departureAt, saved.effectiveTransitRoute?.departureAt)
+        assertNull(saved.sourceUpdatedAt)
+    }
 
     @Test
     fun `출발 후 같은 환승 열차의 신선한 관측만 잠정 도착에 반영한다`() {

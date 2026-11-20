@@ -18,7 +18,7 @@ class JourneyRerouteTransitProofService(
     private val clock: Clock = Clock.systemUTC(),
 ) {
     data class Proof(val candidateId: String, val routeFingerprint: String, val validUntil: Instant,
-        val busAdmission: JourneyBusDeviceAdmission)
+        val busAdmission: JourneyBusDeviceAdmission, val snapshot: JourneyRouteSnapshot)
 
     fun verify(memberId: Long, scheduleId: Long, loginGeneration: Long, sessionId: String,
         fence: AutomaticJourneyStopCommand, candidateId: String): Proof {
@@ -37,6 +37,6 @@ class JourneyRerouteTransitProofService(
         if (latest.path != candidate.path || latest.origin != candidate.origin ||
             latest.destination != candidate.destination || !walks.validUntil.isAfter(clock.instant()))
             throw BusinessException(ErrorCode.INVALID_STATE)
-        return Proof(candidateId, snapshot.fingerprint, walks.validUntil, official)
+        return Proof(candidateId, snapshot.fingerprint, walks.validUntil, official, snapshot)
     }
 }

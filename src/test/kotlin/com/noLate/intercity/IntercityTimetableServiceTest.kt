@@ -77,6 +77,31 @@ class IntercityTimetableServiceTest {
         assertTrue(result.hasMore)
         assertEquals(TimetableStatus.AVAILABLE, result.status)
     }
+    @Test fun `a provider repeating the complete train timetable yields distinct pages`() {
+        val base = fixture("TRAIN-services").items.first()
+        val rows = (1..127).map { number ->
+            base.deepCopy<com.fasterxml.jackson.databind.node.ObjectNode>().put("trainno", number.toString())
+        }
+        payload = TagoPayload(TimetableStatus.AVAILABLE, rows, rows.size)
+        fun page(number: Int) = service.services(IntercityKind.TRAIN, "NATH30000", "NATH20438", date, number)
+        val first = page(1)
+        payload = payload.copy(items = rows.reversed())
+        val second = page(2)
+        assertEquals(100, first.items.size)
+        assertTrue(first.hasMore)
+        assertEquals(27, second.items.size)
+        assertFalse(second.hasMore)
+        assertEquals(127, (first.items + second.items).map { it.id }.distinct().size)
+        assertTrue(page(3).items.isEmpty())
+    }
+
+    @Test fun `page two of a genuinely paged provider retains its rows`() {
+        val node = fixture("TRAIN-services").items.first()
+        payload = TagoPayload(TimetableStatus.AVAILABLE, listOf(node), 101)
+        val result = service.services(IntercityKind.TRAIN, "NATH30000", "NATH20438", date, 2)
+        assertEquals(1, result.items.size)
+        assertFalse(result.hasMore)
+    }
     @Test fun `malformed stop records are provider failures instead of no matches`() {
         payload = TagoPayload(TimetableStatus.AVAILABLE, listOf(mapper.readTree("""{"terminalNm":"공주"}""")), 1)
         assertEquals(TimetableStatus.PROVIDER_UNAVAILABLE, service.stops(IntercityKind.EXPRESS_BUS, null, "공주", 1).status)
@@ -94,6 +119,16 @@ class IntercityTimetableServiceTest {
             .put("depplandtime", "20261012233000").put("arrplandtime", "20261013013000")
         payload = TagoPayload(TimetableStatus.AVAILABLE, listOf(node), 1)
         assertEquals("2026-10-13T01:30+09:00", service.services(IntercityKind.TRAIN, "NATH30000", "NATH20438", date, 1).items.single().arrivalAt)
+    }
+    @Test fun `intercity bus clocks without terminal labels retain the requested IDs and next day arrival`() {
+        val node = mapper.readTree("""{"routeId":"NAIRT201804118081698","depPlandTime":20261012220000,"arrPlandTime":20261013002500,"gradeNm":"심야우등","charge":31100}""")
+        payload = TagoPayload(TimetableStatus.AVAILABLE, listOf(node), 1)
+        val trip = service.services(IntercityKind.INTERCITY_BUS, "NAI2238202", "NAI2839701", date, 1).items.single()
+        assertEquals("NAI2238202", trip.departureName)
+        assertEquals("NAI2839701", trip.arrivalName)
+        assertEquals("2026-10-13T00:25+09:00", trip.arrivalAt)
+        assertEquals("UNCONFIRMED", trip.bookingStatus)
+        assertEquals(31100, trip.fare)
     }
     @Test fun `identical service rows are deduplicated without rejecting the timetable`() {
         val node = fixture("TRAIN-services").items.first()

@@ -28,6 +28,20 @@ class SeoulMetroStationCoordinateClientTest {
             37.60, 127.027539))
     }
 
+    @Test fun `Seoul Station official source spelling is tied to its line code and coordinate`() {
+        val catalog = SeoulMetroStationCoordinateCatalog.parse(csv(
+            "113,4,426,서울,37.553172,126.972836,1985-10-18,2025-08-14",
+            "114,4,425,서울,37.553172,126.972836,1985-10-18,2025-08-14",
+            "115,1,426,서울,37.553172,126.972836,1985-10-18,2025-08-14"))
+        fun matches(code: String, line: String, name: String, latitude: Double = 37.553172) =
+            catalog.corroborates(SeoulMetroShortestPath.Station(code,line,name),latitude,126.972836)
+        assertTrue(matches("0426","4호선","서울역"))
+        assertFalse(matches("0425","4호선","서울역"))
+        assertFalse(matches("0426","1호선","서울역"))
+        assertFalse(matches("0426","4호선","서울대입구역"))
+        assertFalse(matches("0426","4호선","서울역",37.57))
+    }
+
     @Test fun `duplicate or malformed coordinate file is rejected`() {
         assertFailsWith<IllegalArgumentException> { SeoulMetroStationCoordinateCatalog.parse(csv(
             "1,2,222,강남,37.497958,127.027539,1982-12-30,2025-08-14",

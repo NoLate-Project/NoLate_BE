@@ -18,24 +18,25 @@ data class JourneySubwayDeviceAdmission(
 }
 
 fun interface JourneySubwayDeviceAdmissionVerifier {
-    fun verify(snapshot: JourneyRouteSnapshot): JourneySubwayDeviceAdmission
+    fun verify(snapshot: JourneyRouteSnapshot, legIndex: Int): JourneySubwayDeviceAdmission
+    fun verify(snapshot: JourneyRouteSnapshot): JourneySubwayDeviceAdmission = verify(snapshot, 1)
 }
 
 /** Only the live official two-path/coordinate catalog can construct this proof. */
 internal class LiveJourneySubwayDeviceAdmissionVerifier(
     private val catalog: LiveOfficialSubwayServicePatternCatalog,
 ) : JourneySubwayDeviceAdmissionVerifier {
-    override fun verify(snapshot: JourneyRouteSnapshot): JourneySubwayDeviceAdmission {
-        val raw = JourneySubwaySavedLegEvidence.resolve(snapshot, 1).evidence ?: unavailable()
-        if (snapshot.legs.map { it.kind } != listOf("WALK", "SUBWAY", "WALK")) unavailable()
-        val pattern = try { catalog.resolveAll(snapshot, 1).singleOrNull() } catch (_: Exception) { null } ?: unavailable()
+    override fun verify(snapshot: JourneyRouteSnapshot, legIndex: Int): JourneySubwayDeviceAdmission {
+        if (legIndex !in 1..29 || legIndex % 2 != 1) unavailable()
+        val raw = JourneySubwaySavedLegEvidence.resolve(snapshot, legIndex).evidence ?: unavailable()
+        val pattern = try { catalog.resolveAll(snapshot, legIndex).singleOrNull() } catch (_: Exception) { null } ?: unavailable()
         val calls = pattern.stationCalls.subList(pattern.boardingIndex, pattern.alightingIndex + 1)
         if (pattern.officialStationNames == null || pattern.boardingIndex != 0 ||
             calls.size != raw.stations.size || calls.size !in 2..64 ||
             calls.any { !it.matches(Regex("[0-9]{4}")) } || calls.distinct().size != calls.size ||
             raw.startStationId == raw.endStationId) unavailable()
         return JourneySubwayDeviceAdmission(
-            providerRouteId = "${raw.routingCity}:${raw.routingLine}",
+            subwayLegIndex = legIndex, providerRouteId = "${raw.routingCity}:${raw.routingLine}",
             startRoutingStationId = raw.startStationId,
             endRoutingStationId = raw.endStationId,
             stationCount = calls.size - 1,

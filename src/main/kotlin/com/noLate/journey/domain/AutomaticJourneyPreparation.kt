@@ -42,6 +42,7 @@ data class AutomaticJourneyStopCommand(
 @Table(name = "automatic_journey_preparations", uniqueConstraints = [
     UniqueConstraint(name = "uk_auto_journey_session", columnNames = ["session_id"]),
     UniqueConstraint(name = "uk_auto_journey_generation", columnNames = ["member_id", "schedule_id", "generation"]),
+    UniqueConstraint(name = "uk_auto_journey_parent_session", columnNames = ["parent_session_id"]),
 ], indexes = [
     Index(name = "idx_auto_journey_expiry", columnList = "state, expires_at"),
     Index(name = "idx_auto_journey_retention", columnList = "retention_expires_at"),
@@ -58,6 +59,11 @@ class AutomaticJourneyPreparation(
     @Column(name = "route_fingerprint", nullable = false, length = 64) val routeFingerprint: String,
     @Column(nullable = false) val generation: Long,
     @Column(name = "route_revision", nullable = false) val routeRevision: Long = 1,
+    @Column(name = "parent_session_id", length = 36) val parentSessionId: String? = null,
+    @Column(name = "source_route_fingerprint", length = 64) val sourceRouteFingerprint: String? = null,
+    @Lob @Column(name = "reroute_snapshot_json", columnDefinition = "LONGTEXT") val rerouteSnapshotJson: String? = null,
+    @Lob @Column(name = "reroute_input_json", columnDefinition = "LONGTEXT") val rerouteInputJson: String? = null,
+    @Column(name = "reroute_bus_admission_json", length = 1000) val rerouteBusAdmissionJson: String? = null,
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 12) val execution: AutomaticJourneyExecution,
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 12) var state: AutomaticJourneyState = AutomaticJourneyState.ARMED,
     @Column(nullable = false) var sequence: Long = 0,

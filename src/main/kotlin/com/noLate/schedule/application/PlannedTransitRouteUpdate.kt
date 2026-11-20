@@ -1,0 +1,40 @@
+package com.noLate.schedule.application
+
+import java.time.Instant
+import com.fasterxml.jackson.annotation.JsonInclude
+
+enum class PlannedTransitTimingFailure {
+    TRANSFER_RECONNECTION_UNAVAILABLE,
+    EARLY_BOARDING_UNCONFIRMED,
+    TIMELINE_INCONSISTENT,
+}
+
+/** 저장된 경로 안에서도 환승편이 바뀔 수 있어 경고를 낸 편과 승차 시각을 함께 보존한다. */
+data class PlannedTransferBoardingRecheck(val segmentSequence: Int, val trainNumber: String, val scheduledBoardingAt: Instant) {
+    init { require(segmentSequence > 0 && trainNumber.isNotBlank()) }
+}
+
+/** 원래 출발 알림과 분리한 계획 여정의 갱신. 승차·환승을 실제로 했다는 증거는 아니다. */
+data class PlannedTransitRouteUpdate(
+    val routeIdentity: String,
+    val sourceUpdatedAt: Instant,
+    val route: EffectiveTransitRoute? = null,
+    val failure: PlannedTransitTimingFailure? = null,
+    val onlyLastRideObserved: Boolean = false,
+    /** 첫 승차 여유가 사라졌을 때 같은 역의 더 최신 예보가 있어야 계획을 재개한다. */
+    val requiresFirstBoardingRecheck: Boolean = false,
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
+    val transferBoardingRecheck: PlannedTransferBoardingRecheck? = null,
+    /** 당시 신선했던 ARRIVED 상태만 보존한다. 만료된 미래 승차 예보는 넣지 않는다. */
+    @get:JsonInclude(JsonInclude.Include.NON_EMPTY)
+    val reportedBoardings: List<ReportedSubwayBoardingEvidence> = emptyList(),
+) {
+    init {
+        require((route != null) != (failure != null) || route == null && failure == null && reportedBoardings.isNotEmpty())
+        require(route == null || route.identity == routeIdentity)
+        require(reportedBoardings.size <= 32 && reportedBoardings.all { it.routeIdentity == routeIdentity })
+        require(reportedBoardings.map { it.segmentSequence to it.service }.distinct().size == reportedBoardings.size)
+        require(!requiresFirstBoardingRecheck || failure == PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED)
+        require(transferBoardingRecheck == null || (!requiresFirstBoardingRecheck && failure == PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED))
+    }
+}

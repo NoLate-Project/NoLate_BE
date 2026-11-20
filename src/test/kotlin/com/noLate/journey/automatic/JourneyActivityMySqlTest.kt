@@ -43,6 +43,10 @@ class JourneyActivityMySqlTest {
             assertThat(sql(migration).first).isFalse() // Partial/repeated migration fails closed.
             assertThat(sql(Files.readString(Path.of("docs/schedule/migrations/2026-10-12-journey-walking-snapshots.sql"))).first).isTrue()
             assertThat(sql(Files.readString(Path.of("docs/schedule/migrations/2026-10-12-mixed-walking-binding.sql"))).first).isTrue()
+            val rerouteMigration = Files.readString(Path.of("docs/schedule/migrations/2026-11-19-automatic-journey-reroute.sql"))
+            val rerouteApplied = sql(rerouteMigration)
+            assertThat(rerouteApplied.first).withFailMessage(rerouteApplied.second.take(1000)).isTrue()
+            assertThat(sql(rerouteMigration).first).isFalse() // A repeated schema change must fail closed.
             val port = command(listOf("docker", "port", name, "3306/tcp")).second.trim().substringAfterLast(':').toInt()
             val url = "jdbc:mysql://127.0.0.1:$port/journey_test?useSSL=false&allowPublicKeyRetrieval=true&connectionTimeZone=UTC"
             fun database() = DurableJourneyFixtureDatabase(url, "journey", "isolated", "validate", "org.hibernate.dialect.MySQLDialect")

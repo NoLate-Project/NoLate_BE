@@ -23,11 +23,19 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SeoulBusVehicleObservationTest {
+    @Test fun `provider delayed source is retained without receipt time substitution`() {
+        val delayed = SeoulBusVehicleObservationParser.parse(xml(item("20261007124941")), query, now)
+        assertEquals(SeoulBusVehicleObservationStatus.AVAILABLE, delayed.status)
+        val observation = delayed.observations.single()
+        assertEquals(Instant.parse("2026-10-07T03:49:41Z"), observation.sourceUpdatedAt)
+        assertEquals(Instant.parse("2026-10-07T03:50:26Z"), observation.validUntil)
+        assertEquals(30_000L, delayed.sourceAgeSummary?.maxAgeMillis)
+    }
     @Test fun `source age aggregates include stale and future clocks without granting freshness`() {
-        val stale = SeoulBusVehicleObservationParser.parse(xml(item("20261007124956")), query, now)
+        val stale = SeoulBusVehicleObservationParser.parse(xml(item("20261007124926")), query, now)
         assertEquals(1, stale.sourceAgeSummary?.count)
-        assertEquals(15_000L, stale.sourceAgeSummary?.minAgeMillis)
-        assertEquals(15_000L, stale.sourceAgeSummary?.maxAgeMillis)
+        assertEquals(45_000L, stale.sourceAgeSummary?.minAgeMillis)
+        assertEquals(45_000L, stale.sourceAgeSummary?.maxAgeMillis)
         assertEquals(SeoulBusVehicleObservationStatus.NO_USABLE_OBSERVATIONS, stale.status)
         val future = SeoulBusVehicleObservationParser.parse(xml(item("20261007125012")), query, now)
         assertEquals(-1_000L, future.sourceAgeSummary?.minAgeMillis)
@@ -36,11 +44,11 @@ class SeoulBusVehicleObservationTest {
         val malformed = SeoulBusVehicleObservationParser.parse(xml(item("unsupported")), query, now)
         assertEquals(null, malformed.sourceAgeSummary)
         val mixed = SeoulBusVehicleObservationParser.parse(
-            xml(item() + item("20261007124956").replace("100000123", "100000124")), query, now,
+            xml(item() + item("20261007124926").replace("100000123", "100000124")), query, now,
         )
         assertEquals(2, mixed.sourceAgeSummary?.count)
         assertEquals(4_000L, mixed.sourceAgeSummary?.minAgeMillis)
-        assertEquals(15_000L, mixed.sourceAgeSummary?.maxAgeMillis)
+        assertEquals(45_000L, mixed.sourceAgeSummary?.maxAgeMillis)
         val duplicate = SeoulBusVehicleObservationParser.parse(xml(item() + item()), query, now)
         assertEquals(null, duplicate.sourceAgeSummary)
     }
@@ -110,7 +118,7 @@ class SeoulBusVehicleObservationTest {
     @Test fun `rejection reasons are bounded counts without raw timestamp or vehicle identity`() {
         val unsupported = SeoulBusVehicleObservationParser.parse(xml(item("2026-10-07 12:50:07")), query, now)
         assertEquals(mapOf(SeoulBusVehicleRejection.TIMESTAMP_UNSUPPORTED to 1), unsupported.rejectionCounts)
-        val stale = SeoulBusVehicleObservationParser.parse(xml(item("20261007124956")), query, now)
+        val stale = SeoulBusVehicleObservationParser.parse(xml(item("20261007124926")), query, now)
         assertEquals(mapOf(SeoulBusVehicleRejection.TIMESTAMP_STALE to 1), stale.rejectionCounts)
         val duplicate = SeoulBusVehicleObservationParser.parse(xml(item() + item("20261007124956")), query, now)
         assertEquals(mapOf(SeoulBusVehicleRejection.DUPLICATE_VEHICLE to 2), duplicate.rejectionCounts)
@@ -144,7 +152,7 @@ class SeoulBusVehicleObservationTest {
         val observation = batch.observations.single()
         assertEquals(73, observation.roadSectionOrder) // Intentionally outside request stop window.
         assertEquals(Instant.parse("2026-10-07T03:50:07Z"), observation.sourceUpdatedAt)
-        assertEquals(Instant.parse("2026-10-07T03:50:22Z"), observation.validUntil)
+        assertEquals(Instant.parse("2026-10-07T03:50:52Z"), observation.validUntil)
         assertEquals(now, observation.receivedAt)
         assertFalse(batch.passengerVehicleAssociation)
         assertFalse(batch.stopOrderCrosswalkVerified)
@@ -157,7 +165,7 @@ class SeoulBusVehicleObservationTest {
     }
 
     @Test fun `receipt does not freshen stale future malformed or invalid calendar timestamps`() {
-        listOf("20261007124956", "20261007124659", "20261007125012", "20260230125007",
+        listOf("20261007124926", "20261007124659", "20261007125012", "20260230125007",
             "", "2026-10-07 12:50:07", "20261007125007Z").forEach { time ->
             val batch = SeoulBusVehicleObservationParser.parse(xml(item(time)), query, now)
             assertEquals(SeoulBusVehicleObservationStatus.NO_USABLE_OBSERVATIONS, batch.status, time)

@@ -73,6 +73,7 @@ class JourneyRerouteCandidateSnapshotFactory(private val mapper: ObjectMapper) {
                         set<ObjectNode>("coord", point(coord(station.path("y"), station.path("x"))))
                         for (key in listOf("localStationID", "arsID", "stationCityCode", "stationProviderCode"))
                             copyIdentifier(station, key, key)
+                        put("code", path("localStationID").asText())
                         station.path("stationName").takeIf { it.isTextual && it.asText().length in 1..100 &&
                             it.asText().none(Char::isISOControl) }?.let { put("name", it.asText()) }
                     }
@@ -86,10 +87,11 @@ class JourneyRerouteCandidateSnapshotFactory(private val mapper: ObjectMapper) {
                 set<ArrayNode>("stopOccurrences", occurrences)
                 busFields.set<ArrayNode>("passStops", passStops)
                 val declared = ride.path("stationCount")
-                if (!declared.isMissingNode && !declared.isNull) {
-                    if (!declared.isIntegralNumber || declared.asInt(-1) != stations.size() - 1) reject()
-                    put("declaredStationCount", declared.asInt())
-                }
+                // maasRP commonly omits stationCount while returning the complete,
+                // ordered passStopList. Preserve a supplied count only if it agrees.
+                if (!declared.isMissingNode && !declared.isNull &&
+                    (!declared.isIntegralNumber || declared.asInt(-1) != stations.size() - 1)) reject()
+                put("declaredStationCount", stations.size() - 1)
             }
             set<ObjectNode>("navigationEvidence", evidence)
             put("stationCount", evidence.path("stopOccurrences").size() - 1)
@@ -98,12 +100,17 @@ class JourneyRerouteCandidateSnapshotFactory(private val mapper: ObjectMapper) {
             add(walk(first)); add(bus); add(walk(last))
         }
         val route = mapper.createObjectNode().apply {
+            // The app's saved-route map and time rail only accept a route option
+            // with an identity. Preserve the provider's total travel estimate too.
+            put("id", "odsay-reroute-${OpaquePushIdentifier.fingerprint(mapper.writeValueAsString(legs)).take(16)}")
             put("mode", "TRANSIT")
             put("provider", "odsay")
             put("source", "api")
             put("routeReliability", "provider_estimate")
             put("routePlausibility", "normal")
             put("transitServiceState", "unknown")
+            candidate.path.path("totalTime").takeIf { it.isNumber && it.asDouble() in 0.01..1_440.0 }
+                ?.let { put("minutes", it.asDouble()) }
             set<ArrayNode>("transitLegs", legs)
         }
         val json = mapper.writeValueAsString(route)
@@ -130,6 +137,12 @@ class JourneyRerouteCandidateSnapshotFactory(private val mapper: ObjectMapper) {
         set<ArrayNode>("pathCoords", mapper.createArrayNode().apply { points.forEach { add(point(it)) } })
         put("pathCoordsIsExact", true)
         put("pathGeometrySource", "WALK_STEPS_LINESTRING")
+        set<ObjectNode>("navigationEvidence", mapper.createObjectNode().apply {
+            put("version", 1)
+            put("provider", "tmap")
+            put("geometryInputComplete", true)
+            set<ArrayNode>("stopOccurrences", mapper.createArrayNode())
+        })
     }
     private fun point(value: ServerWalkingCoordinate) = mapper.createObjectNode().apply {
         put("lat", value.lat); put("lng", value.lng)
