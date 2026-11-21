@@ -1,0 +1,12 @@
+<testsuite name="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-11-20T05:56:34.743Z" hostname="macui-MacBookPro.local" time="0.046">
+  <properties />
+  <testcase name="[1] before=600, delay=60" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.001" />
+  <testcase name="[2] before=900, delay=60" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[3] before=901, delay=1" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[4] before=930, delay=30" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.001" />
+  <testcase name="[5] before=1800, delay=60" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.001" />
+  <testcase name="[6] before=1500, delay=600" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="출발 전과 모든 역 사건의 지연 조회 창이 지난 뒤에는 기존 주기를 유지한다()" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="같은 여정의 갱신한 시각을 쓰고 다른 여정의 시각은 섞지 않는다()" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="다른 운행일과 미지원 혼합 경로는 관측 주기로 승격하지 않는다()" classname="com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicyTest" time="0.0" />
+  </testsuite>

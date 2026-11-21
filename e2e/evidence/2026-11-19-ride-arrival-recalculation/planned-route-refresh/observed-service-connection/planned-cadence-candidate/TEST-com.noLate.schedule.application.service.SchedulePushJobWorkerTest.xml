@@ -1,0 +1,109 @@
+<testsuite name="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" tests="106" skipped="0" failures="0" errors="0" timestamp="2026-11-20T05:56:31.933Z" hostname="macui-MacBookPro.local" time="2.8">
+  <properties />
+  <testcase name="scoped worker runs existing ETA persistence and metrics for only the requested job()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="1.162" />
+  <testcase name="ETA가 늘어나면 교통 변화 푸시를 보내고 다음 체크를 예약한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.019" />
+  <testcase name="공통 일정 조건과 맞지 않는 개인 계획의 push job은 교통 조회 전에 취소한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.009" />
+  <testcase name="실행 재예약 시각이 바뀌어도 Live Activity는 저장한 ETA 갱신 경계를 유지한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.009" />
+  <testcase name="[1] sourceAgeSeconds=0, boardingDelaySeconds=240, expectedDelaySeconds=60" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.354" />
+  <testcase name="[2] sourceAgeSeconds=121, boardingDelaySeconds=240, expectedDelaySeconds=180" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.013" />
+  <testcase name="[3] sourceAgeSeconds=0, boardingDelaySeconds=3, expectedDelaySeconds=180" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.011" />
+  <testcase name="성공한 ETA 저장 뒤 Live Activity에 대기시간 포함 projection을 독립 전달한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.235" />
+  <testcase name="모호한 전달은 이벤트 단계만 전진시키고 confirmed success 시각은 기록하지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.012" />
+  <testcase name="worker cancels a shared member job when travel permission was reduced()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="selected JSON ETA가 canonical과 다르면 fallback에서 canonical을 우선한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.007" />
+  <testcase name="[1] mode=SUBWAY" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.009" />
+  <testcase name="[2] mode=BUS" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.006" />
+  <testcase name="immutable ETA event가 TTL을 넘기면 발송하지 않고 다음 회차에서 새 payload를 만든다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="느린 첫 처리 뒤 tail job은 실제 claim 시각으로 lease된다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.006" />
+  <testcase name="saved worker event는 TTL과 check count를 direct provider fence에 전달한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="재시도 event A 발송이 실패하면 provider B를 저장하거나 Live Activity에 투영하지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.038" />
+  <testcase name="출발 준비 알림 후 5분 경계에 다시 리마인드 푸시를 보낸다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.006" />
+  <testcase name="알림 시각 전에는 ETA만 조회하고 사용자 푸시 없이 다음 체크를 예약한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.012" />
+  <testcase name="scoped worker without due job does not scan or repair other jobs()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="verified alternative route transition triggers push and persists its identity()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.036" />
+  <testcase name="retry counter is not emitted when the durable transition fails()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.01" />
+  <testcase name="재시도 가능한 기기 실패도 한계 도달 시 Live Activity END를 함께 저장한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="모호한 전달 전이 저장이 실패하면 ETA 결과 카운터를 기록하지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.006" />
+  <testcase name="환승 실패 전환 push가 재시도되어도 취소 원인과 알람 상태를 같은 전이로 보존한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="추천 출발 15분 전에 출발 준비 푸시를 보내고 ETA 조회를 계속한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="일정 시작 이후에는 지연된 출발 푸시 없이 job을 완료한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="[1] firstTrainConfirmed=true" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.095" />
+  <testcase name="[2] firstTrainConfirmed=false" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.03" />
+  <testcase name="ETA가 줄어들면 푸시하지 않고 변경된 출발 전 알림 시각으로 다음 체크를 재설정한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="일정 reset 뒤 generation이 바뀌어 check 0 알림도 새 이벤트로 전송한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.007" />
+  <testcase name="live 이후 fallback을 거쳐 복구한 live는 마지막 fresh live 대비 correction을 한 번 보낸다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.006" />
+  <testcase name="[1] diagnostic=STALE_ONLY" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="[2] diagnostic=PROVIDER_TIMEOUT" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="[3] diagnostic=TRANSIT_TRANSFER_TIMING_UNKNOWN" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="[4] diagnostic=TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.007" />
+  <testcase name="[1] case=pending" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.011" />
+  <testcase name="[2] case=timeout" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.011" />
+  <testcase name="[3] case=late" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.01" />
+  <testcase name="[4] case=missingTiming" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.011" />
+  <testcase name="[5] case=expired" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.01" />
+  <testcase name="앞 열차 지연 회복" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.054" />
+  <testcase name="환승 열차 지연 회복" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.027" />
+  <testcase name="다중 기기 발송 중 fence가 만료되면 앞선 성공을 보존하고 즉시 fresh check를 연다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="all-covered alarm boundary advances handling without fabricating visible push success()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="processing exception commits only the terminal transition after retry limit()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="사용자가 다시 알림을 요청한 시각에는 스누즈 푸시를 보내고 예약을 비운다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="ODsay 시간표가 계산한 실제 출발시각을 단순 ETA 역산 대신 저장하고 알린다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.006" />
+  <testcase name="disabled ETA worker does not claim or recover jobs()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.001" />
+  <testcase name="[1] retryable=false" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="[2] retryable=true" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="같은 환승 실패를 반복 조회하면 경로 재확인 push를 중복 발송하지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="degraded effective candidate never replaces the saved Live Activity route bar()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.02" />
+  <testcase name="alarm boundary keeps ETA shift warning visible while measuring native reminder coverage()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="[1] scenario=REJECTED" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="[2] scenario=FAILED" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="[3] scenario=MISSING_DUE" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="processing exception persist throw records no durable transition()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.007" />
+  <testcase name="intercity fallback keeps ticket departure in reminders and Live Activity despite later arrival deadline()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.008" />
+  <testcase name="worker forwards a past recommended departure as alarm sync policy input instead of creating now alarm()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="푸시 토큰이 없으면 원인을 기록하고 재시도한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="지금 출발 알림 후 3분이 지나면 출발 확인 후속 푸시를 보낸다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="환승 실패 뒤 정상 ETA가 회복되면 기존 안전 출발시각으로 취소 알람을 복구한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="processing exception event and committed retry use separate meters()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.007" />
+  <testcase name="재시도 event A를 보낸 회차는 provider B 대신 A 경로를 API 상태로 유지한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.017" />
+  <testcase name="[1] secondsBeforeArrival=600, expectedDelay=60" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.035" />
+  <testcase name="[2] secondsBeforeArrival=930, expectedDelay=30" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.027" />
+  <testcase name="[3] secondsBeforeArrival=1800, expectedDelay=60" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.019" />
+  <testcase name="[4] secondsBeforeArrival=1500, expectedDelay=600" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.02" />
+  <testcase name="최대 재시도 횟수에 도달하면 job을 실패 상태로 종료한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="정시 도착 불가 ETA는 거짓 정시 문구 대신 예상 도착시각과 degraded provenance를 알린다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="disabled scoped worker does not touch coordinator or providers()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="여러 후속 경계가 밀렸다면 가장 긴급한 일정 1분 전 알림만 보낸다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="일정 시작 후 유예 시간이 지나면 푸시 없이 job을 완료한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="outbox event와 job ETA가 어긋나면 fail closed로 발송 없이 A 상태를 보존한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.014" />
+  <testcase name="provider timeout fallback 증가는 교통 악화 push나 change 이력을 만들지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="[1] earlier=true" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.016" />
+  <testcase name="[2] earlier=false" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.011" />
+  <testcase name="환승 실패 종류가 바뀌면 새 상태를 한 번 알린다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="환승 실패 전이는 리마인드 시각 전에도 경로 재확인 push를 한 번 보낸다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="대중교통 ETA가 줄어도 기존 출발 알림을 늦추지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="freshness가 만료된 live baseline은 correction 비교에 사용하지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="fallback ETA는 직전 fresh 출발시각과 live baseline을 보존하고 새 알림을 만들지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="degraded refresh keeps one coherent previously accepted Live Activity projection()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.013" />
+  <testcase name="[1] graceMinutes=-1" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="[2] graceMinutes=61" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.001" />
+  <testcase name="과거 SUCCESS 재조회는 lastPushedAt을 현재 시각으로 이동시키지 않는다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="출발 준비 알림 후 ETA가 바뀌면 변경된 추천 출발 시각을 다시 안내한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="[1] memberId=0, scheduleId=363" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.001" />
+  <testcase name="[2] memberId=-1, scheduleId=363" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.001" />
+  <testcase name="[3] memberId=296, scheduleId=0" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.001" />
+  <testcase name="[4] memberId=296, scheduleId=-1" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.001" />
+  <testcase name="processing exception persist false records no durable transition()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="지금 출발 푸시가 한 기기에도 전송되지 않으면 완료하지 않고 재시도한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="실시간 추천 출발 시각에 도달하면 지금 출발 푸시를 보내고 후속 알림을 예약한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.003" />
+  <testcase name="PROCESSING job이 timeout을 넘으면 ACTIVE로 복구하고 즉시 재검사 대상으로 만든다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.001" />
+  <testcase name="여러 회원의 job이 동시에 검출되어도 각 회원 일정으로 푸시한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.005" />
+  <testcase name="정상 상태에서 환승 시간 UNKNOWN이면 기존 자동 알람을 유지한다()" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="[1] minutesUntilDeparture=60, graceMinutes=5, expectedRefreshSeconds=300, expectedStaleSeconds=600" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.004" />
+  <testcase name="[2] minutesUntilDeparture=30, graceMinutes=5, expectedRefreshSeconds=120, expectedStaleSeconds=420" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="[3] minutesUntilDeparture=15, graceMinutes=5, expectedRefreshSeconds=60, expectedStaleSeconds=360" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="[4] minutesUntilDeparture=31, graceMinutes=5, expectedRefreshSeconds=60, expectedStaleSeconds=360" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="[5] minutesUntilDeparture=60, graceMinutes=0, expectedRefreshSeconds=300, expectedStaleSeconds=300" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.001" />
+  <testcase name="[6] minutesUntilDeparture=60, graceMinutes=2, expectedRefreshSeconds=300, expectedStaleSeconds=420" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="[7] minutesUntilDeparture=60, graceMinutes=60, expectedRefreshSeconds=300, expectedStaleSeconds=3900" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  <testcase name="[8] minutesUntilDeparture=-28, graceMinutes=5, expectedRefreshSeconds=60, expectedStaleSeconds=120" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.002" />
+  </testsuite>

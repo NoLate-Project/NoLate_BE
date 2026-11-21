@@ -1,0 +1,17 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuite name="com.noLate.eta.application.transit.SafeDepartureResolverTest" tests="13" skipped="0" failures="0" errors="0" timestamp="2026-11-20T06:54:17.030Z" hostname="macui-MacBookPro.local" time="0.014">
+  <properties />
+  <testcase name="관측 열차의 마지막 승차 가능 출발을 건너뛰지 않고 공급자 해상도 안에서 다시 검증한다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="현재 시각 첫 UNKNOWN이 음수 경계에 막히면 5분 뒤 동일 signature 안전 차량을 찾는다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="초 투영은 공급자가 명시한 경우만 허용하고 현재와 미래 계획 출발을 앞당기지 않는다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.0" />
+  <testcase name="ODsay 전체 탐색 예산은 세 회를 넘길 수 없다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="시간표 불연속으로 단순 역산 후보가 늦으면 조회한 후보 중 가장 늦게 출발하는 feasible 여정을 고른다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="음수 probe가 평가 시각에 막혀도 양방향 슬롯으로 세 번 예산을 소진하며 과거로 내려가지 않는다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="마감 초과나 미검증 후보만 있으면 후속 조회 실패를 정상 후보로 덮지 않는다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.002" />
+  <testcase name="후속 최적화 조회가 실패해도 같은 평가에서 마감 전으로 검증한 가장 늦은 후보를 보존한다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="희소 시간표에서 선택 경로가 비면 쿼리 한도 안에서 5분 이전 슬롯을 탐색한다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="첫 후보가 허용 오차 안이지만 늦으면 이전 분을 재조회해 정시 후보를 찾는다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="실시간 projection의 절대 도착시각으로 검색점을 옮겨 마감 전 후보만 반환한다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.001" />
+  <testcase name="도착 마감이 없어도 중간 빈 응답 뒤 남은 예산으로 다음 안전 차량을 찾는다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.0" />
+  <testcase name="안전 후보가 있어도 취소 인터럽트와 치명적 오류는 삼키지 않는다()" classname="com.noLate.eta.application.transit.SafeDepartureResolverTest" time="0.0" />
+  </testsuite>

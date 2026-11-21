@@ -1,0 +1,23 @@
+.FF.
+======================================================================
+FAIL: test_only_current_last_cumulative_frame_can_prove_pairing (test_eta_evaluation_correlation.EvaluationCorrelationTest.test_only_current_last_cumulative_frame_can_prove_pairing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-evaluation-correlation-proof.nw6ly97d/test_eta_evaluation_correlation.py", line 23, in test_only_current_last_cumulative_frame_can_prove_pairing
+    self.assertIsNotNone(fresh_observed_service_connection(worker,qualifying_planned_observation(worker)))
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: unexpectedly None
+
+======================================================================
+FAIL: test_request_start_and_worker_finish_are_distinct_clocks_for_the_same_evaluation (test_eta_evaluation_correlation.EvaluationCorrelationTest.test_request_start_and_worker_finish_are_distinct_clocks_for_the_same_evaluation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-evaluation-correlation-proof.nw6ly97d/test_eta_evaluation_correlation.py", line 16, in test_request_start_and_worker_finish_are_distinct_clocks_for_the_same_evaluation
+    self.assertIsNotNone(witness)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+AssertionError: unexpectedly None
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.002s
+
+FAILED (failures=2)

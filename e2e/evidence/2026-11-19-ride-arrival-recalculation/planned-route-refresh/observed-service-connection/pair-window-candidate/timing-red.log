@@ -1,0 +1,31 @@
+FF
+======================================================================
+FAIL: test_second_round_observes_inbound_arrival_before_reconnecting_onward_service (test_pair_window.PairWindowTest.test_second_round_observes_inbound_arrival_before_reconnecting_onward_service)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-pair-window-proof.lafilf8t/test_pair_window.py", line 17, in test_second_round_observes_inbound_arrival_before_reconnecting_onward_service
+    self.assertEqual(found["stage"],"FIRST_ALIGHTING")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'OBSERVED_SERVICE_CONNECTION' != 'FIRST_ALIGHTING'
+- OBSERVED_SERVICE_CONNECTION
++ FIRST_ALIGHTING
+
+
+======================================================================
+FAIL: test_third_round_uses_updated_onward_clock_without_adding_an_evaluation (test_pair_window.PairWindowTest.test_third_round_uses_updated_onward_clock_without_adding_an_evaluation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-pair-window-proof.lafilf8t/test_pair_window.py", line 26, in test_third_round_uses_updated_onward_clock_without_adding_an_evaluation
+    self.assertEqual(found["at"],at(4140))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '2026-11-20T07:07:00+00:00' != '2026-11-20T07:09:00+00:00'
+- 2026-11-20T07:07:00+00:00
+?                ^
++ 2026-11-20T07:09:00+00:00
+?                ^
+
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.001s
+
+FAILED (failures=2)

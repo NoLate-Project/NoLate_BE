@@ -1,0 +1,21 @@
+{
+  "classification": "REAL_ODSay_SEOUL_SHORT_CORRIDOR_DIAGNOSTIC_NOT_ACCURACY_PASS",
+  "realEvaluationCount": 1,
+  "maximumEvaluationsRequested": 2,
+  "normalRealtimeEtaAccepted": false,
+  "pinnedAppE2E": "FAILED_DETAIL_NAVIGATION",
+  "originalAppEndpointRestored": true,
+  "providerFailures": [],
+  "naverObservationAt": "2026-11-19T12:18:46.159Z",
+  "nolateEvaluatedAt": "2026-11-19T12:14:25.631549Z",
+  "observationDifferenceSeconds": 260.527451,
+  "requestedDepartureAt": "2026-11-19T12:20:00Z",
+  "naverDisplayedArrival": "21:39",
+  "nolateTimetableCandidateArrival": "21:50",
+  "timetableCandidateMinusNaverDisplayMinutes": 11,
+  "normalEtaDifferenceSampleEligible": false,
+  "comparisonScope": "COMMON_PUBLIC_COORDINATES_AND_DEPARTURE_INPUT_REFERENCE_ONLY",
+  "reason": "NoLate normal ETA unavailable, access path differs, no physical route-boundary verification; timetable candidate is not an accepted prediction",
+  "directPhysicalArrivalMeasured": false,
+  "sourceRoot": "/private/tmp/nolate-eta-real-e2e.ix9gf9qe"
+}

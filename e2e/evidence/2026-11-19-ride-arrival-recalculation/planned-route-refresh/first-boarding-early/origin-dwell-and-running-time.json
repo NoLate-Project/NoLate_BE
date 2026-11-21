@@ -1,0 +1,63 @@
+{
+  "classification": "OBSERVED_SAME_TRAIN_RUNNING_TIME_EXCLUDING_ORIGIN_DWELL",
+  "serviceDate": "2026-11-18",
+  "provider": "odsay",
+  "independentJourneys": 1,
+  "additionalHttpCalls": 0,
+  "sourceFilesSha256": {
+    "/private/tmp/nolate-accepted-train-observation.ECyA9C/positions.jsonl": "78ec95e43957d88d5e3428cc1c957b9321c32f7799fe3561f467eb8512f20e91",
+    "/private/tmp/nolate-accepted-train-observation.ECyA9C/collection-report.json": "c6977dd9a0da8f68db7491f01ba15f116ac8149c0f6441fe2bfe896e0ae0cc33",
+    "/private/tmp/nolate-accepted-train-observation.ECyA9C/plan.json": "f507b0a0504c085fa14efdf50aa8b42d4ae1ad7b03317e3655e04f429ffe9ef7",
+    "/private/tmp/nolate-eta-real-e2e.8tjn5tyh/evaluation-1.json": "8f916e6aa9a753c798d018fe35faad56065d1ad361bc89728691a23f0564f458",
+    "/private/tmp/nolate-eta-real-e2e.8tjn5tyh/ui-status-1.json": "6e2c21d055e6813bcfdab70c9a185273ac05035428372f91243edbcd7311b1b2",
+    "/private/tmp/nolate-eta-real-e2e.8tjn5tyh/odsay-seed-journey.json": "5b68ebba3a6a30d1d019832dc76fc1feb097d63bd5547fac6fb2e6f2c1e0a7a8",
+    "/private/tmp/nolate-eta-real-e2e.8tjn5tyh/selected-route.json": "ef07795655ff4db702b1ca87a22728c019c66d8c14a5bdb08b9f1f00ccf65bc8"
+  },
+  "firstRide": {
+    "line": "LINE_4",
+    "trainNumbers": [
+      "K4621",
+      "4621"
+    ],
+    "boardingStation": "노원",
+    "alightingStation": "사당",
+    "originStationArrival": {
+      "lower": "2026-11-18T05:39:55+00:00",
+      "upper": "2026-11-18T05:41:36+00:00"
+    },
+    "originStationDeparture": {
+      "result": "BOUNDED_PROVIDER_TRAIN_DEPARTURE",
+      "lower": "2026-11-18T05:41:36+00:00",
+      "upper": "2026-11-18T05:42:45+00:00",
+      "widthSeconds": 69.0
+    },
+    "lastPositionBeforeAlightingAt": "2026-11-18T06:31:45+00:00",
+    "timetableDepartureAt": "2026-11-18T05:42:00Z",
+    "timetableAlightingAt": "2026-11-18T06:30:00Z",
+    "observedBoardingStationDwellBoundsSeconds": [
+      0,
+      170.0
+    ],
+    "timetableDepartureToAlightingSeconds": 2880.0,
+    "observedDepartureToAlightingBoundsSeconds": [
+      2940.0,
+      null
+    ],
+    "departureToAlightingMinusTimetableBoundsSeconds": [
+      60.0,
+      null
+    ]
+  },
+  "publishedOnwardTrain": "2276",
+  "observedOnwardRunningTimeBoundsSeconds": [
+    null,
+    null
+  ],
+  "observedTransferSameEventGapAfterModeledWalkBoundsSeconds": [
+    null,
+    null
+  ],
+  "physicalPassengerTripObserved": false,
+  "actualSadangArrivalUpperBoundAvailable": false,
+  "explanation": "On this run, even the latest supported departure from Nowon leaves at least 49 minutes before the last upstream position. The timetable allowed 48 minutes after departure. Boarding-station dwell and access or transfer walks are excluded from both durations. Intermediate stops are included. No constant delay or final-destination accuracy was inferred."
+}

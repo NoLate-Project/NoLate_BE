@@ -1,0 +1,221 @@
+{
+  "evaluationAt": "2026-11-19T15:01:03.245593Z",
+  "serviceDate": "2026-11-19",
+  "weekTag": "1",
+  "cases": [
+    {
+      "name": "saved_timetable",
+      "notBefore": "2026-11-19T15:09:37+00:00"
+    },
+    {
+      "name": "if_rejected_first_estimate_used",
+      "notBefore": "2026-11-19T15:12:42+00:00"
+    }
+  ],
+  "normalizedRows": [
+    {
+      "provider": "seoul-timetable",
+      "line": "LINE_2",
+      "serviceDate": "2026-11-19",
+      "trainNumber": "2510",
+      "directionCode": "UP",
+      "serviceClass": "LOCAL",
+      "fromStationCode": "0226",
+      "toStationCode": "0230",
+      "terminalName": "신도림",
+      "boardingAt": "2026-11-19T15:10:30Z",
+      "arrivalAt": "2026-11-19T15:18:00Z",
+      "fetchedAt": "2026-11-19T14:03:28.232992Z",
+      "realtimeTrainNumber": null,
+      "boardingStationArrivalAt": "2026-11-19T15:09:30Z"
+    },
+    {
+      "provider": "seoul-timetable",
+      "line": "LINE_2",
+      "serviceDate": "2026-11-19",
+      "trainNumber": "2512",
+      "directionCode": "UP",
+      "serviceClass": "LOCAL",
+      "fromStationCode": "0226",
+      "toStationCode": "0230",
+      "terminalName": "을지로입구",
+      "boardingAt": "2026-11-19T15:19:30Z",
+      "arrivalAt": "2026-11-19T15:27:00Z",
+      "fetchedAt": "2026-11-19T14:03:28.232992Z",
+      "realtimeTrainNumber": null,
+      "boardingStationArrivalAt": "2026-11-19T15:18:30Z"
+    },
+    {
+      "provider": "seoul-timetable",
+      "line": "LINE_2",
+      "serviceDate": "2026-11-19",
+      "trainNumber": "2514",
+      "directionCode": "UP",
+      "serviceClass": "LOCAL",
+      "fromStationCode": "0226",
+      "toStationCode": "0230",
+      "terminalName": "홍대입구",
+      "boardingAt": "2026-11-19T15:31:30Z",
+      "arrivalAt": "2026-11-19T15:39:00Z",
+      "fetchedAt": "2026-11-19T14:03:28.232992Z",
+      "realtimeTrainNumber": null,
+      "boardingStationArrivalAt": "2026-11-19T15:30:30Z"
+    },
+    {
+      "provider": "seoul-timetable",
+      "line": "LINE_2",
+      "serviceDate": "2026-11-19",
+      "trainNumber": "2516",
+      "directionCode": "UP",
+      "serviceClass": "LOCAL",
+      "fromStationCode": "0226",
+      "toStationCode": "0230",
+      "terminalName": "신도림",
+      "boardingAt": "2026-11-19T15:43:30Z",
+      "arrivalAt": "2026-11-19T15:51:00Z",
+      "fetchedAt": "2026-11-19T14:03:28.232992Z",
+      "realtimeTrainNumber": null,
+      "boardingStationArrivalAt": "2026-11-19T15:42:30Z"
+    }
+  ],
+  "loopbackEnvelopes": {
+    "SearchSTNTimeTableByIDService/0226/1/1": [
+      {
+        "STATION_CD": "0226",
+        "STATION_NM": "사당",
+        "LINE_NUM": "02호선",
+        "WEEK_TAG": "1",
+        "INOUT_TAG": "1",
+        "TRAIN_NO": "2510",
+        "EXPRESS_YN": "G",
+        "SUBWAYENAME": "신도림",
+        "ORIGINSTATION": "FIXTURE_ORIGIN",
+        "DESTSTATION": "FIXTURE_2510",
+        "BRANCH_LINE": "",
+        "ARRIVETIME": "24:09:30",
+        "LEFTTIME": "24:10:30"
+      },
+      {
+        "STATION_CD": "0226",
+        "STATION_NM": "사당",
+        "LINE_NUM": "02호선",
+        "WEEK_TAG": "1",
+        "INOUT_TAG": "1",
+        "TRAIN_NO": "2512",
+        "EXPRESS_YN": "G",
+        "SUBWAYENAME": "을지로입구",
+        "ORIGINSTATION": "FIXTURE_ORIGIN",
+        "DESTSTATION": "FIXTURE_2512",
+        "BRANCH_LINE": "",
+        "ARRIVETIME": "24:18:30",
+        "LEFTTIME": "24:19:30"
+      },
+      {
+        "STATION_CD": "0226",
+        "STATION_NM": "사당",
+        "LINE_NUM": "02호선",
+        "WEEK_TAG": "1",
+        "INOUT_TAG": "1",
+        "TRAIN_NO": "2514",
+        "EXPRESS_YN": "G",
+        "SUBWAYENAME": "홍대입구",
+        "ORIGINSTATION": "FIXTURE_ORIGIN",
+        "DESTSTATION": "FIXTURE_2514",
+        "BRANCH_LINE": "",
+        "ARRIVETIME": "24:30:30",
+        "LEFTTIME": "24:31:30"
+      },
+      {
+        "STATION_CD": "0226",
+        "STATION_NM": "사당",
+        "LINE_NUM": "02호선",
+        "WEEK_TAG": "1",
+        "INOUT_TAG": "1",
+        "TRAIN_NO": "2516",
+        "EXPRESS_YN": "G",
+        "SUBWAYENAME": "신도림",
+        "ORIGINSTATION": "FIXTURE_ORIGIN",
+        "DESTSTATION": "FIXTURE_2516",
+        "BRANCH_LINE": "",
+        "ARRIVETIME": "24:42:30",
+        "LEFTTIME": "24:43:30"
+      }
+    ],
+    "SearchInfoBySubwayNameService/사당": [
+      {
+        "STATION_CD": "0226",
+        "STATION_NM": "사당",
+        "LINE_NUM": "02호선"
+      }
+    ],
+    "SearchSTNTimeTableByIDService/0230/1/1": [
+      {
+        "STATION_CD": "0230",
+        "STATION_NM": "신림",
+        "LINE_NUM": "02호선",
+        "WEEK_TAG": "1",
+        "INOUT_TAG": "1",
+        "TRAIN_NO": "2510",
+        "EXPRESS_YN": "G",
+        "SUBWAYENAME": "신도림",
+        "ORIGINSTATION": "FIXTURE_ORIGIN",
+        "DESTSTATION": "FIXTURE_2510",
+        "BRANCH_LINE": "",
+        "ARRIVETIME": "24:18:00",
+        "LEFTTIME": "00:00:00"
+      },
+      {
+        "STATION_CD": "0230",
+        "STATION_NM": "신림",
+        "LINE_NUM": "02호선",
+        "WEEK_TAG": "1",
+        "INOUT_TAG": "1",
+        "TRAIN_NO": "2512",
+        "EXPRESS_YN": "G",
+        "SUBWAYENAME": "을지로입구",
+        "ORIGINSTATION": "FIXTURE_ORIGIN",
+        "DESTSTATION": "FIXTURE_2512",
+        "BRANCH_LINE": "",
+        "ARRIVETIME": "24:27:00",
+        "LEFTTIME": "00:00:00"
+      },
+      {
+        "STATION_CD": "0230",
+        "STATION_NM": "신림",
+        "LINE_NUM": "02호선",
+        "WEEK_TAG": "1",
+        "INOUT_TAG": "1",
+        "TRAIN_NO": "2514",
+        "EXPRESS_YN": "G",
+        "SUBWAYENAME": "홍대입구",
+        "ORIGINSTATION": "FIXTURE_ORIGIN",
+        "DESTSTATION": "FIXTURE_2514",
+        "BRANCH_LINE": "",
+        "ARRIVETIME": "24:39:00",
+        "LEFTTIME": "00:00:00"
+      },
+      {
+        "STATION_CD": "0230",
+        "STATION_NM": "신림",
+        "LINE_NUM": "02호선",
+        "WEEK_TAG": "1",
+        "INOUT_TAG": "1",
+        "TRAIN_NO": "2516",
+        "EXPRESS_YN": "G",
+        "SUBWAYENAME": "신도림",
+        "ORIGINSTATION": "FIXTURE_ORIGIN",
+        "DESTSTATION": "FIXTURE_2516",
+        "BRANCH_LINE": "",
+        "ARRIVETIME": "24:51:00",
+        "LEFTTIME": "00:00:00"
+      }
+    ],
+    "SearchInfoBySubwayNameService/신림": [
+      {
+        "STATION_CD": "0230",
+        "STATION_NM": "신림",
+        "LINE_NUM": "02호선"
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+
+> NoLate_FE@1.3.0 test
+> jest --runInBand --no-watchman --runTestsByPath __tests__/scheduleDetailTimingTrust.test.ts __tests__/transitEtaTrustPresentation.test.ts __tests__/scheduleRouteSheetControls.test.ts
+
+PASS __tests__/scheduleDetailTimingTrust.test.ts
+PASS __tests__/transitEtaTrustPresentation.test.ts
+PASS __tests__/scheduleRouteSheetControls.test.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       38 passed, 38 total
+Snapshots:   0 total
+Time:        0.824 s, estimated 1 s
+Ran all test suites within paths "__tests__/scheduleDetailTimingTrust.test.ts", "__tests__/transitEtaTrustPresentation.test.ts", "__tests__/scheduleRouteSheetControls.test.ts".

@@ -1,0 +1,37 @@
+{
+  "classification": "SAME_4109_PROVIDER_STATE_TRANSITION_COMPARISON_NOT_PHYSICAL_OR_INCREMENTAL_CODE_GAIN",
+  "independentServices": 1,
+  "firstAlightingProviderBounds": [
+    "2026-11-20T06:25:30+00:00",
+    "2026-11-20T06:26:19+00:00"
+  ],
+  "boundWidthSeconds": 49,
+  "initialTimetablePrediction": "2026-11-20T06:24:30Z",
+  "refreshedProviderPrediction": "2026-11-20T06:27:25Z",
+  "providerBoundsMinusInitialSeconds": [
+    60.0,
+    109.0
+  ],
+  "providerBoundsMinusRefreshedSeconds": [
+    -115.0,
+    -66.0
+  ],
+  "pairedAbsoluteErrorChangeSeconds": [
+    -43.0,
+    55.0
+  ],
+  "uniformlyCloserPredictionProven": false,
+  "interpretation": "Initial prediction is60–109seconds before supplier state transition; refreshed prediction is66–115seconds after it. Both are near this one bounded supplier event, but actual interval straddles their error-equality point; do not claim this requery improved accuracy.",
+  "walkingOrPassengerArrivalMeasured": false,
+  "additionalPublicCallsDuringAnalysis": 0,
+  "positionResponseSha256": {
+    "train-position-1.json": "f3199d4f33b3f8f80266500d4acaf24a25fdb670754ec56df1902f2a57e1bb87",
+    "train-position-2.json": "4a954ad4618161566ff4259f786f71a58ad9f222e3da9322932af191dc2932b1",
+    "train-position-3.json": "4061a3a55efa3afa0e5350c0618a8540fa54a557a4643a55ddb7f232ee65ca65",
+    "train-position-4.json": "eb71fe0522be1dd8e6b4e867426dd702dfc5e05baee95c0b860ee59708707fbb",
+    "train-position-5.json": "0b5d8baf09d1f28702301ab5ecb977a3fedd06c1d499f98ba68bdca86da1364e",
+    "train-position-6.json": "4f338ad619c753d888af60178b3d89a615af3e15a094b32b9645a050167c992a",
+    "train-position-7.json": "8d16bf3e5d4d1ecaa1ad359984e13d39152299b031a9cc657b5a10cee1b4d44c",
+    "train-position-8.json": "3e1f40daf4f7525fb9c4c24d83dd23a2e4da11f18325f2b633d94a199b3a9a27"
+  }
+}

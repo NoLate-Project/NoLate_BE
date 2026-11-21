@@ -1,0 +1,41 @@
+{
+  "classification": "SYNTHETIC_FIRST_ALIGHTING_LATE_SIMULATOR_E2E",
+  "result": "PARTIAL",
+  "providersMocked": true,
+  "database": "H2_MEMORY_ONLY",
+  "physicalTransitHttpCalls": 0,
+  "productionDatabaseModified": false,
+  "actualTripAccuracyVerified": false,
+  "mapAccuracyWithinTwoMinutesVerified": false,
+  "nativeAlarmDeliveryVerified": false,
+  "calendarSmokeRequested": false,
+  "firstAlightingRiskRequested": false,
+  "firstTimetableAlightingRequested": false,
+  "metroPreparation": {
+    "result": "PASSED",
+    "classification": "OWNED_METRO_PREPARATION_NOT_APP_E2E",
+    "port": 8086,
+    "bundleBytes": 21110188,
+    "bundleSha256": "b914e49b76b8ec58207aab93224dbc055c7bc4447ca4771f479d4bd58579135d",
+    "elapsedSeconds": 3.579,
+    "appLaunched": false,
+    "providerRequestSent": false,
+    "uiOrDeliveryDeadlineChanged": false
+  },
+  "startupTransport": {
+    "classification": "PINNED_XCTEST_LIFECYCLE_TRANSPORT_ONLY",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "appDataDeleted": false,
+    "otherDevicesTouched": false,
+    "etaValidated": false,
+    "result": "PASSED",
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.qw7aznaj/ui-private-lifecycle"
+  },
+  "failureKind": "RuntimeError",
+  "failureLocation": {
+    "file": "run-eta-early-transfer.py",
+    "function": "ui",
+    "line": 310
+  },
+  "originalAppEndpointRestored": true
+}

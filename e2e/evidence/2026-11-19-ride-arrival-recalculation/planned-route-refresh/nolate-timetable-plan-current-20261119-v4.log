@@ -1,0 +1,33 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :checkKotlinGradlePluginConfigurationErrors
+> Task :kaptGenerateStubsKotlin UP-TO-DATE
+> Task :kaptKotlin UP-TO-DATE
+> Task :compileKotlin UP-TO-DATE
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :processTestResources UP-TO-DATE
+> Task :kaptGenerateStubsTestKotlin
+> Task :kaptTestKotlin UP-TO-DATE
+
+> Task :compileTestKotlin
+w: file:///private/tmp/nolate-be-planned-build.z6lmcphm/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:374:38 Unnecessary safe call on a non-null receiver of type ScheduleEtaEvaluationHistory
+w: file:///private/tmp/nolate-be-planned-build.z6lmcphm/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:375:37 Unnecessary safe call on a non-null receiver of type ScheduleEtaEvaluationHistory
+w: file:///private/tmp/nolate-be-planned-build.z6lmcphm/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:578:13 Variable 'currentRecommendedDepartureAt' is never used
+
+> Task :compileTestJava NO-SOURCE
+> Task :testClasses UP-TO-DATE
+OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+> Task :test
+
+[Incubating] Problems report is available at: file:///private/tmp/nolate-be-planned-build.z6lmcphm/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 36s
+11 actionable tasks: 4 executed, 7 up-to-date

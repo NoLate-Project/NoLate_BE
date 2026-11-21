@@ -1,0 +1,110 @@
+--- a/e2e/ios/eta_observed_service.py
++++ b/e2e/ios/eta_observed_service.py
+@@ -53,9 +53,24 @@
+         if (observation or {}).get('basis') != 'OBSERVED_SERVICE_CONNECTION':
+             return None
+         now = dt.datetime.fromisoformat(worker['evaluatedAt'])
+-        frames = [f for f in (worker.get('plannedRefreshReplay') or {}).get('frames', [])
+-                  if dt.datetime.fromisoformat(f['evaluatedAt']) == now and not f.get('incomplete')]
+-        if len(frames) != 1 or (frames[0].get('result') or {}).get('route') != observation['effectiveTransitRoute']:
++        frames = (worker.get('plannedRefreshReplay') or {}).get('frames', [])
++        count = worker.get('historyCount')
++        # 이 격리 실행은 첫 평가에 계획을 만들고 이후 평가마다 refresh를 한 번 기록한다.
++        # refresh의 evaluatedAt은 시작시각, Worker의 evaluatedAt은 저장 완료시각이므로
++        # 시각의 동등성 대신 현재 평가 번호·마지막 프레임·저장된 결과를 함께 대조한다.
++        if type(count) is not int or count not in (2, 3) or len(frames) != count - 1:
++            return None
++        starts = [dt.datetime.fromisoformat(f['evaluatedAt']) for f in frames]
++        if any(a >= b for a, b in zip(starts, starts[1:])) or starts[-1] > now:
++            return None
++        frame = frames[-1]
++        decision_at = starts[-1]
++        snapshot = worker['effectiveSnapshot']
++        original = snapshot['inProgressPlannedRoute']
++        if (frame.get('incomplete') or frame.get('departurePlan') != original or
++                frame.get('result') != snapshot.get('plannedRouteUpdate') or
++                any(frame['plan'].get(key) != original.get(key) for key in ('identity', 'provider', 'departureAt')) or
++                (frame.get('result') or {}).get('route') != observation['effectiveTransitRoute']):
+             return None
+         selected = []
+         for leg in observation['effectiveTransitRoute']['segments']:
+@@ -68,9 +83,10 @@
+                     (leg['toName'], 'predictedArrivalAt', 'observationSourceUpdatedAt')):
+                 source = dt.datetime.fromisoformat(timing[source_field])
+                 expected = dt.datetime.fromisoformat(timing[expected_field])
+-                if not -5 <= (now - source).total_seconds() <= 120 or expected <= now:
++                if (not -5 <= (now - source).total_seconds() <= 120 or
++                        not -5 <= (decision_at - source).total_seconds() <= 120 or expected <= now):
+                     return None
+-                read = [r for r in frames[0]['stations'] if station(r['station']) == station(name) and
++                read = [r for r in frame['stations'] if station(r['station']) == station(name) and
+                         r['line'] == leg['lineName'] and r['directionCode'] == service['directionCode']]
+                 if len(read) != 1:
+                     return None
+@@ -106,6 +122,7 @@
+                 comparisonTimetableTrainNumber=timing['timetable']['trainNumber'],
+                 predictedBoardingAt=timing['predictedBoardingAt'], predictedAlightingAt=timing['predictedArrivalAt']))
+         return {'classification': 'TWO_ENDPOINT_ACTUAL_SERVICE_CONNECTION_NOT_TIMETABLE_ALIAS', 'services': selected,
+-                'physicalArrivalVerified': False} if selected else None
++                'refreshEvaluatedAt': frame['evaluatedAt'], 'workerFinishedAt': worker['evaluatedAt'],
++                'historyCount': count, 'physicalArrivalVerified': False} if selected else None
+     except (KeyError, TypeError, ValueError):
+         return None
+--- a/e2e/ios/test_eta_observed_service.py
++++ b/e2e/ios/test_eta_observed_service.py
+@@ -31,8 +31,8 @@
+             stationName=name, lineName='2호선', subwayLineId='1002', trainNumber='3202', direction='내선', destinationName='성수',
+             realtime=True, express=False, freshnessEvidence='PROVIDER_SOURCE_TIMESTAMP', arrivalStatus='IN_TRANSIT',
+             expectedAt=at(expected), sourceUpdatedAt=at(120))]))
+-    worker = dict(evaluatedAt=at(130), effectiveSnapshot=dict(inProgressPlannedRoute=original, plannedRouteUpdate=update),
+-        plannedRefreshReplay=dict(frames=[dict(evaluatedAt=at(130), incomplete=False, stations=reads, result=update)]))
++    worker = dict(evaluatedAt=at(130), historyCount=2, effectiveSnapshot=dict(inProgressPlannedRoute=original, plannedRouteUpdate=update),
++        plannedRefreshReplay=dict(frames=[dict(evaluatedAt=at(130), plan=copy.deepcopy(original), departurePlan=copy.deepcopy(original), incomplete=False, stations=reads, result=update)]))
+     return worker, route, original
+ 
+ 
+--- /dev/null
++++ b/e2e/ios/test_eta_evaluation_correlation.py
+@@ -0,0 +1,42 @@
++import copy
++import unittest
++from test_eta_observed_service import fixture,at
++from eta_observed_service import fresh_observed_service_connection
++from eta_planned_route_evidence import qualifying_planned_observation
++
++class EvaluationCorrelationTest(unittest.TestCase):
++    def current(self):
++        worker,_,_=fixture()
++        worker["plannedRefreshReplay"]["frames"][-1]["evaluatedAt"]=at(127)
++        return worker
++
++    def test_request_start_and_worker_finish_are_distinct_clocks_for_the_same_evaluation(self):
++        worker=self.current();observation=qualifying_planned_observation(worker)
++        witness=fresh_observed_service_connection(worker,observation)
++        self.assertIsNotNone(witness)
++        self.assertEqual(witness["refreshEvaluatedAt"],at(127))
++        self.assertEqual(witness["workerFinishedAt"],at(130))
++
++    def test_only_current_last_cumulative_frame_can_prove_pairing(self):
++        worker=self.current();old=copy.deepcopy(worker["plannedRefreshReplay"]["frames"][0]);old["evaluatedAt"]=at(100);old["result"]=None
++        worker["plannedRefreshReplay"]["frames"].insert(0,old);worker["historyCount"]=3
++        self.assertIsNotNone(fresh_observed_service_connection(worker,qualifying_planned_observation(worker)))
++        worker["plannedRefreshReplay"]["frames"].pop()
++        self.assertIsNone(fresh_observed_service_connection(worker,qualifying_planned_observation(worker)))
++
++    def test_missing_or_foreign_or_incomplete_current_refresh_cannot_reuse_a_previous_pair(self):
++        for case in ["missing-count","future-frame","different-plan","different-result","incomplete","duplicate-frame"]:
++            worker=self.current();frame=worker["plannedRefreshReplay"]["frames"][0]
++            if case=="missing-count":worker.pop("historyCount")
++            if case=="future-frame":frame["evaluatedAt"]=at(131)
++            if case=="different-plan":frame["departurePlan"]=dict(frame["departurePlan"],identity="b"*64)
++            if case=="different-result":frame["result"]=dict(frame["result"],onlyLastRideObserved=True)
++            if case=="incomplete":frame["incomplete"]=True
++            if case=="duplicate-frame":worker["plannedRefreshReplay"]["frames"].append(copy.deepcopy(frame));worker["historyCount"]=3
++            self.assertIsNone(fresh_observed_service_connection(worker,qualifying_planned_observation(worker)),case)
++
++    def test_source_must_be_fresh_at_both_decision_and_completion_without_clock_rewriting(self):
++        worker=self.current();worker["plannedRefreshReplay"]["frames"][0]["evaluatedAt"]=at(114)
++        self.assertIsNone(fresh_observed_service_connection(worker,qualifying_planned_observation(worker)))
++        worker=self.current();worker["evaluatedAt"]=at(241)
++        self.assertIsNone(fresh_observed_service_connection(worker,qualifying_planned_observation(worker)))

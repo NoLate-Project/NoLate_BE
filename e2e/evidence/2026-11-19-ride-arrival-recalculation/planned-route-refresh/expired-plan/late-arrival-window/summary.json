@@ -1,0 +1,29 @@
+{
+  "tests": 226,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "beforeFixRegressionsFailed": 2,
+  "liveJvmIncludesFix": false,
+  "nativeE2EIncludesFix": false,
+  "suites": {
+    "com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest": {
+      "tests": 15,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest": {
+      "tests": 113,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "com.noLate.schedule.application.service.SchedulePushJobWorkerTest": {
+      "tests": 98,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "basis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+  "card": "15:47 도착 예상 · 총 71분",
+  "itinerary": "접근 도보 · 약 2분 17초 · 148m  →  수도권 4호선 · 노원→사당 · 약 52분 · K4621열차 · 승차역 실시간 · 하차역 시간표 · 14:39:40 승차역 열차 도착 예측 → 15:30:00 하차 예측  →  환승 도보 · 약 2분 37초 · 170m  →  수도권 2호선 · 사당→신림 · 환승 대기 약 5분 53초 · 2278열차 · 시간표 · 15:38:30 승차 → 15:46:00 하차 예측  →  도착 도보 · 약 1분 13초 · 78m",
+  "railDeparture": "2026-11-18T05:36:23Z",
+  "railArrival": "2026-11-18T06:47:13Z",
+  "rides": [
+    {
+      "startAt": "2026-11-18T05:39:40.000Z",
+      "endAt": "2026-11-18T06:30:00.000Z",
+      "movementSeconds": 3020,
+      "startsWithStationArrivalPrediction": true,
+      "provisionalPlan": true
+    },
+    {
+      "startAt": "2026-11-18T06:38:30.000Z",
+      "endAt": "2026-11-18T06:46:00.000Z",
+      "movementSeconds": 450,
+      "transferWaitSeconds": 353,
+      "provisionalPlan": true
+    }
+  ]
+}

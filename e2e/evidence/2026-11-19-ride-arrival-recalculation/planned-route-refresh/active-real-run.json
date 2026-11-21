@@ -1,0 +1,45 @@
+{
+  "runnerSession": 65013,
+  "log": "/private/tmp/nolate-timetable-response-fixed-real-run-20261119.log",
+  "purpose": "REAL_TIMETABLE_BASELINE_THEN_PLANNED_RIDE_OBSERVATIONS",
+  "maximumEvaluations": 3,
+  "targetLeadMinutes": 90,
+  "caffeinateSessions": [
+    94018,
+    36866
+  ],
+  "independentPositionCollector": {
+    "execSession": 92984,
+    "root": "/private/tmp/nolate-ride-observation.z8fbdcjl",
+    "maximumHttpCalls": 16,
+    "status": "FINISHED",
+    "completedRequests": 16,
+    "physicalHttpCalls": 16,
+    "summary": "real-response-clock-fixed/completed-position-audit/summary.json"
+  },
+  "productionDatabaseModified": false,
+  "nativeFcmAndPhysicalAudioDeferred": true,
+  "root": "/private/tmp/nolate-eta-real-e2e.f73idd8i",
+  "terminal": {
+    "result": "PARTIAL",
+    "completedEvaluations": 2,
+    "secondEvaluationAt": "2026-11-19T15:01:03.245593Z",
+    "originalAppEndpointRestored": true,
+    "termination": "ODsay rail identifier assertion used the Tmap identifier",
+    "qualifyingRealtimeUpdate": false
+  },
+  "firstEvaluation": {
+    "source": "TIMETABLE_PROVIDER",
+    "stale": true,
+    "normalRealtimeAccepted": false,
+    "timetablePlanPreserved": true,
+    "protectedDepartureAt": "2026-11-19T14:11:00Z",
+    "uiDiagnosticPassed": true
+  },
+  "expiredPlanFollowup": {
+    "fixLoadedInRunningJvm": false,
+    "recordedPublicApiRegression": true,
+    "offlineReplayPassed": true,
+    "evidence": "expired-plan/recorded-midnight-api/summary.json"
+  }
+}

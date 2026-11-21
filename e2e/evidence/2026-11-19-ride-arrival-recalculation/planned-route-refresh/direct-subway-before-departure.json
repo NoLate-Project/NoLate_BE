@@ -1,0 +1,190 @@
+{
+  "scope": "Controlled, identical selected Dongjak–Sadang ODsay route, first train 4703, normalized Seoul station forecast fixtures. Local calculation and production TypeScript presentation functions. No new public query, installed-app E2E, passenger measurement or Naver comparison in this exhibit.",
+  "checkedAt": "2026-07-29T00:00:00Z",
+  "routeSeconds": {
+    "accessWalk": 300,
+    "boardingMargin": 60,
+    "egressWalk": 120
+  },
+  "cases": [
+    {
+      "sharedInputSha256": "119c7d797b1b8118f8e57e0863e4a6532b37968372cc60c336afcb6da6452458",
+      "reportedAlightingTrain": "4703",
+      "forecastSecondsFromCheck": 660,
+      "deadlineSecondsFromCheck": 810,
+      "previous": {
+        "accepted": false,
+        "stale": true,
+        "failureReason": "TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE: 현재 확인된 동일 경로 차량으로는 일정 시각까지 도착할 수 없습니다.",
+        "timingBasis": "FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE",
+        "recommendedDepartureAt": "2026-07-29T00:00:00Z",
+        "predictedBoardingAt": "2026-07-29T00:08:00Z",
+        "predictedAlightingAt": "2026-07-29T00:13:00Z",
+        "predictedArrivalAt": "2026-07-29T00:15:00Z"
+      },
+      "current": {
+        "accepted": true,
+        "stale": false,
+        "failureReason": null,
+        "timingBasis": "SAME_SUBWAY_BOARDING_AND_ALIGHTING_REALTIME",
+        "recommendedDepartureAt": "2026-07-29T00:02:00Z",
+        "predictedBoardingAt": "2026-07-29T00:08:00Z",
+        "predictedAlightingAt": "2026-07-29T00:11:00Z",
+        "predictedArrivalAt": "2026-07-29T00:13:00Z"
+      },
+      "currentMinusPreviousDestinationSeconds": -120,
+      "appPresentationBefore": {
+        "normalSummary": false,
+        "matchedTimeline": false
+      },
+      "appPresentationAfter": {
+        "normalSummary": true,
+        "matchedTimeline": true,
+        "summary": "09:02 출발 · 09:13 도착 · 총 11분",
+        "accessSeconds": 300,
+        "waitSeconds": 60,
+        "rideSeconds": 180,
+        "egressSeconds": 120
+      }
+    },
+    {
+      "sharedInputSha256": "6ea7e58a64111c56c7111e3a817bbb4db25c1f7d9566c074a6adde1a7a5a8e26",
+      "reportedAlightingTrain": "4703",
+      "forecastSecondsFromCheck": 840,
+      "deadlineSecondsFromCheck": 1200,
+      "previous": {
+        "accepted": true,
+        "stale": false,
+        "failureReason": null,
+        "timingBasis": "FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE",
+        "recommendedDepartureAt": "2026-07-29T00:02:00Z",
+        "predictedBoardingAt": "2026-07-29T00:08:00Z",
+        "predictedAlightingAt": "2026-07-29T00:13:00Z",
+        "predictedArrivalAt": "2026-07-29T00:15:00Z"
+      },
+      "current": {
+        "accepted": true,
+        "stale": false,
+        "failureReason": null,
+        "timingBasis": "SAME_SUBWAY_BOARDING_AND_ALIGHTING_REALTIME",
+        "recommendedDepartureAt": "2026-07-29T00:02:00Z",
+        "predictedBoardingAt": "2026-07-29T00:08:00Z",
+        "predictedAlightingAt": "2026-07-29T00:14:00Z",
+        "predictedArrivalAt": "2026-07-29T00:16:00Z"
+      },
+      "currentMinusPreviousDestinationSeconds": 60,
+      "appPresentationBefore": {
+        "normalSummary": true,
+        "matchedTimeline": true,
+        "summary": "09:02 출발 · 09:15 도착 · 총 13분",
+        "accessSeconds": 300,
+        "waitSeconds": 60,
+        "rideSeconds": 300,
+        "egressSeconds": 120
+      },
+      "appPresentationAfter": {
+        "normalSummary": true,
+        "matchedTimeline": true,
+        "summary": "09:02 출발 · 09:16 도착 · 총 14분",
+        "accessSeconds": 300,
+        "waitSeconds": 60,
+        "rideSeconds": 360,
+        "egressSeconds": 120
+      }
+    },
+    {
+      "sharedInputSha256": "f4c12c42b4b645a276f9b467243975f3f19179f86d067dccb422d2cff3f43d75",
+      "reportedAlightingTrain": "4705",
+      "forecastSecondsFromCheck": 660,
+      "deadlineSecondsFromCheck": 1200,
+      "previous": {
+        "accepted": true,
+        "stale": false,
+        "failureReason": null,
+        "timingBasis": "FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE",
+        "recommendedDepartureAt": "2026-07-29T00:02:00Z",
+        "predictedBoardingAt": "2026-07-29T00:08:00Z",
+        "predictedAlightingAt": "2026-07-29T00:13:00Z",
+        "predictedArrivalAt": "2026-07-29T00:15:00Z"
+      },
+      "current": {
+        "accepted": true,
+        "stale": false,
+        "failureReason": null,
+        "timingBasis": "FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE",
+        "recommendedDepartureAt": "2026-07-29T00:02:00Z",
+        "predictedBoardingAt": "2026-07-29T00:08:00Z",
+        "predictedAlightingAt": "2026-07-29T00:13:00Z",
+        "predictedArrivalAt": "2026-07-29T00:15:00Z"
+      },
+      "currentMinusPreviousDestinationSeconds": 0,
+      "appPresentationBefore": {
+        "normalSummary": true,
+        "matchedTimeline": true,
+        "summary": "09:02 출발 · 09:15 도착 · 총 13분",
+        "accessSeconds": 300,
+        "waitSeconds": 60,
+        "rideSeconds": 300,
+        "egressSeconds": 120
+      },
+      "appPresentationAfter": {
+        "normalSummary": true,
+        "matchedTimeline": true,
+        "summary": "09:02 출발 · 09:15 도착 · 총 13분",
+        "accessSeconds": 300,
+        "waitSeconds": 60,
+        "rideSeconds": 300,
+        "egressSeconds": 120
+      }
+    },
+    {
+      "sharedInputSha256": "29274c89ad1364e6ddbaec7d41ad7c6a7df0d8921387adef99a6f278f892897d",
+      "reportedAlightingTrain": "4703",
+      "forecastSecondsFromCheck": 840,
+      "deadlineSecondsFromCheck": 910,
+      "previous": {
+        "accepted": true,
+        "stale": false,
+        "failureReason": null,
+        "timingBasis": "FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE",
+        "recommendedDepartureAt": "2026-07-29T00:02:00Z",
+        "predictedBoardingAt": "2026-07-29T00:08:00Z",
+        "predictedAlightingAt": "2026-07-29T00:13:00Z",
+        "predictedArrivalAt": "2026-07-29T00:15:00Z"
+      },
+      "current": {
+        "accepted": false,
+        "stale": true,
+        "failureReason": "TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE: 현재 확인된 동일 경로 차량으로는 일정 시각까지 도착할 수 없습니다.",
+        "timingBasis": "SAME_SUBWAY_BOARDING_AND_ALIGHTING_REALTIME",
+        "recommendedDepartureAt": "2026-07-29T00:00:00Z",
+        "predictedBoardingAt": "2026-07-29T00:08:00Z",
+        "predictedAlightingAt": "2026-07-29T00:14:00Z",
+        "predictedArrivalAt": "2026-07-29T00:16:00Z"
+      },
+      "currentMinusPreviousDestinationSeconds": 60,
+      "appPresentationBefore": {
+        "normalSummary": true,
+        "matchedTimeline": true,
+        "summary": "09:02 출발 · 09:15 도착 · 총 13분",
+        "accessSeconds": 300,
+        "waitSeconds": 60,
+        "rideSeconds": 300,
+        "egressSeconds": 120
+      },
+      "appPresentationAfter": {
+        "normalSummary": false,
+        "matchedTimeline": false
+      }
+    }
+  ],
+  "regressions": {
+    "backendSuites": 12,
+    "backendTests": 441,
+    "frontendSuites": 4,
+    "frontendTests": 76,
+    "failures": 0,
+    "frontendTypecheck": "passed"
+  },
+  "privateRun": "/private/tmp/nolate-be-planned-build.c3iohx0E"
+}

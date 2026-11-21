@@ -1,0 +1,13 @@
+{
+  "classification": "OFFLINE_CANDIDATE_REGRESSION_NOT_ACCURACY",
+  "candidateRoot": "/private/tmp/nolate-be-planned-build.9h4y8nrr",
+  "regression": {
+    "suites": 12,
+    "tests": 457,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "completedAt": "2026-11-20T02:10:00.998511+00:00",
+  "deployedToRunningJvm": false
+}

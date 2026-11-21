@@ -1,0 +1,39 @@
+{
+  "classification": "COMPLETED_BOUNDED_ACTUAL_RUN_NOT_GOAL_COMPLETION",
+  "result": "PARTIAL",
+  "runRoot": "/private/tmp/nolate-eta-real-e2e._u61kjyy",
+  "evaluations": 3,
+  "positionHttpCalls": 16,
+  "providerFailures": [],
+  "nativeCases": [
+    "initial future timetable passed",
+    "first-alighting and onward timetable update passed",
+    "last-accepted-plan fallback passed"
+  ],
+  "sameHistoricalServiceBindingPassed": false,
+  "independentJourneys": 1,
+  "positionScoredFutureBeforeAfterEvents": 0,
+  "sourceFileCounts": {
+    "backend": 58,
+    "frontend": 6
+  },
+  "sourceDifferences": {
+    "backend": [],
+    "frontend": []
+  },
+  "ownedPortsFree": {
+    "5523": true,
+    "8086": true
+  },
+  "originalAppEndpointRestoreTransportPassed": true,
+  "normalLiveAccuracyOrPhysicalArrivalVerified": false,
+  "observedSourceLateBoundsSeconds": {
+    "originalNowonDepartureAtLeast": 168,
+    "originalSadangArrivalAtLeast": 174
+  },
+  "missingEvidence": [
+    "No fresh matching final train or valid ARRIVED boarding record in the two subsequent evaluations.",
+    "No tight arrival transition upper bound and no pre-event publication proof for the later first-alighting update."
+  ],
+  "nextDistinctValidation": "Actual @Scheduled post-departure one-minute policy and installed-app status, not another repetition of this missing natural-pair scenario."
+}

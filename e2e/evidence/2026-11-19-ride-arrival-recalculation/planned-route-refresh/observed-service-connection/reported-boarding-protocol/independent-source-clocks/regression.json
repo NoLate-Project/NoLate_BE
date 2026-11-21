@@ -1,0 +1,20 @@
+{
+  "classification": "REPORTED_BOARDING_INDEPENDENT_FORECAST_PUBLICATION_CONTRACT_NOT_REAL_ACCURACY",
+  "suites": 18,
+  "tests": 532,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "httpCalls": 0,
+  "sourceSha256": {
+    "src/main/kotlin/com/noLate/schedule/application/ReportedSubwayBoardingEvidence.kt": "6ed9c6c6261a07a9c3a167cd0cae587b9d0e85310c737f67cae766e8ac6158c4",
+    "src/main/kotlin/com/noLate/schedule/application/PlannedTransitRouteUpdate.kt": "9ac4c59071af01e1f2b531d074cbd80832c3d3cb3905058c1504d1e5ba4dc9ef",
+    "src/main/kotlin/com/noLate/schedule/application/TrafficClient.kt": "b0664d0adc2270e77f36a986748b03e7535819b2ddaceb056ffccde0fb1c2bc9",
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "4ea2f4613318b2f038645f9b93ce5cbabc26166c1b07da0b44ccf72a791e1951",
+    "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": "f210a8be3d3dfae96eaf9f9ddd9998099492efae35ca1e8c1e2da867dca6498e",
+    "src/test/kotlin/com/noLate/eta/application/transit/ReportedSubwayBoardingEvidenceTest.kt": "3289b737671c42ed095898c159359ff3647caaa784e4c052e0d207e71d0429a3",
+    "src/test/kotlin/com/noLate/eta/application/transit/ObservedSubwayServiceRefreshTest.kt": "a7639d88b4cb89cd3724d60258dc4bffaf362a87e9da6af61876b324a28c9199",
+    "src/test/kotlin/com/noLate/eta/application/TransitEtaCalculationServiceTest.kt": "454c24edd3532eba3217e7814d7a8983e228b7793b4d673259cf97fdbb35b4d6"
+  },
+  "note": "A still-fresh alighting forecast can be published before the reported boarding-state timestamp; both must be available at the evaluation. Historical boarding state is not a current forecast. No alias, walk or margin change."
+}

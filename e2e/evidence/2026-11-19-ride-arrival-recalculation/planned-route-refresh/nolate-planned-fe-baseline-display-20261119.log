@@ -1,0 +1,8 @@
+PASS __tests__/effectiveTransitRoutePresentation.test.ts
+PASS __tests__/matchedTransitTimeline.test.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       43 passed, 43 total
+Snapshots:   0 total
+Time:        1.431 s, estimated 2 s
+Ran all test suites within paths "__tests__/effectiveTransitRoutePresentation.test.ts", "__tests__/matchedTransitTimeline.test.ts".

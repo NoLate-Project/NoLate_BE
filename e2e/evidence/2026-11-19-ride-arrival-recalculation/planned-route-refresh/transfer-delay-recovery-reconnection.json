@@ -1,0 +1,94 @@
+{
+  "classification": "SYNTHETIC_SAME_STATION_RESPONSES_TWO_COMPILED_BACKEND_REVISIONS",
+  "fixture": "src/test/resources/eta/planned-transfer-recovery-synthetic.json",
+  "inputFileSha256": "d2a09e04c4d35975774df6d44e30c5c2770735019a44faea45c21f48203d328c",
+  "evaluations": [
+    450,
+    470
+  ],
+  "stationResponses": [
+    [
+      {
+        "lineName": "4호선",
+        "stationName": "사당",
+        "trainNumber": "4012",
+        "sourceUpdatedAt": "2026-11-19T12:07:29Z",
+        "expectedAt": "2026-11-19T12:12:20Z"
+      },
+      {
+        "lineName": "2호선",
+        "stationName": "사당",
+        "trainNumber": "2012",
+        "sourceUpdatedAt": "2026-11-19T12:07:29Z",
+        "expectedAt": "2026-11-19T12:18:20Z"
+      }
+    ],
+    [
+      {
+        "lineName": "2호선",
+        "stationName": "사당",
+        "trainNumber": "2012",
+        "sourceUpdatedAt": "2026-11-19T12:07:49Z",
+        "expectedAt": "2026-11-19T12:16:50Z"
+      }
+    ]
+  ],
+  "sourceSha256Before": "5f7e4d36d2e7f1af2d0141d9b222f69a5e0eaa48ef110b0b2cdb17680d275780",
+  "sourceSha256After": "8d6be5555557c89a73a92b1690e1848524ef41578d0848c86d9e134669b1fdf7",
+  "guard": {
+    "inboundArrivalAt": "2026-11-19T12:12:20Z",
+    "originalTransferWalkingSeconds": 243,
+    "requiredMarginSeconds": 60,
+    "readyIncludingMarginAt": "2026-11-19T12:17:23Z",
+    "new2012StationArrivalPrediction": "2026-11-19T12:16:50Z",
+    "shortfallAgainstBoardingPredictionSeconds": 33
+  },
+  "before": {
+    "secondEvaluationReturnedNewPlan": false,
+    "trainNumber": "2012",
+    "transferTimingBasis": "PLANNED_RIDE_BOARDING_REALTIME",
+    "routeSourceUpdatedAt": "2026-11-19T12:07:29Z",
+    "replacementObservationSourceAt": "2026-11-19T12:07:29Z",
+    "firstRideSeconds": 530,
+    "transferWalkSeconds": 243,
+    "transferWaitSeconds": 117,
+    "secondRideSeconds": 481,
+    "departureAt": "2026-11-19T12:00:39Z",
+    "destinationAt": "2026-11-19T12:29:12Z",
+    "freshAppSummary": "21:29 도착 예상 · 총 29분",
+    "expiredAppSummary": "21:29 도착 예상 · 총 29분",
+    "routeWaitAndMovementAddToDuration": true
+  },
+  "after": {
+    "secondEvaluationReturnedNewPlan": true,
+    "trainNumber": "2014",
+    "transferTimingBasis": "TIMETABLE",
+    "routeSourceUpdatedAt": "2026-11-19T12:07:29Z",
+    "replacementObservationSourceAt": null,
+    "firstRideSeconds": 530,
+    "transferWalkSeconds": 243,
+    "transferWaitSeconds": 317,
+    "secondRideSeconds": 481,
+    "departureAt": "2026-11-19T12:00:39Z",
+    "destinationAt": "2026-11-19T12:32:32Z",
+    "freshAppSummary": "21:32 도착 예상 · 총 32분",
+    "expiredAppSummary": "21:32 도착 예상 · 총 32분",
+    "routeWaitAndMovementAddToDuration": true
+  },
+  "regression": {
+    "kotlinSuites": 9,
+    "tests": 377,
+    "skipped": 0,
+    "errors": 0,
+    "failures": 0,
+    "jestSuites": 3,
+    "jestTests": 48,
+    "workerPersistedPlanVerified": true,
+    "publicStatusProjectionAndAppPresentationVerified": true
+  },
+  "newLiveProviderCalls": 0,
+  "naturalTransferRecoveryVerified": false,
+  "installedAppE2EThisRevisionVerified": false,
+  "newEligibleNaverComparisons": 0,
+  "physicalDestinationArrivalMeasured": false
+}

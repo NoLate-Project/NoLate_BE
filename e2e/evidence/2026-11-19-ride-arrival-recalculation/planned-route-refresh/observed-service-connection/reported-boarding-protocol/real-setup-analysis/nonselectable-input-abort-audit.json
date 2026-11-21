@@ -1,0 +1,11 @@
+{
+  "classification": "ABORTED_COMPARISON_SETUP_NOT_PROVIDER_FAILURE",
+  "reason": "Naver public future UI offers ten-minute steps; 19:05 cannot be selected. Do not compare with 19:00 or 19:10 as the same input.",
+  "workerEvaluations": 1,
+  "positionReads": 0,
+  "providerFailures": [],
+  "originalAppEndpointRestored": true,
+  "oldRootMayRestart": false,
+  "successorIsNewMinuteAlignedInput": true,
+  "completedBeforeNativeEtaAssertion": true
+}

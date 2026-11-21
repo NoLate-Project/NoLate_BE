@@ -1,0 +1,19 @@
+{
+  "classification": "PROSPECTIVE_OFFLINE_CANDIDATE_NOT_DEPLOYED",
+  "frozenAt": "2026-11-20T02:04:30.945829+00:00",
+  "sourceSnapshot": "/private/tmp/nolate-be-planned-build.9h4y8nrr",
+  "mainWorktreePromoted": false,
+  "runningJvmModified": false,
+  "inputEvaluation": "/private/tmp/nolate-eta-real-e2e.w9vtd97p/evaluation-2.json",
+  "inputSha256": "d67522b445fda70f5c632aba7d847d453ed8085207ec4bf25f1da484c7dac2eb",
+  "files": {
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "68581d8dd5e20bff0df7b9eb2e66dc540a4d1797724c7ad4981f755d8c64e5c2",
+    "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": "f34deb4f51e9b49b668c703432adc3d93517cfd402e9d732d9ef3c711826e807"
+  },
+  "scope": "Already issued subway plan only. Exact same train/day/direction/terminal/class, fresh<=120s, late ARRIVED state with wait=0 and expectedAt=sourceUpdatedAt, explicit scheduled station-arrival clock. Future forecast filtering remains unchanged. No physical boarding claim.",
+  "baselineFirstAlightingAt": "2026-11-20T02:45:00Z",
+  "candidateFirstAlightingAt": "2026-11-20T02:46:55Z",
+  "candidateKeepsFinalArrivalAt": "2026-11-20T02:59:43Z",
+  "outcomeGate": "Use this run's later independent same-train Sadang transition, bracket<=150s with fresh source timestamps. Compare baseline and candidate against the identical bracket. Candidate must reduce interval worst-case absolute error without increasing early-arrival error. No labels after freeze were used to choose its shift. Reject adoption if not supported. No source transport/quota retries or extra collection.",
+  "physicalArrivalSecondKnown": false
+}

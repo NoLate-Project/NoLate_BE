@@ -1,0 +1,32 @@
+{
+  "classification": "REAL_SAME_FUTURE_INPUT_MAP_AND_INTERNAL_TIMETABLE_CANDIDATE_NOT_ACCEPTED_ETA",
+  "naver": {
+    "requestedDepartureAt": "2026-11-20T19:10:00+09:00",
+    "visibleQueryTime": "18:58",
+    "visibleFirstTrain": "19:11 오이도행",
+    "visibleTransferTrain": "20:03 내선순환행",
+    "visibleArrivalMinute": "20:11",
+    "visibleTransferWalk": "2분 · 155m",
+    "snapshot": "NoLate_FE/output/playwright/eta-20261120-1910/details.yml"
+  },
+  "app": {
+    "requestedDepartureAt": "2026-11-20T19:10:00+09:00",
+    "evaluatedAt": "2026-11-20T09:59:03.167840Z",
+    "candidateDepartureAt": "2026-11-20T10:10:00Z",
+    "candidateArrivalAt": "2026-11-20T11:16:13Z",
+    "exposedDiagnosticDepartureAt": "2026-11-20T10:00:00Z",
+    "currentFailure": "TRANSIT_ARRIVAL_OUT_OF_HORIZON: 계획한 승차 시각 이후의 도착 차량을 확인할 수 없습니다.",
+    "futurePlanPreserved": false
+  },
+  "nominalInternalCandidateMinusMapDisplaySeconds": 313,
+  "currentDiagnosticNotSameDeparture": true,
+  "strictWholeWalkingScopeVerified": false,
+  "physicalArrivalAccuracyVerified": false,
+  "normalLiveEtaAccepted": false,
+  "setupWorkerEvaluations": 1,
+  "alignedWorkerEvaluations": 1,
+  "totalWorkerEvaluationsInTheseSetups": 2,
+  "positionHttpCalls": 0,
+  "providerFailures": [],
+  "fixNotYetPromoted": true
+}

@@ -1,0 +1,20 @@
+{
+  "classification": "OFFLINE_REAL_RUN_PREFLIGHT",
+  "checkedAt": "2026-11-19T22:01:49.784577+00:00",
+  "backendSnapshot": "/private/tmp/nolate-be-planned-build.c3iohx0E",
+  "criticalSourcesMatched": 53,
+  "fixtureInputSha256": "bca0bd0879e42fdc45220f6ac7ba3705ad91369a1dbb4e16e2c448fe58dd7f22",
+  "firstCompileAttempt": "FAILED_MISSING_SNAPSHOT_RELATIVE_INIT_SCRIPT",
+  "recovery": "Runner now uses the repository Gradle initialization script by absolute path with the isolated build working directory.",
+  "fixtureCompile": "PASSED",
+  "classpathEntries": 272,
+  "simulatorLauncherCompiled": true,
+  "offlineReplayLauncherCompiled": true,
+  "runnerUnitTests": 40,
+  "runnerUnitFailures": 0,
+  "publicHttpRequests": 0,
+  "installedAppE2EExecuted": false,
+  "newMapComparisonExecuted": false,
+  "remaining": "The real ODsay/Seoul execution, published predicted clocks and same-train position events must be captured from the reserved 08:00 service run.",
+  "privateLogs": "/private/tmp/nolate-eta-real-e2e.preflight-dtxt2jt8"
+}

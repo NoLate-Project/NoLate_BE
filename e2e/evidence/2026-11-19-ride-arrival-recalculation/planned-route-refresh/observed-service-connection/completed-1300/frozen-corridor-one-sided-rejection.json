@@ -1,0 +1,17 @@
+{
+  "classification": "PRE_OUTCOME_FROZEN_CANDIDATE_ONE_SIDED_REJECTION_NOT_FULL_ARRIVAL_LABEL",
+  "createdAt": "2026-11-20T05:24:12.373332+00:00",
+  "trainNumber": "3240",
+  "independentServices": 1,
+  "inputForecastArtifactSha256": "cd4dad21de960e642903798ab58c0177918e92167cec95b2b73f310a4239718a",
+  "lastConfirmedBeforeAlightingAt": "2026-11-20T05:13:57+00:00",
+  "templatePredictedAlightingAt": "2026-11-20T05:12:03+00:00",
+  "peerPredictedAlightingAt": "2026-11-20T05:09:33+00:00",
+  "templateMinimumEarlyErrorSeconds": 114.0,
+  "peerMinimumEarlyErrorSeconds": 264.0,
+  "peerAbsoluteErrorWorseForEveryPossibleLaterArrivalSeconds": 150.0,
+  "fullArrivalUpperBoundAvailable": false,
+  "physicalPassengerTimestampKnown": false,
+  "decision": "REJECT_PEER_DURATION_IN_THIS_PILOT_NO_PRODUCTION_CHANGE",
+  "additionalPublicCalls": 0
+}

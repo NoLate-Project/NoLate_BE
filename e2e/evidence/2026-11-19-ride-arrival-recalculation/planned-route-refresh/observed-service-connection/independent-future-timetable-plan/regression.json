@@ -1,0 +1,25 @@
+{
+  "status": "PROMOTED_AFTER_PRIVATE_REGRESSION",
+  "suites": 20,
+  "tests": 565,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "additionalHttpCalls": 0,
+  "providerFailureGateUnchanged": true,
+  "currentDiagnosticPreserved": true,
+  "actualNewFuturePlanE2EVerified": false,
+  "sourceSha256": {
+    "src/main/kotlin/com/noLate/schedule/application/TrafficClient.kt": "2ef6aca709f9b4d1039d1b92dd4545b3b38b646c80d1e25ccafc87606e20dfe8",
+    "src/main/kotlin/com/noLate/schedule/application/TransitTimetablePlanEvidence.kt": "247a39c709d7db312bd4be4d4328e11cf135717fbfadc65c1831a74881bbbe4f",
+    "src/main/kotlin/com/noLate/schedule/application/TimetableDeparturePlanPolicy.kt": "3bccad8cb0cd578e42f3dea87e6e32a5caaed2274c6a1a54df6de91cea60a34a",
+    "src/main/kotlin/com/noLate/eta/application/TransitEtaCalculationService.kt": "5ebf9632bdec94f99eec05792ad34133a5fbb7be827acf8af54047f9acae32b8",
+    "src/main/kotlin/com/noLate/schedule/application/service/ScheduleDepartureEtaService.kt": "2c13a70dca8e3497757baf8ddf466e419603d536739df453468ce07a4bdf0c40",
+    "src/test/kotlin/com/noLate/eta/application/TransitEtaCalculationServiceTest.kt": "5c36e71ba20d0fdb4c65ef9f3b237045353f7335939c0e5d87ec79a573f7311f",
+    "src/test/kotlin/com/noLate/schedule/application/TimetableDeparturePlanPolicyTest.kt": "f56333f51ad6de0865207a94138ac84dd9fca090e20d90c9fe26f8401f56ba73",
+    "src/test/kotlin/com/noLate/schedule/application/service/ScheduleDepartureEtaServiceTest.kt": "bc800d15349c90de686d2e1255ea48b12021d93718e8a1940d101dd272c3a5f6",
+    "src/test/kotlin/com/noLate/eta/simulator/RealFutureTimetablePlanTrace.kt": "cae04b958401b613bb4a4e2de954f140eae19fdb071dfb46446e78a0657f8e32",
+    "src/test/kotlin/com/noLate/eta/simulator/RealFutureTimetablePlanTraceTest.kt": "f9546ab4d239cd62aec682379c33d6c07156d7394980cdaa840c678656a9639e",
+    "src/test/kotlin/com/noLate/eta/simulator/EtaRealProviderSimulatorServer.kt": "eb1172d3fb22c0f783330e4c1f6645a0b8fb5d240821304c468b3612e1877908"
+  }
+}

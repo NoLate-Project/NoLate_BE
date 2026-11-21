@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" tests="26" skipped="0" failures="0" errors="0" timestamp="2026-11-20T09:40:52.450Z" hostname="macui-MacBookPro.local" time="0.159">
+  <properties/>
+  <testcase name="여러 구간의 관측은 가장 오래된 출처로 전체 경로 신선도를 제한한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.0"/>
+  <testcase name="환승편도 두 역의 원본시각을 구분하고 한 역만 만료되면 나머지 관측만 쓴다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.001"/>
+  <testcase name="두번째 열차만 갱신한 뒤 첫 하차역의 역순 응답이 환승을 되돌리지 않는다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.002"/>
+  <testcase name="노원 K4621의 저장 응답을 출발 경계에 재생하면 사당 환승은 2278편이 된다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.051"/>
+  <testcase name="후속 시간표를 연결하지 못하면 모순된 기존 도착을 반환하지 않는다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.001"/>
+  <testcase name="예정 승차를 2분 넘게 지난 첫 열차의 새 예보로 환승과 최종 도착을 갱신한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.002"/>
+  <testcase name="첫 열차의 이른 역 도착이 준비 경계면 승차 대기는 갱신하고 하차 시간표로 환승을 확인한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.002"/>
+  <testcase name="뒤 구간을 갱신할 때 첫 승차와 하차 중 아직 신선한 쪽만 보존한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.001"/>
+  <testcase name="환승역 조기 예보는 신선한 하차 예보를 보존하고 정차 중에야 준비되는 기존 지연 계획을 철회한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.001"/>
+  <testcase name="승차 지연을 다시 받아도 신선한 같은 열차의 직접 하차 예상으로 환승을 판정한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.014"/>
+  <testcase name="4075편의 신선한 도착 상태를 원래 출발 계획의 구간과 환승 대기에 반영한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.013"/>
+  <testcase name="하차 지연이 회복되면 기존 환승을 유지하고 줄어든 지연을 대기에 흡수한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.0"/>
+  <testcase name="첫 열차가 시간표보다 늦어도 접근 도보와 승차 여유를 채워야 한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.0"/>
+  <testcase name="출발 후 두 번째 구간의 직접 하차 지연도 세 번째 열차와 도착을 다시 연결한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.002"/>
+  <testcase name="동일 공급자 응답에서 마지막 편 단독 관측 정책과 구간별 재계산을 비교한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.001"/>
+  <testcase name="접근 도보 출발 후 첫 승차 전 관측도 출발 계획을 움직이지 않고 반영한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.001"/>
+  <testcase name="게시된 승차역 상태 뒤 직접 하차 예보가 오면 첫 지연을 중복 합산하지 않는다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.03"/>
+  <testcase name="출발 후 첫 하차 관측으로 다음 편과 최종 도착을 갱신하고 출발 계획을 보존한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.002"/>
+  <testcase name="환승 열차의 지연만 회복돼 승차 여유가 부족하면 다음 시간표와 그 도착을 반환한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.001"/>
+  <testcase name="이른 승차역 도착은 아직 신선한 하차역 직접 관측을 시간표로 되돌리지 않는다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.0"/>
+  <testcase name="하차 지연 회복과 원래 환승편을 같은 역 응답에서 확인하면 원래 편을 복구한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.019"/>
+  <testcase name="같은 환승편이 지연에서 조기 도착으로 바뀌면 승차 대기와 하차 근거를 다시 계산한다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.001"/>
+  <testcase name="다음 열차의 기존 지연 관측이 아직 신선하면 시간표로 지우지 않는다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.0"/>
+  <testcase name="미래 환승의 오래된 지연을 승차 가능 근거로 재사용하지 않는다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.002"/>
+  <testcase name="이미 보정된 승차 계획 위에 직접 하차 관측을 반영할 때 승차 지연을 중복 가산하지 않는다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.0"/>
+  <testcase name="오래되거나 다른 구간 번호의 관측은 계획과 시간표를 바꾸지 않는다()" classname="com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

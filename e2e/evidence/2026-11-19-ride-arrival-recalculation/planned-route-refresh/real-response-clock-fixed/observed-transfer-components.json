@@ -1,0 +1,107 @@
+{
+  "forecastRequestAt": "2026-11-19T15:01:03.198583Z",
+  "plannedTrainNumbers": [
+    "2510"
+  ],
+  "station": "사당",
+  "candidates": [
+    {
+      "trainNumber": "6508",
+      "terminal": "성수",
+      "sourceUpdatedAt": "2026-11-19T15:00:38Z",
+      "predictedStationArrivalAt": "2026-11-19T15:05:08Z",
+      "numberInSavedTimetable": false,
+      "observation": {
+        "result": "UPPER_BOUND_ONLY",
+        "upper": "2026-11-19T15:14:24+00:00"
+      },
+      "result": "UPPER_BOUND_ONLY",
+      "boardingStationDeparture": {
+        "result": "UPPER_BOUND_ONLY",
+        "upper": "2026-11-19T15:14:24+00:00"
+      },
+      "alightingStationArrival": {
+        "result": "UPPER_BOUND_ONLY",
+        "upper": "2026-11-19T15:14:24+00:00"
+      }
+    },
+    {
+      "trainNumber": "4510",
+      "terminal": "신도림",
+      "sourceUpdatedAt": "2026-11-19T15:00:38Z",
+      "predictedStationArrivalAt": "2026-11-19T15:11:38Z",
+      "numberInSavedTimetable": false,
+      "observation": {
+        "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+        "lower": "2026-11-19T15:14:01+00:00",
+        "upper": "2026-11-19T15:16:31+00:00",
+        "widthSeconds": 150.0
+      },
+      "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+      "observedMinusForecastSeconds": [
+        143.0,
+        293.0
+      ],
+      "boardingStationDeparture": {
+        "result": "BOUNDED_PROVIDER_TRAIN_DEPARTURE",
+        "lower": "2026-11-19T15:14:01+00:00",
+        "upper": "2026-11-19T15:16:31+00:00",
+        "widthSeconds": 150.0
+      },
+      "alightingStationArrival": {
+        "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+        "lower": "2026-11-19T15:22:39+00:00",
+        "upper": "2026-11-19T15:23:26+00:00",
+        "widthSeconds": 47.0
+      },
+      "observedRideSeconds": [
+        368.0,
+        565.0
+      ],
+      "transferWithTracedTrain": {
+        "predictedGapSeconds": 338.0,
+        "modeledWalkingSeconds": 157,
+        "requiredMarginSeconds": null,
+        "predictedGapAfterModeledWalkSeconds": 181.0,
+        "predictedGapEndEvent": "ARRIVAL",
+        "observedSameEventGapSeconds": [
+          464.0,
+          739.0
+        ],
+        "observedMinusPredictedGapSeconds": [
+          126.0,
+          401.0
+        ],
+        "maximumSlackAgainstScheduledDepartureSeconds": null,
+        "observedTrainGapSeconds": [
+          464.0,
+          739.0
+        ],
+        "observedGapAfterModeledWalkSeconds": [
+          307.0,
+          582.0
+        ],
+        "observedSlackAfterModeledWalkAndMarginSeconds": null,
+        "modeledMarginAssessment": "TRANSFER_MARGIN_NOT_RECORDED",
+        "stationInteriorWalkOrPassengerTransferVerified": false,
+        "incomingTrain": "K4335",
+        "outgoingTrain": "4510",
+        "publicPlanReadBy": "2026-11-19T15:01:35.598645+00:00",
+        "includedInAppAccuracyScore": false
+      }
+    }
+  ],
+  "stationForecastsWithTwoSidedBounds": 1,
+  "physicalPassengerArrivalMeasured": false,
+  "classification": "OFFLINE_PROVIDER_FORECAST_AND_POSITION_COMPONENTS",
+  "capturedPositionReads": 16,
+  "additionalHttpCalls": 0,
+  "realAppAccuracySampleFromAlternateTrain": false,
+  "originalFilesSha256": {
+    "evaluation-2.json": "57a65e1bef84a571a7240583b5c47cbbbbf283f86ef5c0bf665e15d8d57e54df",
+    "odsay-seed-journey.json": "6a94c7058931fe4329b25e1a6f59f460a7e37f95f63fff1fbbd2055528f1710f",
+    "selected-route.json": "7af01c6457b1ce567be36e39b79aa3c36785f0e02fb954305bdd1aacc5967579",
+    "ui-status-after-evaluation-2.json": "a92b898b2437e5b59dfa258ee76e80b056def245f559062e131437822297f746",
+    "completed-position-audit/positions.jsonl": "058d6e45801d59f0f60ac536e15b508968f0817de79da497464957c37dfebdf5"
+  }
+}

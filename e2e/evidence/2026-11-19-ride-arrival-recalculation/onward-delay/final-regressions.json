@@ -1,0 +1,41 @@
+{
+  "tests": 127,
+  "suites": [
+    {
+      "name": "com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest",
+      "tests": "19",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.noLate.eta.simulator.RealOdsaySelectedRouteFixtureTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.TransitJourneyTimetableEnricherTest",
+      "tests": "26",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.noLate.eta.application.TransitEtaCalculationServiceTest",
+      "tests": "49",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest",
+      "tests": "30",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    }
+  ],
+  "resultsPath": "/private/tmp/nolate-onward-arrival-replay-20261119/current-xml"
+}

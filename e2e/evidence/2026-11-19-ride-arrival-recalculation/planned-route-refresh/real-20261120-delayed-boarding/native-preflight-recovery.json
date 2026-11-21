@@ -1,0 +1,16 @@
+{
+  "classification": "PINNED_NATIVE_REAL_DETAIL_PREFLIGHT",
+  "result": "PASSED",
+  "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+  "runtimeRoot": "/private/tmp/nolate-eta-real-e2e.w9vtd97p",
+  "normalCalendarToDetailNavigation": true,
+  "normalDetailClose": true,
+  "warmAppOpenUsedToRepairCalendarNavigation": false,
+  "scrollRepair": "Slow bounded drag within the observed ScrollView, calculated from the actual card frame; default flings had oscillated across the card.",
+  "markers": [
+    "ETA_REAL_PRE_EVALUATION_DETAIL_REACHABLE",
+    "ETA_REAL_ROUTE_DETAIL_CLOSED_AFTER_READ"
+  ],
+  "rawXcresult": "/private/tmp/nolate-eta-real-e2e.w9vtd97p/ui-login/result.xcresult",
+  "etaAccuracyProvedByThisPreflight": false
+}

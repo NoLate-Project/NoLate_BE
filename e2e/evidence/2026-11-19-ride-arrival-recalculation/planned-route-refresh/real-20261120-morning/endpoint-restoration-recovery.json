@@ -1,0 +1,12 @@
+{
+  "classification": "POST_RUN_ENDPOINT_RESTORE_RECOVERY",
+  "originalFailurePreservedIn": "report.json",
+  "originalFailedAttempt": "ui-restore-endpoint",
+  "recoveryAttempt": "ui-restore-endpoint-after-clean-launch",
+  "recoveryResult": "Passed",
+  "testCount": 1,
+  "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+  "endpointUrlDispatched": "http://127.0.0.1:8085",
+  "etaOrOriginalServerAvailabilityValidated": false,
+  "ownedServersStopped": true
+}

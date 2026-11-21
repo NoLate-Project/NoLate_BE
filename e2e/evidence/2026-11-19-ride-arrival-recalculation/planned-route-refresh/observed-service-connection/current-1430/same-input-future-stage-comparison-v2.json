@@ -1,0 +1,64 @@
+{
+  "classification": "SAME_FUTURE_INPUT_VISIBLE_MAP_COMPARISON_WITH_UNDISCLOSED_SECONDS_AND_WALKING_SCOPE",
+  "evaluatedAt": "2026-11-20T05:30:04.210864Z",
+  "requestedDepartureAt": "2026-11-20T05:40:00Z",
+  "requestedCoordinates": {
+    "origin": {
+      "lat": 37.65636195,
+      "lng": 127.06342739
+    },
+    "destination": {
+      "lat": 37.48426844,
+      "lng": 126.92977778
+    }
+  },
+  "evaluationSha256": "7dfbcef23fa8d0be790096492efa1fe2c164410460f0b5cb046fcb7325fa087e",
+  "backendFirstBoardingAt": "2026-11-20T05:46:30Z",
+  "backendFirstAlightingAt": "2026-11-20T06:34:30Z",
+  "backendFirstRideSeconds": 2880.0,
+  "backendTransferBoardingAt": "2026-11-20T06:38:30Z",
+  "backendFinalTrainAlightingAt": "2026-11-20T06:46:00Z",
+  "backendDoorArrivalAt": "2026-11-20T06:47:13Z",
+  "naverFirstVisibleBoardingMinute": "14:42",
+  "naverFirstVisibleDurationMinutes": 48,
+  "naverTransferVisibleBoardingMinute": "15:33",
+  "naverFinalVisibleArrivalMinute": "15:41",
+  "nominalDisplayedArrivalDifferenceSeconds": 373.0,
+  "accessSeconds": 137,
+  "backendAccessEndsAt": "2026-11-20T05:42:17Z",
+  "boardingBufferSeconds": 60,
+  "transferWalkingSeconds": [
+    157
+  ],
+  "naverTransferWalkMeters": 155,
+  "naverTransferDisplayedMinutes": 2,
+  "egressSeconds": [
+    73
+  ],
+  "observedDifferenceCause": "Backend original137second access and60second buffer require readiness14:43:17, so official K4621 departure14:42:00 is ineligible and the14:46:30 service is selected. Naver displays14:42 but does not reveal its exact seconds or vehicle identifier; cross-map17second lateness is not established. Its visible trip begins at first boarding, and equal coordinate-to-platform access/egress coverage remains unverified.",
+  "hiddenNaverSecondsOrTrainNumberInferred": false,
+  "fullWalkingScopeVerified": false,
+  "strictAccuracySampleIncluded": false,
+  "actualAppPlanDepartureAt": "2026-11-20T05:31:00Z",
+  "actualAppPlanDiffersFromComparisonInput": true,
+  "futureStageIsNotActualAcceptedUiResult": true,
+  "physicalAccuracyVerified": false,
+  "newProviderCalls": 0,
+  "supersedes": {
+    "file": "same-input-future-stage-comparison.json",
+    "sha256": "934a887cb07fbf5c50a7ffa408ed2b57eba25615a5c8e0b09ee5ac97b4351265",
+    "reason": "A displayed minute is not an exact timestamp. The earlier17second cross-map assertion assumed undisclosed Naver seconds and is withdrawn."
+  },
+  "naverBoardingExactSecondsKnown": false,
+  "naverTrainNumberKnown": false,
+  "backendSkippedOfficialCandidate": {
+    "trainNumber": "K4621",
+    "boardingAt": "2026-11-20T05:42:00Z",
+    "terminal": "오이도",
+    "boardingStationArrivalAt": "2026-11-20T05:41:30Z",
+    "sameCandidateIdentityAsNaverProven": false,
+    "accessEnds17SecondsAfterThisOfficialDeparture": true,
+    "readyWithExisting60SecondMargin": "2026-11-20T05:43:17Z"
+  },
+  "nominalDisplayedArrivalDifferenceIsNotExactSecondError": true
+}

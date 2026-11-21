@@ -1,0 +1,12 @@
+{
+  "suites": 19,
+  "tests": 559,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "pythonTests": 56,
+  "physicalTransitHttpCalls": 0,
+  "actualAccuracyVerified": false,
+  "tmapParserBefore": "Dropped supplied ordered stop names",
+  "tmapParserAfter": "Preserves complete ordered names; does not infer missing names"
+}

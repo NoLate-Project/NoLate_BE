@@ -1,0 +1,19 @@
+{
+  "classification": "PUBLIC_UI_CAPABILITY_PROBE_NOT_ACCURACY_SAMPLE",
+  "observedAt": "2026-11-20T04:29:20.249781+00:00",
+  "pageUrl": "https://m.search.naver.com/search.naver?query=%EB%B9%A0%EB%A5%B8%EA%B8%B8%EC%B0%BE%EA%B8%B0",
+  "placeNames": [
+    "노원역 4호선",
+    "신림역 2호선"
+  ],
+  "approvedCoordinateEqualityVerified": false,
+  "shownMessage": "출발시간에 따른 최적 경로 탐색은 네이버지도 PC 또는 APP에서 확인 하실 수 있습니다.",
+  "customFutureDepartureControlFound": false,
+  "appOrBackendModified": false,
+  "publicTransitApiCallsByThisProbe": 0,
+  "accuracySampleCount": 0,
+  "evidence": [
+    "public-ui-snapshot.txt",
+    "public-ui-time-message.png"
+  ]
+}

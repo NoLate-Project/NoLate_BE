@@ -1,0 +1,137 @@
+{
+  "classification": "SYNTHETIC_IDENTICAL_PROVIDER_INPUT_REPLAY",
+  "status": "FIRST_AND_ONWARD_RIDE_SYNTHETIC_REPLAY_AND_PINNED_APP_VERIFIED_REAL_ACCURACY_PENDING",
+  "baselineCommit": "0f3c591547af67c1a6cfc75d283b05b81f512aaa",
+  "actualTravelAccuracyVerified": false,
+  "cases": [
+    {
+      "id": "late-alighting-next-transfer",
+      "inputsIdentical": true,
+      "inputSha256": "6d6d48c77b420f2a05c1fd7d94668cbd6bdf8f67b27e436d90b383aee7cb8abf",
+      "before": {
+        "case": "late-alighting-next-transfer",
+        "observedBoardingAt": "2026-07-29T00:06:00Z",
+        "observedAlightingAt": "2026-07-29T00:15:00Z",
+        "accepted": false,
+        "arrivalAt": null,
+        "onwardTrain": "2480",
+        "failureReason": "TRANSIT_TRANSFER_TIMING_UNKNOWN: 환승 시간표 또는 안전 여유가 불충분해 환승 가능 여부를 확정할 수 없습니다."
+      },
+      "after": {
+        "case": "late-alighting-next-transfer",
+        "observedBoardingAt": "2026-07-29T00:06:00Z",
+        "observedAlightingAt": "2026-07-29T00:15:00Z",
+        "accepted": true,
+        "arrivalAt": "2026-07-29T00:34:00Z",
+        "onwardTrain": "2482",
+        "failureReason": null
+      }
+    },
+    {
+      "id": "recovered-alighting-original-transfer",
+      "inputsIdentical": true,
+      "inputSha256": "42b33ac66184db1771e5a9851356489e146222c07f0c9ca95e3c9fb1273c8145",
+      "before": {
+        "case": "recovered-alighting-original-transfer",
+        "observedBoardingAt": "2026-07-29T00:06:30Z",
+        "observedAlightingAt": "2026-07-29T00:10:20Z",
+        "accepted": false,
+        "arrivalAt": null,
+        "onwardTrain": "2480",
+        "failureReason": "TRANSIT_TRANSFER_TIMING_UNKNOWN: 환승 시간표 또는 안전 여유가 불충분해 환승 가능 여부를 확정할 수 없습니다."
+      },
+      "after": {
+        "case": "recovered-alighting-original-transfer",
+        "observedBoardingAt": "2026-07-29T00:06:30Z",
+        "observedAlightingAt": "2026-07-29T00:10:20Z",
+        "accepted": true,
+        "arrivalAt": "2026-07-29T00:28:40Z",
+        "onwardTrain": "2480",
+        "failureReason": null
+      }
+    }
+  ],
+  "targetedRegression": {
+    "TransitEtaCalculationServiceTest": {
+      "tests": 46,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "TransitJourneyTimetableEnricherTest": {
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "TransitTransferFeasibilityEvaluatorTest": {
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "pinnedSimulatorE2E": {
+    "result": "PASSED",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "originalAppEndpointRestored": true,
+    "publicTransitHttpCalls": 0
+  },
+  "onwardRide": {
+    "evidence": "onward-delay",
+    "sameInputReplayCases": 2,
+    "beforeAccepted": 0,
+    "afterAccepted": 2,
+    "obsoleteTrainObservationDiscarded": true,
+    "targetedRegressionTests": 105,
+    "pinnedAppE2E": "PASSED",
+    "originalAppEndpointRestored": true,
+    "publicTransitHttpCalls": 0,
+    "actualTravelAccuracyVerified": false,
+    "expandedRegressionTests": 127,
+    "pythonVerifierTests": 58,
+    "xcuitestNavigationWaitBuild": "PASSED_RUNTIME_RETEST_PENDING"
+  },
+  "shortFirstRealObservation": {
+    "evidence": "short-first-real",
+    "result": "PARTIAL",
+    "normalRealtimeEtaAccepted": false,
+    "actualEvaluationCount": 1,
+    "pinnedAppE2E": "FAILED_DETAIL_NAVIGATION",
+    "originalAppEndpointRestored": true,
+    "originalAccessMeters": 859,
+    "originalAccessSeconds": 780,
+    "endpointGeodesicMeters": 6.201579073753489,
+    "walkingShortcutProven": false,
+    "walkingReductionApplied": false,
+    "naverTimetableReferenceDifferenceMinutes": 11,
+    "normalAccuracySampleEligible": false,
+    "providerRefinedAccessSeconds": 777
+  },
+  "pendingTrainPositions": {
+    "root": "/private/tmp/nolate-ride-observation.1wdg3yau",
+    "execSession": 29421,
+    "maximumPhysicalHttpCalls": 8,
+    "firstSlot": "2026-11-19T12:31:00Z",
+    "lastSlot": "2026-11-19T12:53:00Z",
+    "timetableOnlyCandidate": true,
+    "mayRestart": false,
+    "stopOnAnyProviderError": true,
+    "completed": true,
+    "completedRequestsObserved": 8,
+    "lastProcessPollAt": "2026-11-19T12:34:01.451656+00:00",
+    "liveExecSession": 29421,
+    "analysisCommand": "PYTHONDONTWRITEBYTECODE=1 python3 /private/tmp/nolate-ride-observation.1wdg3yau/verify.py",
+    "caffeinateSession": 86348,
+    "physicalHttpCalls": 8,
+    "failureCode": null,
+    "analysisResult": "PARTIAL_NO_COMPLETE_ARRIVAL_BOUND",
+    "normalAccuracySampleEligible": false
+  },
+  "plannedRouteRefresh": {
+    "evidence": "planned-route-refresh",
+    "status": "POSTDEPARTURE_RIDE_REFRESH_SYNTHETIC_APP_PASSED_TIMETABLE_PROTECTION_REAL_RETEST_RUNNING",
+    "actualTravelAccuracyVerified": false,
+    "realRunnerSession": 65013
+  }
+}

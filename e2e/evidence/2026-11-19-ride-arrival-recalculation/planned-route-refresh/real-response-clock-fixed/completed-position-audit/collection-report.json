@@ -1,0 +1,13 @@
+{
+  "classification" : "REAL_PUBLIC_POSITION_OBSERVATION_OF_EXPLICIT_TIMETABLE_AND_UPDATED_PLANS",
+  "completedRequests" : 16,
+  "maximumHttpCalls" : 16,
+  "physicalHttpCalls" : 16,
+  "failureCode" : null,
+  "clockMode" : "SYSTEM_WALL_CLOCK",
+  "providersMocked" : false,
+  "serversOrSimulatorsModified" : false,
+  "productionDatabaseModified" : false,
+  "exactPhysicalArrivalSecondsMeasured" : false,
+  "providerFailure" : true
+}

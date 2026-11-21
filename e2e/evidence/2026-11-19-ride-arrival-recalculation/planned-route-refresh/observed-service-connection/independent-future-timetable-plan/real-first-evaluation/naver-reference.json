@@ -1,0 +1,50 @@
+{
+  "classification": "SAME_FUTURE_INPUT_DISPLAY_COMPARISON_NOT_PHYSICAL_ACCURACY",
+  "requestedDepartureAt": "2026-11-20T19:40:00+09:00",
+  "coordinates": {
+    "origin": {
+      "lat": 37.65636195,
+      "lng": 127.06342739
+    },
+    "destination": {
+      "lat": 37.48426844,
+      "lng": 126.92977778
+    }
+  },
+  "naver": {
+    "observedAt": "2026-11-20T10:32:34.838691+00:00",
+    "visibleQueryTime": "19:30",
+    "firstBoardingClock": "19:42",
+    "firstTerminalLabel": "사당행",
+    "firstRideDisplay": "48분",
+    "transferBoardingClock": "20:35",
+    "transferTerminalLabel": "내선순환행",
+    "transferWalkDisplay": "2분 · 155m",
+    "arrivalDisplay": "20:42",
+    "snapshot": "output/playwright/eta-20261120-1940/details.yml",
+    "screenshot": "output/playwright/eta-20261120-1940/details.png"
+  },
+  "app": {
+    "evaluatedAt": "2026-11-20T10:30:05.885279Z",
+    "departureAt": "2026-11-20T10:40:00Z",
+    "arrivalAt": "2026-11-20T11:47:13Z",
+    "source": "TIMETABLE_PROVIDER",
+    "stale": true,
+    "confidence": "LOW",
+    "installedAppUiPassed": true,
+    "publicFutureRouteEqualsRetainedPlan": true,
+    "currentDiagnosticDepartureAt": "2026-11-20T10:31:00Z",
+    "currentDiagnosticFailure": "TRANSIT_TRAIN_NOT_YET_OBSERVED: 시간표의 미래 열차가 현재 실시간 목록에서 아직 확인되지 않았습니다.",
+    "walkingSeconds": [
+      137,
+      157,
+      73
+    ]
+  },
+  "nominalAppMinusMapDisplaySeconds": 313.0,
+  "observationsWithinFiveMinutes": true,
+  "sameFullWalkingScopeVerified": false,
+  "sameHiddenTrainIdentityVerified": false,
+  "normalRealtimeEtaAccepted": false,
+  "physicalArrivalAccuracyVerified": false
+}

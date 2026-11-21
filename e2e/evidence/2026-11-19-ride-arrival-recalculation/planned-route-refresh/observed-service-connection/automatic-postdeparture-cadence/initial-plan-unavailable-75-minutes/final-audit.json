@@ -1,0 +1,18 @@
+{
+  "classification": "NO_ON_TIME_INITIAL_JOURNEY_IN_75_MINUTE_SCENARIO",
+  "actualEvaluations": 1,
+  "providerFailures": [],
+  "arrivalMinusTargetSeconds": 13.0,
+  "workerAlarmBoundaryCaptured": true,
+  "expiryWriterHadNotYetBeenObserved": true,
+  "nativeCleanup": "PASSED",
+  "originalAppEndpointRestored": true,
+  "sourceDifferences": {
+    "backend": [],
+    "frontend": []
+  },
+  "ownedPortsFree": true,
+  "originalReportRetained": true,
+  "noPostdepartureEvaluationAttempted": true,
+  "nextScenarioPreparation": "One 90-minute future target using the existing option. Do not change provider timestamps, route times, walking margins, deadline gates or the maximum three actual evaluations."
+}

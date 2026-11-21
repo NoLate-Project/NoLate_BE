@@ -1,0 +1,160 @@
+{
+  "classification": "CONTROLLED_DTO_REGRESSION_NOT_REAL_ACCURACY",
+  "updatedAt": "2026-11-20T03:59:14.886976+00:00",
+  "buildRoot": "/private/tmp/nolate-be-planned-build.nidu6qbg",
+  "frozenPreviousMainPreserved": "/private/tmp/nolate-be-planned-build.9h4y8nrr",
+  "backendSuites": [
+    {
+      "name": "com.noLate.eta.application.TransitEtaCalculationServiceTest",
+      "tests": "56",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "063b4cbc9de5365545f445670d1d9cd446cc964fefcad5eeb68cb651f0159b3e"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.ObservedFirstBoardingDepartureProjectorTest",
+      "tests": "5",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "347e3fb8c3dcd77ffa95f74c0a24dc09efe82cfc34a86a19e7bd75f3a73e121d"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest",
+      "tests": "9",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "c824025921dd5c92749c0bdd8e0a46133b3487618b6e9ae6e75b2f5e14247beb"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest",
+      "tests": "26",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "53a49177e14e122ab573ded1a4fa531d696d92d7b4cf3d0becd1bbb064f37a0f"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.SafeDepartureResolverTest",
+      "tests": "13",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "8eb32f310cf8982b7c7369ed8cf770ba7952b0056c57e31606ea2e6487b12a94"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.TransitJourneyTimetableEnricherTest",
+      "tests": "26",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "6235b08aa5cbe96f5c71bd9c07dfadb18de7002e31f35fbaaf49cfcdb6dcfb6d"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest",
+      "tests": "30",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "9b04d149d32ab6ecc50c181e854bdf7e2e24be9e605c15ec317ddd89de578979"
+    },
+    {
+      "name": "com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest",
+      "tests": "38",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "6bcf098ba8edc82861d7d37746a611fb868b5af707a3152de7071a3d26a4a83f"
+    },
+    {
+      "name": "com.noLate.eta.integration.TransitTimetableCalculationIntegrationTest",
+      "tests": "26",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "b7705d491bd9e526c90128987c22e95e82d3d56fc22fef99dcc9cbd5d93075a5"
+    },
+    {
+      "name": "com.noLate.eta.simulator.RealPlannedRouteRefreshTraceTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "fea82307f5fb28563fef686821bcef81569dc33d24d3be57267758cfcc42472d"
+    },
+    {
+      "name": "com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest",
+      "tests": "17",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "b0ceaa022d3e1952fe2d496d6eda8473ad0421846180f44bf062b4b7bdb147cf"
+    },
+    {
+      "name": "com.noLate.schedule.application.TimetableDeparturePlanPolicyTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "08d9b79239708f6e53f698396a32a295c4d56d7f4a964c8322a2c8f0f90d85cd"
+    },
+    {
+      "name": "com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest",
+      "tests": "117",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "63db7378c4f61a2988105e4190c3e6875d42db95373fe8b079913e415edb8735"
+    },
+    {
+      "name": "com.noLate.schedule.application.service.SchedulePushJobWorkerTest",
+      "tests": "102",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "rawXmlSha256": "4f47ac758fa2799a46a5093e0a88ef2ef7280571d3b5c8960d3552d7bed70e18"
+    }
+  ],
+  "backendTests": 468,
+  "frontendTests": 55,
+  "frontendTypecheck": "PASSED",
+  "frontendPythonTests": 70,
+  "backendPythonTests": 34,
+  "xmlSystemOutputRemoved": true,
+  "maximumAdditionalEndpointReadsPerRefresh": 1,
+  "productionDatabaseChanged": false,
+  "actualAccuracyOfNewServiceBindingVerified": false,
+  "nativeObservedServiceBindingVerified": false,
+  "sourceSha256": {
+    "BE": {
+      "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "0692bb65d136c16f11e798790be46566feac7a74b44c30b374a2265edaa8b6d8",
+      "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": "1f03d2f38c954385ff6a26880acf7fe5e40d0a2caf37ef6c06015d9ae66cfc2a",
+      "src/main/kotlin/com/noLate/schedule/application/ObservedTransitSubwayService.kt": "772816c013978859d7e57e7836b331d1b5ab4d06a8082b37aefd0df0d8577e5d",
+      "src/main/kotlin/com/noLate/schedule/application/TrafficClient.kt": "63a7d193e731cf367f7125d587ca131f5484d1b49dfd148e60361bb2de9e7167",
+      "src/main/kotlin/com/noLate/schedule/application/EffectiveTransitRouteSnapshot.kt": "f3a7ea034127d7a6ae191c2bb02e74b160f9d44bc7f0b5daf6b2b01bd81ae088",
+      "src/main/kotlin/com/noLate/schedule/domain/ScheduleEta.kt": "b9e76d0fd0d19066f97acd3589be6e6b62595d978ce0fd1b74d8f5b300cb96b5",
+      "src/test/kotlin/com/noLate/eta/simulator/ReplayRecordedPlannedRefresh.kt": "66defa4a61a5bee74b77eae4bb5d18fa778891c2bc09a89407c2105a847c51b9",
+      "src/test/kotlin/com/noLate/eta/application/transit/ObservedSubwayServiceRefreshTest.kt": "eeaa02c72c713efc127d70af111769738cf1516b8011bb0d9aed0a0cc3a411bd"
+    },
+    "FE": {
+      "src/api/schedule.ts": "c5ae3583f83ecb175abbb8f9caaa6e8104935ae0eddd62b2ad748de575b2349b",
+      "src/modules/schedule/effectiveTransitRoutePresentation.ts": "01188d32827f584431448528c1dd22554e4865cd4f08f60d1b2bb7bd211dffe5",
+      "src/modules/schedule/matchedTransitTimeline.ts": "cb565f648c00a8ac8fdfc64c276abea5fe6eaab8153283ef85e3931c531056d5",
+      "e2e/ios/eta_observed_service.py": "a1ccc7775cb5d18bb68dcb84ab623884ca2bc017a1e9b63265e99971ff0f917c",
+      "e2e/ios/eta_planned_route_evidence.py": "060513425aa3d51fc5d09e72ece45ebcd55824f2972174fd18bcd882704bcf80",
+      "e2e/ios/eta_train_position_slots.py": "7b613c3bb61f9b564afdd2854a96f473d93632ec4d6d9d0dbbbf38415abf8af3",
+      "e2e/ios/run-eta.py": "c53c0a2390172221761eaef76c70b148e4e85d0937b78a781e0f475c5de14a95",
+      "e2e/ios/run-eta-real-isolated.py": "d63d17e6bf5efeafc4302c2943cdd429e13293dab5952934accf1ef5fb8f328e"
+    }
+  },
+  "currentRealRun": {
+    "root": "/private/tmp/nolate-eta-real-e2e.dzhrdc0h",
+    "execSession": 49347,
+    "mayRestart": false,
+    "maximumEvaluations": 3,
+    "maximumPositionReads": 16,
+    "status": "RUNNING"
+  }
+}

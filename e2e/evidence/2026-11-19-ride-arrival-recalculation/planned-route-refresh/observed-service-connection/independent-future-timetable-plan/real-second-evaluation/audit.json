@@ -1,0 +1,15 @@
+{
+  "classification": "ACTUAL_FIRST_ALIGHTING_AND_ONWARD_TIMETABLE_RECONNECTED_API_NATIVE_AGREE",
+  "evaluatedAt": "2026-11-20T11:39:03.372966Z",
+  "providerFailures": [],
+  "currentWorkerDiagnosticArrivalIsNotPlannedArrival": "2026-11-20T12:45:43Z",
+  "plannedArrival": "2026-11-20T11:54:13Z",
+  "nativeUiResult": "PASSED",
+  "publicBasis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+  "departureUnchanged": true,
+  "walksUnchanged": true,
+  "alarmStatesUnchanged": true,
+  "beforeAfterRecordedProviderReplayChangesClock": false,
+  "newHistoricalBoardingServiceBindingVerified": false,
+  "physicalFinalArrivalAccuracyVerified": false
+}

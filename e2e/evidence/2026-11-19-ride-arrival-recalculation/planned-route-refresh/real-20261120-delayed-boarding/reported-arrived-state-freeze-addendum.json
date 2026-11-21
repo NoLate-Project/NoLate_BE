@@ -1,0 +1,11 @@
+{
+  "classification": "PROSPECTIVE_FORMAT_NORMALIZATION_ADDENDUM",
+  "recordedAt": "2026-11-20T02:07:47.154416+00:00",
+  "previousFreezePreserved": true,
+  "reason": "Compare ISO timestamps as Instant rather than requiring one string representation. Recorded public row uses Z in both fields, so this normalization does not change the 4075 output. No later alighting labels have been collected.",
+  "files": {
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "70dd2eebe2385e74cdda40c40753700ae87bfc78d576ba29b9382c43d1ee0c98",
+    "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": "f34deb4f51e9b49b668c703432adc3d93517cfd402e9d732d9ef3c711826e807"
+  },
+  "candidateDeployment": "OFFLINE_OWNED_SNAPSHOT_ONLY"
+}

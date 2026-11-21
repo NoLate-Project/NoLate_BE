@@ -1,0 +1,82 @@
+{
+  "classification": "OFFLINE_SAME_VALIDATED_OBSERVATION_AT_DEPARTURE_BOUNDARY",
+  "independentJourneys": 1,
+  "providers": [
+    "ODsay route",
+    "Seoul train arrival and timetable"
+  ],
+  "originalWorkerEvaluatedAt": "2026-11-18T05:35:17.616170Z",
+  "replayEvaluatedAt": "2026-11-18T05:36:23Z",
+  "sourceUpdatedAt": "2026-11-18T05:34:40Z",
+  "sourceAgeAtReplaySeconds": 103.0,
+  "actualPostDepartureProviderRequest": false,
+  "newExternalCalls": 0,
+  "comparability": "Same stored plan, original accepted boarding observation, timetable bank and replay clock in both JVM runs. Observation identity is taken from the original Worker. The after-departure callback was not observed live.",
+  "walkingSeconds": {
+    "ACCESS": 137,
+    "TRANSFER": 157,
+    "EGRESS": 73
+  },
+  "firstBoardingMarginSeconds": 60,
+  "transferMarginSeconds": 60,
+  "before": {
+    "protectedDepartureAt": "2026-11-18T05:36:23Z",
+    "boardingStationPrediction": "2026-11-18T05:39:40Z",
+    "firstAlightingPrediction": "2026-11-18T06:28:10Z",
+    "firstAlightingMinSecondsEarly": 215.0,
+    "transferTrain": "2276",
+    "transferDeparture": "2026-11-18T06:33:30Z",
+    "transferWaitAfterModeledWalkSeconds": 163,
+    "finalTrainAlighting": "2026-11-18T06:41:00Z",
+    "modeledDestinationArrival": "2026-11-18T06:42:13Z",
+    "card": "15:42 도착 예상 · 총 66분",
+    "routeRailArrival": "2026-11-18T06:42:13Z"
+  },
+  "after": {
+    "protectedDepartureAt": "2026-11-18T05:36:23Z",
+    "boardingStationPrediction": "2026-11-18T05:39:40Z",
+    "firstAlightingPrediction": "2026-11-18T06:30:00Z",
+    "firstAlightingMinSecondsEarly": 105.0,
+    "transferTrain": "2278",
+    "transferDeparture": "2026-11-18T06:38:30Z",
+    "transferWaitAfterModeledWalkSeconds": 353,
+    "finalTrainAlighting": "2026-11-18T06:46:00Z",
+    "modeledDestinationArrival": "2026-11-18T06:47:13Z",
+    "card": "15:47 도착 예상 · 총 71분",
+    "routeRailArrival": "2026-11-18T06:47:13Z"
+  },
+  "originalConnectionSlackSecondsAtScheduledAlighting": -7.0,
+  "selectedConnectionSlackSeconds": 293,
+  "observation": {
+    "station": "사당",
+    "lastConfirmedBeforeAlightingEventAt": "2026-11-18T06:31:45+00:00",
+    "providerEventUpperBound": null,
+    "earlyErrorReductionForAnyArrivalAfterLastPrearrivalPositionSeconds": 110,
+    "passengerArrivalMeasured": false,
+    "onwardBoardingAndFinalArrivalVerified": false
+  },
+  "mapComparison": {
+    "eligibleIndependentJourneys": 0,
+    "referenceDepartureKST": "14:40",
+    "appDepartureKST": "14:36:23",
+    "referenceScope": "station endpoints",
+    "appScope": "street coordinates including access and egress"
+  },
+  "snapshotProjectionAndFrontendRailAgree": true,
+  "newNativeLiveRun": false,
+  "evidenceSha256": {
+    "evaluation-1.json": "8f916e6aa9a753c798d018fe35faad56065d1ad361bc89728691a23f0564f458",
+    "positions.jsonl": "78ec95e43957d88d5e3428cc1c957b9321c32f7799fe3561f467eb8512f20e91",
+    "heartbeat-replay.vd5uix": "a0aa37a61bd32ee116ff60440c0090deb82f922b09d91e1bf7dad71687500c5b",
+    "input.json": "997732ef51f8e20a664cb7c2a6447cfaad697e3b48208a16ef2f7934039bc89e",
+    "before.json": "bbbe0383c984032d6edf8810e1871014a65c9b1a18322010f5c1c5d2c8af964b",
+    "after.json": "a2387a52132899c1f6f9e0f7ddf5180abdd41c647f3e15b25ee3743c45740456"
+  },
+  "tests": {
+    "backend": 366,
+    "frontend": 66,
+    "offlineIosVerifier": 64
+  },
+  "archivedRegressionInput": "src/test/resources/eta/odsay-early-first-boarding-20261118.json",
+  "storedPlanPopulation": "Previously saved plan whose first alighting prediction inherited an early boarding shift. The current pre-departure calculation already protects this case. No population-wide gain is inferred."
+}

@@ -1,0 +1,24 @@
+{
+  "classification": "HTTP_ZERO_REVALIDATION_ORIGINAL_PARTIAL_NOT_OVERRIDDEN",
+  "additionalProviderCalls": 0,
+  "runRoot": "/private/tmp/nolate-eta-real-e2e.uf14uvsd",
+  "originalReportSha256": "01001e181f35e7cf0d77353a77d68423c378735a3773b4a4ac7f7a46c690d7e7",
+  "result": "PARTIAL_NO_RECORDED_ACTUAL_SERVICE_PAIR",
+  "correlationChecks": [
+    {
+      "evaluation": 2,
+      "sha256": "0fffd2fd674b52d3b8e8b546826ca3e890c313835e1e6028771983128650cc42",
+      "historyCount": 2,
+      "newObservedServiceWitness": null
+    },
+    {
+      "evaluation": 3,
+      "sha256": "dd4122596af7c34b327cb7a2ac595482a1a2bcdc20b84d1905da593d10ec1b43",
+      "historyCount": 3,
+      "newObservedServiceWitness": null
+    }
+  ],
+  "wireAccountingComplete": true,
+  "allFourLatestPlanEventsBounded": false,
+  "physicalArrivalMeasured": false
+}

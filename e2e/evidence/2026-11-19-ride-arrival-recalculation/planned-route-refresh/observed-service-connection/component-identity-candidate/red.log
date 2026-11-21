@@ -1,0 +1,51 @@
+EFE
+======================================================================
+ERROR: test_explicit_observed_identity_with_same_digits_does_not_require_a_fake_schedule_anchor (test_component_actual_identity.ActualComponentIdentityTest.test_explicit_observed_identity_with_same_digits_does_not_require_a_fake_schedule_anchor)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/test_component_actual_identity.py", line 29, in test_explicit_observed_identity_with_same_digits_does_not_require_a_fake_schedule_anchor
+    route,events=self.fixture(number="2276");report,=route_component_intervals(route,events)
+                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/verify_accepted_train_observation.py", line 213, in route_component_intervals
+    origin = station_event('BOARDING', segment['fromName'], table['boardingAt'])
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/verify_accepted_train_observation.py", line 210, in station_event
+    and station(event['station']) == station(station_name) and instant(event['scheduledAt']) == instant(scheduled)]
+                                                               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/train_arrival_replay.py", line 19, in instant
+    result = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+                                       ^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'replace'
+
+======================================================================
+ERROR: test_other_number_date_direction_terminal_and_ambiguous_events_are_excluded (test_component_actual_identity.ActualComponentIdentityTest.test_other_number_date_direction_terminal_and_ambiguous_events_are_excluded)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/test_component_actual_identity.py", line 38, in test_other_number_date_direction_terminal_and_ambiguous_events_are_excluded
+    report,=route_component_intervals(route,mismatched)
+            ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/verify_accepted_train_observation.py", line 213, in route_component_intervals
+    origin = station_event('BOARDING', segment['fromName'], table['boardingAt'])
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/verify_accepted_train_observation.py", line 210, in station_event
+    and station(event['station']) == station(station_name) and instant(event['scheduledAt']) == instant(scheduled)]
+                                                               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/train_arrival_replay.py", line 19, in instant
+    result = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+                                       ^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'replace'
+
+======================================================================
+FAIL: test_new_service_components_use_own_identity_and_no_other_train_baseline (test_component_actual_identity.ActualComponentIdentityTest.test_new_service_components_use_own_identity_and_no_other_train_baseline)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/test_component_actual_identity.py", line 19, in test_new_service_components_use_own_identity_and_no_other_train_baseline
+    self.assertEqual(report["trainNumber"],"3510")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '2276' != '3510'
+- 2276
++ 3510
+
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.002s
+
+FAILED (failures=1, errors=2)

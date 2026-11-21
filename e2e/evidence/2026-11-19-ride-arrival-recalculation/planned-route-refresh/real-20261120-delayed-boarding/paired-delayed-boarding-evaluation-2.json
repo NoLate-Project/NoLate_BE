@@ -1,0 +1,72 @@
+{
+  "classification": "SAME_RECORDED_RESPONSES_OFFLINE_PLANNED_REFRESH",
+  "evaluationSha256": "d67522b445fda70f5c632aba7d847d453ed8085207ec4bf25f1da484c7dac2eb",
+  "initialState": "SAME_RECORDED_PLAN_AND_PREVIOUS_UPDATE_AT_EACH_REFRESH",
+  "additionalHttpCalls": 0,
+  "journeysWithPairedProviderReplay": 1,
+  "frames": [
+    {
+      "evaluatedAt": "2026-11-20T01:59:01.068530Z",
+      "before": {
+        "result": "REPLAYED",
+        "evaluatedAt": "2026-11-20T01:59:01.068530Z",
+        "stationReadsUsed": 0,
+        "timetableReadsUsed": 0,
+        "verifiedAgainstRecordedResult": false,
+        "update": null
+      },
+      "after": {
+        "result": "REPLAYED",
+        "evaluatedAt": "2026-11-20T01:59:01.068530Z",
+        "stationReadsUsed": 1,
+        "timetableReadsUsed": 0,
+        "verifiedAgainstRecordedResult": true,
+        "update": null
+      },
+      "updateChanged": false,
+      "beforeClocks": {
+        "departureAt": "2026-11-20T01:50:00Z",
+        "arrivalAt": "2026-11-20T02:59:43Z",
+        "rides": [
+          {
+            "sequence": 1,
+            "train": "4075",
+            "boardingAt": "2026-11-20T01:57:00Z",
+            "alightingAt": "2026-11-20T02:45:00Z"
+          },
+          {
+            "sequence": 3,
+            "train": "2200",
+            "boardingAt": "2026-11-20T02:51:00Z",
+            "alightingAt": "2026-11-20T02:58:30Z"
+          }
+        ]
+      },
+      "afterClocks": {
+        "departureAt": "2026-11-20T01:50:00Z",
+        "arrivalAt": "2026-11-20T02:59:43Z",
+        "rides": [
+          {
+            "sequence": 1,
+            "train": "4075",
+            "boardingAt": "2026-11-20T01:57:00Z",
+            "alightingAt": "2026-11-20T02:45:00Z"
+          },
+          {
+            "sequence": 3,
+            "train": "2200",
+            "boardingAt": "2026-11-20T02:51:00Z",
+            "alightingAt": "2026-11-20T02:58:30Z"
+          }
+        ]
+      },
+      "trainOrClockChanged": false,
+      "result": "PAIRED"
+    }
+  ],
+  "refresherClassSha256": {
+    "current": "c9c95f31914e6b7243793befb02bcf8e6194f84b50da5e525eab93080032e216",
+    "baseline": "c9c95f31914e6b7243793befb02bcf8e6194f84b50da5e525eab93080032e216"
+  },
+  "result": "PAIRED"
+}
