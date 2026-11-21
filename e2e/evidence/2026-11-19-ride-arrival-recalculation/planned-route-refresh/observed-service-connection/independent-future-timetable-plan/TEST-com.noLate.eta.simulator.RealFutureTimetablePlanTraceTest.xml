@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.eta.simulator.RealFutureTimetablePlanTraceTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-11-20T10:21:05.482Z" hostname="macui-MacBookPro.local" time="0.094">
+  <properties/>
+  <testcase name="현재 실패와 별도 시간표 후보를 수정 없이 기록하고 원래 클라이언트를 복원한다()" classname="com.noLate.eta.simulator.RealFutureTimetablePlanTraceTest" time="0.094"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

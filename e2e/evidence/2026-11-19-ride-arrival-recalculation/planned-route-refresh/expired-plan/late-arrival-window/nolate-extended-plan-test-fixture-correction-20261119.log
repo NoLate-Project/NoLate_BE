@@ -1,0 +1,62 @@
+> Task :checkKotlinGradlePluginConfigurationErrors
+> Task :processResources UP-TO-DATE
+> Task :processTestResources UP-TO-DATE
+> Task :kaptGenerateStubsKotlin
+
+> Task :kaptKotlin
+Annotation processors discovery from compile classpath is deprecated.
+Set 'kapt.include.compile.classpath=false' to disable discovery.
+Run the build with '--info' for more details.
+
+> Task :compileKotlin
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/main/kotlin/com/noLate/schedule/application/EffectiveTransitRouteSnapshot.kt:85:93 Name shadowed: route
+
+> Task :compileJava UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :kaptGenerateStubsTestKotlin
+> Task :kaptTestKotlin
+
+> Task :compileTestKotlin
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:383:38 Unnecessary safe call on a non-null receiver of type ScheduleEtaEvaluationHistory
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:384:37 Unnecessary safe call on a non-null receiver of type ScheduleEtaEvaluationHistory
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:587:13 Variable 'currentRecommendedDepartureAt' is never used
+
+> Task :compileTestJava NO-SOURCE
+> Task :testClasses UP-TO-DATE
+OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+
+> Task :test
+
+ScheduleDepartureEtaServiceTest > 갱신한 지연 여정은 이전 도착이 지나도 유지하고 최신 도착 이후에는 종료한다(boolean) > [2] expired=true FAILED
+    org.opentest4j.AssertionFailedError: expected: <SELECTED_ROUTE> but was: <SAVED_FALLBACK>
+        at app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+        at app//org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+        at app//org.junit.jupiter.api.AssertEquals.failNotEqual(AssertEquals.java:197)
+        at app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:182)
+        at app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:177)
+        at app//org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:1145)
+        at app//com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest.갱신한 지연 여정은 이전 도착이 지나도 유지하고 최신 도착 이후에는 종료한다(ScheduleDepartureEtaServiceTest.kt:150)
+
+226 tests completed, 1 failed
+
+> Task :test FAILED
+
+[Incubating] Problems report is available at: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get full insights.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 22s
+11 actionable tasks: 8 executed, 3 up-to-date

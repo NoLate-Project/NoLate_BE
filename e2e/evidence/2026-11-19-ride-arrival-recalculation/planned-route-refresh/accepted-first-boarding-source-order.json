@@ -1,0 +1,168 @@
+{
+  "classification": "RECORDED_ACCEPTED_ODSAY_PLAN_AND_IDENTIFIED_STATION_FORECAST_REPLAY",
+  "serviceDate": "2026-11-18",
+  "recordedJourneysInReplay": 1,
+  "privateReplayDirectory": "/private/tmp/nolate-first-boarding-chronology.mnm6sh5s/published-forecast-replay",
+  "recordedEvaluation": "/private/tmp/nolate-eta-real-e2e.ie3j_xou/evaluation-1.json",
+  "recordedEvaluationSha256": "8a17fb89e7c58237cd2cfa3784629748866a9eac33e92f77a34c5ae809fd33c8",
+  "identicalInputsSha256": "ab7e6f4e6ca597dd87720347b67d3d394d6bbf02645ed47ade21b7120597b834",
+  "originalTrainForecast": {
+    "trainNumber": "4607",
+    "terminal": "오이도",
+    "direction": "하행",
+    "express": false,
+    "sourceUpdatedAt": "2026-11-18T04:15:45Z",
+    "expectedAt": "2026-11-18T04:20:45Z",
+    "freshnessEvidence": "PROVIDER_SOURCE_TIMESTAMP",
+    "realtime": true
+  },
+  "readAt": "2026-11-18T04:17:28Z",
+  "inputsDescription": "Both implementations receive the complete recorded accepted snapshot. recordedForecastRepeated replays the captured Seoul forecast fields at the departure boundary. The other three independently vary source time and expected arrival. The post-departure calls and station feed at the boundary are simulated in all four cases.",
+  "plannedRoute": {
+    "recommendedDepartureAt": "2026-11-18T04:17:28Z",
+    "destinationArrivalAt": "2026-11-18T05:23:13Z",
+    "readyAt": "2026-11-18T04:20:45Z",
+    "walkingSeconds": [
+      137,
+      157,
+      73
+    ],
+    "rides": [
+      {
+        "train": "K4607",
+        "boardingAt": "2026-11-18T04:20:45Z",
+        "alightingAt": "2026-11-18T05:09:15Z"
+      },
+      {
+        "train": "2248",
+        "boardingAt": "2026-11-18T05:14:30Z",
+        "alightingAt": "2026-11-18T05:22:00Z"
+      }
+    ]
+  },
+  "scenarios": {
+    "older": {
+      "sourceUpdatedAt": "2026-11-18T04:15:35Z",
+      "expectedAt": "2026-11-18T04:19:10Z",
+      "outcomes": {
+        "before": {
+          "failure": "EARLY_BOARDING_UNCONFIRMED",
+          "predictionBasis": null,
+          "arrivalAt": null,
+          "appTitle": "계획 경로 재확인 필요",
+          "appSummary": "승차 시각을 확인하고 있어요"
+        },
+        "after": {
+          "failure": null,
+          "predictionBasis": "LAST_ACCEPTED_PLAN",
+          "arrivalAt": "2026-11-18T05:23:13Z",
+          "appTitle": "계획 경로 기준 · 잠정 도착",
+          "appSummary": "14:23 도착 예상 · 총 66분"
+        }
+      }
+    },
+    "sameSourceConflict": {
+      "sourceUpdatedAt": "2026-11-18T04:15:45Z",
+      "expectedAt": "2026-11-18T04:19:10Z",
+      "outcomes": {
+        "before": {
+          "failure": "EARLY_BOARDING_UNCONFIRMED",
+          "predictionBasis": null,
+          "arrivalAt": null,
+          "appTitle": "계획 경로 재확인 필요",
+          "appSummary": "승차 시각을 확인하고 있어요"
+        },
+        "after": {
+          "failure": null,
+          "predictionBasis": "LAST_ACCEPTED_PLAN",
+          "arrivalAt": "2026-11-18T05:23:13Z",
+          "appTitle": "계획 경로 기준 · 잠정 도착",
+          "appSummary": "14:23 도착 예상 · 총 66분"
+        }
+      }
+    },
+    "newer": {
+      "sourceUpdatedAt": "2026-11-18T04:15:55Z",
+      "expectedAt": "2026-11-18T04:19:10Z",
+      "outcomes": {
+        "before": {
+          "failure": "EARLY_BOARDING_UNCONFIRMED",
+          "predictionBasis": null,
+          "arrivalAt": null,
+          "appTitle": "계획 경로 재확인 필요",
+          "appSummary": "승차 시각을 확인하고 있어요"
+        },
+        "after": {
+          "failure": "EARLY_BOARDING_UNCONFIRMED",
+          "predictionBasis": null,
+          "arrivalAt": null,
+          "appTitle": "계획 경로 재확인 필요",
+          "appSummary": "승차 시각을 확인하고 있어요"
+        }
+      }
+    },
+    "recordedForecastRepeated": {
+      "sourceUpdatedAt": "2026-11-18T04:15:45Z",
+      "expectedAt": "2026-11-18T04:20:45Z",
+      "outcomes": {
+        "before": {
+          "failure": null,
+          "predictionBasis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+          "arrivalAt": "2026-11-18T05:23:13Z",
+          "appTitle": "계획 경로 기준 · 잠정 도착",
+          "appSummary": "14:23 도착 예상 · 총 66분"
+        },
+        "after": {
+          "failure": null,
+          "predictionBasis": "LAST_ACCEPTED_PLAN",
+          "arrivalAt": "2026-11-18T05:23:13Z",
+          "appTitle": "계획 경로 기준 · 잠정 도착",
+          "appSummary": "14:23 도착 예상 · 총 66분"
+        }
+      }
+    }
+  },
+  "scope": {
+    "historicalAcceptedEvaluationsWithFirstSourceOnlyAtSnapshotRoot": 6,
+    "observedNaturalOutOfOrderIncidentsInReplay": 0,
+    "additionalTransportRequests": 0,
+    "newInstalledAppRuns": 0,
+    "newNaverComparisons": 0,
+    "physicalArrivalAccuracyVerified": false,
+    "appComparison": "Production TypeScript status presentation and route selectors processed the two JVM status projections offline."
+  },
+  "artifactHashes": {
+    "ReplayPublicWitness.java": "deb6ffc18d34ad3190818f3b957c3ef0be6402f95c9df163bcb7965cc2664d77",
+    "published-forecast-replay/render.cjs": "d7c9b201b3755a62b30eac9b7c8440e3c0308801981c77ca4cc281ea03d54312",
+    "published-forecast-replay/before-status.json": "922625b61c5226714f9bdc8f55ec3d7ba67f81579297967210f5ffc94028e7b1",
+    "published-forecast-replay/after-status.json": "b509dac8463ba31bca824add309ce3c7f4ba89c556f1a4f160a69e51b48060fb",
+    "published-forecast-replay/app-comparison.json": "d1c13b84af443c2dd313eeb4ab88a149d80a4720df281ae623c8d05402f54327"
+  },
+  "productHashes": {
+    "src/main/kotlin/com/noLate/schedule/application/EffectiveTransitRouteSnapshot.kt": "7a4c6366fa7deb8ec537c07469738c9eeb4ddf08b7911b2e28db88edffbe3747",
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "c5636e4d2504f44ff4ab4c1ea6d9171c6d3d3e461217176eb62bd493e2ebfa53",
+    "../NoLate_FE/src/modules/schedule/effectiveTransitRoutePresentation.ts": "bdd8f5d82a925f5ef07800bce160a029c18b6af20d7e2d891f3bae4543762e76"
+  },
+  "regression": {
+    "backend": {
+      "suites": 7,
+      "tests": 326,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "frontend": {
+      "suites": 3,
+      "testsPassed": 37
+    },
+    "offlinePositionAudit": {
+      "testsPassed": 32,
+      "checksKotlinFallbackProjection": true
+    },
+    "privateLogs": [
+      "/private/tmp/nolate-first-boarding-chronology.mnm6sh5s/final-backend.log",
+      "/private/tmp/nolate-first-boarding-chronology.mnm6sh5s/fe-regression.log",
+      "/private/tmp/nolate-first-boarding-chronology.mnm6sh5s/witness-final.log"
+    ]
+  }
+}

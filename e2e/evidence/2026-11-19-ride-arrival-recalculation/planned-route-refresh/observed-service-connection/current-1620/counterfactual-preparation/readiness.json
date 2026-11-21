@@ -1,0 +1,39 @@
+{
+  "classification": "PREPARED_NOT_RUN_ADDITIONAL_PUBLIC_CALLS_ZERO",
+  "privateProofRoot": "/private/tmp/nolate-counterfactual-proof.rrh9y9rx",
+  "runRoot": "/private/tmp/nolate-eta-real-e2e.tdmhogat",
+  "additionalPublicRequestsSoFar": 0,
+  "maximumAdditionalComparisonStationRequests": 1,
+  "productionGuardSupplementCapUnchanged": 1,
+  "actualEvaluationCapUnchanged": 3,
+  "positionReadCapUnchanged": 16,
+  "collectorFenceTestMethods": 6,
+  "unionIntegrityTestMethods": 3,
+  "productionParserSmokePassed": true,
+  "syntheticUnionSmokePassed": true,
+  "syntheticSmokeIsAccuracyEvidence": false,
+  "actualCounterfactualComparisonAvailable": false,
+  "requiredCausality": [
+    "request starts within one second of exact original frame decision",
+    "receipt no later than original Worker commit",
+    "at most four seconds per request",
+    "provider source generated no later than original decision",
+    "original evaluation and raw and normalized response hashes unchanged"
+  ],
+  "noSourceClockRewrite": true,
+  "noSyntheticResponseInActualComparison": true,
+  "settingsFingerprintKeptPrivate": true,
+  "state": "RUNNING_EXCLUSIVE_LOCAL_WAIT_HTTP_ZERO",
+  "collectorExecSession": 90063,
+  "collectorPid": 98231,
+  "claimPath": "/private/tmp/nolate-eta-real-e2e.tdmhogat/counterfactual-collector-claim.json",
+  "mustNotStartAnotherCapture": true,
+  "allPreparationTestsPassed": true,
+  "offlineActualUnionComparator": "compare_actual_station_union.py",
+  "sourceSha256": {
+    "capture_counterfactual_station.py": "c8884fb5b0441331898714a3fbb3bc8c32721c87565a84dcd0ec1ca158c54ebf",
+    "DecodeCounterfactualArrival.java": "40772e41bbe856c1747cf331b7e49ad645a66e2e2624f95b497dc5845ff59f9b",
+    "ReplayUnionFrame.java": "2c7dd74b56f4f6f0c259fdf411f2239dce570628e144f715753d19dd08a5f3cc",
+    "compare_actual_station_union.py": "f9af23ea1dd24783efe3289453db5cf14041c1e374877882126dc748a1a7f795"
+  }
+}

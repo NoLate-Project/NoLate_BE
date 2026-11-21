@@ -1,0 +1,534 @@
+### Page
+- Page URL: https://map.naver.com/p/directions/14144636.035502888,4530994.374320928,NoLate%20origin,,/14129758.22897297,4506824.249386212,NoLate%20destination,,/-/transit?c=10.00,0,0,0,dh
+- Page Title: 길찾기 - 네이버지도
+### Snapshot
+```yaml
+- generic [ref=f19e3]:
+  - generic:
+    - link "본문 바로가기" [ref=f19e4] [cursor=pointer]:
+      - /url: "#section_content"
+    - link "주 메뉴 바로가기" [ref=f19e6] [cursor=pointer]:
+      - /url: "#header"
+  - banner [ref=f19e8]:
+    - heading [level=1] [ref=f19e9]:
+      - link "네이버지도" [ref=f19e10] [cursor=pointer]:
+        - /url: https://www.naver.com
+    - navigation [ref=f19e12]:
+      - list [ref=f19e13]:
+        - listitem [ref=f19e14]:
+          - button "지도 홈" [ref=f19e15] [cursor=pointer]
+        - listitem [ref=f19e22]:
+          - button "길찾기 선택됨" [ref=f19e23] [cursor=pointer]:
+            - generic [ref=f19e28]: 길찾기
+            - generic [ref=f19e29]: 선택됨
+        - listitem [ref=f19e30]:
+          - button "버스" [ref=f19e31] [cursor=pointer]
+        - listitem [ref=f19e37]:
+          - button "지하철" [ref=f19e38] [cursor=pointer]
+        - listitem [ref=f19e44]:
+          - button "기차" [ref=f19e45] [cursor=pointer]
+        - listitem [ref=f19e51]:
+          - button "new 저장" [ref=f19e52] [cursor=pointer]:
+            - generic [ref=f19e53]: new
+            - generic [ref=f19e59]: 저장
+        - listitem [ref=f19e60]:
+          - button "더보기" [ref=f19e61] [cursor=pointer]
+    - generic [ref=f19e68]:
+      - strong [ref=f19e69]: 사용자 링크
+      - list [ref=f19e70]:
+        - listitem [ref=f19e71]:
+          - link "로그인" [ref=f19e72] [cursor=pointer]:
+            - /url: https://nid.naver.com/nidlogin.login
+        - listitem [ref=f19e74]:
+          - link "서비스 더보기" [ref=f19e75] [cursor=pointer]:
+            - /url: javascript:;
+  - generic:
+    - application [ref=f19e80]:
+      - generic [ref=f19e160]:
+        - region "Map" [ref=f19e161]
+        - generic:
+          - generic:
+            - generic:
+              - generic [ref=f19e8340] [cursor=pointer]:
+                - generic [ref=f19e8341]: 지하철
+                - emphasis [ref=f19e8343]: 노원역
+              - generic [ref=f19e8344] [cursor=pointer]:
+                - generic [ref=f19e8345]: 지하철
+                - emphasis [ref=f19e8347]: 사당역
+            - generic:
+              - generic: 도착
+              - generic: 출발
+      - generic [ref=f19e174]:
+        - img "NAVER" [ref=f19e176] [cursor=pointer]
+        - generic [ref=f19e177]: 5km
+    - generic [ref=f19e84]:
+      - generic [ref=f19e86]:
+        - status [ref=f19e87]
+        - generic [ref=f19e89]:
+          - generic [ref=f19e90]:
+            - tablist "이동수단 선택" [ref=f19e91]:
+              - tab "대중교통" [selected] [ref=f19e92] [cursor=pointer]
+              - tab "자동차" [ref=f19e93] [cursor=pointer]
+              - tab "도보" [ref=f19e94] [cursor=pointer]
+              - tab "자전거" [ref=f19e95] [cursor=pointer]
+            - generic [ref=f19e96]:
+              - generic [ref=f19e99]:
+                - generic [ref=f19e100]: 출발지 입력
+                - combobox "출발지 입력" [ref=f19e101]: NoLate origin
+              - generic [ref=f19e104]:
+                - generic [ref=f19e105]: 도착지 입력
+                - combobox "도착지 입력" [ref=f19e106]: NoLate destination
+              - button "출발지/도착지 전환" [ref=f19e107] [cursor=pointer]
+            - generic [ref=f19e109]:
+              - button "다시입력" [ref=f19e110] [cursor=pointer]
+              - button "길찾기" [ref=f19e111] [cursor=pointer]
+          - tabpanel [ref=f19e112]:
+            - generic [ref=f19e113]:
+              - tablist [ref=f19e182]:
+                - tab "전체" [selected] [ref=f19e183] [cursor=pointer]
+                - tab "버스 1" [ref=f19e8348] [cursor=pointer]
+                - tab "지하철 5" [ref=f19e8349] [cursor=pointer]
+                - tab "버스 + 지하철 2" [ref=f19e6731] [cursor=pointer]
+              - generic [ref=f19e187]:
+                - generic [ref=f19e188]:
+                  - button "ON" [ref=f19e189] [cursor=pointer]
+                  - button "오늘 오후 02:40 출발 접기" [expanded] [ref=f19e8350] [cursor=pointer]:
+                    - emphasis [ref=f19e192]:
+                      - generic [ref=f19e193]: 오늘
+                      - generic [ref=f19e194]: 오후 02:40
+                    - text: 출발
+                    - generic [ref=f19e195]: 접기
+                  - button "최적 경로순 펼치기" [ref=f19e197] [cursor=pointer]:
+                    - text: 최적 경로순
+                    - generic [ref=f19e198]: 펼치기
+                - generic [ref=f19e5761]:
+                  - generic [ref=f19e5762]:
+                    - button "이전" [disabled] [ref=f19e5763]
+                    - button "오늘" [ref=f19e5766] [cursor=pointer]
+                    - button "다음" [ref=f19e5768] [cursor=pointer]
+                  - generic [ref=f19e5770]:
+                    - button "이전" [ref=f19e5771] [cursor=pointer]
+                    - button "14시" [ref=f19e5799] [cursor=pointer]
+                    - button "다음" [ref=f19e5776] [cursor=pointer]
+                  - generic [ref=f19e5778]:
+                    - button "이전" [ref=f19e5779] [cursor=pointer]
+                    - button "40분" [ref=f19e8351] [cursor=pointer]
+                    - button "다음" [ref=f19e5784] [cursor=pointer]
+                  - button "지금 출발" [ref=f19e5786] [cursor=pointer]
+              - tabpanel [ref=f19e8352]:
+                - list [ref=f19e8353]:
+                  - listitem [ref=f19e8354]:
+                    - button "최적 59분 오후 3:41 도착 1,950원 4호선지하철 48분 도보 2분 2호선지하철 7분 지하철 4호선 노원역 실시간 시간표 14:42오이도행 창동역 방면 지하철 2호선 사당역 하차 신림역 상세보기" [pressed] [ref=f19e8355] [cursor=pointer]:
+                      - generic [ref=f19e8356]:
+                        - emphasis [ref=f19e8357]: 최적
+                        - generic [ref=f19e8358]:
+                          - emphasis [ref=f19e8359]: 59분
+                          - generic [ref=f19e8360]: 오후 3:41 도착
+                          - generic [ref=f19e8361]: 1,950원
+                      - list [ref=f19e8362]:
+                        - listitem [ref=f19e8363]:
+                          - generic [ref=f19e8364]: 4호선지하철
+                          - generic [ref=f19e8366]: 48분
+                        - listitem [ref=f19e8367]:
+                          - generic [ref=f19e8368]:
+                            - generic [ref=f19e8369]: 도보
+                            - text: 2분
+                        - listitem [ref=f19e8370]:
+                          - generic [ref=f19e8371]: 2호선지하철
+                          - generic [ref=f19e8373]: 7분
+                      - list [ref=f19e8374]:
+                        - listitem [ref=f19e8375]:
+                          - generic [ref=f19e8376]:
+                            - emphasis [ref=f19e8378]:
+                              - generic [ref=f19e8379]: 지하철
+                            - emphasis [ref=f19e8384]: 4호선
+                          - generic [ref=f19e8385]:
+                            - generic [ref=f19e8386]:
+                              - emphasis [ref=f19e8388]: 노원역
+                              - button "실시간" [ref=f19e8389]
+                              - button "시간표" [ref=f19e8390]
+                            - generic [ref=f19e8391]:
+                              - time [ref=f19e8392]: 14:42
+                              - text: 오이도행 창동역 방면
+                        - listitem [ref=f19e8393]:
+                          - generic [ref=f19e8394]:
+                            - emphasis [ref=f19e8396]:
+                              - generic [ref=f19e8397]: 지하철
+                            - emphasis [ref=f19e8402]: 2호선
+                          - emphasis [ref=f19e8406]: 사당역
+                        - listitem [ref=f19e8407]:
+                          - emphasis [ref=f19e8409]: 하차
+                          - emphasis [ref=f19e8413]: 신림역
+                      - button "상세보기" [ref=f19e8414]
+                  - listitem [ref=f19e8415]:
+                    - button "1시간12분 오후 3:52 도착 1,950원 도보 5분 7호선지하철 38분 도보 4분 3호선지하철 2분 도보 2분 2호선지하철 15분 지하철 7호선 노원역 실시간 시간표 14:46온수행 중계역 방면 지하철 3호선 고속터미널역 지하철 2호선 교대역 하차 신림역 상세보기" [ref=f19e8416] [cursor=pointer]:
+                      - generic [ref=f19e8418]:
+                        - emphasis [ref=f19e8419]: 1시간12분
+                        - generic [ref=f19e8420]: 오후 3:52 도착
+                        - generic [ref=f19e8421]: 1,950원
+                      - list [ref=f19e8422]:
+                        - listitem [ref=f19e8423]:
+                          - generic [ref=f19e8424]: 도보
+                          - generic [ref=f19e8426]: 5분
+                        - listitem [ref=f19e8427]:
+                          - generic [ref=f19e8428]: 7호선지하철
+                          - generic [ref=f19e8430]: 38분
+                        - listitem [ref=f19e8431]:
+                          - generic [ref=f19e8432]:
+                            - generic [ref=f19e8433]: 도보
+                            - text: 4분
+                        - listitem [ref=f19e8434]:
+                          - generic [ref=f19e8435]: 3호선지하철
+                          - generic [ref=f19e8437]: 2분
+                        - listitem [ref=f19e8438]:
+                          - generic [ref=f19e8439]:
+                            - generic [ref=f19e8440]: 도보
+                            - text: 2분
+                        - listitem [ref=f19e8441]:
+                          - generic [ref=f19e8442]: 2호선지하철
+                          - generic [ref=f19e8444]: 15분
+                      - list [ref=f19e8445]:
+                        - listitem [ref=f19e8446]:
+                          - generic [ref=f19e8447]:
+                            - emphasis [ref=f19e8449]:
+                              - generic [ref=f19e8450]: 지하철
+                            - emphasis [ref=f19e8455]: 7호선
+                          - generic [ref=f19e8456]:
+                            - generic [ref=f19e8457]:
+                              - emphasis [ref=f19e8459]: 노원역
+                              - button "실시간" [ref=f19e8460]
+                              - button "시간표" [ref=f19e8461]
+                            - generic [ref=f19e8462]:
+                              - time [ref=f19e8463]: 14:46
+                              - text: 온수행 중계역 방면
+                        - listitem [ref=f19e8464]:
+                          - generic [ref=f19e8465]:
+                            - emphasis [ref=f19e8467]:
+                              - generic [ref=f19e8468]: 지하철
+                            - emphasis [ref=f19e8473]: 3호선
+                          - emphasis [ref=f19e8477]: 고속터미널역
+                        - listitem [ref=f19e8478]:
+                          - generic [ref=f19e8479]:
+                            - emphasis [ref=f19e8481]:
+                              - generic [ref=f19e8482]: 지하철
+                            - emphasis [ref=f19e8487]: 2호선
+                          - emphasis [ref=f19e8491]: 교대역
+                        - listitem [ref=f19e8492]:
+                          - emphasis [ref=f19e8494]: 하차
+                          - emphasis [ref=f19e8498]: 신림역
+                      - button "상세보기" [ref=f19e8499]
+                  - listitem [ref=f19e8500]:
+                    - button "1시간18분 오후 3:58 도착 1,950원 도보 5분 7호선지하철 24분 도보 3분 2호선지하철 38분 지하철 7호선 노원역 실시간 시간표 14:46온수행 중계역 방면 지하철 2호선 건대입구역 하차 신림역 상세보기" [ref=f19e8501] [cursor=pointer]:
+                      - generic [ref=f19e8503]:
+                        - emphasis [ref=f19e8504]: 1시간18분
+                        - generic [ref=f19e8505]: 오후 3:58 도착
+                        - generic [ref=f19e8506]: 1,950원
+                      - list [ref=f19e8507]:
+                        - listitem [ref=f19e8508]:
+                          - generic [ref=f19e8509]: 도보
+                          - generic [ref=f19e8511]: 5분
+                        - listitem [ref=f19e8512]:
+                          - generic [ref=f19e8513]: 7호선지하철
+                          - generic [ref=f19e8515]: 24분
+                        - listitem [ref=f19e8516]:
+                          - generic [ref=f19e8517]:
+                            - generic [ref=f19e8518]: 도보
+                            - text: 3분
+                        - listitem [ref=f19e8519]:
+                          - generic [ref=f19e8520]: 2호선지하철
+                          - generic [ref=f19e8522]: 38분
+                      - list [ref=f19e8523]:
+                        - listitem [ref=f19e8524]:
+                          - generic [ref=f19e8525]:
+                            - emphasis [ref=f19e8527]:
+                              - generic [ref=f19e8528]: 지하철
+                            - emphasis [ref=f19e8533]: 7호선
+                          - generic [ref=f19e8534]:
+                            - generic [ref=f19e8535]:
+                              - emphasis [ref=f19e8537]: 노원역
+                              - button "실시간" [ref=f19e8538]
+                              - button "시간표" [ref=f19e8539]
+                            - generic [ref=f19e8540]:
+                              - time [ref=f19e8541]: 14:46
+                              - text: 온수행 중계역 방면
+                        - listitem [ref=f19e8542]:
+                          - generic [ref=f19e8543]:
+                            - emphasis [ref=f19e8545]:
+                              - generic [ref=f19e8546]: 지하철
+                            - emphasis [ref=f19e8551]: 2호선
+                          - emphasis [ref=f19e8555]: 건대입구역
+                        - listitem [ref=f19e8556]:
+                          - emphasis [ref=f19e8558]: 하차
+                          - emphasis [ref=f19e8562]: 신림역
+                      - button "상세보기" [ref=f19e8563]
+                  - listitem [ref=f19e8564]:
+                    - button "1시간16분 오후 4:02 도착 1,950원 도보 5분 7호선지하철 56분 도보 5분 신림지하철 6분 도보 1분 지하철 7호선 노원역 실시간 시간표 14:52석남행 중계역 방면 지하철 신림 보라매역 하차 신림역 상세보기" [ref=f19e8565] [cursor=pointer]:
+                      - generic [ref=f19e8567]:
+                        - emphasis [ref=f19e8568]: 1시간16분
+                        - generic [ref=f19e8569]: 오후 4:02 도착
+                        - generic [ref=f19e8570]: 1,950원
+                      - list [ref=f19e8571]:
+                        - listitem [ref=f19e8572]:
+                          - generic [ref=f19e8573]: 도보
+                          - generic [ref=f19e8575]: 5분
+                        - listitem [ref=f19e8576]:
+                          - generic [ref=f19e8577]: 7호선지하철
+                          - generic [ref=f19e8579]: 56분
+                        - listitem [ref=f19e8580]:
+                          - generic [ref=f19e8581]:
+                            - generic [ref=f19e8582]: 도보
+                            - text: 5분
+                        - listitem [ref=f19e8583]:
+                          - generic [ref=f19e8584]: 신림지하철
+                          - generic [ref=f19e8586]: 6분
+                        - listitem [ref=f19e8587]:
+                          - generic [ref=f19e8588]:
+                            - generic [ref=f19e8589]: 도보
+                            - text: 1분
+                      - list [ref=f19e8590]:
+                        - listitem [ref=f19e8591]:
+                          - generic [ref=f19e8592]:
+                            - emphasis [ref=f19e8594]:
+                              - generic [ref=f19e8595]: 지하철
+                            - emphasis [ref=f19e8600]: 7호선
+                          - generic [ref=f19e8601]:
+                            - generic [ref=f19e8602]:
+                              - emphasis [ref=f19e8604]: 노원역
+                              - button "실시간" [ref=f19e8605]
+                              - button "시간표" [ref=f19e8606]
+                            - generic [ref=f19e8607]:
+                              - time [ref=f19e8608]: 14:52
+                              - text: 석남행 중계역 방면
+                        - listitem [ref=f19e8609]:
+                          - generic [ref=f19e8610]:
+                            - emphasis [ref=f19e8612]:
+                              - generic [ref=f19e8613]: 지하철
+                            - emphasis [ref=f19e8618]: 신림
+                          - emphasis [ref=f19e8622]: 보라매역
+                        - listitem [ref=f19e8623]:
+                          - emphasis [ref=f19e8625]: 하차
+                          - emphasis [ref=f19e8629]: 신림역
+                      - button "상세보기" [ref=f19e8630]
+                  - listitem [ref=f19e8631]:
+                    - button "1시간22분 오후 4:02 도착 2,050원 도보 5분 7호선지하철 48분 도보 4분 간선버스 17분 도보 3분 지하철 7호선 노원역 실시간 시간표 14:46온수행 중계역 방면 간선 간선 숭실대입구역 506 하차 신림사거리.신림역 상세보기" [ref=f19e8632] [cursor=pointer]:
+                      - generic [ref=f19e8634]:
+                        - emphasis [ref=f19e8635]: 1시간22분
+                        - generic [ref=f19e8636]: 오후 4:02 도착
+                        - generic [ref=f19e8637]: 2,050원
+                      - list [ref=f19e8638]:
+                        - listitem [ref=f19e8639]:
+                          - generic [ref=f19e8640]: 도보
+                          - generic [ref=f19e8642]: 5분
+                        - listitem [ref=f19e8643]:
+                          - generic [ref=f19e8644]: 7호선지하철
+                          - generic [ref=f19e8646]: 48분
+                        - listitem [ref=f19e8647]:
+                          - generic [ref=f19e8648]:
+                            - generic [ref=f19e8649]: 도보
+                            - text: 4분
+                        - listitem [ref=f19e8650]:
+                          - generic [ref=f19e8651]: 간선버스
+                          - generic [ref=f19e8653]: 17분
+                        - listitem [ref=f19e8654]:
+                          - generic [ref=f19e8655]:
+                            - generic [ref=f19e8656]: 도보
+                            - text: 3분
+                      - list [ref=f19e8657]:
+                        - listitem [ref=f19e8658]:
+                          - generic [ref=f19e8659]:
+                            - emphasis [ref=f19e8661]:
+                              - generic [ref=f19e8662]: 지하철
+                            - emphasis [ref=f19e8667]: 7호선
+                          - generic [ref=f19e8668]:
+                            - generic [ref=f19e8669]:
+                              - emphasis [ref=f19e8671]: 노원역
+                              - button "실시간" [ref=f19e8672]
+                              - button "시간표" [ref=f19e8673]
+                            - generic [ref=f19e8674]:
+                              - time [ref=f19e8675]: 14:46
+                              - text: 온수행 중계역 방면
+                        - listitem [ref=f19e8676]:
+                          - generic [ref=f19e8677]:
+                            - emphasis [ref=f19e8679]:
+                              - generic [ref=f19e8680]: 간선
+                            - emphasis [ref=f19e8685]: 간선
+                          - generic [ref=f19e8686]:
+                            - emphasis [ref=f19e8689]: 숭실대입구역
+                            - list [ref=f19e8690]:
+                              - listitem [ref=f19e8691]:
+                                - emphasis [ref=f19e8692]: "506"
+                        - listitem [ref=f19e8693]:
+                          - emphasis [ref=f19e8695]: 하차
+                          - emphasis [ref=f19e8699]: 신림사거리.신림역
+                      - button "상세보기" [ref=f19e8700]
+                  - listitem [ref=f19e8701]:
+                    - button "1시간22분 오후 4:02 도착 1,950원 도보 5분 7호선지하철 54분 도보 6분 간선버스 9분 도보 4분 지하철 7호선 노원역 실시간 시간표 14:46온수행 중계역 방면 간선 간선 신대방삼거리 152 하차 신림사거리 상세보기" [ref=f19e8702] [cursor=pointer]:
+                      - generic [ref=f19e8704]:
+                        - emphasis [ref=f19e8705]: 1시간22분
+                        - generic [ref=f19e8706]: 오후 4:02 도착
+                        - generic [ref=f19e8707]: 1,950원
+                      - list [ref=f19e8708]:
+                        - listitem [ref=f19e8709]:
+                          - generic [ref=f19e8710]: 도보
+                          - generic [ref=f19e8712]: 5분
+                        - listitem [ref=f19e8713]:
+                          - generic [ref=f19e8714]: 7호선지하철
+                          - generic [ref=f19e8716]: 54분
+                        - listitem [ref=f19e8717]:
+                          - generic [ref=f19e8718]:
+                            - generic [ref=f19e8719]: 도보
+                            - text: 6분
+                        - listitem [ref=f19e8720]:
+                          - generic [ref=f19e8721]: 간선버스
+                          - generic [ref=f19e8723]: 9분
+                        - listitem [ref=f19e8724]:
+                          - generic [ref=f19e8725]:
+                            - generic [ref=f19e8726]: 도보
+                            - text: 4분
+                      - list [ref=f19e8727]:
+                        - listitem [ref=f19e8728]:
+                          - generic [ref=f19e8729]:
+                            - emphasis [ref=f19e8731]:
+                              - generic [ref=f19e8732]: 지하철
+                            - emphasis [ref=f19e8737]: 7호선
+                          - generic [ref=f19e8738]:
+                            - generic [ref=f19e8739]:
+                              - emphasis [ref=f19e8741]: 노원역
+                              - button "실시간" [ref=f19e8742]
+                              - button "시간표" [ref=f19e8743]
+                            - generic [ref=f19e8744]:
+                              - time [ref=f19e8745]: 14:46
+                              - text: 온수행 중계역 방면
+                        - listitem [ref=f19e8746]:
+                          - generic [ref=f19e8747]:
+                            - emphasis [ref=f19e8749]:
+                              - generic [ref=f19e8750]: 간선
+                            - emphasis [ref=f19e8755]: 간선
+                          - generic [ref=f19e8756]:
+                            - emphasis [ref=f19e8759]: 신대방삼거리
+                            - list [ref=f19e8760]:
+                              - listitem [ref=f19e8761]:
+                                - emphasis [ref=f19e8762]: "152"
+                        - listitem [ref=f19e8763]:
+                          - emphasis [ref=f19e8765]: 하차
+                          - emphasis [ref=f19e8769]: 신림사거리
+                      - button "상세보기" [ref=f19e8770]
+                  - listitem [ref=f19e8771]:
+                    - button "1시간40분 오후 4:22 도착 1,950원 도보 31분 1호선지하철 55분 도보 1분 2호선지하철 9분 지하철 1호선 창동역 실시간 시간표 15:14인천행 녹천역 방면 지하철 2호선 신도림역 하차 신림역 상세보기" [ref=f19e8772] [cursor=pointer]:
+                      - generic [ref=f19e8774]:
+                        - emphasis [ref=f19e8775]: 1시간40분
+                        - generic [ref=f19e8776]: 오후 4:22 도착
+                        - generic [ref=f19e8777]: 1,950원
+                      - list [ref=f19e8778]:
+                        - listitem [ref=f19e8779]:
+                          - generic [ref=f19e8780]: 도보
+                          - generic [ref=f19e8782]: 31분
+                        - listitem [ref=f19e8783]:
+                          - generic [ref=f19e8784]: 1호선지하철
+                          - generic [ref=f19e8786]: 55분
+                        - listitem [ref=f19e8787]:
+                          - generic [ref=f19e8788]:
+                            - generic [ref=f19e8789]: 도보
+                            - text: 1분
+                        - listitem [ref=f19e8790]:
+                          - generic [ref=f19e8791]: 2호선지하철
+                          - generic [ref=f19e8793]: 9분
+                      - list [ref=f19e8794]:
+                        - listitem [ref=f19e8795]:
+                          - generic [ref=f19e8796]:
+                            - emphasis [ref=f19e8798]:
+                              - generic [ref=f19e8799]: 지하철
+                            - emphasis [ref=f19e8804]: 1호선
+                          - generic [ref=f19e8805]:
+                            - generic [ref=f19e8806]:
+                              - emphasis [ref=f19e8808]: 창동역
+                              - button "실시간" [ref=f19e8809]
+                              - button "시간표" [ref=f19e8810]
+                            - generic [ref=f19e8811]:
+                              - time [ref=f19e8812]: 15:14
+                              - text: 인천행 녹천역 방면
+                        - listitem [ref=f19e8813]:
+                          - generic [ref=f19e8814]:
+                            - emphasis [ref=f19e8816]:
+                              - generic [ref=f19e8817]: 지하철
+                            - emphasis [ref=f19e8822]: 2호선
+                          - emphasis [ref=f19e8826]: 신도림역
+                        - listitem [ref=f19e8827]:
+                          - emphasis [ref=f19e8829]: 하차
+                          - emphasis [ref=f19e8833]: 신림역
+                      - button "상세보기" [ref=f19e8834]
+                - generic [ref=f19e8836]:
+                  - generic [ref=f19e8837]: 나중에 출발
+                  - generic [ref=f19e8838]: 운행 시간 주의
+                - list [ref=f19e8839]:
+                  - listitem [ref=f19e8840]:
+                    - button "2시간1분 오후 11:39 출발 2,500원 도보 2분 심야버스 114분 도보 2분 일반 일반 노원역9번출구 도착정보 버스 N61 운행종료 하차 신림사거리.신림역 상세보기" [ref=f19e8841] [cursor=pointer]:
+                      - generic [ref=f19e8843]:
+                        - emphasis [ref=f19e8844]: 2시간1분
+                        - generic [ref=f19e8845]: 오후 11:39 출발
+                        - generic [ref=f19e8846]: 2,500원
+                      - list [ref=f19e8847]:
+                        - listitem [ref=f19e8848]:
+                          - generic [ref=f19e8849]: 도보
+                          - generic [ref=f19e8851]: 2분
+                        - listitem [ref=f19e8852]:
+                          - generic [ref=f19e8853]: 심야버스
+                          - generic [ref=f19e8855]: 114분
+                        - listitem [ref=f19e8856]:
+                          - generic [ref=f19e8857]:
+                            - generic [ref=f19e8858]: 도보
+                            - text: 2분
+                      - list [ref=f19e8859]:
+                        - listitem [ref=f19e8860]:
+                          - generic [ref=f19e8861]:
+                            - emphasis [ref=f19e8863]:
+                              - generic [ref=f19e8864]: 일반
+                            - emphasis [ref=f19e8869]: 일반
+                          - generic [ref=f19e8870]:
+                            - generic [ref=f19e8871]:
+                              - emphasis [ref=f19e8873]: 노원역9번출구
+                              - button "도착정보" [ref=f19e8874]
+                            - list [ref=f19e8875]:
+                              - listitem [ref=f19e8876]:
+                                - generic [ref=f19e8877]:
+                                  - emphasis [ref=f19e8878]:
+                                    - generic [ref=f19e8879]: 버스
+                                  - emphasis [ref=f19e8884]: N61
+                                - generic [ref=f19e8885]: 운행종료
+                        - listitem [ref=f19e8886]:
+                          - emphasis [ref=f19e8888]: 하차
+                          - emphasis [ref=f19e8892]: 신림사거리.신림역
+                      - button "상세보기" [ref=f19e8893]
+              - generic [ref=f19e963]:
+                - list [ref=f19e965]:
+                  - listitem [ref=f19e966]: NoLate origin
+                  - listitem [ref=f19e967]: NoLate destination
+                - generic [ref=f19e968]:
+                  - button "저장" [ref=f19e969] [cursor=pointer]
+                  - button "공유하기" [ref=f19e970] [cursor=pointer]
+      - button "패널 접기" [expanded] [ref=f19e120] [cursor=pointer]
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic [ref=f19e122]:
+                - button "일반지도" [ref=f19e123] [cursor=pointer]
+                - button "위성지도" [ref=f19e125] [cursor=pointer]
+                - button "지형지도" [ref=f19e127] [cursor=pointer]
+              - generic [ref=f19e129]:
+                - button "테마" [ref=f19e130] [cursor=pointer]
+                - button "저장" [ref=f19e132] [cursor=pointer]
+                - button "지적편집도" [ref=f19e134] [cursor=pointer]
+                - button "거리뷰" [ref=f19e136] [cursor=pointer]
+              - generic [ref=f19e138]:
+                - button "반경측정" [ref=f19e139] [cursor=pointer]
+                - button "면적측정" [ref=f19e141] [cursor=pointer]
+                - button "거리측정" [ref=f19e143] [cursor=pointer]
+            - generic:
+              - button "접속위치" [ref=f19e147] [cursor=pointer]
+              - generic [ref=f19e153]:
+                - button "확대" [ref=f19e154] [cursor=pointer]
+                - button "축소" [ref=f19e157] [cursor=pointer]
+  - status [ref=f19e159]
+```

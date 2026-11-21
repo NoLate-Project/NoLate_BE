@@ -1,0 +1,90 @@
+{
+  "classification": "IDENTICAL_SYNTHETIC_STATION_RESPONSES_IN_PRODUCTION_REPLAY",
+  "fixture": "src/test/resources/eta/planned-transfer-recovery-synthetic.json",
+  "fixtureSha256": "b60f593401e2f1b91dfbf1f0644d3f1838d697aabe9c3d442ff766c3bdd9a76c",
+  "route": "노원 4호선 → 사당 2호선 → 신림",
+  "publicHttpCalls": 0,
+  "installedAppRunInThisReplay": false,
+  "physicalTravelAccuracyVerified": false,
+  "samples": {
+    "before": {
+      "evaluations": [
+        {
+          "inboundAlightingAt": "2026-11-19T12:12:20Z",
+          "transferTrain": "2014",
+          "transferBoardingAt": "2026-11-19T12:21:40Z",
+          "destinationAt": "2026-11-19T12:32:32Z"
+        },
+        {
+          "inboundAlightingAt": "2026-11-19T12:10:50Z",
+          "transferTrain": "2014",
+          "transferBoardingAt": "2026-11-19T12:21:40Z",
+          "destinationAt": "2026-11-19T12:32:32Z"
+        }
+      ],
+      "departureAt": "2026-11-19T12:00:39Z",
+      "sourceUpdatedAt": "2026-11-19T12:07:49Z",
+      "appSummary": "21:32 도착 예상 · 총 32분",
+      "appTimeRailSeconds": {
+        "access": 111,
+        "firstBoardingInterval": 60,
+        "firstRide": 440,
+        "transferWalk": 243,
+        "transferWait": 407,
+        "secondRide": 481,
+        "egress": 171,
+        "total": 1913
+      },
+      "transferMarginSeconds": 60,
+      "afterSourceExpires": {
+        "basis": "LAST_ACCEPTED_PLAN",
+        "appSummary": "21:32 도착 예상 · 총 32분",
+        "arrivalAt": "2026-11-19T12:32:32Z"
+      },
+      "productionSourceSha256": {
+        "TransitTransferRealtimeGuard.kt": "956fe8e729099c6f01eb06cc1f68d422e5c8f9d337a7acbf8bb87f247f5a2acb",
+        "PlannedTransitRouteRefresher.kt": "2e0f2ab9a6ed1020908e5f25106a10c2aea30aed370ec0b4b4afff89fa3004d2"
+      }
+    },
+    "after": {
+      "evaluations": [
+        {
+          "inboundAlightingAt": "2026-11-19T12:12:20Z",
+          "transferTrain": "2014",
+          "transferBoardingAt": "2026-11-19T12:21:40Z",
+          "destinationAt": "2026-11-19T12:32:32Z"
+        },
+        {
+          "inboundAlightingAt": "2026-11-19T12:10:50Z",
+          "transferTrain": "2012",
+          "transferBoardingAt": "2026-11-19T12:16:50Z",
+          "destinationAt": "2026-11-19T12:27:42Z"
+        }
+      ],
+      "departureAt": "2026-11-19T12:00:39Z",
+      "sourceUpdatedAt": "2026-11-19T12:07:49Z",
+      "appSummary": "21:27 도착 예상 · 총 28분",
+      "appTimeRailSeconds": {
+        "access": 111,
+        "firstBoardingInterval": 60,
+        "firstRide": 440,
+        "transferWalk": 243,
+        "transferWait": 117,
+        "secondRide": 481,
+        "egress": 171,
+        "total": 1623
+      },
+      "transferMarginSeconds": 60,
+      "afterSourceExpires": {
+        "basis": "LAST_ACCEPTED_PLAN",
+        "appSummary": "21:27 도착 예상 · 총 28분",
+        "arrivalAt": "2026-11-19T12:27:42Z"
+      },
+      "productionSourceSha256": {
+        "TransitTransferRealtimeGuard.kt": "ad0b496570b8d572b9720bd9121f7825d4fa81d67ea658220b527e459728a99f",
+        "PlannedTransitRouteRefresher.kt": "5f7e4d36d2e7f1af2d0141d9b222f69a5e0eaa48ef110b0b2cdb17680d275780"
+      }
+    }
+  },
+  "matchedPhysicalRunsForThisRecovery": 0
+}

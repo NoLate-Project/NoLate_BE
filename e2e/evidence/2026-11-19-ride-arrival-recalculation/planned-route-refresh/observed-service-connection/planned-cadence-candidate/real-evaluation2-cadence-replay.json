@@ -1,0 +1,10 @@
+{
+  "classification" : "RECORDED_WORKER_STATE_CADENCE_REPLAY_NOT_NEW_LIVE_EXECUTION",
+  "recordedWorkerFinishedAt" : "2026-11-20T06:19:32.433272Z",
+  "recordedNextCheckAt" : "2026-11-20T06:29:32.433272Z",
+  "candidateStationWindowAt" : "2026-11-20T06:20:32.433272Z",
+  "recordedDepartureAt" : "2026-11-20T05:31:00Z",
+  "additionalPublicCalls" : 0,
+  "liveWorkerAndPublishedApiChanged" : false,
+  "doesNotClaimAutomaticRequeryAlreadyRan" : true
+}

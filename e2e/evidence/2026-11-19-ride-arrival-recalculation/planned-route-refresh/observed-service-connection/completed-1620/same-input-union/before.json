@@ -1,0 +1,9 @@
+{
+  "result" : "REPLAYED",
+  "evaluatedAt" : "2026-11-20T08:25:30.324068Z",
+  "stationReadsUsed" : 3,
+  "capturedStationReadsNotUsed" : 1,
+  "timetableReadsUsed" : 0,
+  "verifiedAgainstRecordedResult" : false,
+  "update" : null
+}

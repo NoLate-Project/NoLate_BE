@@ -1,0 +1,59 @@
+{
+  "classification": "PRE_OUTCOME_FROZEN_SHADOW_WITH_MATCHING_STATION_ARRIVAL_BASIS",
+  "createdAt": "2026-11-20T04:58:06.811693+00:00",
+  "inputEvaluationSha256": "fb154987f5d7985dbc558b96010c8791495b70efa20271fb45cd3ea45ccb6967",
+  "availableAt": "2026-11-20T04:54:32.367176Z",
+  "ownVehicle": {
+    "rawTrainNumber": "3240",
+    "boardingStation": "사당",
+    "alightingStation": "신림",
+    "line": "LINE_2",
+    "direction": "UP",
+    "serviceClass": "LOCAL",
+    "terminal": "성수",
+    "predictedBoardingAt": "2026-11-20T05:03:33Z",
+    "boardingSourceUpdatedAt": "2026-11-20T04:54:03Z",
+    "directOwnAlightingForecastAvailable": false
+  },
+  "orderedStops": [
+    "사당",
+    "낙성대",
+    "서울대입구",
+    "봉천",
+    "신림"
+  ],
+  "peer": {
+    "rawTrainNumber": "2238",
+    "boardingAt": "2026-11-20T04:58:23Z",
+    "alightingAt": "2026-11-20T05:04:23Z",
+    "sourceUpdatedAt": "2026-11-20T04:54:03Z",
+    "durationSeconds": 360.0,
+    "bothEndpointsAreForecastsNotPhysicalMeasurements": true
+  },
+  "frozenPredictions": {
+    "stationArrivalToArrivalCorridorTemplate": {
+      "referenceRecordedAt": "2026-11-20T04:00:02.555816Z",
+      "referenceStationArrivalAt": "2026-11-20T04:56:30Z",
+      "referenceDepartureAt": "2026-11-20T04:57:30Z",
+      "referenceAlightingAt": "2026-11-20T05:05:00Z",
+      "dwellSeconds": 60.0,
+      "movementSeconds": 450.0,
+      "durationSeconds": 510.0,
+      "predictedAlightingAt": "2026-11-20T05:12:03+00:00",
+      "doesNotAssertTrainNumberAlias": true
+    },
+    "contemporaneousPeerCorridorForecastDuration": {
+      "durationSeconds": 360.0,
+      "predictedAlightingAt": "2026-11-20T05:09:33+00:00",
+      "basis": "PEER_CORRIDOR_FORECAST_ESTIMATE_NOT_OWN_ALIGHTING_REALTIME"
+    }
+  },
+  "productionApplication": false,
+  "sameTrainRealtimeGateRelaxed": false,
+  "providerApiCallsAdded": 0,
+  "positionsUsedToTuneOrSelect": false,
+  "outcomeKnownWhenFrozen": false,
+  "requiredAudit": "Compare both frozen predictions only with raw3240 position bounds in this run. Do not use2244 bounds or count a different vehicle as improvement. One outcome is pilot evidence only.",
+  "supersedesBaselineDefinitionOnly": "frozen-corridor-forecast-shadow.json",
+  "reasonForBaselineCorrection": "Realtime boarding predicts station arrival. A LEFTTIME-to-alighting duration omits the reference 60-second dwell and is not the corresponding baseline. Original frozen artifact remains untouched."
+}

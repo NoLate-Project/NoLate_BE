@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.eta.simulator.RealPlannedRouteRefreshTraceTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-11-20T09:40:52.851Z" hostname="macui-MacBookPro.local" time="0.157">
+  <properties/>
+  <testcase name="같은 역과 시간표 응답으로 환승 재선택을 재생하고 누락된 조회는 비교에서 제외한다()" classname="com.noLate.eta.simulator.RealPlannedRouteRefreshTraceTest" time="0.157"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

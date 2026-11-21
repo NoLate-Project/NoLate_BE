@@ -1,0 +1,87 @@
+{
+  "classification": "OFFLINE_REPLAY_OF_CAPTURED_JOURNEY_POSITION_SCHEDULING",
+  "sourceDirectory": "real-response-clock-fixed",
+  "sourceSha256": {
+    "evaluation-1.json": "99aa4d891a07a6e01337d6f1f4a930706f7a6bd24914c836d08346c207b6a2b9",
+    "evaluation-2.json": "57a65e1bef84a571a7240583b5c47cbbbbf283f86ef5c0bf665e15d8d57e54df",
+    "odsay-seed-journey.json": "6a94c7058931fe4329b25e1a6f59f460a7e37f95f63fff1fbbd2055528f1710f",
+    "selected-route.json": "7af01c6457b1ce567be36e39b79aa3c36785f0e02fb954305bdd1aacc5967579",
+    "completed-position-audit/positions.jsonl": "058d6e45801d59f0f60ac536e15b508968f0817de79da497464957c37dfebdf5"
+  },
+  "previousActualPositionRequests": 16,
+  "actualJourneysInArchive": 1,
+  "newPositionHttpCalls": 0,
+  "proposedSlots": 16,
+  "events": [
+    {
+      "station": "노원",
+      "line": "LINE_4",
+      "event": "BOARDING",
+      "trainNumber": "K4335",
+      "referenceInstant": "2026-11-19T14:18:00Z",
+      "previousLineFirstScheduledPositionReadMinusReferenceSeconds": 2700,
+      "previousObservedIntervalResult": "NO_ARRIVAL_BOUND",
+      "previousIntervalLower": null,
+      "previousIntervalUpper": null,
+      "newProposedReadOffsetsSeconds": [
+        -120,
+        -15,
+        90,
+        195
+      ]
+    },
+    {
+      "station": "사당",
+      "line": "LINE_4",
+      "event": "ALIGHTING",
+      "trainNumber": "K4335",
+      "referenceInstant": "2026-11-19T15:06:00Z",
+      "previousLineFirstScheduledPositionReadMinusReferenceSeconds": -180,
+      "previousObservedIntervalResult": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+      "previousIntervalLower": "2026-11-19T15:04:12+00:00",
+      "previousIntervalUpper": "2026-11-19T15:06:17+00:00",
+      "newProposedReadOffsetsSeconds": [
+        -120,
+        -15,
+        90,
+        195
+      ]
+    },
+    {
+      "station": "사당",
+      "line": "LINE_2",
+      "event": "BOARDING",
+      "trainNumber": "2510",
+      "referenceInstant": "2026-11-19T15:10:30Z",
+      "previousLineFirstScheduledPositionReadMinusReferenceSeconds": 270,
+      "previousObservedIntervalResult": "NO_ARRIVAL_BOUND",
+      "previousIntervalLower": null,
+      "previousIntervalUpper": null,
+      "newProposedReadOffsetsSeconds": [
+        -120,
+        -15,
+        90,
+        195
+      ]
+    },
+    {
+      "station": "신림",
+      "line": "LINE_2",
+      "event": "ALIGHTING",
+      "trainNumber": "2510",
+      "referenceInstant": "2026-11-19T15:18:00Z",
+      "previousLineFirstScheduledPositionReadMinusReferenceSeconds": -180,
+      "previousObservedIntervalResult": "NO_ARRIVAL_BOUND",
+      "previousIntervalLower": null,
+      "previousIntervalUpper": null,
+      "newProposedReadOffsetsSeconds": [
+        -120,
+        -15,
+        90,
+        195
+      ]
+    }
+  ],
+  "actualNewStationBounds": null,
+  "passengerDestinationArrivalMeasured": false
+}

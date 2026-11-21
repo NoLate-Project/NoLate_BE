@@ -1,0 +1,43 @@
+{
+  "classification": "INITIAL_ACCESS_WAIT_AND_FIRST_VEHICLE_SELECTION_CAUSE_NOT_WALKING_GROUND_TRUTH",
+  "doorDepartureAt": "2026-11-20T07:20:00Z",
+  "modeledAccessSeconds": 137,
+  "requiredBoardingMarginSeconds": 60,
+  "modeledReadyAt": "2026-11-20T16:23:17+09:00",
+  "earlierOfficialCandidate": {
+    "provider": "seoul-timetable",
+    "line": "LINE_4",
+    "serviceDate": "2026-11-20",
+    "trainNumber": "4125",
+    "directionCode": "DOWN",
+    "serviceClass": "LOCAL",
+    "fromStationCode": "0411",
+    "toStationCode": "0433",
+    "terminalName": "사당",
+    "boardingAt": "2026-11-20T07:20:30Z",
+    "arrivalAt": "2026-11-20T08:08:30Z",
+    "fetchedAt": "2026-11-20T07:19:01.455544Z",
+    "realtimeTrainNumber": null,
+    "boardingStationArrivalAt": "2026-11-20T07:20:00Z"
+  },
+  "earlierOfficialCandidateCanBeCaughtUnderOriginalModeledReady": false,
+  "selectedFirstTrain": "4641",
+  "selectedTrainBoardingPrediction": "2026-11-20T16:26:30+09:00",
+  "observedSelectedTrainDepartureBounds": {
+    "result": "BOUNDED_PROVIDER_TRAIN_DEPARTURE",
+    "lower": "2026-11-20T07:27:19+00:00",
+    "upper": "2026-11-20T07:29:26+00:00",
+    "widthSeconds": 127.0
+  },
+  "selectedTrainDepartureObservedMinusPredictedSeconds": [
+    49,
+    176
+  ],
+  "mapFirstBoardingDisplay": "16:20 사당행",
+  "mapUnderlyingTrainIdEstablished": false,
+  "mapAccessBoundaryEstablished": false,
+  "independentSelectedJourneys": 1,
+  "physicalWalkingMeasured": false,
+  "mapDisplayedArrivalDifferenceSeconds": 433,
+  "nominalDisplayedDifferenceIsNotHiddenSecondOrPhysicalError": true
+}

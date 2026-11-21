@@ -1,0 +1,20 @@
+{
+  "classification": "OFFLINE_HISTORICAL_STATE_IS_NOT_FORECAST_REGRESSION",
+  "updatedAt": "2026-11-20T10:53:03.700740+00:00",
+  "providerCallsAdded": 0,
+  "runtimeOrFrozenProductCodeChanged": false,
+  "combinedRelatedTestsPassed": 44,
+  "expandedHistoricalBoundaryTestSuitePassed": 14,
+  "sourceSha256": {
+    "e2e/audit_journey_train_positions.py": "d433476d6b4ba2bb49be314fdc3597239b407796413a5d95956d77282442a5c4",
+    "e2e/verify_accepted_train_observation.py": "a368d08a34d435091edf83251e3fc2a761444ecf3e764ab79f7ff7c723de4bdb",
+    "e2e/test_audit_journey_train_positions.py": "425d33ab2c36e8afb5e8a4d01fe4a70c9c8143e5a99744ed471233d2bd13b697"
+  },
+  "checks": [
+    "new historical basis references ARRIVAL rather than timetable DEPARTURE",
+    "historical station state excluded from future prediction count and paired accuracy score",
+    "LAST_ACCEPTED_PLAN keeps the historical role",
+    "different route identity, late receipt and stale source rejected"
+  ],
+  "physicalAccuracyImprovementVerified": false
+}

@@ -1,0 +1,152 @@
+{
+  "classification": "PROSPECTIVE_SAME_TRAIN_FIRST_ALIGHTING_OUTCOME",
+  "assessedAt": "2026-11-20T02:49:59.538940+00:00",
+  "candidateFrozenBeforeOutcome": true,
+  "candidateDeployedInActualWorker": false,
+  "independentJourneyCount": 1,
+  "independentTrain": "4075",
+  "physicalHttpCallsDuringAnalysis": 0,
+  "positionSamplesRead": 7,
+  "events": {
+    "baseline": {
+      "line": "LINE_4",
+      "event": "ALIGHTING",
+      "station": "사당",
+      "scheduledAt": "2026-11-20T02:45:00Z",
+      "predictedAt": "2026-11-20T02:45:00Z",
+      "trainNumbers": [
+        "4075"
+      ],
+      "direction": "DOWN",
+      "terminal": "사당",
+      "serviceClass": "LOCAL",
+      "serviceDate": "2026-11-20",
+      "from": "2026-11-20T01:53:00.456570+00:00",
+      "until": "2026-11-20T02:49:40.271718+00:00",
+      "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+      "lower": "2026-11-20T02:47:35+00:00",
+      "upper": "2026-11-20T02:48:31+00:00",
+      "widthSeconds": 56.0,
+      "predictionReferenceEvent": "ARRIVAL",
+      "observedMinusPredictionSeconds": [
+        155.0,
+        211.0
+      ],
+      "minimumObservedMinusPredictionSeconds": null,
+      "sameEventTimetableAt": "2026-11-20T02:45:00Z",
+      "absoluteErrorChangeFromTimetableSeconds": [
+        0.0,
+        0.0
+      ],
+      "observedMinusSameEventTimetableSeconds": [
+        155.0,
+        211.0
+      ],
+      "observedMinusTimetableSeconds": [
+        155.0,
+        211.0
+      ],
+      "positionReadsRelativeToPrediction": {
+        "before": 4,
+        "atOrAfter": 3
+      }
+    },
+    "candidate": {
+      "line": "LINE_4",
+      "event": "ALIGHTING",
+      "station": "사당",
+      "scheduledAt": "2026-11-20T02:45:00Z",
+      "predictedAt": "2026-11-20T02:46:55Z",
+      "trainNumbers": [
+        "4075"
+      ],
+      "direction": "DOWN",
+      "terminal": "사당",
+      "serviceClass": "LOCAL",
+      "serviceDate": "2026-11-20",
+      "from": "2026-11-20T01:53:00.456570+00:00",
+      "until": "2026-11-20T02:49:40.271718+00:00",
+      "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+      "lower": "2026-11-20T02:47:35+00:00",
+      "upper": "2026-11-20T02:48:31+00:00",
+      "widthSeconds": 56.0,
+      "predictionReferenceEvent": "ARRIVAL",
+      "observedMinusPredictionSeconds": [
+        40.0,
+        96.0
+      ],
+      "minimumObservedMinusPredictionSeconds": null,
+      "sameEventTimetableAt": "2026-11-20T02:45:00Z",
+      "absoluteErrorChangeFromTimetableSeconds": [
+        -115.0,
+        -115.0
+      ],
+      "observedMinusSameEventTimetableSeconds": [
+        155.0,
+        211.0
+      ],
+      "observedMinusTimetableSeconds": [
+        155.0,
+        211.0
+      ],
+      "positionReadsRelativeToPrediction": {
+        "before": 5,
+        "atOrAfter": 2
+      }
+    },
+    "latestDirectAlighting": {
+      "line": "LINE_4",
+      "event": "ALIGHTING",
+      "station": "사당",
+      "scheduledAt": "2026-11-20T02:45:00Z",
+      "predictedAt": "2026-11-20T02:48:05Z",
+      "trainNumbers": [
+        "4075"
+      ],
+      "direction": "DOWN",
+      "terminal": "사당",
+      "serviceClass": "LOCAL",
+      "serviceDate": "2026-11-20",
+      "from": "2026-11-20T01:53:00.456570+00:00",
+      "until": "2026-11-20T02:49:40.271718+00:00",
+      "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+      "lower": "2026-11-20T02:47:35+00:00",
+      "upper": "2026-11-20T02:48:31+00:00",
+      "widthSeconds": 56.0,
+      "predictionReferenceEvent": "ARRIVAL",
+      "observedMinusPredictionSeconds": [
+        -30.0,
+        26.0
+      ],
+      "minimumObservedMinusPredictionSeconds": null,
+      "sameEventTimetableAt": "2026-11-20T02:45:00Z",
+      "absoluteErrorChangeFromTimetableSeconds": [
+        -185.0,
+        -125.0
+      ],
+      "observedMinusSameEventTimetableSeconds": [
+        155.0,
+        211.0
+      ],
+      "observedMinusTimetableSeconds": [
+        155.0,
+        211.0
+      ],
+      "positionReadsRelativeToPrediction": {
+        "before": 6,
+        "atOrAfter": 1
+      }
+    }
+  },
+  "physicalArrivalExactSecondKnown": false,
+  "passengerBoardingVerified": false,
+  "sourceSampleHashes": {
+    "train-position-3.json": "7013f26101a78f75ffb9b617cb0a1eea477b2494821e1a60001b3a013f011276",
+    "train-position-2.json": "34a39f02c9237ff9044d9be147c6133c5b5ff36c3847a8a14f5e705cf25f3ea5",
+    "train-position-5.json": "2ad79e3733e5b45571cae3c197156bf208f83a603f96e4ccdf68673611887707",
+    "train-position-4.json": "cbb34f5262d82e76c9ad8640049248686ca5fdc4735cf8aa52d3ca19f1391fed",
+    "train-position-7.json": "8952efe58fdc0bd0999c896f2e51265164d73e1983728e7e0b8f28a4a9bd6b85",
+    "train-position-6.json": "357dde4f2e04b1f7f09a3aa95b0e16b1ffc2157fb7ae5a8a4d8bd54a699867e6",
+    "train-position-1.json": "37eed8282ea19583d1290fd9c7ce7a7aa4e28fb4512f4e194ac3490139bf8305"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "classification": "FROZEN_OFFLINE_CANDIDATE_BEFORE_SADANG_OUTCOME",
+  "recordedAt": "2026-11-20T02:11:17.526042+00:00",
+  "runningJvmModified": false,
+  "sourceWorktreePromoted": false,
+  "sourceSnapshot": "/private/tmp/nolate-be-planned-build.9h4y8nrr",
+  "patch": "offline-candidate-not-applied.patch",
+  "files": {
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "70dd2eebe2385e74cdda40c40753700ae87bfc78d576ba29b9382c43d1ee0c98",
+    "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": "f34deb4f51e9b49b668c703432adc3d93517cfd402e9d732d9ef3c711826e807",
+    "src/test/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuardTest.kt": "c9e28b206ca0da63a7c11694c730bb13b5f617db827d2c02abb9e11050f16666",
+    "src/test/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresherTest.kt": "7bdb03a0d19b1762825964fc347179af8b3548b73619719bafb916d9bc0309dc",
+    "src/test/resources/eta/reported-boarding-arrival-20261120.json": "5697117de62e126e8d8687b89276d91df3791602e1855dfd1b32d8d3cc8038d9"
+  },
+  "sameRecordedResponseReplayed": true,
+  "publicStateTimestampIsNotExactPhysicalArrivalTime": true,
+  "fullRegression": {
+    "suites": 12,
+    "tests": 457,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "actualFirstAlightingAndAccuracy": "PENDING_THIS_RUNNING_JOURNEY"
+}

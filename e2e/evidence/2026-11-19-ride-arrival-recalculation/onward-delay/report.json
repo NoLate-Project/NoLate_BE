@@ -1,0 +1,41 @@
+{
+  "classification": "SYNTHETIC_ONWARD_DELAY_SIMULATOR_E2E",
+  "result": "PASSED",
+  "providersMocked": true,
+  "database": "H2_MEMORY_ONLY",
+  "physicalTransitHttpCalls": 0,
+  "productionDatabaseModified": false,
+  "actualTripAccuracyVerified": false,
+  "mapAccuracyWithinTwoMinutesVerified": false,
+  "nativeAlarmDeliveryVerified": false,
+  "calendarSmokeRequested": false,
+  "firstAlightingRiskRequested": false,
+  "firstTimetableAlightingRequested": false,
+  "metroPreparation": {
+    "result": "PASSED",
+    "classification": "OWNED_METRO_PREPARATION_NOT_APP_E2E",
+    "port": 8086,
+    "bundleBytes": 21111242,
+    "bundleSha256": "30b27ea3f6635ec4fb0d35d57add2f8f9ccef45d68087293560f2622604cf127",
+    "elapsedSeconds": 19.884,
+    "appLaunched": false,
+    "providerRequestSent": false,
+    "uiOrDeliveryDeadlineChanged": false
+  },
+  "startupTransport": {
+    "classification": "PINNED_XCTEST_LIFECYCLE_TRANSPORT_ONLY",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "appDataDeleted": false,
+    "otherDevicesTouched": false,
+    "etaValidated": false,
+    "result": "PASSED",
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.9e6r2dj6/ui-private-lifecycle"
+  },
+  "predictionAudit": {
+    "result": "PASSED",
+    "observedMiddleRideReconnectedOnwardTrain": true,
+    "walkingAndMarginPreserved": true,
+    "actualTripAccuracyVerified": false
+  },
+  "originalAppEndpointRestored": true
+}

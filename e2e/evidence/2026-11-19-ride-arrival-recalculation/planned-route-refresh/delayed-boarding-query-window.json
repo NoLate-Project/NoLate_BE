@@ -1,0 +1,29 @@
+{
+  "classification": "CONTROLLED_DELAYED_BOARDING_REGRESSION_AFTER_REAL_OBSERVATION",
+  "realEvidence": "real-20261120-morning/first-station-observation-assessment.json",
+  "additionalActualPosition": "real-20261120-morning/train-position-4.json",
+  "firstBoardingLookupLookbackSecondsBefore": 120,
+  "firstBoardingLookupLookbackSecondsAfter": 1200,
+  "originResponseFreshnessSeconds": 120,
+  "recordedRealArrivalResponseDuringBlindInterval": false,
+  "controlledOriginForecastIsRealProviderResponse": false,
+  "originalRealRunUsedNewLookback": false,
+  "oldGuardParameterizedCases": {
+    "tests": 5,
+    "failures": 4
+  },
+  "oldFullRefreshIntegrationCases": {
+    "tests": 1,
+    "failures": 1
+  },
+  "currentRegressionSuites": 12,
+  "currentRegression": {
+    "tests": 448,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "compiledSnapshot": "/private/tmp/nolate-be-planned-build.5cs_r9s9",
+  "realRunOriginalCompiledSnapshotPreserved": "/private/tmp/nolate-be-planned-build.c3iohx0E",
+  "nextValidation": "Use one independent bounded real journey with a planned first-boarding recheck after the nominal boarding plus 121 seconds, preserving real clock and provider outputs. Do not repeat the completed morning journey or fetch a missing historical arrival response."
+}

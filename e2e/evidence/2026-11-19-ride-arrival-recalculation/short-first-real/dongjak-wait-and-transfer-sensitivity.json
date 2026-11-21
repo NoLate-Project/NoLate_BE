@@ -1,0 +1,114 @@
+{
+  "classification": "OFFLINE_SAME_POSITION_INTERVAL_PREDICTOR_SENSITIVITY",
+  "additionalHttpCalls": 0,
+  "independentJourneys": 1,
+  "publishedRealtimeCorrectionsScored": 0,
+  "physicalTripMeasured": false,
+  "odSayPath": [
+    "동작",
+    "총신대입구",
+    "사당"
+  ],
+  "train": {
+    "provider": "seoul-timetable",
+    "line": "LINE_4",
+    "serviceDate": "2026-11-19",
+    "trainNumber": "K4327",
+    "directionCode": "DOWN",
+    "serviceClass": "LOCAL",
+    "fromStationCode": "0431",
+    "toStationCode": "0433",
+    "terminalName": "안산",
+    "boardingAt": "2026-11-19T12:29:30Z",
+    "arrivalAt": "2026-11-19T12:34:00Z",
+    "fetchedAt": "2026-11-19T12:14:22.975028Z",
+    "realtimeTrainNumber": "4327",
+    "boardingStationArrivalAt": "2026-11-19T12:29:00Z"
+  },
+  "modelInputAvailableAt": "2026-11-19T12:35:00.305653Z",
+  "positionsReadByThen": 3,
+  "modelOriginArrivalInterval": {
+    "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+    "lower": "2026-11-19T12:32:46+00:00",
+    "upper": "2026-11-19T12:33:59+00:00",
+    "widthSeconds": 73.0
+  },
+  "originScheduledArrival": "2026-11-19T12:29:00Z",
+  "originArrivalMinusScheduledSeconds": [
+    226.0,
+    299.0
+  ],
+  "modeledOriginWalkingSeconds": 777,
+  "scheduledWaitFromModeledPlatformArrivalToTrainArrivalSeconds": 63.0,
+  "waitFromModeledPlatformArrivalToObservedTrainArrivalSeconds": [
+    289.0,
+    362.0
+  ],
+  "originTrainDeparture": {
+    "result": "OBSERVATION_GAP_TOO_WIDE",
+    "widthSeconds": 154.0,
+    "lastConfirmedBeforeEventAt": "2026-11-19T12:34:00+00:00"
+  },
+  "minimumOriginDepartureDelaySeconds": 270.0,
+  "heldOutDownstreamObservation": {
+    "result": "NO_ARRIVAL_BOUND",
+    "freshMatchingRowsInKnownOrder": 2,
+    "lastConfirmedBeforeEventAt": "2026-11-19T12:36:41+00:00"
+  },
+  "downstreamMinimumDelaySeconds": 161.0,
+  "downstreamWalkingSeconds": 157,
+  "confidenceMarginSeconds": 60.0,
+  "v1EndpointScenarios": [
+    {
+      "sadangArrival": "2026-11-19T12:37:16Z",
+      "readyWithWalkAndMargin": "2026-11-19T12:40:53+00:00",
+      "transferTrain": "2462",
+      "sillimScheduledArrival": "2026-11-19T12:50:00Z"
+    },
+    {
+      "sadangArrival": "2026-11-19T12:38:29Z",
+      "readyWithWalkAndMargin": "2026-11-19T12:42:06+00:00",
+      "transferTrain": "2462",
+      "sillimScheduledArrival": "2026-11-19T12:50:00Z"
+    }
+  ],
+  "v2EndpointScenarios": [
+    {
+      "sadangArrival": "2026-11-19T12:37:46Z",
+      "readyWithWalkAndMargin": "2026-11-19T12:41:23+00:00",
+      "transferTrain": "2462",
+      "sillimScheduledArrival": "2026-11-19T12:50:00Z"
+    },
+    {
+      "sadangArrival": "2026-11-19T12:38:59Z",
+      "readyWithWalkAndMargin": "2026-11-19T12:42:36+00:00",
+      "transferTrain": "2464",
+      "sillimScheduledArrival": "2026-11-19T12:56:00Z"
+    }
+  ],
+  "v2MinusV1AbsoluteErrorBoundsSeconds": [
+    -30.0,
+    30.0
+  ],
+  "v2MinusUnchangedTimetableAbsoluteErrorBoundsSeconds": [
+    -299.0,
+    -23.0
+  ],
+  "v2MinusObservationReceiptClockAbsoluteErrorBoundsSeconds": [
+    -238.694347,
+    37.305653
+  ],
+  "limitations": [
+    "The recorded app did not accept a live ETA. The predictor inputs here are both ends of a train position interval, not a historical published Seoul arrival forecast.",
+    "The same train remained upstream at the last Sadang observation. True arrival and whether either transfer was boarded are unknown. Sillim in the scenarios is the recorded scheduled alighting at the end of this route.",
+    "The longer ODsay archive is used only to verify upstream station order. Its clocks and vehicle observations are not features."
+  ],
+  "sha256": {
+    "e2e/evidence/2026-11-19-ride-arrival-recalculation/short-first-real/positions.jsonl": "000eb58f87c2129124e72b60c730f5d27bef6ccdb3475ab6cb85cb0f97b1f736",
+    "e2e/evidence/2026-11-19-ride-arrival-recalculation/short-first-real/evaluation-1.json": "e30ff243646c2ff03ea84bcc69db1441cc4a5c9a9d187ccff174992a59824d42",
+    "e2e/evidence/2026-11-19-ride-arrival-recalculation/short-first-real/selected-route.json": "59c608083ac8b150b9e01567d5a355160ababef8f003a1bc44cd681963a43945",
+    "e2e/evidence/2026-11-19-ride-arrival-recalculation/short-first-real/odsay-seed-journey.json": "1861daa47c5a0108afeeae986093dc5c75f827df55d09cae1a157c8668e87d53",
+    "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-response-clock-fixed/odsay-seed-journey.json": "6a94c7058931fe4329b25e1a6f59f460a7e37f95f63fff1fbbd2055528f1710f",
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitRideArrivalPredictor.kt": "3cb92bfebbc5c7b04cc32658b57162bd70bd95a55e050c77d3ec088d67a32f8a"
+  }
+}

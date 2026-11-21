@@ -1,0 +1,22 @@
+{
+  "classification": "RECORDED_REJECTED_RESPONSE_WARNING_PRESENTATION_FIX_NOT_ETA_ACCURACY",
+  "realFailureRoot": "/private/tmp/nolate-eta-real-e2e.iks_ofa2",
+  "realUiResult": "FAILED",
+  "failureText": "Rejected route must not look like successful realtime ETA",
+  "cause": "The generic saved-route warning was suppressed both before lookup and after a real rejected evaluation with the same default warning text.",
+  "fix": "Hide repeated default warning only without an own failed timing lookup; preserve another participant’s independent status.",
+  "sameRecordedPublicResponseSha256": "606404963063e644f14327363c6daf24119f5ea1f6df02dbbd434312086d4442",
+  "sameInputBeforeTests": 11,
+  "sameInputBeforeFailures": 1,
+  "afterRelatedTests": 38,
+  "afterFailures": 0,
+  "typecheck": "PASSED",
+  "layoutReplaced": false,
+  "nativeAfterFixE2E": "PENDING",
+  "accuracyImprovementClaimed": false,
+  "sourceSha256": {
+    "before": "5f007b60e230bca6559f1c1514b07e8a168f36f89d676e48d1a8684389f22c4f",
+    "after": "49e8a30b9882fc1460a6ff5e361260aaa240f2757a3e415d867aebcaa5b8786b"
+  },
+  "beforeAfterScope": "Only recorded failed-lookup warning suppression condition; other existing UI changes preserved."
+}

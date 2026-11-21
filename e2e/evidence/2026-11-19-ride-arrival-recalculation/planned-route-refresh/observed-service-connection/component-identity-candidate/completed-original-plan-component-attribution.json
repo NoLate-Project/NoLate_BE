@@ -1,0 +1,160 @@
+{
+  "classification": "COMPLETED_ORIGINAL_PLAN_COMPONENT_ATTRIBUTION_NOT_PASSENGER_MEASUREMENT",
+  "sourceRoot": "/private/tmp/nolate-eta-real-e2e.w9vtd97p",
+  "independentJourneys": 1,
+  "firstTrain": "4075",
+  "originalOnwardTrain": "2200",
+  "firstDepartureDelaySeconds": [
+    56.0,
+    172.0
+  ],
+  "firstAlightingDelaySeconds": [
+    155.0,
+    211.0
+  ],
+  "originalOnwardDepartureDelaySeconds": [
+    273.0,
+    420.0
+  ],
+  "originalOnwardAlightingDelaySeconds": [
+    271.0,
+    383.0
+  ],
+  "rides": [
+    {
+      "sequence": 1,
+      "trainNumber": "4075",
+      "serviceDate": "2026-11-20",
+      "from": "노원",
+      "to": "사당",
+      "startEvent": "DEPARTURE",
+      "endEvent": "ARRIVAL",
+      "observedBoardingStationDwellBoundsSeconds": [
+        0,
+        238.0
+      ],
+      "timetableDepartureToAlightingSeconds": 2880.0,
+      "observedDepartureToAlightingBoundsSeconds": [
+        2863.0,
+        3035.0
+      ],
+      "departureToAlightingMinusTimetableBoundsSeconds": [
+        -17.0,
+        155.0
+      ],
+      "predictedStationToStationSeconds": 2880.0,
+      "observedStationToStationBoundsSeconds": [
+        2863.0,
+        3035.0
+      ],
+      "stationToStationMinusPredictionBoundsSeconds": [
+        -17.0,
+        155.0
+      ],
+      "firstBoardingWithModeledAccess": {
+        "modeledAccessEndAt": "2026-11-20T01:52:17+00:00",
+        "predictedGapSeconds": 283.0,
+        "observedGapBoundsSeconds": [
+          339.0,
+          455.0
+        ],
+        "gapMinusPredictionBoundsSeconds": [
+          56.0,
+          172.0
+        ]
+      }
+    },
+    {
+      "sequence": 3,
+      "trainNumber": "2200",
+      "serviceDate": "2026-11-20",
+      "from": "사당",
+      "to": "신림",
+      "startEvent": "DEPARTURE",
+      "endEvent": "ARRIVAL",
+      "observedBoardingStationDwellBoundsSeconds": [
+        0,
+        147.0
+      ],
+      "timetableDepartureToAlightingSeconds": 450.0,
+      "observedDepartureToAlightingBoundsSeconds": [
+        301.0,
+        560.0
+      ],
+      "departureToAlightingMinusTimetableBoundsSeconds": [
+        -149.0,
+        110.0
+      ],
+      "predictedStationToStationSeconds": 450.0,
+      "observedStationToStationBoundsSeconds": [
+        301.0,
+        560.0
+      ],
+      "stationToStationMinusPredictionBoundsSeconds": [
+        -149.0,
+        110.0
+      ]
+    }
+  ],
+  "transfer": {
+    "predictedGapSeconds": 360.0,
+    "modeledWalkingSeconds": 157,
+    "requiredMarginSeconds": 60,
+    "predictedGapAfterModeledWalkSeconds": 203.0,
+    "predictedGapEndEvent": "DEPARTURE",
+    "observedSameEventGapSeconds": [
+      422.0,
+      625.0
+    ],
+    "observedSameEventGapAfterModeledWalkBoundsSeconds": [
+      265.0,
+      468.0
+    ],
+    "observedMinusPredictedGapSeconds": [
+      62.0,
+      265.0
+    ],
+    "maximumSlackAgainstScheduledDepartureSeconds": -12.0,
+    "gapAfterModeledWalkToScheduledDepartureBoundsSeconds": [
+      -8.0,
+      48.0
+    ],
+    "observedTrainGapSeconds": [
+      422.0,
+      625.0
+    ],
+    "observedGapAfterModeledWalkSeconds": [
+      265.0,
+      468.0
+    ],
+    "observedSlackAfterModeledWalkAndMarginSeconds": [
+      205.0,
+      408.0
+    ],
+    "modeledMarginAssessment": "MODELED_MARGIN_FITS_THROUGHOUT_INTERVAL",
+    "stationInteriorWalkOrPassengerTransferVerified": false
+  },
+  "destinationWithModeledEgress": {
+    "planningArrivalAt": "2026-11-20T02:59:43Z",
+    "modeledEgressSeconds": 73,
+    "egressTimingSource": "ODSAY_EXIT_WALK_SECONDS",
+    "trainArrivalPlusModeledEgressWindow": {
+      "lower": "2026-11-20T03:04:14+00:00",
+      "upper": "2026-11-20T03:06:06+00:00"
+    },
+    "windowMinusPlanningArrivalSeconds": [
+      271.0,
+      383.0
+    ],
+    "physicalDestinationArrivalVerified": false,
+    "result": "MODELED_DESTINATION_ARRIVAL_WINDOW"
+  },
+  "causalFinding": "Onward departure itself was273–420seconds later than its timetable. The original transfer is feasible throughout observed train-event bounds with existing157second walk+60second margin, whereas holding its timetable departure fixed makes inbound delay appear to miss that service. Recalculate each ride independently; upstream-only delay plus unchanged onward timetable cannot decide this actual connection.",
+  "sameOriginalOnwardTrainObserved": true,
+  "newSelected2202OutcomeNotKnown": true,
+  "walkingDurationPhysicallyMeasured": false,
+  "marginalIntervalsMayNotBeSummedAsIndependentErrors": true,
+  "originalPlanIsNotLatestAcceptedRequery": true,
+  "newCodeAccuracyImprovementClaimed": false,
+  "additionalPublicCalls": 0
+}

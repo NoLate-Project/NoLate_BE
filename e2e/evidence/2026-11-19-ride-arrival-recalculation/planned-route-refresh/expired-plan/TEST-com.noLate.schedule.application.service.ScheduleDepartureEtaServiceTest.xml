@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" tests="111" skipped="0" failures="0" errors="0" timestamp="2026-11-19T14:26:30.035Z" hostname="macui-MacBookPro.local" time="1.749">
+  <properties/>
+  <testcase name="정시 도착 불가 진단은 늦은 예측 도착을 LOW confidence 상태로 노출한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.843"/>
+  <testcase name="다음 재조회 시각의 freshness grace 경계까지 worker snapshot을 허용한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.005"/>
+  <testcase name="출발한 계획 경로의 잠정 도착은 정상 ETA와 알림 출발시각으로 승격하지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.057"/>
+  <testcase name="[1] hasStoredDeparture=true" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.018"/>
+  <testcase name="[2] hasStoredDeparture=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.004"/>
+  <testcase name="retry 예약이 미래로 이동해도 만료된 provider snapshot을 되살리지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="fraction routeInfo ETA가 canonical과 일치하면 선택 경로 snapshot으로 사용한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="일정 시작 시각이 바뀌면 이전 scheduleAt job snapshot을 거부한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="[1] source=LIVE_PROVIDER" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="[2] source=TIMETABLE_PROVIDER" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="[3] source=SELECTED_ROUTE" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="[1] source=TIMETABLE_PROVIDER, reason=ARRIVAL" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.004"/>
+  <testcase name="[2] source=TIMETABLE_PROVIDER, reason=HORIZON" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="[3] source=LIVE_PROVIDER, reason=ARRIVAL" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[1] source=LIVE_PROVIDER, durationSeconds=3841, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.004"/>
+  <testcase name="[2] source=LIVE_PROVIDER, durationSeconds=3888, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[3] source=LIVE_PROVIDER, durationSeconds=3899, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="[4] source=LIVE_PROVIDER, durationSeconds=3900, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="[5] source=LIVE_PROVIDER, durationSeconds=3901, travelMinutes=66" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[6] source=TIMETABLE_PROVIDER, durationSeconds=3888, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="fixed intercity departure is preserved when arrival deadline is later than ticket arrival()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.007"/>
+  <testcase name="[1] source=LIVE_PROVIDER" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[2] source=TIMETABLE_PROVIDER" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="processing timeout 복구 예약도 만료된 provider snapshot을 되살리지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="shared participant 계획 fingerprint가 stale이면 이전 job snapshot을 거부한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.005"/>
+  <testcase name="저장된 LIVE job snapshot을 provider 재호출 없이 그대로 반환한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="설정한 60분 평가 주기는 grace까지 provider snapshot을 유지한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[1] hasStoredDeparture=true" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.005"/>
+  <testcase name="[2] hasStoredDeparture=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[1] source=LIVE_PROVIDER, latenessSeconds=1" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.003"/>
+  <testcase name="[2] source=TIMETABLE_PROVIDER, latenessSeconds=1" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[3] source=LIVE_PROVIDER, latenessSeconds=300" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="과대 selected JSON ETA는 canonical 저장 시간을 덮어쓰지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="departure status exposes the accepted effective transit route and timing basis()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.03"/>
+  <testcase name="[1] boundary=FRESH, fresh=true" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.025"/>
+  <testcase name="[2] boundary=AGE_120, fresh=true" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.022"/>
+  <testcase name="[3] boundary=AGE_121, fresh=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.016"/>
+  <testcase name="[4] boundary=UNCATCHABLE, fresh=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.013"/>
+  <testcase name="[5] boundary=MISSING, fresh=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.012"/>
+  <testcase name="[6] boundary=WRONG_CHECK, fresh=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.013"/>
+  <testcase name="[7] boundary=WRONG_GENERATION, fresh=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.014"/>
+  <testcase name="job이 없는 개인 대중교통 계획은 선택 itinerary snapshot만 반환한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="조기 reminder ETA 경계를 retry 시각이 덮어써도 snapshot은 부활하지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="ODsay 실제 출발시각이 ETA 역산값보다 이르더라도 시간표 snapshot을 그대로 노출한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="출발 후 새 출발지 재검색이 늦은 경로를 찾아도 저장된 여정과 혼합하지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.012"/>
+  <testcase name="다른 회원에게 보이지 않는 일정은 snapshot 조회 전에 차단한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.007"/>
+  <testcase name="이동 계획이 없으면 존재하지 않는 ETA와 준비시간을 만들지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="환승 실패 fallback snapshot은 선택 경로여도 LOW confidence로 노출한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[1] boundary=CURRENT, expose=true" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.012"/>
+  <testcase name="[2] boundary=STALE_SOURCE, expose=true" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.011"/>
+  <testcase name="[3] boundary=WRONG_CHECK, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.011"/>
+  <testcase name="[4] boundary=WRONG_GENERATION, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.015"/>
+  <testcase name="[5] boundary=INCOMPLETE, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.023"/>
+  <testcase name="[6] boundary=PAST, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.012"/>
+  <testcase name="[7] boundary=API_ERROR, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.024"/>
+  <testcase name="[8] boundary=LATE, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.027"/>
+  <testcase name="[9] boundary=STALE_SOURCE_LATE, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.061"/>
+  <testcase name="diagnostic snapshot without an accepted route keeps new departure fields empty()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.007"/>
+  <testcase name="제품 상한 초과 또는 불완전 LIVE provenance job은 현재 route fallback으로 내린다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.004"/>
+  <testcase name="FAILED job은 현재 저장 경로보다 우선하지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[1] boundary=CURRENT, expose=true" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.01"/>
+  <testcase name="[2] boundary=STALE, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.008"/>
+  <testcase name="[3] boundary=UNCATCHABLE, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.009"/>
+  <testcase name="[4] boundary=FUTURE_SOURCE, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.01"/>
+  <testcase name="[5] boundary=WRONG_CHECK, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.008"/>
+  <testcase name="[6] boundary=WRONG_GENERATION, expose=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.007"/>
+  <testcase name="저장된 provider 원문은 departure status에서 안정 코드로 sanitize한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="저장된 timeout fallback snapshot은 이전 live 시각과 낮은 신뢰도를 노출한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[1] wrongRoute=false" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.012"/>
+  <testcase name="[2] wrongRoute=true" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.006"/>
+  <testcase name="corrupt effective route json does not invalidate existing departure status fields()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.006"/>
+  <testcase name="[1] source=SELECTED_ROUTE, durationSeconds=3841, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[2] source=SELECTED_ROUTE, durationSeconds=3888, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[3] source=SELECTED_ROUTE, durationSeconds=3899, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[4] source=SELECTED_ROUTE, durationSeconds=3900, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[5] source=SELECTED_ROUTE, durationSeconds=3901, travelMinutes=66" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[6] source=SAVED_FALLBACK, durationSeconds=3888, travelMinutes=65" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="알림이 비활성화되면 active job snapshot도 거부한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="재조회 전 ODsay 출발 안내에 일치하는 초 단위 추정을 유지한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="owner 경로가 바뀌고 job이 취소되면 이전 live snapshot을 사용하지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="legacy null ETA refresh due snapshot은 현재 상태로 채택하지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="global sharing off preserves owner saved ETA status()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="다음 재조회 freshness grace를 초과한 worker snapshot은 저장 경로로 내린다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="global sharing off selects owner detail before ETA status lookup()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="일정만 공유되고 이동 권한이 없는 회원은 departure status를 조회할 수 없다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="invalid provider 응답 snapshot은 saved fallback과 낮은 신뢰도로 노출한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="route-level 시간이 없으면 step 시간이 아니라 저장 travelMinutes를 사용한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="departure status 조회 서비스는 provider client를 의존하지 않는다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[1] ageSeconds=60, fresh=true, basis=TRANSFER_ALIGHTING_REALTIME" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.011"/>
+  <testcase name="[2] ageSeconds=121, fresh=false, basis=TRANSFER_ALIGHTING_REALTIME" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.008"/>
+  <testcase name="[3] ageSeconds=60, fresh=true, basis=FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.01"/>
+  <testcase name="[4] ageSeconds=121, fresh=false, basis=FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.01"/>
+  <testcase name="owner 목적지가 바뀌면 active job의 이전 route fingerprint snapshot도 거부한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[1] savedMinutesBeforeTarget=45, expectedMinutesBeforeTarget=45" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[2] savedMinutesBeforeTarget=20, expectedMinutesBeforeTarget=30" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[3] savedMinutesBeforeTarget=-5, expectedMinutesBeforeTarget=30" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="설정 주기를 넘어선 손상 ETA refresh due는 미래여도 거부한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[1] invalidBoundary=EXPIRED" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[2] invalidBoundary=FINGERPRINT" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.002"/>
+  <testcase name="[3] invalidBoundary=SCHEDULE" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[4] invalidBoundary=NOTIFICATIONS_DISABLED" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[5] invalidBoundary=LATE_PREDICTION" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="legacy job의 source와 stale이 null이면 ETA source null 대신 현재 saved fallback을 반환한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="job이 없으면 routeInfo 전체 시간으로 선택 경로 snapshot을 구성한다()" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[1] boundary=MISSING_FETCH" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[2] boundary=FUTURE_FETCH" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[3] boundary=EXPIRED" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[4] boundary=WRONG_ROUTE" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[5] boundary=DISABLED" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[6] boundary=LATE_ARRIVAL" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <testcase name="[7] boundary=NO_REASON" classname="com.noLate.schedule.application.service.ScheduleDepartureEtaServiceTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[Mockito is currently self-attaching to enable the inline-mock-maker. This will no longer work in future releases of the JDK. Please add Mockito as an agent to your build as described in Mockito's documentation: https://javadoc.io/doc/org.mockito/mockito-core/latest/org.mockito/org/mockito/Mockito.html#0.3
+WARNING: A Java agent has been loaded dynamically (/Users/mac/.gradle/caches/modules-2/files-2.1/net.bytebuddy/byte-buddy-agent/1.17.8/f09415827a71be7ed621c7bd02550678f28bc81c/byte-buddy-agent-1.17.8.jar)
+WARNING: If a serviceability tool is in use, please run with -XX:+EnableDynamicAgentLoading to hide this warning
+WARNING: If a serviceability tool is not in use, please run with -Djdk.instrument.traceUsage for more information
+WARNING: Dynamic loading of agents will be disallowed by default in a future release
+]]></system-err>
+</testsuite>

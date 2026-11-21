@@ -1,0 +1,35 @@
+{
+  "result" : "REPLAYED",
+  "evaluatedAt" : "2026-11-19T12:17:16Z",
+  "stationReadsUsed" : 3,
+  "capturedStationReadsNotUsed" : 0,
+  "timetableReadsUsed" : 0,
+  "verifiedAgainstRecordedResult" : false,
+  "update" : {
+    "routeIdentity" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sourceUpdatedAt" : "2026-11-19T12:16:50Z",
+    "route" : null,
+    "failure" : null,
+    "onlyLastRideObserved" : false,
+    "requiresFirstBoardingRecheck" : false,
+    "reportedBoardings" : [ {
+      "routeIdentity" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "routeDepartureAt" : "2026-11-19T12:00:39Z",
+      "segmentSequence" : 3,
+      "service" : {
+        "provider" : "seoul-openapi",
+        "line" : "LINE_2",
+        "serviceDate" : "2026-11-19",
+        "trainNumber" : "3202",
+        "directionCode" : "DOWN",
+        "serviceClass" : "LOCAL",
+        "terminalName" : "성수",
+        "boardingStationName" : "사당",
+        "alightingStationName" : "신림"
+      },
+      "sourceUpdatedAt" : "2026-11-19T12:16:50Z",
+      "checkedAt" : "2026-11-19T12:17:16Z",
+      "recordedAt" : "2026-11-19T12:17:16.250Z"
+    } ]
+  }
+}

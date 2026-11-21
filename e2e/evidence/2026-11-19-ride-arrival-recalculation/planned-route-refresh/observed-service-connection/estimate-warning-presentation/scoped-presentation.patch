@@ -1,0 +1,14 @@
+--- a/src/routeSupport/schedule/scheduleDetailPresentationModel.ts
++++ b/src/routeSupport/schedule/scheduleDetailPresentationModel.ts
+@@ -162,7 +162,10 @@
+     intercityJourneySelected: Boolean(routeDetailInfo?.intercityJourney),
+     intercityTicketSelected: routeDetailInfo?.intercityJourney?.service.timingBasis === "TICKET",
+   });
+-  const isSavedRouteEstimate = etaTrust.warning === SAVED_TRANSIT_ESTIMATE_WARNING;
++  // 저장만 한 경로의 반복 안내는 줄이되, 실제 조회가 실패한 사실까지 숨기지 않는다.
++  // 다른 참여자의 경로에는 현재 사용자의 조회 실패를 적용하지 않는다.
++  const hasFailedTimingLookup = !inspectedTravelPlan && Boolean(controller.departureStatus?.failureReason);
++  const isSavedRouteEstimate = etaTrust.warning === SAVED_TRANSIT_ESTIMATE_WARNING && !hasFailedTimingLookup;
+   const routeDetailMeta = [
+     hasDetailedRoute
+       ? isSavedRouteEstimate ? undefined : etaTrust.warning ?? (effectiveTransitRoutePresentation

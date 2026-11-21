@@ -1,0 +1,49 @@
+{
+  "classification": "OFFLINE_PUBLIC_RECOMMENDATION_VS_OBSERVED_FIRST_TRAIN_WINDOW",
+  "independentJourneys": 1,
+  "newTrainObservations": 0,
+  "additionalHttpCalls": 0,
+  "inputHashes": {
+    "/private/tmp/nolate-accepted-train-observation.ECyA9C/collection-report.json": "c6977dd9a0da8f68db7491f01ba15f116ac8149c0f6441fe2bfe896e0ae0cc33",
+    "/private/tmp/nolate-accepted-train-observation.ECyA9C/positions.jsonl": "78ec95e43957d88d5e3428cc1c957b9321c32f7799fe3561f467eb8512f20e91",
+    "/private/tmp/nolate-eta-real-e2e.8tjn5tyh/evaluation-1.json": "8f916e6aa9a753c798d018fe35faad56065d1ad361bc89728691a23f0564f458",
+    "/private/tmp/nolate-eta-real-e2e.8tjn5tyh/ui-status-1.json": "6e2c21d055e6813bcfdab70c9a185273ac05035428372f91243edbcd7311b1b2",
+    "/private/tmp/nolate-eta-real-e2e.8tjn5tyh/odsay-seed-journey.json": "5b68ebba3a6a30d1d019832dc76fc1feb097d63bd5547fac6fb2e6f2c1e0a7a8",
+    "/private/tmp/nolate-eta-real-e2e.8tjn5tyh/selected-route.json": "ef07795655ff4db702b1ca87a22728c019c66d8c14a5bdb08b9f1f00ccf65bc8"
+  },
+  "firstStation": "노원",
+  "line": "LINE_4",
+  "observationEvent": "ARRIVAL",
+  "stationArrivalBound": {
+    "lower": "2026-11-18T05:39:55+00:00",
+    "upper": "2026-11-18T05:41:36+00:00"
+  },
+  "modeledAccessSeconds": 137,
+  "modeledBoardingMarginSeconds": 60,
+  "assessment": {
+    "planningDepartureAt": "2026-11-18T05:36:23Z",
+    "modeledAccessAndBoardingMarginSeconds": 197.0,
+    "trainArrivalBasedDepartureWindow": {
+      "lower": "2026-11-18T05:36:38+00:00",
+      "upper": "2026-11-18T05:38:19+00:00"
+    },
+    "windowMinusPlanningDepartureSeconds": [
+      15.0,
+      116.0
+    ],
+    "passengerDepartureVerified": false,
+    "result": "COMPARED_WITH_MODELED_FIRST_TRAIN_LIMIT",
+    "recommendedDepartureAt": "2026-11-18T05:36:23Z",
+    "publicReadFinishedAt": "2026-11-18T05:35:43.201219Z",
+    "trainNumber": "K4621",
+    "recommendedMinusDepartureLimitSeconds": [
+      -116.0,
+      -15.0
+    ]
+  },
+  "limits": [
+    "The observed interval is based on Seoul train positions. The traveler and walking time were not measured.",
+    "This scores the chosen train. The latest train that would still meet the appointment has not been established.",
+    "This is the same November 18 journey, not evidence of a new improvement or a matched Naver comparison."
+  ]
+}

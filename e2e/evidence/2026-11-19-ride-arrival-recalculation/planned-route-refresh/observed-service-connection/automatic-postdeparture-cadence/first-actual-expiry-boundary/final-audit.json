@@ -1,0 +1,30 @@
+{
+  "classification": "ACTUAL_SCHEDULER_TEST_STOPPED_AT_ALARM_LIFECYCLE_BOUNDARY",
+  "result": "PARTIAL",
+  "actualEvaluations": 2,
+  "manualWorkerInvocations": 0,
+  "providerFailures": [],
+  "firstAccepted": true,
+  "secondNextCheckAndEtaRefreshBothOneMinute": true,
+  "protectedDepartureUnchanged": true,
+  "initialAlarmGeneration": 1,
+  "secondAlarmGeneration": 2,
+  "secondAlarmOperation": "CANCEL",
+  "alarmChangedAt": "2026-11-20T12:18:11.156+00:00",
+  "secondEvaluationAt": "2026-11-20T12:50:15.216808Z",
+  "testFailure": "Compared the full initial alarm row to one captured after the separate ten-minute alarm-expiry cleanup window.",
+  "exactCancellationCallerRecorded": false,
+  "earlierCleanupTimingMatchesConfiguredGrace": true,
+  "sourceDifferences": {
+    "backend": [],
+    "frontend": []
+  },
+  "ownedPortsFree": {
+    "5523": true,
+    "8086": true
+  },
+  "nativeCleanup": "PASSED",
+  "originalAppEndpointRestored": true,
+  "accuracyClaimed": false,
+  "requiredCorrection": "Observe alarm state immediately before and after each ETA tick and record the real expiry writer transition; do not accept an arbitrary generation change."
+}

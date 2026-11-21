@@ -1,0 +1,23 @@
+[
+  {
+    "name": "com.noLate.eta.application.TransitEtaCalculationServiceTest",
+    "tests": "49",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.noLate.eta.application.transit.TransitJourneyTimetableEnricherTest",
+    "tests": "26",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  },
+  {
+    "name": "com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest",
+    "tests": "30",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "0"
+  }
+]

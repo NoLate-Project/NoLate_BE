@@ -1,0 +1,33 @@
+{
+  "classification": "RECORDED_QUERY_STARVATION_REGRESSION_WITH_SYNTHETIC_UNQUERIED_ENDPOINT_NOT_ACCURACY_PROOF",
+  "privateRoot": "/private/tmp/nolate-endpoint-budget-proof.v2cprlwz",
+  "currentRun": "/private/tmp/nolate-eta-real-e2e.uf14uvsd",
+  "beforeTests": 2,
+  "beforeFailures": 2,
+  "afterFocusedSuites": 3,
+  "afterFocusedTests": 79,
+  "afterFailures": 0,
+  "afterErrors": 0,
+  "extraReadCapBeforeAndAfter": 1,
+  "sourceFreshnessGateSeconds": 120,
+  "newLiveProviderCalls": 0,
+  "cause": "At15:32 the stale ended inbound Sadang4ride requested Nowon4 as a supplementary pairing read, exhausting the one extra-read allowance before upcoming Sadang2ride could request Sillim2. Actual captured refresh stations are Sadang4,Nowon4,Sadang2 and no Sillim2.",
+  "fix": "Collect mandatory ride observations first; defer pair supplements and prioritize upcoming boarding contexts. Do not pair replacement services for boardings outside existing20minute boarding lookback. Keep direct alighting queries and all identity/freshness/one-read gates.",
+  "unqueriedRealShinlimResponseAvailable": false,
+  "syntheticContinuationUsedOnlyForControlledRegression": true,
+  "sameActualResponseReplayWithNewRequiredShinlimQueryMustBeNotComparable": true,
+  "sourceSha256": {
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": {
+      "before": "6d8762c7986b2574ede0a41ef64c68791104eb831b8ef005d893dcadc758595c",
+      "after": "cf511fee1c90868e31b3da2a396498c6c6bf7cb7a597340ecce01dbaae86d4f5"
+    },
+    "src/test/kotlin/com/noLate/eta/application/transit/ObservedSubwayServiceRefreshTest.kt": {
+      "before": "d9392e7850b9c9007c304af07c5e3360693d1456ed424299a3857aedbe9adc12",
+      "after": "c9a63a1cdecc7d5522e6a0e4fdb0b08feedca27d9c4f434cd279d9015d31e2a0"
+    },
+    "src/test/resources/eta/endpoint-budget-starvation-20261120.json": {
+      "before": null,
+      "after": "15db5a6032f535129b8924785afa87c361710a47eb9449ed07b19bbc0e0770ee"
+    }
+  }
+}

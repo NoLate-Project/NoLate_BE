@@ -1,0 +1,27 @@
+<testsuite name="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" tests="2" skipped="0" failures="2" errors="0" timestamp="2026-11-20T06:40:28.244Z" hostname="macui-MacBookPro.local" time="0.75">
+  <properties />
+  <testcase name="실제 캡처의 오래 지난 첫 승차역에 보충 예산을 낭비하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.74">
+    <failure message="java.util.NoSuchElementException: Key 3 is missing in the map." type="java.util.NoSuchElementException">java.util.NoSuchElementException: Key 3 is missing in the map.
+	at kotlin.collections.MapsKt__MapWithDefaultKt.getOrImplicitDefaultNullable(MapWithDefault.kt:24)
+	at kotlin.collections.MapsKt__MapsKt.getValue(Maps.kt:360)
+	at com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest.실제 캡처의 오래 지난 첫 승차역에 보충 예산을 낭비하지 않는다(ObservedSubwayServiceRefreshTest.kt:285)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+</failure>
+  </testcase>
+  <testcase name="다가오는 환승의 두 역 대조를 지난 구간의 대체 편 검색보다 우선한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.007">
+    <failure message="org.opentest4j.AssertionFailedError: expected: &lt;[3]&gt; but was: &lt;[1]&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: expected: &lt;[3]&gt; but was: &lt;[1]&gt;
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+	at app//org.junit.jupiter.api.AssertEquals.failNotEqual(AssertEquals.java:197)
+	at app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:182)
+	at app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:177)
+	at app//org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:1145)
+	at app//com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest.다가오는 환승의 두 역 대조를 지난 구간의 대체 편 검색보다 우선한다(ObservedSubwayServiceRefreshTest.kt:171)
+	at java.base@21.0.2/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base@21.0.2/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base@21.0.2/java.util.ArrayList.forEach(ArrayList.java:1596)
+</failure>
+  </testcase>
+  </testsuite>

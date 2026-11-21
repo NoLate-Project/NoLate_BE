@@ -1,0 +1,37 @@
+{
+  "classification": "ACTUAL_QUERY_SELECTION_DEFECT_NO_INVENTED_ENDPOINT_RESPONSE",
+  "evaluatedAt": "2026-11-20T06:32:30.132463Z",
+  "queries": [
+    {
+      "station": "사당",
+      "line": "4호선",
+      "directionCode": "DOWN"
+    },
+    {
+      "station": "노원",
+      "line": "4호선",
+      "directionCode": "DOWN"
+    },
+    {
+      "station": "사당",
+      "line": "2호선",
+      "directionCode": "UP"
+    }
+  ],
+  "newRefreshResult": null,
+  "futureSadang2Vehicles": [
+    {
+      "trainNumber": "2268",
+      "expectedAt": "2026-11-20T06:36:06Z",
+      "sourceUpdatedAt": "2026-11-20T06:31:46Z"
+    },
+    {
+      "trainNumber": "3270",
+      "expectedAt": "2026-11-20T06:38:46Z",
+      "sourceUpdatedAt": "2026-11-20T06:31:46Z"
+    }
+  ],
+  "missingEndpoint": "신림 2호선",
+  "providerFailureCodes": [],
+  "unqueriedEndpointFabricated": false
+}

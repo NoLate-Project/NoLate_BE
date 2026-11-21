@@ -1,0 +1,22 @@
+{
+  "classification": "EARLY_PARTIAL_POSITION_WINDOW_FOR_FIRST_TRAIN",
+  "observedProviderInterval": {
+    "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+    "lower": "2026-11-19T15:04:12+00:00",
+    "upper": "2026-11-19T15:06:17+00:00",
+    "widthSeconds": 125.0
+  },
+  "scheduledArrivalAt": "2026-11-19T15:06:00Z",
+  "arrivalFeedEstimateAt": "2026-11-19T15:09:05+00:00",
+  "arrivalFeedEstimateMinusProviderUpperSeconds": 168.0,
+  "observationMinusTimetableSeconds": [
+    -108.0,
+    17.0
+  ],
+  "remainingGapAfterModeledWalkAndMarginAtLatestObservedArrivalSeconds": 36.0,
+  "secondTrainActualDepartureVerified": false,
+  "physicalStationArrivalVerified": false,
+  "crossFeedEstimateWouldImproveThisSample": false,
+  "note": "No claim about actual transfer; the last field refers to the first train state interval alone.",
+  "sourceRowsSha256": "fd03330ce458be6ad9cfbe7fbaae2ed79a281fa291ee2bb95585693dfbe7a566"
+}

@@ -1,0 +1,22 @@
+{
+  "terminal": "-2",
+  "independentPositionTerminal": "금정",
+  "sameTrainNumber": "4335",
+  "positionsAvailableAtEvaluation": false,
+  "originalResponseTrainLineNmRecorded": false,
+  "officialArrivalSchemaUrl": "https://data.seoul.go.kr/dataList/openApiView.do?infId=OA-12764&srvType=A",
+  "noAdditionalProviderCallsInReplay": true,
+  "predictedDelayAtSadangSeconds": 185,
+  "nextTrainCannotBeReachedUnderProviderArrivalEstimateAndModeledWalk": true,
+  "oldTransferTrain": "2510",
+  "possibleNextTrainWithKnownIdentity": "2512",
+  "predictedFinalArrivalDeltaSeconds": 540,
+  "arrivalAndTimetableValuesUnchangedDuringReplay": true,
+  "actualTripAccuracyVerified": false,
+  "relatedServerTestsPassed": 52,
+  "forensicReplayTestsPassed": 1,
+  "frontendVerifierTestsPassed": 256,
+  "xcuitestBuildSucceeded": true,
+  "postFixRealProviderE2EVerified": false,
+  "replayInputSha256": "b0dd18d5c80bf98f0cef5230905198a29430afe9bcbbbed83ff9314f3ce1f845"
+}

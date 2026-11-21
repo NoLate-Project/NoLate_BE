@@ -1,0 +1,55 @@
+{
+  "analysis": "OFFLINE_TRANSFER_WINDOW_AND_SEPARATE_MAP_COMPARISON",
+  "newHttpCalls": 0,
+  "observedJourney": {
+    "archive": "real-response-clock-fixed",
+    "sourceSha256": {
+      "completed-position-audit/positions.jsonl": "058d6e45801d59f0f60ac536e15b508968f0817de79da497464957c37dfebdf5",
+      "evaluation-2.json": "57a65e1bef84a571a7240583b5c47cbbbbf283f86ef5c0bf665e15d8d57e54df",
+      "ui-status-after-evaluation-2.json": "a92b898b2437e5b59dfa258ee76e80b056def245f559062e131437822297f746",
+      "odsay-seed-journey.json": "6a94c7058931fe4329b25e1a6f59f460a7e37f95f63fff1fbbd2055528f1710f",
+      "selected-route.json": "7af01c6457b1ce567be36e39b79aa3c36785f0e02fb954305bdd1aacc5967579"
+    },
+    "publicRead": {
+      "publicStatusFile": "ui-status-after-evaluation-2.json",
+      "readFinishedAt": "2026-11-19T15:01:35.598645Z",
+      "basis": "LAST_ACCEPTED_PLAN"
+    },
+    "firstTrain": "K4335",
+    "inboundArrivalBounds": [
+      "2026-11-19T15:04:12+00:00",
+      "2026-11-19T15:06:17+00:00"
+    ],
+    "onwardTrain": "2510",
+    "onwardScheduledDeparture": "2026-11-19T15:10:30Z",
+    "modeledTransferWalkSeconds": 157,
+    "predictedWaitSeconds": 113.0,
+    "gapAfterModeledWalkToScheduledDepartureBoundsSeconds": [
+      96.0,
+      221.0
+    ],
+    "measuredOnwardDepartureAvailable": false,
+    "observedPassengerWalkOrBoarding": false
+  },
+  "separateNaverJourney": {
+    "source": "naver-published-checkpoints.json",
+    "sourceSha256": "b5265123373f1d5d0e355049c30086251219b264a5e5676f9b28eedcd518df25",
+    "independentMapQueries": 1,
+    "sameInput": true,
+    "sameDoorDepartureMinute": false,
+    "samePhysicalTrainConfirmed": false,
+    "minuteClockDifferencesAppMinusNaver": {
+      "before": {
+        "routeDepartureDifferenceMinutes": -3,
+        "routeClockDurationDifferenceMinutes": 5,
+        "destinationDifferenceMinutes": 2
+      },
+      "after": {
+        "routeDepartureDifferenceMinutes": -3,
+        "routeClockDurationDifferenceMinutes": 5,
+        "destinationDifferenceMinutes": 2
+      }
+    },
+    "liveCorrectionInMapSample": false
+  }
+}

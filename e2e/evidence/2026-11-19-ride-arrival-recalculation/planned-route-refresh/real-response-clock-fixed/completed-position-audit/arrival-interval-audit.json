@@ -1,0 +1,133 @@
+{
+  "classification": "ONE_TIMETABLE_PLANNED_JOURNEY_PUBLIC_POSITION_INTERVALS_NOT_PHYSICAL_TRIP",
+  "collection": {
+    "classification": "REAL_PUBLIC_POSITION_OBSERVATION_OF_EXPLICIT_TIMETABLE_AND_UPDATED_PLANS",
+    "completedRequests": 16,
+    "maximumHttpCalls": 16,
+    "physicalHttpCalls": 16,
+    "failureCode": null,
+    "clockMode": "SYSTEM_WALL_CLOCK",
+    "providersMocked": false,
+    "serversOrSimulatorsModified": false,
+    "productionDatabaseModified": false,
+    "exactPhysicalArrivalSecondsMeasured": false,
+    "providerFailure": true
+  },
+  "journeyCount": 1,
+  "forecastCount": 1,
+  "providerCallsDuringAnalysis": 0,
+  "forecasts": [
+    {
+      "evidence": "evaluation-1.json",
+      "issuedAt": "2026-11-19T14:03:29.771959Z",
+      "routeDepartureAt": "2026-11-19T14:11:00Z",
+      "routeArrivalAt": "2026-11-19T15:19:13Z",
+      "results": [
+        {
+          "sequence": 1,
+          "line": "LINE_4",
+          "trainNumber": "K4335",
+          "timetable": {
+            "provider": "seoul-timetable",
+            "line": "LINE_4",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "K4335",
+            "directionCode": "DOWN",
+            "serviceClass": "LOCAL",
+            "fromStationCode": "0411",
+            "toStationCode": "0433",
+            "terminalName": "금정",
+            "boardingAt": "2026-11-19T14:18:00Z",
+            "arrivalAt": "2026-11-19T15:06:00Z",
+            "fetchedAt": "2026-11-19T14:03:27.701162Z",
+            "realtimeTrainNumber": "4335",
+            "boardingStationArrivalAt": "2026-11-19T14:17:30Z"
+          },
+          "predictionAt": "2026-11-19T15:06:00Z",
+          "window": {
+            "line": "LINE_4",
+            "station": "사당",
+            "scheduledAt": "2026-11-19T15:06:00Z",
+            "from": "2026-11-19T15:01:00+00:00",
+            "until": "2026-11-19T15:17:00.336682+00:00",
+            "trainNumbers": [
+              "K4335",
+              "4335"
+            ],
+            "direction": "DOWN",
+            "serviceClass": "LOCAL",
+            "terminal": "금정"
+          },
+          "observation": {
+            "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+            "lower": "2026-11-19T15:04:12+00:00",
+            "upper": "2026-11-19T15:06:17+00:00",
+            "widthSeconds": 125.0
+          },
+          "intervalError": {
+            "signedIntervalMinusPredictionSeconds": [
+              -108.0,
+              17.0
+            ],
+            "minimumAbsoluteErrorSeconds": 0,
+            "worstAbsoluteErrorSeconds": 108.0,
+            "issuedBeforeInterval": true
+          },
+          "trainIdButDifferentTerminalExcluded": []
+        },
+        {
+          "sequence": 3,
+          "line": "LINE_2",
+          "trainNumber": "2510",
+          "timetable": {
+            "provider": "seoul-timetable",
+            "line": "LINE_2",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "2510",
+            "directionCode": "UP",
+            "serviceClass": "LOCAL",
+            "fromStationCode": "0226",
+            "toStationCode": "0230",
+            "terminalName": "신도림",
+            "boardingAt": "2026-11-19T15:10:30Z",
+            "arrivalAt": "2026-11-19T15:18:00Z",
+            "fetchedAt": "2026-11-19T14:03:28.232992Z",
+            "realtimeTrainNumber": null,
+            "boardingStationArrivalAt": "2026-11-19T15:09:30Z"
+          },
+          "predictionAt": "2026-11-19T15:18:00Z",
+          "window": {
+            "line": "LINE_2",
+            "station": "신림",
+            "scheduledAt": "2026-11-19T15:18:00Z",
+            "from": "2026-11-19T15:13:00+00:00",
+            "until": "2026-11-19T15:29:00.364065+00:00",
+            "trainNumbers": [
+              "2510"
+            ],
+            "direction": "UP",
+            "serviceClass": "LOCAL",
+            "terminal": "신도림"
+          },
+          "observation": {
+            "result": "NO_ARRIVAL_BOUND",
+            "freshMatchingRowsInKnownOrder": 0,
+            "lastConfirmedBeforeEventAt": null
+          },
+          "intervalError": null,
+          "trainIdButDifferentTerminalExcluded": []
+        }
+      ]
+    }
+  ],
+  "sameFirstTrainComparisons": [],
+  "planningFailures": [],
+  "physicalPassengerArrivalVerified": false,
+  "generalAccuracyGuarantee": false,
+  "naverStrictComparisonEligible": false,
+  "normalRealtimeInitialPlanAccepted": false,
+  "sourceSha256": {
+    "evaluation-2.json": "57a65e1bef84a571a7240583b5c47cbbbbf283f86ef5c0bf665e15d8d57e54df",
+    "evaluation-1.json": "99aa4d891a07a6e01337d6f1f4a930706f7a6bd24914c836d08346c207b6a2b9"
+  }
+}

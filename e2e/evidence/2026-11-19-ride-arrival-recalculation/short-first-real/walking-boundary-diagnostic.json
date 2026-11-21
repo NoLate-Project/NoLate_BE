@@ -1,0 +1,14 @@
+{
+  "classification": "REAL_PROVIDER_WALKING_BOUNDARY_DIAGNOSTIC",
+  "observedAt": "2026-11-19T12:15:28.282588+00:00",
+  "route": "동작 4호선 → 사당 2호선 → 신림",
+  "originalAccessWalkingSeconds": 780,
+  "providerPathDistanceMeters": 859,
+  "endpointGeodesicMeters": 6.201579073753489,
+  "pathSteps": 11,
+  "stationInteriorCoverage": "UNKNOWN",
+  "physicalAccessibleShortcutVerified": false,
+  "walkingReductionApplied": false,
+  "naverStationQueryEligibleForWholeJourneyAccuracy": false,
+  "reason": "Naver station-node query omits access while ODsay coordinate query supplies an 859m access path; physical boundary equivalence unproven"
+}

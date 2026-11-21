@@ -1,0 +1,36 @@
+{
+  "classification": "SECOND_REAL_REQUERY_API_AND_INSTALLED_APP_WITNESS_NOT_ACCURACY_VERDICT",
+  "workerEvaluatedAt": "2026-11-20T06:19:32.433272Z",
+  "firstAlightingBefore": "2026-11-20T06:24:30Z",
+  "firstAlightingAfter": "2026-11-20T06:27:25Z",
+  "firstAlightingChangeSeconds": 175.0,
+  "onwardReferenceTrain": "2276",
+  "onwardBoardingAt": "2026-11-20T06:33:30Z",
+  "transfer": {
+    "previousArrivalAt": "2026-11-20T06:27:25Z",
+    "walkingSeconds": 157,
+    "bufferSeconds": 0,
+    "confidenceMarginSeconds": 60,
+    "boardingAt": "2026-11-20T06:33:30Z",
+    "requiredMarginSeconds": 60,
+    "confidenceReadyAt": "2026-11-20T06:31:02Z",
+    "physicalReadyAt": "2026-11-20T06:30:02Z",
+    "remainingSlackSeconds": 148
+  },
+  "arrivalUnchanged": true,
+  "originalDoorDepartureUnchanged": true,
+  "publicApiMatchesWorkerRoute": true,
+  "installedNativeCase": "ui-planned-2 PASSED",
+  "actualOnwardTrainDirectlyObserved": false,
+  "newObservedServiceSelected": false,
+  "firstAlightingForecastPhysicalErrorNotYetKnown": true,
+  "originDiagnosticFailureCode": "TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE",
+  "originDiagnosticDidNotReplacePlannedPrediction": true,
+  "recordedNextCheckAt": "2026-11-20T06:29:32.433272Z",
+  "additionalCallsDuringAnalysis": 0,
+  "evidenceSha256": {
+    "evaluation-1.json": "7dfbcef23fa8d0be790096492efa1fe2c164410460f0b5cb046fcb7325fa087e",
+    "evaluation-2.json": "0fffd2fd674b52d3b8e8b546826ca3e890c313835e1e6028771983128650cc42",
+    "ui-status-planned-2.json": "91b22d4d157b9e9e70243bcc469cea9b1746b04c9104459d91e3fe4bee3e4c24"
+  }
+}

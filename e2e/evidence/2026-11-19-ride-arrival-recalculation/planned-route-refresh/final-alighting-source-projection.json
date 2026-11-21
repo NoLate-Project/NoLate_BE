@@ -1,0 +1,63 @@
+{
+  "classification": "SAME_INPUT_SERVER_AND_APP_PROJECTION_WITH_CONTROLLED_STATION_FORECAST",
+  "archivedOdsayPlanFixture": "odsay-early-first-boarding-20261118.json",
+  "fixtureSha256": "997732ef51f8e20a664cb7c2a6447cfaad697e3b48208a16ef2f7934039bc89e",
+  "testInputsSha256": "57f73ceba5182c8a84f25287e71e0f0278b3e6dcd73b4a4c146a5347295234aa",
+  "replayReadAt": "2026-11-18T06:31:00Z",
+  "plannedDepartureAt": "2026-11-18T05:36:23Z",
+  "timing": {
+    "predictedBoardingAt": "2026-11-18T06:32:10Z",
+    "predictedArrivalAt": "2026-11-18T06:41:00Z",
+    "basis": "TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING",
+    "observationSourceUpdatedAt": "2026-11-18T06:30:55Z"
+  },
+  "otherArrivalEvidenceInput": {
+    "routeIdentity": "5efbee2d61165d6d5f6aaa7832284ed140d5a45d0e09db9da0602666f45f127b",
+    "predictedArrivalAt": "2026-11-18T06:44:13Z",
+    "sourceUpdatedAt": "2026-11-18T06:30:40Z"
+  },
+  "before": {
+    "otherArrivalEvidence": {
+      "arrival": "2026-11-18T06:42:13Z",
+      "sourceUpdatedAt": "2026-11-18T06:30:55Z",
+      "basis": "MATCHED_TRAIN_REALTIME",
+      "summary": "15:42 도착 예상",
+      "waitMeta": "실제 탑승·환승 여부는 확인하지 못했어요. 출발 알림 시각은 바뀌지 않아요"
+    },
+    "stationOnly": {
+      "arrival": "2026-11-18T06:42:13Z",
+      "sourceUpdatedAt": "2026-11-18T06:30:55Z",
+      "basis": "MATCHED_TRAIN_REALTIME",
+      "summary": "15:42 도착 예상",
+      "waitMeta": "실제 탑승·환승 여부는 확인하지 못했어요. 출발 알림 시각은 바뀌지 않아요"
+    }
+  },
+  "after": {
+    "otherArrivalEvidence": {
+      "arrival": "2026-11-18T06:44:13Z",
+      "sourceUpdatedAt": "2026-11-18T06:30:40Z",
+      "basis": "MATCHED_TRAIN_REALTIME",
+      "summary": "15:44 도착 예상",
+      "waitMeta": "실제 탑승·환승 여부는 확인하지 못했어요. 출발 알림 시각은 바뀌지 않아요"
+    },
+    "stationOnly": {
+      "arrival": "2026-11-18T06:42:13Z",
+      "sourceUpdatedAt": null,
+      "basis": "LAST_ACCEPTED_PLAN",
+      "summary": "15:42 도착 예상 · 총 66분",
+      "waitMeta": "도착시각은 이전 계획을 기준으로 해요. 실제 탑승·환승 여부는 확인하지 못했어요. 출발 알림 시각은 바뀌지 않아요"
+    }
+  },
+  "physicalArrivalMeasured": false,
+  "newTransitRequests": 0,
+  "installedAppE2eOnThisRevision": false,
+  "verification": {
+    "backendSuites": 8,
+    "backendTests": 362,
+    "appSuites": 4,
+    "appTests": 76,
+    "backendPythonTests": 62,
+    "iosRunnerPythonTests": 278,
+    "backendSnapshotCriticalSourceFilesMatching": 53
+  }
+}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.eta.application.transit.ObservedFirstBoardingDepartureProjectorTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-20T08:58:31.409Z" hostname="macui-MacBookPro.local" time="0.003">
+  <properties/>
+  <testcase name="차량 관측 요청 또는 시간표 일치를 증명하지 못하면 출발을 옮기지 않는다()" classname="com.noLate.eta.application.transit.ObservedFirstBoardingDepartureProjectorTest" time="0.001"/>
+  <testcase name="조기 관측도 같은 시간표와 후속 열차를 유지한 채 안전한 출발만 옮긴다()" classname="com.noLate.eta.application.transit.ObservedFirstBoardingDepartureProjectorTest" time="0.0"/>
+  <testcase name="같은 관측 열차의 대기만 줄이고 모든 도보 여유 환승편과 최종 도착을 보존한다()" classname="com.noLate.eta.application.transit.ObservedFirstBoardingDepartureProjectorTest" time="0.001"/>
+  <testcase name="ODsay 출입구 도보 초와 동일 열차 관측으로 출발 초를 보존한다()" classname="com.noLate.eta.application.transit.ObservedFirstBoardingDepartureProjectorTest" time="0.0"/>
+  <testcase name="단일 열차의 embedded 지연도 중복 적용하거나 제거하지 않는다()" classname="com.noLate.eta.application.transit.ObservedFirstBoardingDepartureProjectorTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

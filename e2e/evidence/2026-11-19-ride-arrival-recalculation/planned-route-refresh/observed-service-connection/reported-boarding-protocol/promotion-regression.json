@@ -1,0 +1,26 @@
+{
+  "classification": "FOCUSED_TEMPORAL_BOARDING_SOURCE_PROMOTION_NOT_REAL_ACCURACY",
+  "privateProofRoot": "/private/tmp/nolate-temporal-boarding-proof.ckyycj9f",
+  "recordedAt": "2026-11-20T09:05:41.486180+00:00",
+  "suites": 18,
+  "tests": 530,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "publicHttpCalls": 0,
+  "concurrentBaseChecksPassed": true,
+  "formatOnlyAfterTests": [
+    "PlannedTransitRouteRefresher.kt local function indentation"
+  ],
+  "sourceSha256": {
+    "src/main/kotlin/com/noLate/schedule/application/ReportedSubwayBoardingEvidence.kt": "e472bb4fdc47b9c4319bc40ae1289df3e114c6b172a51bdabb97b9079a0d9506",
+    "src/main/kotlin/com/noLate/schedule/application/PlannedTransitRouteUpdate.kt": "9ac4c59071af01e1f2b531d074cbd80832c3d3cb3905058c1504d1e5ba4dc9ef",
+    "src/main/kotlin/com/noLate/schedule/application/TrafficClient.kt": "c801e2d81dd5b400afa43d96f400ceb35fd28c03d31908bc9e9f47c4bbecb63d",
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "10a1d9ed010f82e496b7dba23e68f4baae703ad97c287cf993dee542bc41a1d9",
+    "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": "7dc3cba5e9c5aea04349b282b1cc92879cf3e50319277a4c894f0d7648fffed7",
+    "src/test/kotlin/com/noLate/eta/application/transit/ReportedSubwayBoardingEvidenceTest.kt": "22d643073a160014d275a87fc7e96917e0afc494c4146709614c453d49d91ff1",
+    "src/test/kotlin/com/noLate/eta/application/transit/ObservedSubwayServiceRefreshTest.kt": "9daa3c7af9062c2fb543ca02f34723633e7ad5c81edd3017eac059038d8a3689",
+    "src/test/kotlin/com/noLate/eta/application/TransitEtaCalculationServiceTest.kt": "454c24edd3532eba3217e7814d7a8983e228b7793b4d673259cf97fdbb35b4d6"
+  },
+  "actualNewModelE2E": false
+}

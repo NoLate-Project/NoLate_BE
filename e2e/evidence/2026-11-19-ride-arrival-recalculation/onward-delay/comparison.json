@@ -1,0 +1,49 @@
+{
+  "classification": "SYNTHETIC_IDENTICAL_PROVIDER_INPUT_REPLAY",
+  "cases": [
+    {
+      "inputSha256": "f546fde45815c69126c1c26cb78838b9b2a306c00b7126e3d5799f118c503210",
+      "inputsIdentical": true,
+      "before": {
+        "accepted": false,
+        "arrivalAt": null,
+        "failureReason": "TRANSIT_TRANSFER_REALTIME_DELAY: 선택한 환승 열차의 실시간 지연으로 시간표 도착시각을 사용할 수 없습니다.",
+        "trains": null
+      },
+      "after": {
+        "accepted": true,
+        "arrivalAt": "2026-07-29T00:16:00Z",
+        "failureReason": null,
+        "trains": [
+          "4703",
+          "2480",
+          "1014"
+        ]
+      },
+      "obsoleteLastObservation": false
+    },
+    {
+      "inputSha256": "b871a393ceb4e03fca368b7421541ed7a562dc68d6efc5c43e9d13a6c11ff6de",
+      "inputsIdentical": true,
+      "before": {
+        "accepted": false,
+        "arrivalAt": null,
+        "failureReason": "TRANSIT_TRANSFER_REALTIME_DELAY: 선택한 환승 열차의 실시간 지연으로 시간표 도착시각을 사용할 수 없습니다.",
+        "trains": null
+      },
+      "after": {
+        "accepted": true,
+        "arrivalAt": "2026-07-29T00:16:00Z",
+        "failureReason": null,
+        "trains": [
+          "4703",
+          "2480",
+          "1014"
+        ]
+      },
+      "obsoleteLastObservation": true
+    }
+  ],
+  "physicalTransitHttpCalls": 0,
+  "actualTravelAccuracyVerified": false
+}

@@ -1,0 +1,57 @@
+{
+  "classification": "RECORDED_SAME_INPUT_WALKING_AND_SERVICE_SELECTION_DIAGNOSIS",
+  "additionalHttpCalls": 0,
+  "evaluationSha256": "141ca5e60e876bd5c5d962e8b807bd57d6ea0ad0ffa2c0a646a25633e2c0b8ff",
+  "naverSnapshotSha256": "3ab8776f12dba6cefbb384cedeb34f03e4f62676809aa898f2efe135b8f0254a",
+  "requestedDepartureAt": "2026-11-20T10:40:00Z",
+  "originalWalkSeconds": [
+    137,
+    157,
+    73
+  ],
+  "firstBoardingReadyAt": "2026-11-20T10:43:17Z",
+  "firstBoardingMarginSeconds": 60,
+  "firstServiceCandidates": [
+    {
+      "trainNumber": "4175",
+      "terminal": "사당",
+      "scheduledBoardingAt": "2026-11-20T10:39:00Z",
+      "scheduledBoardingMinusReadySeconds": -257.0,
+      "freshFirstBoardingAccepted": false,
+      "method": "observeTimetableCandidate"
+    },
+    {
+      "trainNumber": "4177",
+      "terminal": "사당",
+      "scheduledBoardingAt": "2026-11-20T10:42:30Z",
+      "scheduledBoardingMinusReadySeconds": -47.0,
+      "freshFirstBoardingAccepted": false,
+      "method": "observeTimetableCandidate"
+    },
+    {
+      "trainNumber": "4685",
+      "terminal": "오이도",
+      "scheduledBoardingAt": "2026-11-20T10:46:00Z",
+      "scheduledBoardingMinusReadySeconds": 163.0,
+      "freshFirstBoardingAccepted": false,
+      "method": "resolve"
+    }
+  ],
+  "naverPublicRows": {
+    "requestedDepartureLabel": "19:40",
+    "originDepartureLabel": "19:42",
+    "firstBoardingLabel": "19:42 사당행",
+    "transferWalkLabel": "2분 · 155m",
+    "transferBoardingLabel": "20:35 내선순환행",
+    "destinationArrivalLabel": "20:42",
+    "accessOrEgressWalkRowVisible": false
+  },
+  "conclusions": [
+    "The complete Naver detail shows a different first boarding minute and no separate access or egress walk rows.",
+    "Our captured 4177 timetable departs at 19:42:30, 47 seconds before the retained access-plus-margin readiness. No fresh observation accepted this earlier train.",
+    "No Naver train ID or hidden seconds are known. The displayed Sadang-bound service must not be asserted to be 4177.",
+    "The +313-second displayed arrival gap is not a measured physical error and cannot be corrected by subtracting access, egress, transfer margins or a constant."
+  ],
+  "fullWalkingBoundaryMatched": false,
+  "actualAccuracyImprovementVerified": false
+}

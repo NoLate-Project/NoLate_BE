@@ -1,0 +1,74 @@
+{
+  "classification": "SAME_RECORDED_RESPONSES_OFFLINE_PLANNED_REFRESH",
+  "evaluationSha256": "ae3234d94236ec995a6baf248fe5ef03867ab3b98358ffd74a255b230de32014",
+  "initialState": "SAME_RECORDED_PLAN_AND_PREVIOUS_UPDATE_AT_EACH_REFRESH",
+  "additionalHttpCalls": 0,
+  "journeysWithPairedProviderReplay": 1,
+  "frames": [
+    {
+      "evaluatedAt": "2026-11-20T04:06:36.400020Z",
+      "before": {
+        "result": "REPLAYED",
+        "evaluatedAt": "2026-11-20T04:06:36.400020Z",
+        "stationReadsUsed": 1,
+        "capturedStationReadsNotUsed": 0,
+        "timetableReadsUsed": 0,
+        "verifiedAgainstRecordedResult": false,
+        "update": null
+      },
+      "after": {
+        "result": "REPLAYED",
+        "evaluatedAt": "2026-11-20T04:06:36.400020Z",
+        "stationReadsUsed": 1,
+        "capturedStationReadsNotUsed": 0,
+        "timetableReadsUsed": 0,
+        "verifiedAgainstRecordedResult": true,
+        "update": null
+      },
+      "updateChanged": false,
+      "beforeClocks": {
+        "departureAt": "2026-11-20T04:01:18Z",
+        "arrivalAt": "2026-11-20T05:06:13Z",
+        "rides": [
+          {
+            "sequence": 1,
+            "train": "4095",
+            "boardingAt": "2026-11-20T04:04:35Z",
+            "alightingAt": "2026-11-20T04:53:05Z"
+          },
+          {
+            "sequence": 3,
+            "train": "2242",
+            "boardingAt": "2026-11-20T04:57:30Z",
+            "alightingAt": "2026-11-20T05:05:00Z"
+          }
+        ]
+      },
+      "afterClocks": {
+        "departureAt": "2026-11-20T04:01:18Z",
+        "arrivalAt": "2026-11-20T05:06:13Z",
+        "rides": [
+          {
+            "sequence": 1,
+            "train": "4095",
+            "boardingAt": "2026-11-20T04:04:35Z",
+            "alightingAt": "2026-11-20T04:53:05Z"
+          },
+          {
+            "sequence": 3,
+            "train": "2242",
+            "boardingAt": "2026-11-20T04:57:30Z",
+            "alightingAt": "2026-11-20T05:05:00Z"
+          }
+        ]
+      },
+      "trainOrClockChanged": false,
+      "result": "PAIRED"
+    }
+  ],
+  "refresherClassSha256": {
+    "current": "1e7d4a4d5d8d6bafc2c46f126a850ac389b9e5cf448bfa26ae41d3c6bd19a87a",
+    "baseline": "a2ac4f44aceacbf4de4735e7146000be3adddb4f16c5f986ccacb827978e4123"
+  },
+  "result": "PAIRED"
+}

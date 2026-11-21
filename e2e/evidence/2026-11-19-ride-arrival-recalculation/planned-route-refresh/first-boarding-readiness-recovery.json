@@ -1,0 +1,170 @@
+{
+  "classification": "ARCHIVED_ACCEPTED_ROUTE_WITH_CONTROLLED_SAME_TRAIN_FORECAST_REPLAY",
+  "newTrafficHttpCalls": 0,
+  "archivedEvaluationSha256": "8a17fb89e7c58237cd2cfa3784629748866a9eac33e92f77a34c5ae809fd33c8",
+  "privateReplayDirectory": "/private/tmp/nolate-first-train-recovery.js2v4ou7",
+  "hashes": {
+    "inputs.json": "81e01883f8953aa7b111b79cf72a879c8bbfe857358d09e7ceea2b62da015dcf",
+    "before-status.json": "99d1785b8de0be3d0b1f7ea421dcb2a3daf4a440dd8e3c134f2e0722f521982b",
+    "final-status.json": "9e59f4951add21ffed9584c8a399dc50699c412c0173090b4926c09f3f909417",
+    "app-comparison.json": "efb5a06429bba037c3e3aebef5782fe0675e3551d260422128602463e28f760a",
+    "before-test.xml": "30ada77cff2d008799b3b7442880dc1a471e4b18831917f7a6f6e45240fc8530",
+    "refresher-before.kt": "8d6be5555557c89a73a92b1690e1848524ef41578d0848c86d9e134669b1fdf7",
+    "guard-before.kt": "c5636e4d2504f44ff4ab4c1ea6d9171c6d3d3e461217176eb62bd493e2ebfa53"
+  },
+  "route": {
+    "trainNumbers": [
+      "K4607",
+      "2248"
+    ],
+    "stations": [
+      "노원",
+      "사당",
+      "신림"
+    ],
+    "departureAt": "2026-11-18T04:17:28Z",
+    "walkingSeconds": 137,
+    "boardingBufferSeconds": 60,
+    "readyAt": "2026-11-18T04:20:45Z"
+  },
+  "cases": [
+    {
+      "case": "beforeWalkEnd",
+      "forecastOrigin": "CONTROLLED_FORECAST_ON_ARCHIVED_TRAIN",
+      "forecastIssuedAt": "2026-11-18T04:15:55Z",
+      "expectedStationArrivalAt": "2026-11-18T04:19:44Z",
+      "before": {
+        "reason": "TIMELINE_INCONSISTENT",
+        "arrivalAt": null,
+        "appSummary": "환승 시각을 확인하고 있어요"
+      },
+      "after": {
+        "reason": "EARLY_BOARDING_UNCONFIRMED",
+        "arrivalAt": null,
+        "appSummary": "승차 시각을 확인하고 있어요"
+      }
+    },
+    {
+      "case": "atWalkEnd",
+      "forecastOrigin": "CONTROLLED_FORECAST_ON_ARCHIVED_TRAIN",
+      "forecastIssuedAt": "2026-11-18T04:15:55Z",
+      "expectedStationArrivalAt": "2026-11-18T04:19:45Z",
+      "before": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      },
+      "after": {
+        "reason": "EARLY_BOARDING_UNCONFIRMED",
+        "arrivalAt": null,
+        "appSummary": "승차 시각을 확인하고 있어요"
+      }
+    },
+    {
+      "case": "insideMargin",
+      "forecastOrigin": "CONTROLLED_FORECAST_ON_ARCHIVED_TRAIN",
+      "forecastIssuedAt": "2026-11-18T04:15:55Z",
+      "expectedStationArrivalAt": "2026-11-18T04:20:15Z",
+      "before": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      },
+      "after": {
+        "reason": "EARLY_BOARDING_UNCONFIRMED",
+        "arrivalAt": null,
+        "appSummary": "승차 시각을 확인하고 있어요"
+      }
+    },
+    {
+      "case": "oneSecondShort",
+      "forecastOrigin": "CONTROLLED_FORECAST_ON_ARCHIVED_TRAIN",
+      "forecastIssuedAt": "2026-11-18T04:15:55Z",
+      "expectedStationArrivalAt": "2026-11-18T04:20:44Z",
+      "before": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      },
+      "after": {
+        "reason": "EARLY_BOARDING_UNCONFIRMED",
+        "arrivalAt": null,
+        "appSummary": "승차 시각을 확인하고 있어요"
+      }
+    },
+    {
+      "case": "exactReady",
+      "forecastOrigin": "CONTROLLED_FORECAST_ON_ARCHIVED_TRAIN",
+      "forecastIssuedAt": "2026-11-18T04:15:55Z",
+      "expectedStationArrivalAt": "2026-11-18T04:20:45Z",
+      "before": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      },
+      "after": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      }
+    },
+    {
+      "case": "afterReady",
+      "forecastOrigin": "CONTROLLED_FORECAST_ON_ARCHIVED_TRAIN",
+      "forecastIssuedAt": "2026-11-18T04:15:55Z",
+      "expectedStationArrivalAt": "2026-11-18T04:20:55Z",
+      "before": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      },
+      "after": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      }
+    },
+    {
+      "case": "unchangedRecorded",
+      "forecastOrigin": "ARCHIVED_FIRST_BOARDING_OBSERVATION",
+      "forecastIssuedAt": "2026-11-18T04:15:45Z",
+      "expectedStationArrivalAt": "2026-11-18T04:20:45Z",
+      "before": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      },
+      "after": {
+        "reason": null,
+        "arrivalAt": "2026-11-18T05:23:13Z",
+        "appSummary": "14:23 도착 예상 · 총 66분"
+      }
+    }
+  ],
+  "workerRecovery": {
+    "unresolvedAfterOnlyTransferUpdate": true,
+    "restoredWithNewerFeasibleFirstTrainForecast": true,
+    "departureAlarmRescheduled": false,
+    "test": "SchedulePushJobWorkerTest.Worker는 첫 승차 여유가 사라진 계획을 같은 승차역의 새 예보로만 재개한다"
+  },
+  "offlineRegression": {
+    "backendSuites": 7,
+    "backend": {
+      "tests": 329,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "frontendPresentationSuites": 3,
+    "frontendPresentationTests": 37,
+    "pythonHarnessTests": 272,
+    "positionAuditTests": 11,
+    "nativeWarningAssertionSyntaxVerified": true
+  },
+  "measurements": {
+    "newIndependentOperatingJourneys": 0,
+    "sameConditionsNaverPairsForThisChange": 0,
+    "actualPassengerTimesMeasured": false,
+    "installedSimulatorOnThisRevisionVerified": false
+  }
+}

@@ -1,0 +1,217 @@
+--- a/src/main/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorker.kt
++++ b/src/main/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorker.kt
+@@ -1,6 +1,7 @@
+ package com.noLate.schedule.application.service
+ 
+ import com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicy
++import com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicy
+ 
+ import com.fasterxml.jackson.databind.ObjectMapper
+ import com.noLate.global.observability.EtaJobMetricOutcome
+@@ -992,6 +993,8 @@
+                         ?.rideTiming?.takeIf {
+                             it.basis == EffectiveTransitRideTimingBasis.TIMETABLE
+                         }?.predictedBoardingAt,
++                    // 출발 후에도 저장 경로의 승하차 관측 창을 건너뛰지 않는다. 알림 시각은 유지한다.
++                    plannedRouteRefreshAt = PlannedTransitRefreshCadencePolicy.nextRefreshAt(transitionAt, effectiveRouteSnapshot),
+                     effectiveDepartureNoticeSentAt = if (
+                         pushOutcome.notificationHandled &&
+                         pushOutcome.decision == DepartureReminderDecision.DEPART_NOW &&
+@@ -1226,6 +1229,7 @@
+         observedBoardingAt: Instant?,
+         pendingTimetableBoardingAt: Instant?,
+         effectiveDepartureNoticeSentAt: Instant?,
++        plannedRouteRefreshAt: Instant?,
+     ): Instant? {
+         if (!now.isBefore(scheduleAt)) return null
+ 
+@@ -1258,7 +1262,7 @@
+             alertLeadMinutes = departureAlertLeadMinutes,
+         )
+ 
+-        return listOfNotNull(etaRefreshAt, trafficCheckAt, reminderCheckAt, scheduleAt)
++        return listOfNotNull(etaRefreshAt, plannedRouteRefreshAt, trafficCheckAt, reminderCheckAt, scheduleAt)
+             .filter { it.isAfter(now) }
+             .minOrNull()
+     }
+--- /dev/null
++++ b/src/main/kotlin/com/noLate/schedule/application/service/policy/PlannedTransitRefreshCadencePolicy.kt
+@@ -0,0 +1,33 @@
++package com.noLate.schedule.application.service.policy
++
++import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
++import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
++import java.time.Instant
++import java.time.temporal.ChronoUnit
++
++/** 조회 창만 조정한다. 시간표·관측의 채택, 출발 알림과 도보·환승 여유는 바꾸지 않는다. */
++object PlannedTransitRefreshCadencePolicy {
++    private const val LOOKAHEAD_SECONDS = 15 * 60L
++    private const val LATE_OBSERVATION_SECONDS = 20 * 60L
++
++    fun nextRefreshAt(now: Instant, snapshot: EffectiveTransitRouteSnapshot?): Instant? {
++        val state = snapshot ?: return null
++        val original = state.plannedRouteAt(now) ?: return null
++        if (original.departureAt > now) return null
++        fun matchesOriginal(route: com.noLate.schedule.application.EffectiveTransitRoute) =
++            route.identity == original.identity && route.provider == original.provider && route.departureAt == original.departureAt
++        val route = state.plannedRouteUpdate?.route?.takeIf(::matchesOriginal)
++            ?: state.lastUpdatedPlannedRoute?.takeIf(::matchesOriginal) ?: original
++        val rides = route.segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
++        if (rides.isEmpty() || rides.any { it.kind != EffectiveTransitRouteSegmentKind.SUBWAY || it.rideTiming == null }) return null
++        if (rides.any { !requireNotNull(it.rideTiming).timetable.isObservableServiceDay(original.departureAt, now) }) return null
++        val events = rides.flatMap { segment -> requireNotNull(segment.rideTiming).let {
++            listOf(it.predictedBoardingAt, it.predictedArrivalAt)
++        } }.filter { it >= now.minusSeconds(LATE_OBSERVATION_SECONDS) }
++        if (events.isEmpty()) return null
++        // 공급자의 15분 미래 조회·20분 지연 대조 창 안에서는 120초 신선도보다 짧게 확인한다.
++        // 멀리 있는 여정은 기존 저빈도 주기를 유지하되 관측 창이 열리는 경계는 넘기지 않는다.
++        return if (events.any { it <= now.plusSeconds(LOOKAHEAD_SECONDS) }) now.plus(1, ChronoUnit.MINUTES)
++            else events.minOf { it.minusSeconds(LOOKAHEAD_SECONDS) }
++    }
++}
+--- a/src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt
++++ b/src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt
+@@ -363,18 +363,6 @@
+         !isBefore(evaluatedAt.minusSeconds(lookbackSeconds)) &&
+             !isAfter(evaluatedAt.plusSeconds(LOOKAHEAD_SECONDS))
+ 
+-    private fun TransitLegTimetable.isObservableServiceDay(departureAt: Instant, evaluatedAt: Instant): Boolean {
+-        val today = evaluatedAt.atZone(SeoulSubwayServiceDay.zone).toLocalDate()
+-        if (serviceDate == today) return true
+-
+-        // The saved route can carry yesterday's explicit 24–26h timetable into today's early hours.
+-        // Never infer that a fresh row with a reused train number belongs to an old plan.
+-        return serviceDate == SeoulSubwayServiceDay.dateAt(evaluatedAt) &&
+-            serviceDate == SeoulSubwayServiceDay.dateAt(departureAt) &&
+-            serviceDate == SeoulSubwayServiceDay.dateAt(arrivalAt) &&
+-            arrivalAt.atZone(SeoulSubwayServiceDay.zone).toLocalDate() == today
+-    }
+-
+     private fun TransitArrivalDto.matches(
+         stationName: String?,
+         table: TransitLegTimetable,
+--- a/src/main/kotlin/com/noLate/eta/domain/TransitLegTimetable.kt
++++ b/src/main/kotlin/com/noLate/eta/domain/TransitLegTimetable.kt
+@@ -38,6 +38,18 @@
+     /** 승차역의 시간표상 열차 도착. boardingAt은 같은 역의 시간표상 출발이다. */
+     val boardingStationArrivalAt: Instant? = null,
+ ) {
++    fun isObservableServiceDay(departureAt: Instant, evaluatedAt: Instant): Boolean {
++        val today = evaluatedAt.atZone(SeoulSubwayServiceDay.zone).toLocalDate()
++        if (serviceDate == today) return true
++
++        // The saved route can carry yesterday's explicit 24–26h timetable into today's early hours.
++        // Never infer that a fresh row with a reused train number belongs to an old plan.
++        return serviceDate == SeoulSubwayServiceDay.dateAt(evaluatedAt) &&
++            serviceDate == SeoulSubwayServiceDay.dateAt(departureAt) &&
++            serviceDate == SeoulSubwayServiceDay.dateAt(arrivalAt) &&
++            arrivalAt.atZone(SeoulSubwayServiceDay.zone).toLocalDate() == today
++    }
++
+     fun shiftFromObservedBoardingArrival(observedAt: Instant): Duration =
+         Duration.between(boardingStationArrivalAt ?: boardingAt, observedAt)
+ 
+--- a/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt
++++ b/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt
+@@ -101,6 +101,40 @@
+         .withZone(ZoneId.of("Asia/Seoul"))
+     private val objectMapper = jacksonObjectMapper().findAndRegisterModules()
+ 
++    @ParameterizedTest
++    @org.junit.jupiter.params.provider.CsvSource("600,60", "930,30", "1800,60", "1500,600")
++    fun `진행 중 계획의 하차 관측 창을 주기 조회가 건너뛰지 않는다`(secondsBeforeArrival: Long, expectedDelay: Long) {
++        val input = requireNotNull(javaClass.getResourceAsStream("/eta/reported-boarding-arrival-20261120.json"))
++            .use(objectMapper::readTree)
++        val plan = objectMapper.treeToValue(input["plan"], EffectiveTransitRoute::class.java)
++        val firstArrival = requireNotNull(plan.segments.first { it.rideTiming != null }.rideTiming).predictedArrivalAt
++        val now = firstArrival.minusSeconds(secondsBeforeArrival)
++        val schedule = schedule(now.plusSeconds(7200), travelMode = ScheduleTravelMode.TRANSIT)
++        val job = persistedJob(1L, 10L, schedule.startAt, plan.departureAt,
++            plan.departureAt.minusSeconds(600), notificationIntervalMinutes)
++        job.startProcessing("previous-worker")
++        job.finishCheck(travelMinutes = plan.totalMinutes, recommendedDepartureAt = plan.departureAt,
++            pushSent = true, notifiedDepartureAt = plan.departureAt, nextCheckAt = now, completeAfterCheck = false,
++            etaRouteFingerprint = routeFingerprint(schedule),
++            effectiveTransitRouteJson = objectMapper.writeValueAsString(EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan)),
++            now = now.minusSeconds(60))
++        stubDueJobLookup(job, schedule, now)
++        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(travelMinutes = plan.totalMinutes,
++            source = TrafficSource.SELECTED_ROUTE, stale = true, failureReason = TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED))
++
++        worker(clock = Clock.fixed(now, ZoneOffset.UTC)).runDueJobs(now)
++
++        assertEquals(now, job.lastCheckedAt)
++        assertEquals(2, job.checkCount)
++        assertEquals(plan.departureAt, job.lastRecommendedDepartureAt)
++        assertEquals(now.plusSeconds(expectedDelay), job.nextCheckAt)
++        // 상태 API가 사용하는 갱신 경계도 실제 다음 조회시각과 함께 저장한다.
++        assertEquals(job.nextCheckAt, job.lastEtaRefreshDueAt)
++        val stored = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
++        assertEquals(plan, stored.inProgressPlannedRoute)
++        assertFalse(stored.accepted)
++    }
++
+     @ParameterizedTest(name = "{0}")
+     @ValueSource(strings = ["앞 열차 지연 회복", "환승 열차 지연 회복"])
+     fun `출발 후 먼저 도착하는 열차에 맞춰 Worker가 가능한 환승과 도착을 저장하고 출발 알람을 유지한다`(case: String) {
+--- /dev/null
++++ b/src/test/kotlin/com/noLate/schedule/application/service/policy/PlannedTransitRefreshCadencePolicyTest.kt
+@@ -0,0 +1,57 @@
++package com.noLate.schedule.application.service.policy
++
++import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
++import com.noLate.schedule.application.*
++import org.junit.jupiter.api.Assertions.*
++import org.junit.jupiter.api.Test
++import org.junit.jupiter.params.ParameterizedTest
++import org.junit.jupiter.params.provider.CsvSource
++
++class PlannedTransitRefreshCadencePolicyTest {
++    private val mapper = jacksonObjectMapper().findAndRegisterModules()
++    private val route = requireNotNull(javaClass.getResourceAsStream("/eta/reported-boarding-arrival-20261120.json"))
++        .use(mapper::readTree).let { mapper.treeToValue(it["plan"], EffectiveTransitRoute::class.java) }
++    private val firstArrival = requireNotNull(route.segments.first { it.rideTiming != null }.rideTiming).predictedArrivalAt
++    private fun state(plan: EffectiveTransitRoute = route) = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan)
++
++    @ParameterizedTest
++    @CsvSource("600,60", "900,60", "901,1", "930,30", "1800,60", "1500,600")
++    fun `가까운 역 사건과 관측 창 시작에만 조회 경계를 추가한다`(before: Long, delay: Long) {
++        val now = firstArrival.minusSeconds(before)
++        assertEquals(now.plusSeconds(delay), PlannedTransitRefreshCadencePolicy.nextRefreshAt(now,state()))
++    }
++
++    @Test
++    fun `출발 전과 모든 역 사건의 지연 조회 창이 지난 뒤에는 기존 주기를 유지한다`() {
++        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(route.departureAt.minusSeconds(1),state()))
++        val lastArrival = requireNotNull(route.segments.last { it.rideTiming != null }.rideTiming).predictedArrivalAt
++        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(lastArrival.plusSeconds(1201),state()))
++        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(firstArrival,null))
++    }
++
++    @Test
++    fun `같은 여정의 갱신한 시각을 쓰고 다른 여정의 시각은 섞지 않는다`() {
++        val now = firstArrival.minusSeconds(930)
++        val delayed = route.copy(arrivalAt=route.arrivalAt.plusSeconds(300),segments=route.segments.map { leg ->
++            leg.rideTiming?.let { timing -> leg.copy(rideTiming=timing.copy(
++                predictedBoardingAt=timing.predictedBoardingAt.plusSeconds(300),
++                predictedArrivalAt=timing.predictedArrivalAt.plusSeconds(300),
++                basis=EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE)) } ?: leg
++        })
++        assertEquals(now.plusSeconds(330),PlannedTransitRefreshCadencePolicy.nextRefreshAt(now,
++            state().copy(lastUpdatedPlannedRoute=delayed)))
++        assertEquals(now.plusSeconds(30),PlannedTransitRefreshCadencePolicy.nextRefreshAt(now,
++            state().copy(lastUpdatedPlannedRoute=delayed.copy(identity="b".repeat(64)))))
++    }
++
++    @Test
++    fun `다른 운행일과 미지원 혼합 경로는 관측 주기로 승격하지 않는다`() {
++        val now = firstArrival.minusSeconds(600)
++        val otherDay = route.copy(segments=route.segments.map { leg -> leg.rideTiming?.let { timing ->
++            leg.copy(rideTiming=timing.copy(timetable=timing.timetable.copy(serviceDate=timing.timetable.serviceDate.minusDays(1))))
++        } ?: leg })
++        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(now,state(otherDay)))
++        val missing = route.copy(segments=route.segments.map { if(it.rideTiming!=null) it.copy(rideTiming=null) else it })
++        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(now,state(missing)))
++    }
++}

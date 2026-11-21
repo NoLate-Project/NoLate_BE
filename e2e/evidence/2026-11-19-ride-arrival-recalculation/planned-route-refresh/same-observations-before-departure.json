@@ -1,0 +1,244 @@
+{
+  "classification": "CONTROLLED_STATION_FORECASTS_PAIRED_PREDEPARTURE_CALCULATOR_AND_APP_PRESENTATION",
+  "publicHttpCalls": 0,
+  "installedAppRun": false,
+  "physicalArrivalMeasured": false,
+  "newComparableNaverJourneys": 0,
+  "stationTimeBasis": "Test clock 2026-07-29 UTC. Controlled times are not the travel time between the real named stations.",
+  "comparison": "Same selected route, timetable, target, fixed clock, observed first boarding/alighting and mocked timetable replies in both runs. Existing connection uses train 2480 at +1000s and a +2000s target. Reconnection uses 2482 at +1320s when 2480 at +1200s is missed, with a +2400s target.",
+  "inputIdentifier": "SHA-256 of sorted UTF-8 JSON of case, Kotlin inputJourney string, first boarding and alighting observation instants and saved route JSON.",
+  "componentBasis": "First wait is the gap between the end of modeled access and first boarding on the app rail. Access, transfer and egress use provider minute estimates. No passenger walking observations.",
+  "kotlinSources": {
+    "before": "bd9c05c47619e004961d3d13249bb681aee8fa8427e5fafa67ffd9e89553374e",
+    "after": "0b0f2130159d9023371d4f21e5ec7966269655628e50d7a5c0defffc97c93e54"
+  },
+  "frontendFunctions": [
+    "buildRouteInfoFromAlternative",
+    "buildEffectiveTransitRoutePresentation",
+    "applyMatchedTransitTimeline"
+  ],
+  "cases": [
+    {
+      "case": "late-alighting-next-transfer",
+      "inputIdentifierSha256": "0ea1eeead1db91858e5b33827497ea284ec91c732dcefb712ac2bbb84024a22c",
+      "observedBoardingAt": "2026-07-29T00:06:00Z",
+      "observedFirstAlightingAt": "2026-07-29T00:15:00Z",
+      "before": {
+        "accepted": true,
+        "failure": null,
+        "serverRecommendedDepartureAt": "2026-07-29T00:00:00Z",
+        "doorArrivalAt": "2026-07-29T00:34:00Z",
+        "onwardCandidateTrain": "2482",
+        "appFreshSummary": "09:00 출발 · 09:34 도착 · 총 34분",
+        "intervalsFromAppRailSeconds": {
+          "access": 300,
+          "firstWait": 60,
+          "firstRide": 540,
+          "transferWalk": 300,
+          "transferWait": 120,
+          "secondRide": 600,
+          "egress": 120
+        },
+        "appLabeledFirstWaitAtSecondPrecision": false
+      },
+      "after": {
+        "accepted": true,
+        "failure": null,
+        "serverRecommendedDepartureAt": "2026-07-29T00:00:00Z",
+        "doorArrivalAt": "2026-07-29T00:34:00Z",
+        "onwardCandidateTrain": "2482",
+        "appFreshSummary": "09:00 출발 · 09:34 도착 · 총 34분",
+        "intervalsFromAppRailSeconds": {
+          "access": 300,
+          "firstWait": 60,
+          "firstRide": 540,
+          "transferWalk": 300,
+          "transferWait": 120,
+          "secondRide": 600,
+          "egress": 120
+        },
+        "appLabeledFirstWaitAtSecondPrecision": false
+      }
+    },
+    {
+      "case": "late-alighting-next-transfer",
+      "inputIdentifierSha256": "7765a47b65a960a55df9f71b960c38a3fa6543705f4bd8b0a151f3a5ee67687d",
+      "observedBoardingAt": "2026-07-29T00:12:00Z",
+      "observedFirstAlightingAt": "2026-07-29T00:15:00Z",
+      "before": {
+        "accepted": false,
+        "failure": "TRANSIT_TRANSFER_TIMING_UNKNOWN: 환승 시간표 또는 안전 여유가 불충분해 환승 가능 여부를 확정할 수 없습니다.",
+        "serverRecommendedDepartureAt": null,
+        "doorArrivalAt": null,
+        "onwardCandidateTrain": "2482",
+        "appFreshSummary": null,
+        "intervalsFromAppRailSeconds": null,
+        "appLabeledFirstWaitAtSecondPrecision": null
+      },
+      "after": {
+        "accepted": true,
+        "failure": null,
+        "serverRecommendedDepartureAt": "2026-07-29T00:06:00Z",
+        "doorArrivalAt": "2026-07-29T00:34:00Z",
+        "onwardCandidateTrain": "2482",
+        "appFreshSummary": "09:06 출발 · 09:34 도착 · 총 28분",
+        "intervalsFromAppRailSeconds": {
+          "access": 300,
+          "firstWait": 60,
+          "firstRide": 180,
+          "transferWalk": 300,
+          "transferWait": 120,
+          "secondRide": 600,
+          "egress": 120
+        },
+        "appLabeledFirstWaitAtSecondPrecision": false
+      }
+    },
+    {
+      "case": "recovered-alighting-original-transfer",
+      "inputIdentifierSha256": "b93de0dc88ded14d352161de275bb984b98e104c4517ca7ee7030b82de3ca61b",
+      "observedBoardingAt": "2026-07-29T00:06:30Z",
+      "observedFirstAlightingAt": "2026-07-29T00:10:20Z",
+      "before": {
+        "accepted": true,
+        "failure": null,
+        "serverRecommendedDepartureAt": "2026-07-29T00:00:00Z",
+        "doorArrivalAt": "2026-07-29T00:28:40Z",
+        "onwardCandidateTrain": "2480",
+        "appFreshSummary": "09:00 출발 · 09:28 도착 · 총 29분",
+        "intervalsFromAppRailSeconds": {
+          "access": 300,
+          "firstWait": 90,
+          "firstRide": 230,
+          "transferWalk": 300,
+          "transferWait": 80,
+          "secondRide": 600,
+          "egress": 120
+        },
+        "appLabeledFirstWaitAtSecondPrecision": false
+      },
+      "after": {
+        "accepted": true,
+        "failure": null,
+        "serverRecommendedDepartureAt": "2026-07-29T00:00:00Z",
+        "doorArrivalAt": "2026-07-29T00:28:40Z",
+        "onwardCandidateTrain": "2480",
+        "appFreshSummary": "09:00 출발 · 09:28 도착 · 총 29분",
+        "intervalsFromAppRailSeconds": {
+          "access": 300,
+          "firstWait": 90,
+          "firstRide": 230,
+          "transferWalk": 300,
+          "transferWait": 80,
+          "secondRide": 600,
+          "egress": 120
+        },
+        "appLabeledFirstWaitAtSecondPrecision": false
+      }
+    },
+    {
+      "case": "recovered-alighting-original-transfer",
+      "inputIdentifierSha256": "0fee374c4943386922a9f9c7b0282a0ae1aad27379dcadfa50c5a48fb34e4218",
+      "observedBoardingAt": "2026-07-29T00:07:30Z",
+      "observedFirstAlightingAt": "2026-07-29T00:10:20Z",
+      "before": {
+        "accepted": true,
+        "failure": null,
+        "serverRecommendedDepartureAt": "2026-07-29T00:00:00Z",
+        "doorArrivalAt": "2026-07-29T00:28:40Z",
+        "onwardCandidateTrain": "2480",
+        "appFreshSummary": "09:00 출발 · 09:28 도착 · 총 29분",
+        "intervalsFromAppRailSeconds": {
+          "access": 300,
+          "firstWait": 150,
+          "firstRide": 170,
+          "transferWalk": 300,
+          "transferWait": 80,
+          "secondRide": 600,
+          "egress": 120
+        },
+        "appLabeledFirstWaitAtSecondPrecision": false
+      },
+      "after": {
+        "accepted": true,
+        "failure": null,
+        "serverRecommendedDepartureAt": "2026-07-29T00:01:00Z",
+        "doorArrivalAt": "2026-07-29T00:28:40Z",
+        "onwardCandidateTrain": "2480",
+        "appFreshSummary": "09:01 출발 · 09:28 도착 · 총 28분",
+        "intervalsFromAppRailSeconds": {
+          "access": 300,
+          "firstWait": 90,
+          "firstRide": 170,
+          "transferWalk": 300,
+          "transferWait": 80,
+          "secondRide": 600,
+          "egress": 120
+        },
+        "appLabeledFirstWaitAtSecondPrecision": false
+      }
+    }
+  ],
+  "regressions": {
+    "backend": {
+      "suites": 12,
+      "tests": 435,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "frontend": {
+      "suites": 4,
+      "tests": 76,
+      "failures": 0
+    }
+  },
+  "snapshotComparedFiles": 53,
+  "archivedRealAcceptedNowonToSadang": {
+    "date": "2026-11-18",
+    "evaluations": [
+      {
+        "sourceFile": "nolate-eta-real-e2e.7oi7o38v/evaluation-1.json",
+        "evaluationSha256": "014483fcd4b651508844d956d43ead1291d576c3af3be401aaf85171ad84787d",
+        "evaluatedAt": "2026-11-18T03:20:01.394369Z",
+        "acceptedFirstTrain": "4597",
+        "scheduledFirstAlightingAt": "2026-11-18T04:13:00Z",
+        "secondsUntilFirstAlighting": 3178
+      },
+      {
+        "sourceFile": "nolate-eta-real-e2e.c5lckxhg/evaluation-2.json",
+        "evaluationSha256": "d93391bee0a1ff4bbae12657d957f3fc6d6fa4bf718dd7f9df3c13f520f25cb9",
+        "evaluatedAt": "2026-11-18T03:31:52.851385Z",
+        "acceptedFirstTrain": "K4599",
+        "scheduledFirstAlightingAt": "2026-11-18T04:24:00Z",
+        "secondsUntilFirstAlighting": 3127
+      },
+      {
+        "sourceFile": "nolate-eta-real-e2e.ie3j_xou/evaluation-1.json",
+        "evaluationSha256": "8a17fb89e7c58237cd2cfa3784629748866a9eac33e92f77a34c5ae809fd33c8",
+        "evaluatedAt": "2026-11-18T04:16:47.330317Z",
+        "acceptedFirstTrain": "K4607",
+        "scheduledFirstAlightingAt": "2026-11-18T05:08:00Z",
+        "secondsUntilFirstAlighting": 3072
+      },
+      {
+        "sourceFile": "nolate-eta-real-e2e.j1kq3rn2/evaluation-1.json",
+        "evaluationSha256": "fdf2e602c0289edae047eb2eeaf63e12fab703f2c21c4908d98b9f2acd1e11cc",
+        "evaluatedAt": "2026-11-18T05:05:42.612003Z",
+        "acceptedFirstTrain": "4105",
+        "scheduledFirstAlightingAt": "2026-11-18T05:59:30Z",
+        "secondsUntilFirstAlighting": 3227
+      },
+      {
+        "sourceFile": "nolate-eta-real-e2e.8tjn5tyh/evaluation-1.json",
+        "evaluationSha256": "8f916e6aa9a753c798d018fe35faad56065d1ad361bc89728691a23f0564f458",
+        "evaluatedAt": "2026-11-18T05:35:17.616170Z",
+        "acceptedFirstTrain": "K4621",
+        "scheduledFirstAlightingAt": "2026-11-18T06:30:00Z",
+        "secondsUntilFirstAlighting": 3282
+      }
+    ],
+    "hadFirstAlightingInsidePredeparture15MinuteWindow": 0,
+    "interpretation": "First-train boarding forecasts were accepted. The accepted first alighting lay beyond the observation window in every example. These archived public-provider cases cannot prove the short-first-ride predeparture correction."
+  }
+}

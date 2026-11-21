@@ -1,0 +1,35 @@
+{
+  "journeys": 1,
+  "samplesByLine": {
+    "LINE_4": 8,
+    "LINE_2": 8
+  },
+  "firstAlightingIntervalKST": [
+    "00:04:12",
+    "00:06:17"
+  ],
+  "plannedFirstAlightingKST": "00:06:00",
+  "unadoptedProviderPredictionKST": "00:09:05",
+  "absoluteErrorIncreaseIfAdoptedSeconds": [
+    151.0,
+    185.0
+  ],
+  "matchedScheduledOnwardTrainPositions": 0,
+  "unverifiedTrainNumbersKeptDistinct": [
+    "2510",
+    "4510"
+  ],
+  "measuredFinalArrivals": 0,
+  "eligibleNaverMatchesThisRun": 0,
+  "originalCollectorProviderFailureFlag": true,
+  "observedPositionsReturnedPerCall": true,
+  "collectionStatusAudit": "16 nonempty position snapshots from 16 counted requests. Original collector tested membership of non-success timers without testing their counts. TransitProviderWireMetrics preregisters every outcome; collector failureCode is null. Original flag and report preserved.",
+  "publicCallsDuringOfflineAnalysis": 0,
+  "sourceSha256": {
+    "arrival-interval-audit.json": "80743ee1830b08d3fb5be89bfd1a45f6bb6d19f3be66a30e6febe91dfb97aa95",
+    "collection-report.json": "dbd89b82150c45b90cec027f5c1d17ce7d9554f4bb804143d49172abe8083062",
+    "component-audit.json": "0baeda51a8cb2627a413a520414098072ea100e87b5fed9c6fec679440edbacf",
+    "position-window-source.json": "9935bb0e8e4a973c4c2c23806e6806ad73effa2032ef917ff4e59ef69291943d",
+    "positions.jsonl": "058d6e45801d59f0f60ac536e15b508968f0817de79da497464957c37dfebdf5"
+  }
+}

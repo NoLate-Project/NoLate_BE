@@ -1,0 +1,23 @@
+{
+  "classification": "OFFLINE_COMPONENT_IDENTITY_ANALYSIS_FIX_NOT_ETA_MODEL_OR_REAL_ACCURACY",
+  "privateRoot": "/private/tmp/nolate-component-identity-proof.q34l_9po",
+  "mainWorktreeAndLiveRunnerChanged": false,
+  "newPublicCalls": 0,
+  "beforeRegressionCases": 3,
+  "beforeFailures": 1,
+  "beforeErrors": 2,
+  "additionalConflictingContextRegressionInitiallyFailed": true,
+  "afterTests": 43,
+  "afterFailures": 0,
+  "afterErrors": 0,
+  "beforeSourceSha256": "964d367e29abdbdf3dba64fb17d4a5da8fd12d29a3aab2fb195ee39690751b4c",
+  "afterSourceSha256": "28feeb557dd8688a1bee4548dd184a88dffb9d2e2dd3d35dc101a7b3a567c924",
+  "completedRealRootsBeforeAfterReportsUnchanged": [
+    "w9vtd97p",
+    "dzhrdc0h"
+  ],
+  "cause": "Component extraction used comparison timetable identity after a new actual service was selected; actual ride intervals disappeared, and equal-digit explicitly observed identity caused a null schedule-anchor exception.",
+  "fix": "Join explicit actual raw train/day/direction/terminal/class/endpoints; keep no other-vehicle timetable baseline. Reject conflicting context and ambiguous records.",
+  "mayPromoteWhileCurrentRunAlive": false,
+  "nextRequired": "After uf14uvsd terminates and restores, compare main source hash, apply only the scoped analysis patch and regression test, then write a new offline report without overwriting original run reports."
+}

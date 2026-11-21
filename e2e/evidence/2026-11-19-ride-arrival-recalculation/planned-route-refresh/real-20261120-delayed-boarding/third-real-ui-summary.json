@@ -1,0 +1,15 @@
+{
+  "classification": "ACTUAL_MATCHED_FIRST_ALIGHTING_AND_ONWARD_TIMETABLE_INSTALLED_UI",
+  "sourceAt": "2026-11-20T02:39:35Z",
+  "firstTrain": "4075",
+  "firstPredictedAlightingAt": "2026-11-20T02:48:05Z",
+  "newOnwardTrain": "2202",
+  "newOnwardBoardingAt": "2026-11-20T02:57:00Z",
+  "predictedDestinationAt": "2026-11-20T03:05:43Z",
+  "doorDepartureAt": "2026-11-20T01:50:00Z",
+  "apiBasis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+  "normalOriginRequeryExcludedFromPublicProgressPlan": true,
+  "installedUiPassed": true,
+  "physicalOutcome": "PENDING",
+  "candidate9h4y8nrrUsed": false
+}

@@ -1,0 +1,14 @@
+{
+  "sourceRoot": "/private/tmp/nolate-eta-real-e2e.dzhrdc0h",
+  "classification": "COMPLETED_PARTIAL_REAL_RUN_WITH_HTTP_ZERO_PAIRED_REPLAY",
+  "sha256": {
+    "report.json": "594897f36f74abe7996b35dd9e7073ebfe2a1c0e2e59e85aa5df5fcbbeab29d0",
+    "partial-first-event-audit.json": "eca4c0454cdfb3de95456c06722eb8dda419440ef5eea00b9b0e1856270a0424",
+    "train-position-audit.json": "80463217261d9c959438af8e1587d53f9476b27bfa4e11b35427f075fbac57b5",
+    "paired-final-refresh-replay.json": "0eca762c9d0d4a409d729bd4efc54b9ac3ebb80eef60d135e5e191ec984be837",
+    "paired-first-boarding-replay.json": "199f39f7c1683b5af5bcdf9798c6cd6e27a0efc532120ba448a864b15a204812",
+    "frozen-corridor-forecast-shadow-dwell-corrected.json": "cd4dad21de960e642903798ab58c0177918e92167cec95b2b73f310a4239718a",
+    "frozen-corridor-forecast-shadow-audit.json": "4487cf373a6042aeff84115d60648b5ceedc65fa70c5cf5d8b12cc37e8f641d3",
+    "frozen-corridor-one-sided-rejection.json": "e7aa3bd9647ecd467eb334e0864e008d217b38b72b0c769df11e863a9abe3fdc"
+  }
+}

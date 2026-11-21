@@ -1,0 +1,14 @@
+.F
+======================================================================
+FAIL: test_same_train_keeps_imminent_original_observations_when_forecast_moves_later (test_position_reschedule.PositionRescheduleTest.test_same_train_keeps_imminent_original_observations_when_forecast_moves_later)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-pair-window-proof.lafilf8t/test_position_reschedule.py", line 16, in test_same_train_keeps_imminent_original_observations_when_forecast_moves_later
+    self.assertEqual(slots.pending[key]["at"],old["at"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: datetime.datetime(2026, 11, 19, 15, 10, 30, tzinfo=datetime.timezone.utc) != datetime.datetime(2026, 11, 19, 15, 7, 30, tzinfo=datetime.timezone.utc)
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.001s
+
+FAILED (failures=1)

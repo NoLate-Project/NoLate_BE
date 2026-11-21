@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_conflicting_explicit_service_metadata_cannot_reuse_reference_identity (test_component_actual_identity.ActualComponentIdentityTest.test_conflicting_explicit_service_metadata_cannot_reuse_reference_identity)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/nolate-component-identity-proof.q34l_9po/test_component_actual_identity.py", line 49, in test_conflicting_explicit_service_metadata_cannot_reuse_reference_identity
+    with self.assertRaises(ValueError):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)

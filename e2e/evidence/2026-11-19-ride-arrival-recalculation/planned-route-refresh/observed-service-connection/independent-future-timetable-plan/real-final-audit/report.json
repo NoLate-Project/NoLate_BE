@@ -1,0 +1,1046 @@
+{
+  "classification": "REAL_PROVIDER_WORKER_API_SIMULATOR_E2E",
+  "result": "PARTIAL",
+  "productionDatabaseModified": false,
+  "existingServersStopped": false,
+  "evaluations": [
+    {
+      "index": 1,
+      "accepted": false,
+      "uiResult": "DIAGNOSTIC_PASSED_NOT_ACCEPTED_ETA",
+      "evaluatedAt": "2026-11-20T10:30:05.885279Z",
+      "recommendedDepartureAt": "2026-11-20T10:40:00Z",
+      "automaticAlarmStateCount": 0,
+      "failureCode": "TRANSIT_TRAIN_NOT_YET_OBSERVED",
+      "providerWire": [
+        {
+          "provider": "seoul_subway",
+          "operation": "arrival",
+          "outcome": "success",
+          "count": 1
+        },
+        {
+          "provider": "seoul_timetable",
+          "operation": "station_lookup",
+          "outcome": "success",
+          "count": 6
+        },
+        {
+          "provider": "seoul_timetable",
+          "operation": "timetable",
+          "outcome": "success",
+          "count": 9
+        }
+      ],
+      "providerFailures": [],
+      "subwayArrivalCallsBeforeWorker": 0,
+      "subwayArrivalCallsAfterWorker": 1,
+      "initialPlanBasis": "VERIFIED_TIMETABLE_NOT_REALTIME",
+      "nextObservationWindow": {
+        "stage": "REPORTED_BOARDING_STATE_WINDOW",
+        "at": "2026-11-20T11:39:00+00:00",
+        "sequence": 3,
+        "station": "\uc0ac\ub2f9",
+        "plannedBoardingAt": "2026-11-20T11:38:30Z",
+        "plannedAlightingAt": "2026-11-20T11:46:00Z",
+        "qualifyingNaturalObservationGuaranteed": false
+      }
+    },
+    {
+      "index": 2,
+      "accepted": false,
+      "uiResult": "PROVISIONAL_PASSED",
+      "evaluatedAt": "2026-11-20T11:39:03.372966Z",
+      "recommendedDepartureAt": "2026-11-20T10:40:00Z",
+      "automaticAlarmStateCount": 0,
+      "failureCode": "TRANSIT_ON_TIME_ARRIVAL_UNAVAILABLE",
+      "providerWire": [
+        {
+          "provider": "seoul_subway",
+          "operation": "arrival",
+          "outcome": "success",
+          "count": 4
+        },
+        {
+          "provider": "seoul_timetable",
+          "operation": "station_lookup",
+          "outcome": "success",
+          "count": 12
+        },
+        {
+          "provider": "seoul_timetable",
+          "operation": "timetable",
+          "outcome": "success",
+          "count": 18
+        },
+        {
+          "provider": "seoul_subway",
+          "operation": "position",
+          "outcome": "success",
+          "count": 10
+        }
+      ],
+      "providerFailures": [],
+      "subwayArrivalCallsBeforeWorker": 1,
+      "subwayArrivalCallsAfterWorker": 4,
+      "plannedArrivalPrediction": {
+        "predictedArrivalAt": "2026-11-20T11:54:13Z",
+        "presentedAt": "2026-11-20T11:39:33.751999Z",
+        "routeIdentity": "5efbee2d61165d6d5f6aaa7832284ed140d5a45d0e09db9da0602666f45f127b",
+        "basis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+        "effectiveTransitRoute": {
+          "provider": "odsay",
+          "identity": "5efbee2d61165d6d5f6aaa7832284ed140d5a45d0e09db9da0602666f45f127b",
+          "departureAt": "2026-11-20T10:40:00Z",
+          "arrivalAt": "2026-11-20T11:54:13Z",
+          "totalMinutes": 75,
+          "segments": [
+            {
+              "sequence": 0,
+              "kind": "WALK",
+              "durationMinutes": 3,
+              "waitingMinutes": null,
+              "lineName": null,
+              "fromName": null,
+              "toName": null,
+              "directionName": null,
+              "walkingScope": "ACCESS",
+              "durationSeconds": 137,
+              "walkingGeometry": {
+                "from": {
+                  "lat": 37.65636121651711,
+                  "lng": 127.06342767617363
+                },
+                "to": {
+                  "lat": 37.65660244931353,
+                  "lng": 127.06400986889055
+                },
+                "distanceMeters": 148,
+                "endpointBasis": "PROVIDER_PATH_ENDPOINTS",
+                "pathEvidence": null,
+                "providerQueryEndpoints": {
+                  "start": {
+                    "lat": 37.65636195,
+                    "lng": 127.06342739
+                  },
+                  "end": {
+                    "lat": 37.656590053614906,
+                    "lng": 127.06400007271506
+                  },
+                  "originalEgressEndpoint": null
+                }
+              },
+              "rideTiming": null,
+              "walkingTiming": {
+                "source": "ODSAY_ENTRANCE_WALK_SECONDS",
+                "originalDurationMinutes": 1,
+                "movementSeconds": 137,
+                "fetchedAt": "2026-11-20T10:30:01.803535Z",
+                "sameOrderedPathVerified": false,
+                "transferReference": null
+              },
+              "transferTiming": null,
+              "busRidePrediction": null
+            },
+            {
+              "sequence": 1,
+              "kind": "SUBWAY",
+              "durationMinutes": 59,
+              "waitingMinutes": 4,
+              "lineName": "\uc218\ub3c4\uad8c 4\ud638\uc120",
+              "fromName": "\ub178\uc6d0",
+              "toName": "\uc0ac\ub2f9",
+              "directionName": null,
+              "walkingScope": null,
+              "durationSeconds": null,
+              "walkingGeometry": null,
+              "rideTiming": {
+                "timetable": {
+                  "provider": "seoul-timetable",
+                  "line": "LINE_4",
+                  "serviceDate": "2026-11-20",
+                  "trainNumber": "4685",
+                  "directionCode": "DOWN",
+                  "serviceClass": "LOCAL",
+                  "fromStationCode": "0411",
+                  "toStationCode": "0433",
+                  "terminalName": "\uc624\uc774\ub3c4",
+                  "boardingAt": "2026-11-20T10:46:00Z",
+                  "arrivalAt": "2026-11-20T11:34:00Z",
+                  "fetchedAt": "2026-11-20T10:30:02.477977Z",
+                  "realtimeTrainNumber": null,
+                  "boardingStationArrivalAt": "2026-11-20T10:45:30Z"
+                },
+                "predictedBoardingAt": "2026-11-20T10:46:00Z",
+                "predictedArrivalAt": "2026-11-20T11:40:25Z",
+                "basis": "PLANNED_RIDE_ALIGHTING_REALTIME",
+                "observationSourceUpdatedAt": "2026-11-20T11:38:25Z",
+                "plannedBoardingIsStationArrival": false,
+                "boardingObservationSourceUpdatedAt": null
+              },
+              "walkingTiming": null,
+              "transferTiming": null,
+              "busRidePrediction": null,
+              "orderedStopNames": [
+                "\ub178\uc6d0",
+                "\ucc3d\ub3d9",
+                "\uc30d\ubb38",
+                "\uc218\uc720(\uac15\ubd81\uad6c\uccad)",
+                "\ubbf8\uc544",
+                "\ubbf8\uc544\uc0ac\uac70\ub9ac",
+                "\uae38\uc74c",
+                "\uc131\uc2e0\uc5ec\ub300\uc785\uad6c",
+                "\ud55c\uc131\ub300\uc785\uad6c",
+                "\ud61c\ud654",
+                "\ub3d9\ub300\ubb38",
+                "\ub3d9\ub300\ubb38\uc5ed\uc0ac\ubb38\ud654\uacf5\uc6d0",
+                "\ucda9\ubb34\ub85c",
+                "\uba85\ub3d9",
+                "\ud68c\ud604",
+                "\uc11c\uc6b8\uc5ed",
+                "\uc219\ub300\uc785\uad6c",
+                "\uc0bc\uac01\uc9c0",
+                "\uc2e0\uc6a9\uc0b0",
+                "\uc774\ucd0c",
+                "\ub3d9\uc791",
+                "\ucd1d\uc2e0\ub300\uc785\uad6c(\uc774\uc218)",
+                "\uc0ac\ub2f9"
+              ]
+            },
+            {
+              "sequence": 2,
+              "kind": "WALK",
+              "durationMinutes": 3,
+              "waitingMinutes": 0,
+              "lineName": null,
+              "fromName": null,
+              "toName": null,
+              "directionName": null,
+              "walkingScope": "TRANSFER",
+              "durationSeconds": 157,
+              "walkingGeometry": {
+                "from": null,
+                "to": null,
+                "distanceMeters": 170,
+                "endpointBasis": "UNKNOWN",
+                "pathEvidence": {
+                  "provider": "odsay",
+                  "status": "PROVIDED",
+                  "steps": [
+                    {
+                      "coordinates": [
+                        {
+                          "lat": 37.47679013032343,
+                          "lng": 126.98167283045825
+                        },
+                        {
+                          "lat": 37.47679030082541,
+                          "lng": 126.98166816752526
+                        },
+                        {
+                          "lat": 37.476790777126816,
+                          "lng": 126.98165346140914
+                        },
+                        {
+                          "lat": 37.47679834053122,
+                          "lng": 126.98144621239518
+                        }
+                      ],
+                      "distanceMeters": 20.0,
+                      "description": null
+                    },
+                    {
+                      "coordinates": [
+                        {
+                          "lat": 37.47679834053122,
+                          "lng": 126.98144621239518
+                        },
+                        {
+                          "lat": 37.47696413646154,
+                          "lng": 126.98122848234775
+                        }
+                      ],
+                      "distanceMeters": 26.0,
+                      "description": null
+                    },
+                    {
+                      "coordinates": [
+                        {
+                          "lat": 37.47696413646154,
+                          "lng": 126.98122848234775
+                        },
+                        {
+                          "lat": 37.47705003375247,
+                          "lng": 126.9811253077268
+                        }
+                      ],
+                      "distanceMeters": 13.0,
+                      "description": null
+                    },
+                    {
+                      "coordinates": [
+                        {
+                          "lat": 37.47705003375247,
+                          "lng": 126.9811253077268
+                        },
+                        {
+                          "lat": 37.47718564112053,
+                          "lng": 126.981319805645
+                        }
+                      ],
+                      "distanceMeters": 22.0,
+                      "description": null
+                    },
+                    {
+                      "coordinates": [
+                        {
+                          "lat": 37.47718564112053,
+                          "lng": 126.981319805645
+                        },
+                        {
+                          "lat": 37.4771776339575,
+                          "lng": 126.98126161487467
+                        },
+                        {
+                          "lat": 37.47708185925482,
+                          "lng": 126.9811270103682
+                        }
+                      ],
+                      "distanceMeters": 21.0,
+                      "description": null
+                    },
+                    {
+                      "coordinates": [
+                        {
+                          "lat": 37.47708185925482,
+                          "lng": 126.9811270103682
+                        },
+                        {
+                          "lat": 37.47701710373018,
+                          "lng": 126.98103630029293
+                        }
+                      ],
+                      "distanceMeters": 10.0,
+                      "description": null
+                    },
+                    {
+                      "coordinates": [
+                        {
+                          "lat": 37.47701710373018,
+                          "lng": 126.98103630029293
+                        },
+                        {
+                          "lat": 37.47701101142366,
+                          "lng": 126.98104471174815
+                        },
+                        {
+                          "lat": 37.47700267869859,
+                          "lng": 126.98105607926804
+                        },
+                        {
+                          "lat": 37.47683414407021,
+                          "lng": 126.98128638269647
+                        },
+                        {
+                          "lat": 37.476777038003036,
+                          "lng": 126.98131606995292
+                        },
+                        {
+                          "lat": 37.47659639019979,
+                          "lng": 126.98133315225579
+                        }
+                      ],
+                      "distanceMeters": 56.0,
+                      "description": null
+                    },
+                    {
+                      "coordinates": [
+                        {
+                          "lat": 37.47659639019979,
+                          "lng": 126.98133315225579
+                        },
+                        {
+                          "lat": 37.476593635930946,
+                          "lng": 126.9813618086199
+                        }
+                      ],
+                      "distanceMeters": 2.0,
+                      "description": null
+                    }
+                  ],
+                  "stationInteriorCoverage": "UNKNOWN"
+                },
+                "providerQueryEndpoints": {
+                  "start": {
+                    "lat": 37.476793075344084,
+                    "lng": 126.98167300000001
+                  },
+                  "end": {
+                    "lat": 37.47657507534361,
+                    "lng": 126.981359
+                  },
+                  "originalEgressEndpoint": null
+                }
+              },
+              "rideTiming": null,
+              "walkingTiming": {
+                "source": "ODSAY_FULL_PATH_SECONDS",
+                "originalDurationMinutes": 3,
+                "movementSeconds": 157,
+                "fetchedAt": "2026-11-20T10:30:01.803751Z",
+                "sameOrderedPathVerified": true,
+                "transferReference": {
+                  "stationName": "\uc0ac\ub2f9",
+                  "fromLine": "4\ud638\uc120",
+                  "toLine": "2\ud638\uc120",
+                  "distanceMeters": 74,
+                  "durationSeconds": 62,
+                  "datasetDate": "2025-03-31",
+                  "provider": "seoulmetro",
+                  "walkingSpeedMetersPerSecond": 1.2,
+                  "application": "REFERENCE_ONLY_DIRECTION_AND_PATH_UNVERIFIED",
+                  "sourceUrl": "https://data.seoul.go.kr/dataList/OA-13290/F/1/datasetView.do"
+                }
+              },
+              "transferTiming": null,
+              "busRidePrediction": null
+            },
+            {
+              "sequence": 3,
+              "kind": "SUBWAY",
+              "durationMinutes": 10,
+              "waitingMinutes": 3,
+              "lineName": "\uc218\ub3c4\uad8c 2\ud638\uc120",
+              "fromName": "\uc0ac\ub2f9",
+              "toName": "\uc2e0\ub9bc",
+              "directionName": null,
+              "walkingScope": null,
+              "durationSeconds": null,
+              "walkingGeometry": null,
+              "rideTiming": {
+                "timetable": {
+                  "provider": "seoul-timetable",
+                  "line": "LINE_2",
+                  "serviceDate": "2026-11-20",
+                  "trainNumber": "2438",
+                  "directionCode": "UP",
+                  "serviceClass": "LOCAL",
+                  "fromStationCode": "0226",
+                  "toStationCode": "0230",
+                  "terminalName": "\uc131\uc218",
+                  "boardingAt": "2026-11-20T11:45:30Z",
+                  "arrivalAt": "2026-11-20T11:53:00Z",
+                  "fetchedAt": "2026-11-20T11:39:02.037025Z",
+                  "realtimeTrainNumber": null,
+                  "boardingStationArrivalAt": "2026-11-20T11:44:30Z"
+                },
+                "predictedBoardingAt": "2026-11-20T11:45:30Z",
+                "predictedArrivalAt": "2026-11-20T11:53:00Z",
+                "basis": "TIMETABLE",
+                "observationSourceUpdatedAt": null,
+                "plannedBoardingIsStationArrival": null,
+                "boardingObservationSourceUpdatedAt": null
+              },
+              "walkingTiming": null,
+              "transferTiming": {
+                "previousArrivalAt": "2026-11-20T11:40:25Z",
+                "walkingSeconds": 157,
+                "bufferSeconds": 0,
+                "confidenceMarginSeconds": 60,
+                "boardingAt": "2026-11-20T11:45:30Z",
+                "requiredMarginSeconds": 60,
+                "confidenceReadyAt": "2026-11-20T11:44:02Z",
+                "physicalReadyAt": "2026-11-20T11:43:02Z",
+                "remainingSlackSeconds": 88
+              },
+              "busRidePrediction": null,
+              "orderedStopNames": [
+                "\uc0ac\ub2f9",
+                "\ub099\uc131\ub300",
+                "\uc11c\uc6b8\ub300\uc785\uad6c",
+                "\ubd09\ucc9c",
+                "\uc2e0\ub9bc"
+              ]
+            },
+            {
+              "sequence": 4,
+              "kind": "WALK",
+              "durationMinutes": 2,
+              "waitingMinutes": null,
+              "lineName": null,
+              "fromName": null,
+              "toName": null,
+              "directionName": null,
+              "walkingScope": "EGRESS",
+              "durationSeconds": 73,
+              "walkingGeometry": {
+                "from": {
+                  "lat": 37.4839123631212,
+                  "lng": 126.92990999996168
+                },
+                "to": {
+                  "lat": 37.48429580055334,
+                  "lng": 126.92977191554935
+                },
+                "distanceMeters": 78,
+                "endpointBasis": "PROVIDER_PATH_ENDPOINTS",
+                "pathEvidence": null,
+                "providerQueryEndpoints": {
+                  "start": {
+                    "lat": 37.48392182495826,
+                    "lng": 126.92989416822
+                  },
+                  "end": {
+                    "lat": 37.48426844,
+                    "lng": 126.92977778
+                  },
+                  "originalEgressEndpoint": {
+                    "lat": 37.48429580055334,
+                    "lng": 126.92977191554935
+                  }
+                }
+              },
+              "rideTiming": null,
+              "walkingTiming": {
+                "source": "ODSAY_EXIT_WALK_SECONDS",
+                "originalDurationMinutes": 1,
+                "movementSeconds": 73,
+                "fetchedAt": "2026-11-20T10:30:01.803641Z",
+                "sameOrderedPathVerified": false,
+                "transferReference": null
+              },
+              "transferTiming": null,
+              "busRidePrediction": null
+            }
+          ]
+        },
+        "sourceUpdatedAt": "2026-11-20T11:38:25Z"
+      },
+      "otherObservedServiceConnection": null,
+      "observedServiceConnection": null,
+      "freshFinalAlighting": null,
+      "nextObservationWindow": {
+        "stage": "REPORTED_BOARDING_FRESH_ALIGHTING_WINDOW",
+        "at": "2026-11-20T11:51:00+00:00",
+        "sequence": 3,
+        "station": "\uc2e0\ub9bc",
+        "plannedBoardingAt": "2026-11-20T11:45:30Z",
+        "plannedAlightingAt": "2026-11-20T11:53:00Z",
+        "qualifyingNaturalObservationGuaranteed": false
+      }
+    },
+    {
+      "index": 3,
+      "accepted": false,
+      "uiResult": "FALLBACK_PASSED_NOT_LIVE_CORRECTION",
+      "evaluatedAt": "2026-11-20T11:51:02.312360Z",
+      "recommendedDepartureAt": "2026-11-20T10:40:00Z",
+      "automaticAlarmStateCount": 0,
+      "failureCode": "TRANSIT_TRAIN_NOT_YET_OBSERVED",
+      "providerWire": [
+        {
+          "provider": "seoul_subway",
+          "operation": "arrival",
+          "outcome": "success",
+          "count": 7
+        },
+        {
+          "provider": "seoul_timetable",
+          "operation": "station_lookup",
+          "outcome": "success",
+          "count": 12
+        },
+        {
+          "provider": "seoul_timetable",
+          "operation": "timetable",
+          "outcome": "success",
+          "count": 18
+        },
+        {
+          "provider": "seoul_subway",
+          "operation": "position",
+          "outcome": "success",
+          "count": 13
+        }
+      ],
+      "providerFailures": [],
+      "subwayArrivalCallsBeforeWorker": 4,
+      "subwayArrivalCallsAfterWorker": 7
+    }
+  ],
+  "physicalIphone": "DEFERRED_BY_USER",
+  "fcmDeliveryVerified": false,
+  "mapAccuracyWithinTwoMinutesVerified": false,
+  "actualTripAccuracyVerified": false,
+  "journeyProvider": "odsay",
+  "apiBase": "http://127.0.0.1:5523",
+  "targetLeadMinutes": 75,
+  "comparisonRequestedDepartureAt": "2026-11-20T19:40:00+09:00",
+  "comparisonTargetArrivalAt": "2026-11-20T12:00:00+00:00",
+  "evaluationNotBefore": "2026-11-20T19:30:00+09:00",
+  "plannedPostdepartureRequested": true,
+  "timetablePlanBaselineRequested": true,
+  "reportedBoardingChainRequested": true,
+  "firstBoardingRecheckRequested": false,
+  "firstBoardingFollowup": null,
+  "trainPositions": {
+    "maximumHttpCalls": 16,
+    "physicalHttpCalls": 16,
+    "positionCommandsSent": 16,
+    "wireAccountingComplete": true,
+    "allFourLatestPlanEventsBounded": false,
+    "plans": [
+      {
+        "evaluation": 1,
+        "snapshotPath": "lastTimetablePlannedRoute",
+        "selectedAt": "2026-11-20T10:30:06.461150+00:00"
+      },
+      {
+        "evaluation": 2,
+        "snapshotPath": "plannedRouteUpdate.route",
+        "selectedAt": "2026-11-20T11:39:03.763496+00:00"
+      },
+      {
+        "evaluation": 3,
+        "snapshotPath": "plannedRouteUpdate.route",
+        "selectedAt": "2026-11-20T11:51:02.501113+00:00"
+      }
+    ],
+    "slots": [
+      {
+        "at": "2026-11-20T10:44:00+00:00",
+        "line": "LINE_4",
+        "event": "BOARDING",
+        "station": "\ub178\uc6d0",
+        "ordinal": 0,
+        "trainNumber": "4685",
+        "predictedAt": "2026-11-20T10:46:00Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "4685",
+          "DOWN",
+          "LOCAL",
+          "\uc624\uc774\ub3c4",
+          "\ub178\uc6d0",
+          "\uc0ac\ub2f9"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-1.json"
+      },
+      {
+        "at": "2026-11-20T10:45:45+00:00",
+        "line": "LINE_4",
+        "event": "BOARDING",
+        "station": "\ub178\uc6d0",
+        "ordinal": 1,
+        "trainNumber": "4685",
+        "predictedAt": "2026-11-20T10:46:00Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "4685",
+          "DOWN",
+          "LOCAL",
+          "\uc624\uc774\ub3c4",
+          "\ub178\uc6d0",
+          "\uc0ac\ub2f9"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-2.json"
+      },
+      {
+        "at": "2026-11-20T10:47:30+00:00",
+        "line": "LINE_4",
+        "event": "BOARDING",
+        "station": "\ub178\uc6d0",
+        "ordinal": 2,
+        "trainNumber": "4685",
+        "predictedAt": "2026-11-20T10:46:00Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "4685",
+          "DOWN",
+          "LOCAL",
+          "\uc624\uc774\ub3c4",
+          "\ub178\uc6d0",
+          "\uc0ac\ub2f9"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-3.json"
+      },
+      {
+        "at": "2026-11-20T10:49:15+00:00",
+        "line": "LINE_4",
+        "event": "BOARDING",
+        "station": "\ub178\uc6d0",
+        "ordinal": 3,
+        "trainNumber": "4685",
+        "predictedAt": "2026-11-20T10:46:00Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "4685",
+          "DOWN",
+          "LOCAL",
+          "\uc624\uc774\ub3c4",
+          "\ub178\uc6d0",
+          "\uc0ac\ub2f9"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-4.json"
+      },
+      {
+        "at": "2026-11-20T11:32:00+00:00",
+        "line": "LINE_4",
+        "event": "ALIGHTING",
+        "station": "\uc0ac\ub2f9",
+        "ordinal": 0,
+        "trainNumber": "4685",
+        "predictedAt": "2026-11-20T11:34:00Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "4685",
+          "DOWN",
+          "LOCAL",
+          "\uc624\uc774\ub3c4",
+          "\ub178\uc6d0",
+          "\uc0ac\ub2f9"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-5.json"
+      },
+      {
+        "at": "2026-11-20T11:33:45+00:00",
+        "line": "LINE_4",
+        "event": "ALIGHTING",
+        "station": "\uc0ac\ub2f9",
+        "ordinal": 1,
+        "trainNumber": "4685",
+        "predictedAt": "2026-11-20T11:34:00Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "4685",
+          "DOWN",
+          "LOCAL",
+          "\uc624\uc774\ub3c4",
+          "\ub178\uc6d0",
+          "\uc0ac\ub2f9"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-6.json"
+      },
+      {
+        "at": "2026-11-20T11:35:30+00:00",
+        "line": "LINE_4",
+        "event": "ALIGHTING",
+        "station": "\uc0ac\ub2f9",
+        "ordinal": 2,
+        "trainNumber": "4685",
+        "predictedAt": "2026-11-20T11:34:00Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "4685",
+          "DOWN",
+          "LOCAL",
+          "\uc624\uc774\ub3c4",
+          "\ub178\uc6d0",
+          "\uc0ac\ub2f9"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-7.json"
+      },
+      {
+        "at": "2026-11-20T11:36:30+00:00",
+        "line": "LINE_2",
+        "event": "BOARDING",
+        "station": "\uc0ac\ub2f9",
+        "ordinal": 0,
+        "trainNumber": "2434",
+        "predictedAt": "2026-11-20T11:38:30Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "2434",
+          "UP",
+          "LOCAL",
+          "\uc2e0\ub3c4\ub9bc",
+          "\uc0ac\ub2f9",
+          "\uc2e0\ub9bc"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-8.json"
+      },
+      {
+        "at": "2026-11-20T11:37:15+00:00",
+        "line": "LINE_4",
+        "event": "ALIGHTING",
+        "station": "\uc0ac\ub2f9",
+        "ordinal": 3,
+        "trainNumber": "4685",
+        "predictedAt": "2026-11-20T11:34:00Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "4685",
+          "DOWN",
+          "LOCAL",
+          "\uc624\uc774\ub3c4",
+          "\ub178\uc6d0",
+          "\uc0ac\ub2f9"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-9.json"
+      },
+      {
+        "at": "2026-11-20T11:38:15+00:00",
+        "line": "LINE_2",
+        "event": "BOARDING",
+        "station": "\uc0ac\ub2f9",
+        "ordinal": 1,
+        "trainNumber": "2434",
+        "predictedAt": "2026-11-20T11:38:30Z",
+        "evaluation": 1,
+        "serviceIdentity": [
+          "2026-11-20",
+          "2434",
+          "UP",
+          "LOCAL",
+          "\uc2e0\ub3c4\ub9bc",
+          "\uc0ac\ub2f9",
+          "\uc2e0\ub9bc"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-10.json"
+      },
+      {
+        "at": "2026-11-20T11:47:00+00:00",
+        "line": "LINE_2",
+        "event": "BOARDING",
+        "station": "\uc0ac\ub2f9",
+        "ordinal": 2,
+        "trainNumber": "2438",
+        "predictedAt": "2026-11-20T11:45:30Z",
+        "evaluation": 2,
+        "serviceIdentity": [
+          "2026-11-20",
+          "2438",
+          "UP",
+          "LOCAL",
+          "\uc131\uc218",
+          "\uc0ac\ub2f9",
+          "\uc2e0\ub9bc"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-11.json"
+      },
+      {
+        "at": "2026-11-20T11:48:45+00:00",
+        "line": "LINE_2",
+        "event": "BOARDING",
+        "station": "\uc0ac\ub2f9",
+        "ordinal": 3,
+        "trainNumber": "2438",
+        "predictedAt": "2026-11-20T11:45:30Z",
+        "evaluation": 2,
+        "serviceIdentity": [
+          "2026-11-20",
+          "2438",
+          "UP",
+          "LOCAL",
+          "\uc131\uc218",
+          "\uc0ac\ub2f9",
+          "\uc2e0\ub9bc"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-12.json"
+      },
+      {
+        "at": "2026-11-20T11:51:00+00:00",
+        "line": "LINE_2",
+        "event": "ALIGHTING",
+        "station": "\uc2e0\ub9bc",
+        "ordinal": 0,
+        "trainNumber": "2438",
+        "predictedAt": "2026-11-20T11:53:00Z",
+        "evaluation": 2,
+        "serviceIdentity": [
+          "2026-11-20",
+          "2438",
+          "UP",
+          "LOCAL",
+          "\uc131\uc218",
+          "\uc0ac\ub2f9",
+          "\uc2e0\ub9bc"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-13.json"
+      },
+      {
+        "at": "2026-11-20T11:52:45+00:00",
+        "line": "LINE_2",
+        "event": "ALIGHTING",
+        "station": "\uc2e0\ub9bc",
+        "ordinal": 1,
+        "trainNumber": "2438",
+        "predictedAt": "2026-11-20T11:53:00Z",
+        "evaluation": 3,
+        "serviceIdentity": [
+          "2026-11-20",
+          "2438",
+          "UP",
+          "LOCAL",
+          "\uc131\uc218",
+          "\uc0ac\ub2f9",
+          "\uc2e0\ub9bc"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-14.json"
+      },
+      {
+        "at": "2026-11-20T11:54:30+00:00",
+        "line": "LINE_2",
+        "event": "ALIGHTING",
+        "station": "\uc2e0\ub9bc",
+        "ordinal": 2,
+        "trainNumber": "2438",
+        "predictedAt": "2026-11-20T11:53:00Z",
+        "evaluation": 3,
+        "serviceIdentity": [
+          "2026-11-20",
+          "2438",
+          "UP",
+          "LOCAL",
+          "\uc131\uc218",
+          "\uc0ac\ub2f9",
+          "\uc2e0\ub9bc"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-15.json"
+      },
+      {
+        "at": "2026-11-20T11:56:15+00:00",
+        "line": "LINE_2",
+        "event": "ALIGHTING",
+        "station": "\uc2e0\ub9bc",
+        "ordinal": 3,
+        "trainNumber": "2438",
+        "predictedAt": "2026-11-20T11:53:00Z",
+        "evaluation": 3,
+        "serviceIdentity": [
+          "2026-11-20",
+          "2438",
+          "UP",
+          "LOCAL",
+          "\uc131\uc218",
+          "\uc0ac\ub2f9",
+          "\uc2e0\ub9bc"
+        ],
+        "status": "RECORDED",
+        "evidenceFile": "train-position-16.json"
+      }
+    ],
+    "publicRequeryComparison": {
+      "independentJourneysWithScoredEvent": 0,
+      "eventComparisonCounts": {
+        "NO_PRE_EVENT_PUBLICATION_PROOF": 4,
+        "DIFFERENT_TRAIN_OR_SERVICE": 4
+      }
+    }
+  },
+  "backendSourceSnapshot": {
+    "path": "/private/tmp/nolate-be-planned-build.y02tjk2g",
+    "etaSourcesIdenticalAtLaunch": true,
+    "sourceSha256": {
+      "src/main/kotlin/com/noLate/eta/resilience/EtaProviderEndpointValidator.kt": "9e5ec431899d2d0a44b99b4b9dae0279d94e9a9a3bf4d6cd99758d05a4128771",
+      "src/main/kotlin/com/noLate/eta/resilience/EtaSoftDeadline.kt": "e6624dc816453ca100bfc0225814f3fae6fa5dbac57782cf4135d9b292cbc64f",
+      "src/main/kotlin/com/noLate/eta/resilience/EtaDeadlineAwareClientHttpRequestFactory.kt": "0e4ffddabec134d13788bbcf175a0e64d72d894dd6e86027d26928953b776516",
+      "src/main/kotlin/com/noLate/eta/resilience/EtaProviderResilience.kt": "5a3694960d2cb98dbe61e884724264d4af9ba583d225613d728a5b0305fa4bbd",
+      "src/main/kotlin/com/noLate/eta/resilience/EtaResilienceConfiguration.kt": "284f098a60667c165d84fd5140519a212492a28eafb4c3207d48f02689f024d8",
+      "src/main/kotlin/com/noLate/eta/application/TransitEtaCalculationService.kt": "5ebf9632bdec94f99eec05792ad34133a5fbb7be827acf8af54047f9acae32b8",
+      "src/main/kotlin/com/noLate/eta/application/TransitRouteIdentity.kt": "64b53b610d0cc929b13c31b3ec6b4e7b0ee818c49bd870d113e9378b6ef46e35",
+      "src/main/kotlin/com/noLate/eta/domain/TransitWalking.kt": "2d2c4f7d1bb5a066f98fd2dd9ffd75b93374ffd4980a5bdae980b1cc8c323cb2",
+      "src/main/kotlin/com/noLate/eta/domain/TransitTrainPosition.kt": "bd6b5d33e88f06440641bfbe2b74d9a76848afb851fc8860dc35e71cf0209bcd",
+      "src/main/kotlin/com/noLate/eta/domain/TransitFirstBoardingObservation.kt": "c1b422569375573fbca882e2794a9d7102d4811c1c4ece96265d843faeb0f9cf",
+      "src/main/kotlin/com/noLate/eta/domain/TransitLegTimetable.kt": "02dc2cfc11390e3733717a2e6ff4c62cd6419074e20f6c63115a2619952382d9",
+      "src/main/kotlin/com/noLate/eta/domain/TransitJourney.kt": "210feafe05e21a84f6482aa9188f8d0e31f49a19c98767fe31f1dae211f8be34",
+      "src/main/kotlin/com/noLate/eta/infrastructure/tmap/TmapTransitJourneyProvider.kt": "c96ea8fc6c6da2f8db3a215b8d8641fbcd5dfc2fa3e7b2e699fb787ded6215f7",
+      "src/main/kotlin/com/noLate/eta/infrastructure/tmap/TmapWalkingPathEvidenceDecoder.kt": "98998e46aa2cad4354184836ae90898230695b3193daffd6ee2be5af2dd6746a",
+      "src/main/kotlin/com/noLate/eta/infrastructure/tmap/TmapTransitJourneyMapper.kt": "6d54518b68dcbe144b6bbe290285b58f3c3e140a5c45a7de113888c2326e5f23",
+      "src/main/kotlin/com/noLate/eta/infrastructure/seoul/SeoulTransitTimetableProvider.kt": "63e0b654eca124ec0b1a1dd6a49cb51d5f892bf178edafa9e34a1c6d30a51787",
+      "src/main/kotlin/com/noLate/eta/infrastructure/seoul/SeoulTimetableServiceDayResolver.kt": "fcdd65b5e234b76b0b0b30dd239dc2fd9bf7341f394efa9b2805a44a4540402f",
+      "src/main/kotlin/com/noLate/eta/infrastructure/seoul/SeoulTrainPositionClient.kt": "23dd10d2f677f324834f5392dffc1af7e3762475beecd523e6bb8ac736bb32d8",
+      "src/main/kotlin/com/noLate/eta/infrastructure/seoul/SeoulTransferReferenceCatalog.kt": "767506482ac6a7e85306277e50bf167d6903746ac4b546a6f75b02958a7a547e",
+      "src/main/kotlin/com/noLate/eta/infrastructure/odsay/OdsayWalkingTimeClient.kt": "14f7891a377a18264a54d50bd061ea974b11c7aad50a60083f675b75a12030b1",
+      "src/main/kotlin/com/noLate/eta/infrastructure/odsay/OdsayTransitJourneyClient.kt": "2a0dcb6acf5b589f04b19594495e1aae66f1682993c3b0f2813434bc26cd95c8",
+      "src/main/kotlin/com/noLate/eta/infrastructure/odsay/OdsayTransitJourneyMapper.kt": "290f5060d0800797f5ba49d4e97f9301510f15a60c4c2c51845d3198f8fddbe8",
+      "src/main/kotlin/com/noLate/eta/infrastructure/odsay/OdsayWalkingDecoder.kt": "bb137a6fca4363d7626bf629b7c7ab2386cc232a9f9d2e6c386adf53c1742ca0",
+      "src/main/kotlin/com/noLate/eta/infrastructure/routejson/SelectedTransitRouteDecoder.kt": "7366f24340b4f805b0e5c5aaee23c11bfa65295bbef36a6807be46caf109f394",
+      "src/main/kotlin/com/noLate/eta/application/transit/TransitJourneyTimetableEnricher.kt": "b9e270c713bb823f2750782ecbfda7a0808d58286f56036fd5e75ef9b0e665f4",
+      "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": "f210a8be3d3dfae96eaf9f9ddd9998099492efae35ca1e8c1e2da867dca6498e",
+      "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferFeasibilityEvaluator.kt": "f06d955d474874b9098d05aa8adc994dfc1d3391dd8c26f6178a30014a6c92da",
+      "src/main/kotlin/com/noLate/eta/application/transit/TransitRideArrivalPredictor.kt": "3cb92bfebbc5c7b04cc32658b57162bd70bd95a55e050c77d3ec088d67a32f8a",
+      "src/main/kotlin/com/noLate/eta/application/transit/SafeDepartureResolver.kt": "abc0b4c1e6208b392d629fdb7d6a92ccfb6fca9005995c2c11333369b056f0ad",
+      "src/main/kotlin/com/noLate/eta/application/transit/TransitWalkingTimeEnricher.kt": "51aa932e924d988c5237e8dd078c30d154719ef4f4dd8b2e87fe9d5bb420e2ec",
+      "src/main/kotlin/com/noLate/eta/application/transit/SeoulBusEta.kt": "cfffb3239d14b3629e0e41cf31444d4f4aa343b7221d42ddf29b73c102448787",
+      "src/main/kotlin/com/noLate/eta/application/transit/FirstBoardingRealtimeOverlay.kt": "b7beaad5f9ae6520011546fb4553538fc9dd65e608b52a2066502091457178e2",
+      "src/main/kotlin/com/noLate/eta/application/transit/ObservedFirstBoardingDepartureProjector.kt": "65943e26e9f68227a2c81ee4c024a53313a148ad0a092dbfb6b408442a83b74c",
+      "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "4ea2f4613318b2f038645f9b93ce5cbabc26166c1b07da0b44ccf72a791e1951",
+      "src/main/kotlin/com/noLate/eta/application/transit/TransitJourneyMatcher.kt": "37b455b1f5ad605edf6691b4d4f9ae2dd78d396080d8b029fe1aacbcc895d250",
+      "src/main/kotlin/com/noLate/eta/application/port/TransitJourneyProvider.kt": "7bcb899492517a415d86c6ff9dce4b0e9caaae8aa64b29a21c3354d45075e7a4",
+      "src/main/kotlin/com/noLate/eta/application/port/TransitTimetableProvider.kt": "8f9fedf99d4343e08bf1675e44c587c0fd2177ee5cf51d53a92f98caa5d82064",
+      "src/main/kotlin/com/noLate/eta/application/port/TransitWalkingTimeProvider.kt": "799266042bba1eebc243493979eac3ceac93e4dc006082bca80c2216eb1fe793",
+      "src/main/kotlin/com/noLate/eta/application/port/TransitTrainPositionProvider.kt": "04190732edf6e7e4390eb11e0eccc38a96ff10b58253c55cf81a415480d4495d",
+      "src/main/kotlin/com/noLate/schedule/application/TrafficClient.kt": "2ef6aca709f9b4d1039d1b92dd4545b3b38b646c80d1e25ccafc87606e20dfe8",
+      "src/main/kotlin/com/noLate/schedule/application/ObservedTransitSubwayService.kt": "772816c013978859d7e57e7836b331d1b5ab4d06a8082b37aefd0df0d8577e5d",
+      "src/main/kotlin/com/noLate/schedule/application/ReportedSubwayBoardingEvidence.kt": "6ed9c6c6261a07a9c3a167cd0cae587b9d0e85310c737f67cae766e8ac6158c4",
+      "src/main/kotlin/com/noLate/schedule/application/TransitTimetablePlanEvidence.kt": "247a39c709d7db312bd4be4d4328e11cf135717fbfadc65c1831a74881bbbe4f",
+      "src/main/kotlin/com/noLate/schedule/application/EffectiveTransitRouteSnapshot.kt": "f3a7ea034127d7a6ae191c2bb02e74b160f9d44bc7f0b5daf6b2b01bd81ae088",
+      "src/main/kotlin/com/noLate/schedule/application/PlannedTransitRouteUpdate.kt": "9ac4c59071af01e1f2b531d074cbd80832c3d3cb3905058c1504d1e5ba4dc9ef",
+      "src/main/kotlin/com/noLate/schedule/application/TimetableDeparturePlanPolicy.kt": "3bccad8cb0cd578e42f3dea87e6e32a5caaed2274c6a1a54df6de91cea60a34a",
+      "src/main/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorker.kt": "8d8aa9c5d5da404b3cdd5693dc1bb97c749508271c867153a2e72a19e27a1a45",
+      "src/main/kotlin/com/noLate/schedule/application/service/policy/PlannedTransitRefreshCadencePolicy.kt": "4527757c98a5732b9e4fdaf042a6c8f1dd37c484f33a40161445188b43ca5543",
+      "src/main/kotlin/com/noLate/schedule/application/service/ScheduleDepartureEtaService.kt": "2c13a70dca8e3497757baf8ddf466e419603d536739df453468ce07a4bdf0c40",
+      "src/main/kotlin/com/noLate/schedule/domain/ScheduleEta.kt": "b9e76d0fd0d19066f97acd3589be6e6b62595d978ce0fd1b74d8f5b300cb96b5",
+      "src/main/kotlin/com/noLate/transit/infrastructure/SeoulTransitArrivalClient.kt": "7490c127f08b2ed963681fe163d46d063280a467d9f6297b389f3ae6d797c1c4",
+      "src/test/kotlin/com/noLate/eta/simulator/EtaRealProviderSimulatorServer.kt": "eb1172d3fb22c0f783330e4c1f6645a0b8fb5d240821304c468b3612e1877908",
+      "src/test/kotlin/com/noLate/eta/simulator/RealPlannedRouteRefreshTrace.kt": "b3039341e51a0244cd564213de6758827ae47793526ccbca5b17dda2223e2d38",
+      "src/test/kotlin/com/noLate/eta/simulator/RealFutureTimetablePlanTrace.kt": "cae04b958401b613bb4a4e2de954f140eae19fdb071dfb46446e78a0657f8e32",
+      "src/test/kotlin/com/noLate/eta/simulator/ReplayRecordedPlannedRefresh.kt": "66defa4a61a5bee74b77eae4bb5d18fa778891c2bc09a89407c2105a847c51b9",
+      "src/test/kotlin/com/noLate/eta/simulator/RealPlannedRideObservationTrace.kt": "a6fd626e59590198a115d56a5411a353abde0697487fb5bf8b2ac0cf41c6dca5",
+      "src/test/kotlin/com/noLate/eta/simulator/RealTimetableSelectionTrace.kt": "f74f8d26202d3f7f89a0902f17375f4a796349991c9d59d442540066261d45ff",
+      "src/test/kotlin/com/noLate/eta/simulator/RealOdsaySelectedRouteFixture.kt": "683a170ae38d0b931dc83282023cea9007f7c045dfc717c08216528816b96613"
+    }
+  },
+  "odsaySeedRequestedDepartureAt": "2026-11-20T10:40:00Z",
+  "startupTransport": {
+    "classification": "PINNED_XCTEST_LIFECYCLE_TRANSPORT_ONLY",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "appDataDeleted": false,
+    "otherDevicesTouched": false,
+    "restoringOriginalEndpoint": false,
+    "etaValidated": false,
+    "result": "PASSED",
+    "evidenceRoot": "/private/tmp/nolate-eta-real-e2e._u61kjyy/ui-private-lifecycle"
+  },
+  "sameTrainProvisionalOnly": true,
+  "plannedFallbackUiVerified": true,
+  "audit": {
+    "result": "PARTIAL",
+    "classification": "REAL_PROVIDER_POSTDEPARTURE_OBSERVED_SERVICE_CONNECTION_NOT_PHYSICAL_TRIP",
+    "evaluationCount": 3,
+    "departureRecommendationUnchanged": true,
+    "finalAlightingForecastVerified": false,
+    "physicalArrivalMeasured": false,
+    "observedServiceApiAndAppVerified": false,
+    "automaticAlarmStateAbsent": true,
+    "nativeAlarmDeliveryTested": false
+  },
+  "endpointRestoreRequired": true,
+  "originalAppEndpointRestored": true,
+  "workerAndAppResult": "PARTIAL"
+}
