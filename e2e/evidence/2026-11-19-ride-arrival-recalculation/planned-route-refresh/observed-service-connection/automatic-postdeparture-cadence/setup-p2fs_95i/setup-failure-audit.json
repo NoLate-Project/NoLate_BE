@@ -1,0 +1,10 @@
+{
+  "classification": "SETUP_FAILURE_BEFORE_PROVIDER_START",
+  "failure": "NoSuchFileException opening env.local.properties at server line163 before HTTP clients or Spring start",
+  "publicProviderCalls": 0,
+  "etaEvaluations": 0,
+  "appScenarioStarted": false,
+  "credentialsCopied": false,
+  "fix": "Use the authorized BE runtime directory with the frozen classpath, as the real isolated runner already does.",
+  "originalReportPreserved": true
+}

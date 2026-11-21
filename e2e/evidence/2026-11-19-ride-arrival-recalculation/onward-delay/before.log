@@ -1,0 +1,60 @@
+> Task :checkKotlinGradlePluginConfigurationErrors
+> Task :kaptGenerateStubsKotlin UP-TO-DATE
+> Task :kaptKotlin UP-TO-DATE
+> Task :compileKotlin UP-TO-DATE
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :kaptGenerateStubsTestKotlin UP-TO-DATE
+> Task :kaptTestKotlin UP-TO-DATE
+> Task :compileTestKotlin UP-TO-DATE
+> Task :compileTestJava NO-SOURCE
+> Task :processTestResources UP-TO-DATE
+> Task :testClasses UP-TO-DATE
+OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+
+> Task :test
+
+TransitEtaCalculationServiceTest > 두 번째 승차의 하차 지연 뒤 재연결한 세 번째 열차에 이전 편 관측을 섞지 않는다(boolean) > [1] obsoleteLastObservation=false FAILED
+    org.opentest4j.AssertionFailedError: expected: <true> but was: <false>
+        at app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+        at app//org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+        at app//org.junit.jupiter.api.AssertTrue.failNotTrue(AssertTrue.java:63)
+        at app//org.junit.jupiter.api.AssertTrue.assertTrue(AssertTrue.java:36)
+        at app//org.junit.jupiter.api.AssertTrue.assertTrue(AssertTrue.java:31)
+        at app//org.junit.jupiter.api.Assertions.assertTrue(Assertions.java:183)
+        at app//com.noLate.eta.application.TransitEtaCalculationServiceTest.두 번째 승차의 하차 지연 뒤 재연결한 세 번째 열차에 이전 편 관측을 섞지 않는다(TransitEtaCalculationServiceTest.kt:1141)
+
+TransitEtaCalculationServiceTest > 두 번째 승차의 하차 지연 뒤 재연결한 세 번째 열차에 이전 편 관측을 섞지 않는다(boolean) > [2] obsoleteLastObservation=true FAILED
+    org.opentest4j.AssertionFailedError: expected: <true> but was: <false>
+        at app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+        at app//org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+        at app//org.junit.jupiter.api.AssertTrue.failNotTrue(AssertTrue.java:63)
+        at app//org.junit.jupiter.api.AssertTrue.assertTrue(AssertTrue.java:36)
+        at app//org.junit.jupiter.api.AssertTrue.assertTrue(AssertTrue.java:31)
+        at app//org.junit.jupiter.api.Assertions.assertTrue(Assertions.java:183)
+        at app//com.noLate.eta.application.TransitEtaCalculationServiceTest.두 번째 승차의 하차 지연 뒤 재연결한 세 번째 열차에 이전 편 관측을 섞지 않는다(TransitEtaCalculationServiceTest.kt:1141)
+
+2 tests completed, 2 failed
+
+> Task :test FAILED
+
+[Incubating] Problems report is available at: file:///Users/mac/IdeaProjects/NoLate/NoLate_BE/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///Users/mac/IdeaProjects/NoLate/NoLate_BE/build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get full insights.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 6s
+11 actionable tasks: 2 executed, 9 up-to-date

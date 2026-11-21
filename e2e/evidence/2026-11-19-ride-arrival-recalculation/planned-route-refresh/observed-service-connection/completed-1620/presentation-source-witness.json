@@ -1,0 +1,12 @@
+{
+  "classification": "CURRENT_NATIVE_PRESENTATION_SOURCE_WITNESS_NOT_LIVE_ACCURACY",
+  "capturedAt": "2026-11-20T07:24:46.484053+00:00",
+  "note": "Compare these source hashes after the ongoing run; do not assume another session has not changed the worktree.",
+  "sourceSha256": {
+    "src/routeSupport/schedule/scheduleDetailPresentationModel.ts": "49e8a30b9882fc1460a6ff5e361260aaa240f2757a3e415d867aebcaa5b8786b",
+    "src/modules/schedule/transitEtaTrustPresentation.ts": "e35f0fe92e9dc3a4d69e8f8f76e400dd8e927446e76ccee9e04863fa11b70668",
+    "src/modules/schedule/effectiveTransitRoutePresentation.ts": "01188d32827f584431448528c1dd22554e4865cd4f08f60d1b2bb7bd211dffe5",
+    "src/modules/schedule/matchedTransitTimeline.ts": "cb565f648c00a8ac8fdfc64c276abea5fe6eaab8153283ef85e3931c531056d5",
+    "src/routeSupport/schedule/ScheduleDetailRouteQuickSummary.tsx": "31212b39b40761ee81ec5beab597eeb0e59f62e84818682cecd1de0f9a17aa77"
+  }
+}

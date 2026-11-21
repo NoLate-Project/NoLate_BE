@@ -1,0 +1,12 @@
+{
+  "classification": "READ_ONLY_RECORDED_FUTURE_BOARDING_FORECAST_AVAILABILITY_NOT_A_NEW_MODEL",
+  "rootsReferenced": 20,
+  "distinctCapturedRefreshFrames": 10,
+  "freshEndpointRows": 20,
+  "reachableFutureBoardingRowsForOtherRawVehicles": 5,
+  "temporalPairs": [],
+  "additionalHttpCalls": 0,
+  "changedProductionLogic": false,
+  "historicalForecastWasNotPromotedToArrivedState": true,
+  "accuracySamplesAdded": 0
+}

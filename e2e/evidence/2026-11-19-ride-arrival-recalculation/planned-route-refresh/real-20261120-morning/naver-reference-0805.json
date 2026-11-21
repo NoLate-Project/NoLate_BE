@@ -1,0 +1,128 @@
+{
+  "comparisonType": "PUBLIC_UI_SAME_COORDINATES_AND_DISPLAYED_DEPARTURE_MINUTE",
+  "observedArtifacts": {
+    "eta-naver-0805.txt": {
+      "sha256": "71f451e3fa8a12251f335f71a0516f347459c2605585cc540ed2e1b31bbe914b",
+      "artifactSavedAt": "2026-11-19T23:05:15.674648+00:00"
+    },
+    "eta-naver-0805-detail.txt": {
+      "sha256": "ce261ebd1b9a61d2ea806952c8bf46c07d89d7155c11f7a18ec69f97580ee0ad",
+      "artifactSavedAt": "2026-11-19T23:05:58.265581+00:00"
+    }
+  },
+  "requestedCoordinates": {
+    "origin": {
+      "lat": 37.65636195,
+      "lng": 127.06342739
+    },
+    "destination": {
+      "lat": 37.48426844,
+      "lng": 126.92977778
+    }
+  },
+  "publicQueryDisplayedDepartureAt": "2026-11-19T23:05:00Z",
+  "publicDepartureInputMethod": "Actual Now departure button at 08:05. The minute picker offers ten-minute entries. No page state or response was replaced.",
+  "publicQuerySecondsVisible": false,
+  "appInitialRouteQueryDepartureAt": "2026-11-19T23:15:00Z",
+  "appCalculatedDoorDepartureAt": "2026-11-19T23:05:00Z",
+  "appPlanSource": "TIMETABLE_PROVIDER",
+  "appStale": true,
+  "appFailureReason": "TRANSIT_TRAIN_NOT_YET_OBSERVED: 시간표의 미래 열차가 현재 실시간 목록에서 아직 확인되지 않았습니다.",
+  "naverDisplayedDoorDepartureAt": "2026-11-19T23:06:00Z",
+  "naverDisplayedFinalArrivalAt": "2026-11-20T00:07:00Z",
+  "appPredictedFinalArrivalAt": "2026-11-20T00:11:43Z",
+  "appMinusNaverDisplayedFinalSeconds": 283,
+  "naverDisplayPrecision": "minute; rounding rule unobserved",
+  "naverDisplayedTotalMinutes": 61,
+  "naverTransferWalkDisplayedMinutes": 2,
+  "naverVisibleBoardingTimes": [
+    "2026-11-19T23:06:00Z",
+    "2026-11-19T23:59:00Z"
+  ],
+  "naverFirstTerminal": "오이도",
+  "appRideTimings": [
+    {
+      "timetable": {
+        "provider": "seoul-timetable",
+        "line": "LINE_4",
+        "serviceDate": "2026-11-20",
+        "trainNumber": "4041",
+        "directionCode": "DOWN",
+        "serviceClass": "LOCAL",
+        "fromStationCode": "0411",
+        "toStationCode": "0433",
+        "terminalName": "사당",
+        "boardingAt": "2026-11-19T23:09:30Z",
+        "arrivalAt": "2026-11-19T23:57:30Z",
+        "fetchedAt": "2026-11-19T23:02:46.299090Z",
+        "realtimeTrainNumber": null,
+        "boardingStationArrivalAt": "2026-11-19T23:09:00Z"
+      },
+      "predictedBoardingAt": "2026-11-19T23:09:30Z",
+      "predictedArrivalAt": "2026-11-19T23:57:30Z",
+      "basis": "TIMETABLE",
+      "observationSourceUpdatedAt": null,
+      "plannedBoardingIsStationArrival": null,
+      "boardingObservationSourceUpdatedAt": null
+    },
+    {
+      "timetable": {
+        "provider": "seoul-timetable",
+        "line": "LINE_2",
+        "serviceDate": "2026-11-20",
+        "trainNumber": "2118",
+        "directionCode": "UP",
+        "serviceClass": "LOCAL",
+        "fromStationCode": "0226",
+        "toStationCode": "0230",
+        "terminalName": "성수",
+        "boardingAt": "2026-11-20T00:03:00Z",
+        "arrivalAt": "2026-11-20T00:10:30Z",
+        "fetchedAt": "2026-11-19T23:02:46.731758Z",
+        "realtimeTrainNumber": null,
+        "boardingStationArrivalAt": "2026-11-20T00:02:00Z"
+      },
+      "predictedBoardingAt": "2026-11-20T00:03:00Z",
+      "predictedArrivalAt": "2026-11-20T00:10:30Z",
+      "basis": "TIMETABLE",
+      "observationSourceUpdatedAt": null,
+      "plannedBoardingIsStationArrival": null,
+      "boardingObservationSourceUpdatedAt": null
+    }
+  ],
+  "appWalks": [
+    {
+      "scope": "ACCESS",
+      "seconds": 137,
+      "source": "ODSAY_ENTRANCE_WALK_SECONDS"
+    },
+    {
+      "scope": "TRANSFER",
+      "seconds": 157,
+      "source": "ODSAY_FULL_PATH_SECONDS"
+    },
+    {
+      "scope": "EGRESS",
+      "seconds": 73,
+      "source": "ODSAY_EXIT_WALK_SECONDS"
+    }
+  ],
+  "sameTopology": true,
+  "topology": [
+    "노원 4호선",
+    "사당 2호선",
+    "신림"
+  ],
+  "withinFiveMinutesOfAppEvaluation": true,
+  "normalRealtimeAccepted": false,
+  "eligibleForWholeTripAccuracy": false,
+  "exclusions": [
+    "ACCESS_EGRESS_SCOPE_DIFFERS_OR_IS_NOT_EXPLICIT_IN_NAVER_DETAIL",
+    "NAVER_QUERY_SECOND_COMPONENT_UNOBSERVED"
+  ],
+  "samePhysicalFirstTrain": false,
+  "samePhysicalFirstTrainReason": "App first timetable terminal is Sadang with boarding 08:09:30. Naver first terminal is Oido with boarding 08:06.",
+  "actualPassengerArrivalObserved": false,
+  "newIndependentJourneys": 1,
+  "strictComparableJourneys": 0
+}

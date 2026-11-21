@@ -1,0 +1,14 @@
+{
+  "classification": "EXACT_RECORDED_CALCULATION_RESULT_POLICY_REPLAY_NOT_ROUTING_OR_ARRIVAL_ACCURACY",
+  "inputSha256": "c6a9b466ed174011b200bcf17b1fceadc365289f3f4dba6221a1570d562a0b79",
+  "identicalRecordedInputForBoth": true,
+  "oldSchemaIgnoresNewOptionalMetadata": true,
+  "additionalHttpCalls": 0,
+  "scope": "Persistence plan selection from the exact captured calculation result; not full routing replay or arrival accuracy",
+  "beforeDeparture": "2026-11-20T10:31:00Z",
+  "afterDeparture": "2026-11-20T10:40:00Z",
+  "afterArrival": "2026-11-20T11:47:13Z",
+  "currentDiagnosticUnchanged": true,
+  "realtimeAcceptanceStillFalse": true,
+  "result": "PAIRED_PLAN_PRESERVATION_CHANGED"
+}

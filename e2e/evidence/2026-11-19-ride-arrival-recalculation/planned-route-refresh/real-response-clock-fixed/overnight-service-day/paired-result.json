@@ -1,0 +1,76 @@
+{
+  "classification": "POSTMIDNIGHT_ADAPTER_REPLAY_NORMALIZED_CAPTURE_LOCAL_ENVELOPES",
+  "outcomes": {
+    "before": {
+      "cases": {
+        "saved_timetable": [],
+        "if_rejected_first_estimate_used": []
+      },
+      "checkedDays": [],
+      "localHttpResponses": 0,
+      "adapterClassSha256": "5797f9b2abb6fb14c99f156c6e40c71261029049904cec34daa293e8cf40e0bf"
+    },
+    "after": {
+      "cases": {
+        "saved_timetable": [
+          {
+            "boardingAt": "2026-11-19T15:10:30Z",
+            "arrivalAt": "2026-11-19T15:18:00Z",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "2510"
+          },
+          {
+            "boardingAt": "2026-11-19T15:19:30Z",
+            "arrivalAt": "2026-11-19T15:27:00Z",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "2512"
+          },
+          {
+            "boardingAt": "2026-11-19T15:31:30Z",
+            "arrivalAt": "2026-11-19T15:39:00Z",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "2514"
+          },
+          {
+            "boardingAt": "2026-11-19T15:43:30Z",
+            "arrivalAt": "2026-11-19T15:51:00Z",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "2516"
+          }
+        ],
+        "if_rejected_first_estimate_used": [
+          {
+            "boardingAt": "2026-11-19T15:19:30Z",
+            "arrivalAt": "2026-11-19T15:27:00Z",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "2512"
+          },
+          {
+            "boardingAt": "2026-11-19T15:31:30Z",
+            "arrivalAt": "2026-11-19T15:39:00Z",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "2514"
+          },
+          {
+            "boardingAt": "2026-11-19T15:43:30Z",
+            "arrivalAt": "2026-11-19T15:51:00Z",
+            "serviceDate": "2026-11-19",
+            "trainNumber": "2516"
+          }
+        ]
+      },
+      "checkedDays": [
+        "2026-11-19",
+        "2026-11-19"
+      ],
+      "localHttpResponses": 4,
+      "adapterClassSha256": "3306339a89634cafb062d262f29fc796be0930d32b3dbfd106c5a616f78e38d2"
+    }
+  },
+  "inputSha256": "e5699720f494c1953180aef3e89363113c0df3dbce757ebfb8d5be8f249c2465",
+  "publicHttpCalls": 0,
+  "exactProviderRawBodyReplayed": false,
+  "actualNightRunLookedUpOnwardTimetableAfterMidnight": false,
+  "observedRidePerformanceVerified": false,
+  "physicalArrivalVerified": false
+}

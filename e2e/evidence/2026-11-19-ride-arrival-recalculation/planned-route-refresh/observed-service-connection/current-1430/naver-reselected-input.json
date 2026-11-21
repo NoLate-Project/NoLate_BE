@@ -1,0 +1,18 @@
+{
+  "classification": "PUBLIC_NAVER_UI_RESELECTED_FUTURE_INPUT_AFTER_REFRESH_RESET",
+  "observedAt": "2026-11-20T05:31:00.303Z",
+  "workerEvaluatedAt": "2026-11-20T05:30:04.210864Z",
+  "observationGapSeconds": 56.092136,
+  "requestedDepartureAt": "2026-11-20T14:40:00+09:00",
+  "visibleFirstBoardingMinute": "14:42",
+  "visibleArrivalMinute": "15:41",
+  "topology": "노원4호선→사당환승→신림2호선",
+  "publicUIOnly": true,
+  "secondsHidden": true,
+  "trainIdentifierHidden": true,
+  "sameWalkingScopeVerified": false,
+  "strictAccuracySampleIncluded": false,
+  "refreshResetAt": "2026-11-20T05:29:34.457Z",
+  "resetQueryExcludedBecauseInputChangedTo": "14:29",
+  "derivedReport": "same-input-future-stage-comparison-v2.json"
+}

@@ -1,0 +1,70 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :checkKotlinGradlePluginConfigurationErrors
+> Task :processResources UP-TO-DATE
+> Task :processTestResources UP-TO-DATE
+> Task :kaptGenerateStubsKotlin
+> Task :kaptKotlin UP-TO-DATE
+> Task :compileKotlin UP-TO-DATE
+> Task :compileJava UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :kaptGenerateStubsTestKotlin
+> Task :kaptTestKotlin UP-TO-DATE
+> Task :compileTestKotlin
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/SchedulingConfigurationTest.kt:37:34 'getter for isRemoveOnCancelPolicy: Boolean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/auth/apple/AppleAccountLifecycleIntegrationTest.kt:35:51 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/auth/apple/AppleAccountLifecycleIntegrationTest.kt:73:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/auth/apple/AppleAccountLifecycleIntegrationTest.kt:76:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/eta/resilience/EtaCalculationDeadlineTest.kt:23:17 The expression is unused
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/eta/resilience/EtaProviderGuardTest.kt:39:50 The expression is unused
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/eta/resilience/EtaProviderGuardTest.kt:142:50 The expression is unused
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/eta/resilience/EtaProviderGuardTest.kt:302:21 The expression is unused
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/journey/automatic/JourneyActivityDurabilityTest.kt:43:59 Parameter 'f' is never used
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/journey/automatic/RealBusProductSimulatorServer.kt:287:81 Unnecessary non-null assertion (!!) on a non-null receiver of type Long
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/journey/automatic/SavedGuidanceFixture.kt:45:18 'fields(): (Mutable)Iterator<(Mutable)Map.(Mutable)Entry<String!, JsonNode!>!>!' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/journey/automatic/WalkingSnapshotDatabaseFixture.kt:85:69 'constructor TransactionInterceptor(PlatformTransactionManager, TransactionAttributeSource)' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberSessionGenerationIntegrationTest.kt:28:51 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberSessionGenerationIntegrationTest.kt:41:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:24:51 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:46:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:152:30 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:152:70 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:167:30 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:167:73 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:454:30 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:454:70 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:516:30 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseIntegrationTest.kt:516:68 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseUnitTest.kt:224:13 Variable 'snsLoginRequest' is never used
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseUnitTest.kt:455:13 Variable 'snsLoginRequest' is never used
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseUnitTest.kt:573:13 Variable 'stored' is never used
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseUnitTest.kt:629:13 Variable 'stored' is never used
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/member/application/MemberUseCaseUnitTest.kt:769:30 Unnecessary safe call on a non-null receiver of type String
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:383:38 Unnecessary safe call on a non-null receiver of type ScheduleEtaEvaluationHistory
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:384:37 Unnecessary safe call on a non-null receiver of type ScheduleEtaEvaluationHistory
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt:587:13 Variable 'currentRecommendedDepartureAt' is never used
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/ScheduleTravelPlanConcurrencyIntegrationTest.kt:26:51 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/ScheduleTravelPlanConcurrencyIntegrationTest.kt:63:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/ScheduleTravelPlanMySqlConcurrencyIntegrationTest.kt:28:51 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/service/ScheduleTravelPlanMySqlConcurrencyIntegrationTest.kt:80:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/useCase/ScheduleTravelPlanUseCaseRollbackIntegrationTest.kt:29:51 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/useCase/ScheduleTravelPlanUseCaseRollbackIntegrationTest.kt:58:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/useCase/ScheduleTravelPlanUseCaseRollbackIntegrationTest.kt:61:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/useCase/ScheduleTravelPlanUseCaseRollbackIntegrationTest.kt:64:6 'MockBean' is deprecated. Deprecated in Java
+w: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/src/test/kotlin/com/noLate/schedule/application/useCase/ScheduleTravelPlanUseCaseRollbackIntegrationTest.kt:67:6 'MockBean' is deprecated. Deprecated in Java
+
+> Task :compileTestJava NO-SOURCE
+> Task :testClasses UP-TO-DATE
+OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+> Task :test
+
+[Incubating] Problems report is available at: file:///private/tmp/nolate-be-expired-plan-build.4230w97s/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 1m 14s
+11 actionable tasks: 5 executed, 6 up-to-date

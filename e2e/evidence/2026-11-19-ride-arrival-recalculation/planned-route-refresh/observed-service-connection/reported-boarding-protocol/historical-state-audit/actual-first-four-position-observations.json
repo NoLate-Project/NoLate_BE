@@ -1,0 +1,249 @@
+{
+  "classification": "PARTIAL_READ_ONLY_4_OF_16_POSITION_OBSERVATIONS",
+  "evaluationCount": 1,
+  "providerCallsAdded": 0,
+  "audit": {
+    "events": [
+      {
+        "line": "LINE_4",
+        "event": "BOARDING",
+        "station": "노원",
+        "scheduledAt": "2026-11-20T10:46:00Z",
+        "predictedAt": "2026-11-20T10:46:00Z",
+        "trainNumbers": [
+          "4685"
+        ],
+        "direction": "DOWN",
+        "terminal": "오이도",
+        "serviceClass": "LOCAL",
+        "serviceDate": "2026-11-20",
+        "from": "2026-11-20T10:42:00.580230+00:00",
+        "until": "2026-11-20T10:49:20.230888+00:00",
+        "result": "NO_ARRIVAL_BOUND",
+        "freshMatchingRowsInKnownOrder": 1,
+        "lastConfirmedBeforeEventAt": "2026-11-20T10:48:48+00:00",
+        "departureObservation": {
+          "result": "NO_DEPARTURE_BOUND",
+          "freshMatchingRowsInKnownOrder": 1,
+          "lastConfirmedBeforeEventAt": "2026-11-20T10:48:48+00:00"
+        },
+        "predictionReferenceEvent": "DEPARTURE",
+        "observedMinusPredictionSeconds": null,
+        "minimumObservedMinusPredictionSeconds": 168.0,
+        "sameEventTimetableAt": "2026-11-20T10:46:00Z",
+        "absoluteErrorChangeFromTimetableSeconds": null,
+        "observedMinusSameEventTimetableSeconds": null,
+        "observedMinusTimetableSeconds": null,
+        "positionReadsRelativeToPrediction": {
+          "before": 2,
+          "atOrAfter": 2
+        }
+      },
+      {
+        "line": "LINE_4",
+        "event": "ALIGHTING",
+        "station": "사당",
+        "scheduledAt": "2026-11-20T11:34:00Z",
+        "predictedAt": "2026-11-20T11:34:00Z",
+        "trainNumbers": [
+          "4685"
+        ],
+        "direction": "DOWN",
+        "terminal": "오이도",
+        "serviceClass": "LOCAL",
+        "serviceDate": "2026-11-20",
+        "from": "2026-11-20T10:42:00.580230+00:00",
+        "until": "2026-11-20T10:49:20.230888+00:00",
+        "result": "NO_ARRIVAL_BOUND",
+        "freshMatchingRowsInKnownOrder": 1,
+        "lastConfirmedBeforeEventAt": "2026-11-20T10:48:48+00:00",
+        "predictionReferenceEvent": "ARRIVAL",
+        "observedMinusPredictionSeconds": null,
+        "minimumObservedMinusPredictionSeconds": -2712.0,
+        "sameEventTimetableAt": "2026-11-20T11:34:00Z",
+        "absoluteErrorChangeFromTimetableSeconds": null,
+        "observedMinusSameEventTimetableSeconds": null,
+        "observedMinusTimetableSeconds": null,
+        "positionReadsRelativeToPrediction": {
+          "before": 4,
+          "atOrAfter": 0
+        }
+      },
+      {
+        "line": "LINE_2",
+        "event": "BOARDING",
+        "station": "사당",
+        "scheduledAt": "2026-11-20T11:38:30Z",
+        "predictedAt": "2026-11-20T11:38:30Z",
+        "trainNumbers": [
+          "2434"
+        ],
+        "direction": "UP",
+        "terminal": "신도림",
+        "serviceClass": "LOCAL",
+        "serviceDate": "2026-11-20",
+        "from": "2026-11-20T11:36:30+00:00",
+        "until": "2026-11-20T11:38:35+00:00",
+        "result": "NO_ARRIVAL_BOUND",
+        "freshMatchingRowsInKnownOrder": 0,
+        "lastConfirmedBeforeEventAt": null,
+        "departureObservation": {
+          "result": "NO_DEPARTURE_BOUND",
+          "freshMatchingRowsInKnownOrder": 0,
+          "lastConfirmedBeforeEventAt": null
+        },
+        "predictionReferenceEvent": "DEPARTURE",
+        "observedMinusPredictionSeconds": null,
+        "minimumObservedMinusPredictionSeconds": null,
+        "sameEventTimetableAt": "2026-11-20T11:38:30Z",
+        "absoluteErrorChangeFromTimetableSeconds": null,
+        "observedMinusSameEventTimetableSeconds": null,
+        "observedMinusTimetableSeconds": null,
+        "positionReadsRelativeToPrediction": {
+          "before": 0,
+          "atOrAfter": 0
+        }
+      },
+      {
+        "line": "LINE_2",
+        "event": "ALIGHTING",
+        "station": "신림",
+        "scheduledAt": "2026-11-20T11:46:00Z",
+        "predictedAt": "2026-11-20T11:46:00Z",
+        "trainNumbers": [
+          "2434"
+        ],
+        "direction": "UP",
+        "terminal": "신도림",
+        "serviceClass": "LOCAL",
+        "serviceDate": "2026-11-20",
+        "from": "2026-11-20T11:44:00+00:00",
+        "until": "2026-11-20T11:46:05+00:00",
+        "result": "NO_ARRIVAL_BOUND",
+        "freshMatchingRowsInKnownOrder": 0,
+        "lastConfirmedBeforeEventAt": null,
+        "predictionReferenceEvent": "ARRIVAL",
+        "observedMinusPredictionSeconds": null,
+        "minimumObservedMinusPredictionSeconds": null,
+        "sameEventTimetableAt": "2026-11-20T11:46:00Z",
+        "absoluteErrorChangeFromTimetableSeconds": null,
+        "observedMinusSameEventTimetableSeconds": null,
+        "observedMinusTimetableSeconds": null,
+        "positionReadsRelativeToPrediction": {
+          "before": 0,
+          "atOrAfter": 0
+        }
+      }
+    ],
+    "boundedPredictionEvents": 0,
+    "boundedHistoricalStationStates": 0,
+    "rides": [
+      {
+        "sequence": 1,
+        "trainNumber": "4685",
+        "serviceDate": "2026-11-20",
+        "from": "노원",
+        "to": "사당",
+        "startEvent": "DEPARTURE",
+        "endEvent": "ARRIVAL",
+        "observedBoardingStationDwellBoundsSeconds": [
+          null,
+          null
+        ],
+        "timetableDepartureToAlightingSeconds": 2880.0,
+        "observedDepartureToAlightingBoundsSeconds": [
+          null,
+          null
+        ],
+        "departureToAlightingMinusTimetableBoundsSeconds": [
+          null,
+          null
+        ],
+        "predictedStationToStationSeconds": 2880.0,
+        "observedStationToStationBoundsSeconds": [
+          null,
+          null
+        ],
+        "stationToStationMinusPredictionBoundsSeconds": [
+          null,
+          null
+        ],
+        "firstBoardingWithModeledAccess": {
+          "modeledAccessEndAt": "2026-11-20T10:42:17+00:00",
+          "predictedGapSeconds": 223.0,
+          "observedGapBoundsSeconds": [
+            391.0,
+            null
+          ],
+          "gapMinusPredictionBoundsSeconds": [
+            168.0,
+            null
+          ]
+        }
+      },
+      {
+        "sequence": 3,
+        "trainNumber": "2434",
+        "serviceDate": "2026-11-20",
+        "from": "사당",
+        "to": "신림",
+        "startEvent": "DEPARTURE",
+        "endEvent": "ARRIVAL",
+        "observedBoardingStationDwellBoundsSeconds": [
+          null,
+          null
+        ],
+        "timetableDepartureToAlightingSeconds": 450.0,
+        "observedDepartureToAlightingBoundsSeconds": [
+          null,
+          null
+        ],
+        "departureToAlightingMinusTimetableBoundsSeconds": [
+          null,
+          null
+        ],
+        "predictedStationToStationSeconds": 450.0,
+        "observedStationToStationBoundsSeconds": [
+          null,
+          null
+        ],
+        "stationToStationMinusPredictionBoundsSeconds": [
+          null,
+          null
+        ]
+      }
+    ],
+    "transfer": {
+      "predictedGapSeconds": 270.0,
+      "modeledWalkingSeconds": 157,
+      "requiredMarginSeconds": 60,
+      "predictedGapAfterModeledWalkSeconds": 113.0,
+      "predictedGapEndEvent": "DEPARTURE",
+      "observedSameEventGapSeconds": null,
+      "observedSameEventGapAfterModeledWalkBoundsSeconds": [
+        null,
+        null
+      ],
+      "observedMinusPredictedGapSeconds": null,
+      "maximumSlackAgainstScheduledDepartureSeconds": 2765.0,
+      "gapAfterModeledWalkToScheduledDepartureBoundsSeconds": [
+        null,
+        2825.0
+      ],
+      "observedTrainGapSeconds": null,
+      "observedGapAfterModeledWalkSeconds": null,
+      "observedSlackAfterModeledWalkAndMarginSeconds": null,
+      "modeledMarginAssessment": "OBSERVATION_BOUNDS_MISSING",
+      "stationInteriorWalkOrPassengerTransferVerified": false
+    },
+    "destination": {
+      "planningArrivalAt": "2026-11-20T11:47:13Z",
+      "modeledEgressSeconds": 73,
+      "egressTimingSource": "ODSAY_EXIT_WALK_SECONDS",
+      "trainArrivalPlusModeledEgressWindow": null,
+      "windowMinusPlanningArrivalSeconds": null,
+      "physicalDestinationArrivalVerified": false,
+      "result": "FINAL_TRAIN_OBSERVATION_BOUNDS_MISSING"
+    }
+  }
+}

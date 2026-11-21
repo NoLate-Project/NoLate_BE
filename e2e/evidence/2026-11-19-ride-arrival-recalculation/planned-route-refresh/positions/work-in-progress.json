@@ -1,0 +1,14 @@
+{
+  "root": "/private/tmp/nolate-ride-observation.z8fbdcjl",
+  "execSession": 92984,
+  "maximumPhysicalHttpCalls": 16,
+  "plannedEtaRunnerSession": 65013,
+  "failureStopsAreSharedWithOwnedParent": true,
+  "firstSlot": "2026-11-19T15:03:00Z",
+  "initialLastSlot": "2026-11-19T15:29:00Z",
+  "lastWindowMayFollowVerifiedChangedLastTrain": true,
+  "mayRestart": false,
+  "sourceFreshnessSeconds": 120,
+  "maxSourceStateTransitionGapSeconds": 150,
+  "physicalPassengerArrivalVerified": false
+}

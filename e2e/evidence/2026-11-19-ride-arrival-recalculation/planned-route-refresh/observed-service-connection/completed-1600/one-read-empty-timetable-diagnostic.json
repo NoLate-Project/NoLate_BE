@@ -1,0 +1,16 @@
+{
+  "classification": "ONE_READ_EMPTY_TIMETABLE_DIAGNOSTIC_NO_RETRY_NOT_ETA_SUCCESS",
+  "maximumHttpCalls": 1,
+  "requestCount": 1,
+  "service": "SearchSTNTimeTableByIDService",
+  "stationCode": "0411",
+  "weekTag": "1",
+  "direction": "2",
+  "observedAt": "2026-11-20T07:02:04.062443+00:00",
+  "retries": 0,
+  "httpStatus": 200,
+  "providerCode": "INFO-200",
+  "total": null,
+  "rowCount": 0,
+  "responseSha256": "3cca3288065e641403e5076ee83d32d69de4425718148e0a4c25eeded68a0a8a"
+}

@@ -1,0 +1,54 @@
+{
+  "scope": "Explicit prior service day 24xx–26xx timetable lookup after midnight",
+  "beforeProviderSuite": {
+    "tests": 33,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  },
+  "failedBefore": [
+    "자정 전 계획한 환승편은 자정 직후 재조회에서도 이전 운행일의 24시 행을 사용한다()"
+  ],
+  "afterSuites": {
+    "com.noLate.eta.infrastructure.seoul.SeoulTrainPositionClientTest": {
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "com.noLate.eta.infrastructure.seoul.SeoulTransitTimetableProviderTest": {
+      "tests": 33,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "com.noLate.eta.application.transit.PlannedTransitRouteRefresherTest": {
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "com.noLate.eta.infrastructure.seoul.SeoulCircularTimetableDirectionTest": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "com.noLate.eta.application.transit.TransitJourneyTimetableEnricherTest": {
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "com.noLate.eta.infrastructure.seoul.SeoulTimetableServiceDayResolverTest": {
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "pythonIosHarnessTestsPassed": 257,
+  "pinnedXCTestBuildForTesting": true,
+  "newNativeRealE2EVerified": false,
+  "newPhysicalArrivalAccuracyVerified": false
+}

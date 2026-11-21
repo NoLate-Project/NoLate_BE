@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.schedule.application.TimetableDeparturePlanPolicyTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-11-20T09:11:14.300Z" hostname="macui-MacBookPro.local" time="0.009">
+  <properties/>
+  <testcase name="실제 미관측 응답의 완전한 시간표를 계획으로 보존하고 13분 늦은 출발을 보호한다()" classname="com.noLate.schedule.application.TimetableDeparturePlanPolicyTest" time="0.002"/>
+  <testcase name="시간표 부족 또는 장애 또는 도착 지각은 더 이른 알림의 근거로 승격하지 않는다()" classname="com.noLate.schedule.application.TimetableDeparturePlanPolicyTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

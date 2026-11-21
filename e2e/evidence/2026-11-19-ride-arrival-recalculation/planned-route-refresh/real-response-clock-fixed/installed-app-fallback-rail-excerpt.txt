@@ -1,0 +1,3 @@
+/Users/mac/IdeaProjects/NoLate/NoLate_FE/e2e/ios/NoLateE2ETests.swift:2905: error: -[NoLateE2ETests.NoLateEtaJourneyE2ETests testVerifyIsolatedRealProviderPlannedFallback] : failed - Expanded route content did not appear
+                                          Button, 0x108ff6440, {{20.0, 803.7}, {362.0, 194.3}}, identifier: 'route-step-row-odsay-leg-1', label: '지하철, 4호선, 노원, 사당까지 · 48분, 23:18 승차 계획, 00:06 예상 하차, 계획 경로의 잠정 시각 기준'
+                                          Button, 0x108ff4b40, {{20.0, 1064.7}, {362.0, 214.3}}, identifier: 'route-step-row-odsay-leg-3', label: '지하철, 2호선, 사당, 신림까지 · 8분, 00:10 승차 계획, 00:18 예상 하차, 환승 대기 예상 1분 53초, 계획 경로의 잠정 시각 기준'

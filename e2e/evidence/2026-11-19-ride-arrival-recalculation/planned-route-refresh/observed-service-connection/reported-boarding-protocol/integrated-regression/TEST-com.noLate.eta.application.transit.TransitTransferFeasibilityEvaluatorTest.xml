@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" tests="30" skipped="0" failures="0" errors="0" timestamp="2026-11-20T09:40:52.708Z" hostname="macui-MacBookPro.local" time="0.015">
+  <properties/>
+  <testcase name="마지막 승차의 도착시각이 없으면 앞 환승이 가능해도 전체 ETA는 미확정이다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.001"/>
+  <testcase name="환승 시간표에 여유가 있으면 첫 지연은 대기에서 흡수되고 최종 도착은 시간표를 따른다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="환승 열차 승차역 지연은 그 열차의 시간표 운행시간만 이동한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="환승 도보 243초는 분 올림 없이 계산하고 기존 60초 신뢰 여유는 유지한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="구간이 추정값이어도 첫 실시간 차량을 놓친 사실은 MISSED로 보존한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="분 단위 시간표에서 60초 환승 여유가 확보되면 FEASIBLE이다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="첫 실시간 승차 검증에 환승 버퍼를 중복 적용하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="[1] timingBasis=ROUTE_ESTIMATE" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="[2] timingBasis=UNKNOWN" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="미래 환승 출발시각이 없으면 실시간 성공으로 꾸미지 않고 UNKNOWN으로 남긴다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="첫 승차가 5분 늦으면 환승 도보 뒤의 시간표 차량을 놓친다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="첫 승차 접근 111초를 2분으로 올림해서 탈 수 있는 차량을 놓쳤다고 하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="명시적으로 신뢰 여유를 0으로 내린 경우에만 exact boundary를 허용한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="실시간 overlay가 없어도 첫 시간표 차량을 탈 수 있으면 허용한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="다음 ride의 waitingMinutes는 실제 boarding 여유로 보존한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="원본 초 값이 없는 공급자의 환승 도보는 기존 분 단위를 유지한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="초 단위 도보라도 환승 여유가 59초뿐이면 성공으로 승격하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="[1] earlyArrivalSeconds=8, expected=FEASIBLE, shortfall=0" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.001"/>
+  <testcase name="[2] earlyArrivalSeconds=9, expected=UNKNOWN, shortfall=1" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.001"/>
+  <testcase name="[3] earlyArrivalSeconds=30, expected=UNKNOWN, shortfall=22" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="ROUTE_ESTIMATE 시각은 존재해도 환승 시간표 증거로 사용하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.001"/>
+  <testcase name="구간 시간표가 없으면 일부 실시간 관측으로 전체 ETA를 만들지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="환승 열차 하차역 예측을 해당 구간과 최종 도착에만 반영한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="ODsay waitingTime 0 인접 환승은 분 단위 경계라 기본값에서 UNKNOWN이다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="첫 승차가 미관측이어도 동일 환승편의 하차 예측은 독립적으로 계산한다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="여유 0초 환승에 첫 구간 지연이 1초 전파되면 놓친다()" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="[1] additionalDelaySeconds=28, scheduledDwellSeconds=0, expected=FEASIBLE" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.001"/>
+  <testcase name="[2] additionalDelaySeconds=29, scheduledDwellSeconds=0, expected=UNKNOWN" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="[3] additionalDelaySeconds=89, scheduledDwellSeconds=0, expected=MISSED" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <testcase name="[4] additionalDelaySeconds=0, scheduledDwellSeconds=29, expected=UNKNOWN" classname="com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluatorTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

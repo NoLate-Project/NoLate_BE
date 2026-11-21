@@ -1,0 +1,10 @@
+{
+  "classification": "SETUP_FAILURE_BEFORE_PROVIDER_START",
+  "failure": "Missing relative Gradle init script in thin owned backend snapshot",
+  "originalReportPreserved": true,
+  "publicProviderCalls": 0,
+  "etaEvaluations": 0,
+  "appScenarioStarted": false,
+  "originalAppEndpointRestoreNeeded": false,
+  "fixedRunnerUsesAbsoluteAuthoritativeBackendInitScript": true
+}

@@ -1,0 +1,78 @@
+{
+  "classification": "OFFLINE_PAIRED_PUBLIC_STATUS_PRESENTATION",
+  "independentJourneys": 1,
+  "publicSnapshots": 2,
+  "provider": "odsay",
+  "trains": [
+    "K4335",
+    "2510"
+  ],
+  "stationClockBasis": "서울 시간표",
+  "recordedDeviceEvidence": [
+    "real-response-clock-fixed/initial-installed-app-ui.txt",
+    "real-response-clock-fixed/installed-app-fallback-rail-excerpt.txt"
+  ],
+  "cardBefore": {
+    "ui-status-1.json": {
+      "sha256": "5f0a59a090e8e4419f25e221817072793464a1e8ff9d30a1908697339441a1af",
+      "summary": "23:11 출발 예측 · 00:19 도착 예측 · 총 69분",
+      "title": "미래 시간표 예측 · 실시간 미확인",
+      "recommendedDepartureAt": "2026-11-19T14:11:00Z",
+      "transfer": "수도권 2호선 · 사당→신림 · 약 10분 · 2510열차 · 시간표 · 00:10:30 승차 → 00:18:00 하차 예측"
+    },
+    "ui-status-after-evaluation-2.json": {
+      "sha256": "a92b898b2437e5b59dfa258ee76e80b056def245f559062e131437822297f746",
+      "summary": "00:19 도착 예상 · 총 69분",
+      "title": "계획 경로 기준 · 잠정 도착",
+      "recommendedDepartureAt": "2026-11-19T14:11:00Z",
+      "transfer": "수도권 2호선 · 사당→신림 · 약 10분 · 2510열차 · 시간표 · 00:10:30 승차 → 00:18:00 하차 예측"
+    }
+  },
+  "cardAfter": {
+    "ui-status-1.json": {
+      "sha256": "5f0a59a090e8e4419f25e221817072793464a1e8ff9d30a1908697339441a1af",
+      "summary": "23:11 출발 예측 · 00:19 도착 예측 · 총 69분",
+      "title": "미래 시간표 예측 · 실시간 미확인",
+      "recommendedDepartureAt": "2026-11-19T14:11:00Z",
+      "transfer": "수도권 2호선 · 사당→신림 · 환승 대기 약 1분 53초 · 승차역부터 하차역까지 약 7분 30초 · 2510열차 · 시간표 · 00:10:30 승차 → 00:18:00 하차 예측"
+    },
+    "ui-status-after-evaluation-2.json": {
+      "sha256": "a92b898b2437e5b59dfa258ee76e80b056def245f559062e131437822297f746",
+      "summary": "00:19 도착 예상 · 총 69분",
+      "title": "계획 경로 기준 · 잠정 도착",
+      "recommendedDepartureAt": "2026-11-19T14:11:00Z",
+      "transfer": "수도권 2호선 · 사당→신림 · 환승 대기 약 1분 53초 · 승차역부터 하차역까지 약 7분 30초 · 2510열차 · 시간표 · 00:10:30 승차 → 00:18:00 하차 예측"
+    }
+  },
+  "afterPlannedRouteRail": {
+    "kind": "SUBWAY",
+    "description": "신림까지 · 7분 30초",
+    "startAt": "2026-11-19T15:10:30.000Z",
+    "endAt": "2026-11-19T15:18:00.000Z",
+    "movementSeconds": 450,
+    "transferWaitSeconds": 113,
+    "provisionalPlan": true
+  },
+  "componentsSeconds": {
+    "approachWalk": 137,
+    "firstWait": 283,
+    "firstRide": 2880,
+    "transferWalk": 157,
+    "transferWait": 113,
+    "onwardRide": 450,
+    "egressWalk": 73
+  },
+  "scheduledJourneySeconds": 4093,
+  "additionalHttpCalls": 0,
+  "checks": {
+    "frontendTests": 78,
+    "etaVerifierTests": 273,
+    "typescript": "PASS",
+    "swiftSyntax": "PASS",
+    "updatedInstalledAppRun": "PENDING",
+    "checkedE2EExpectedTextAgainstBothArchivedPublicResponses": true
+  },
+  "newComparableNaverJourneys": 0,
+  "newPhysicalArrivalMeasurements": 0,
+  "changeInPredictedArrivalSeconds": 0
+}

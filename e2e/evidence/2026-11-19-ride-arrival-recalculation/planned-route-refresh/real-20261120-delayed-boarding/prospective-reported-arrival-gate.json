@@ -1,0 +1,39 @@
+{
+  "classification": "PREREGISTERED_FIRST_ALIGHTING_PILOT_GATE",
+  "result": "SUPPORTED_FIRST_ALIGHTING_PILOT_ONLY",
+  "independentPhysicalTrains": 1,
+  "allFreezeSourceHashesVerified": true,
+  "inputHashVerified": true,
+  "candidateCodeAndClocksFrozenBeforeOutcome": true,
+  "observationBracketSeconds": 56.0,
+  "comparison": {
+    "baseline": {
+      "signedObservedMinusPredictedSeconds": [
+        155.0,
+        211.0
+      ],
+      "worstCaseAbsoluteSeconds": 211.0,
+      "worstCaseEarlySeconds": 211.0
+    },
+    "candidate": {
+      "signedObservedMinusPredictedSeconds": [
+        40.0,
+        96.0
+      ],
+      "worstCaseAbsoluteSeconds": 96.0,
+      "worstCaseEarlySeconds": 96.0
+    },
+    "latestDirectAlighting": {
+      "signedObservedMinusPredictedSeconds": [
+        -30.0,
+        26.0
+      ],
+      "worstCaseAbsoluteSeconds": 30.0,
+      "worstCaseEarlySeconds": 26.0
+    }
+  },
+  "candidateAbsoluteErrorReductionForEveryInstantInBracketSeconds": 115,
+  "globalAccuracyGuarantee": false,
+  "passengerDoorToDoorAccuracyVerified": false,
+  "installedCandidateUiVerified": false
+}

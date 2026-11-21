@@ -1,0 +1,24 @@
+{
+  "classification": "OFFLINE_VERIFICATION_WINDOW_REGRESSION_NOT_ACCURACY_PROOF",
+  "createdAt": "2026-11-20T05:15:04.390312+00:00",
+  "privateRoot": "/private/tmp/nolate-pair-window-proof.lafilf8t",
+  "productionAndActiveRunnerModified": false,
+  "newTransportApiCalls": 0,
+  "maximumEvaluations": 3,
+  "maximumPositionReads": 16,
+  "sourceFreshnessGateSeconds": 120,
+  "positionTransitionGateSeconds": 150,
+  "beforeFailures": {
+    "windowCases": 2,
+    "sameVehicleRescheduleCase": 1
+  },
+  "afterUnitTests": 75,
+  "afterResult": "PASSED",
+  "changes": [
+    "Second evaluation observes first alighting before reconnecting onward train unless first-boarding scenario explicitly requested.",
+    "Third evaluation is one minute before the updated onward boarding, inside the alighting horizon.",
+    "Exact same vehicle/context keeps an earlier unspent observation window when an ETA update moves it later.",
+    "Spent/missed slots remain retired; no request budget is reset, and other vehicles do not inherit the old event window."
+  ],
+  "nextRequirement": "Promote only after dzhrdc0h terminates and restores, then verify a new independent real trip; do not rewrite current observation receive times or accept stale terminal rows."
+}

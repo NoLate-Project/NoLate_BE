@@ -1,0 +1,30 @@
+{
+  "classification": "SCOPED_PROMOTION_WITH_PAIRED_REGRESSION_NOT_ACCURACY_COMPLETION",
+  "promotedAfterPriorRunRestored": true,
+  "priorRun": "/private/tmp/nolate-eta-real-e2e.dzhrdc0h",
+  "sourceBuild": "/private/tmp/nolate-be-planned-build.7ylfd8u6",
+  "regressions": {
+    "backendSuites": 14,
+    "backendTests": 473,
+    "frontendTests": 55,
+    "frontendTypecheck": "PASSED",
+    "pythonTests": 75
+  },
+  "sameControlledInputBeforeFailures": 4,
+  "sameControlledInputAfterFailures": 0,
+  "sameRecordedActualResponseReplay": {
+    "report": "promoted-previous-real-response-replay.json",
+    "frames": 2,
+    "result": "PAIRED",
+    "outputClocksChanged": false,
+    "httpCalls": 0
+  },
+  "actualNewRun": "/private/tmp/nolate-eta-real-e2e.uf14uvsd",
+  "wholeJourneyAccuracyVerified": false,
+  "unrelatedWorktreeChangesPreserved": true,
+  "promotedSourceSha256": {
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": "6d8762c7986b2574ede0a41ef64c68791104eb831b8ef005d893dcadc758595c",
+    "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": "0e26c30948b2e71cc57c6af917d4c1ea00515333b87c74d2844299c92b6c3292",
+    "src/test/kotlin/com/noLate/eta/application/transit/ObservedSubwayServiceRefreshTest.kt": "d9392e7850b9c9007c304af07c5e3360693d1456ed424299a3857aedbe9adc12"
+  }
+}

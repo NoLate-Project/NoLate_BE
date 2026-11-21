@@ -1,0 +1,12 @@
+{
+  "classification": "COMBINED_SOURCE_REGRESSION_NOT_LIVE_ACCURACY",
+  "snapshot": "/private/tmp/nolate-be-planned-build.566ghmce",
+  "suites": 17,
+  "tests": 522,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "beAnalysisTests": 43,
+  "feCorrelationTests": 79,
+  "httpCalls": 0
+}

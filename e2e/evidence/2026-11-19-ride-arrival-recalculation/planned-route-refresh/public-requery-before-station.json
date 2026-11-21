@@ -1,0 +1,104 @@
+{
+  "classification": "OFFLINE_PAIRED_PUBLISHED_PREDICTIONS_VERSUS_SAME_TRAIN_POSITION",
+  "newProviderCalls": 0,
+  "positionReadsInArchive": 16,
+  "inputs": {
+    "report.json": "998e013830e149440e172c666c1367c5cfbffa7a8ac1f0ac8d85fb90e43527b3",
+    "evaluation-1.json": "99aa4d891a07a6e01337d6f1f4a930706f7a6bd24914c836d08346c207b6a2b9",
+    "evaluation-2.json": "57a65e1bef84a571a7240583b5c47cbbbbf283f86ef5c0bf665e15d8d57e54df",
+    "ui-status-1.json": "5f0a59a090e8e4419f25e221817072793464a1e8ff9d30a1908697339441a1af",
+    "ui-status-after-evaluation-2.json": "a92b898b2437e5b59dfa258ee76e80b056def245f559062e131437822297f746",
+    "odsay-seed-journey.json": "6a94c7058931fe4329b25e1a6f59f460a7e37f95f63fff1fbbd2055528f1710f",
+    "selected-route.json": "7af01c6457b1ce567be36e39b79aa3c36785f0e02fb954305bdd1aacc5967579",
+    "completed-position-audit/positions.jsonl": "058d6e45801d59f0f60ac536e15b508968f0817de79da497464957c37dfebdf5"
+  },
+  "publicRequeryComparison": {
+    "independentJourneysWithPublicPair": 1,
+    "independentJourneysWithScoredEvent": 1,
+    "scoredEventComparisons": 1,
+    "eventComparisonCounts": {
+      "NO_OBSERVATION_BOUND": 3,
+      "UNCHANGED_CLOCK": 1
+    },
+    "evaluations": [
+      {
+        "evaluation": 1,
+        "evaluatedAt": "2026-11-19T14:03:29.771959Z",
+        "publicStatusFile": "ui-status-1.json",
+        "readFinishedAt": "2026-11-19T14:04:13.218124Z",
+        "basis": "TIMETABLE_ONLY",
+        "result": "INITIAL_PUBLIC_PLAN"
+      },
+      {
+        "evaluation": 2,
+        "evaluatedAt": "2026-11-19T15:01:03.245593Z",
+        "publicStatusFile": "ui-status-after-evaluation-2.json",
+        "readFinishedAt": "2026-11-19T15:01:35.598645Z",
+        "basis": "LAST_ACCEPTED_PLAN",
+        "events": [
+          {
+            "line": "LINE_4",
+            "station": "노원",
+            "event": "BOARDING",
+            "predictionReferenceEvent": "DEPARTURE",
+            "beforeAt": "2026-11-19T14:18:00Z",
+            "afterAt": "2026-11-19T14:18:00Z",
+            "beforeTrain": "K4335",
+            "afterTrain": "K4335",
+            "lower": null,
+            "upper": null,
+            "result": "NO_OBSERVATION_BOUND",
+            "observationResult": "NO_DEPARTURE_BOUND"
+          },
+          {
+            "line": "LINE_4",
+            "station": "사당",
+            "event": "ALIGHTING",
+            "predictionReferenceEvent": "ARRIVAL",
+            "beforeAt": "2026-11-19T15:06:00Z",
+            "afterAt": "2026-11-19T15:06:00Z",
+            "beforeTrain": "K4335",
+            "afterTrain": "K4335",
+            "lower": "2026-11-19T15:04:12+00:00",
+            "upper": "2026-11-19T15:06:17+00:00",
+            "result": "UNCHANGED_CLOCK",
+            "absoluteErrorChangeSeconds": [
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "line": "LINE_2",
+            "station": "사당",
+            "event": "BOARDING",
+            "predictionReferenceEvent": "DEPARTURE",
+            "beforeAt": "2026-11-19T15:10:30Z",
+            "afterAt": "2026-11-19T15:10:30Z",
+            "beforeTrain": "2510",
+            "afterTrain": "2510",
+            "lower": null,
+            "upper": null,
+            "result": "NO_OBSERVATION_BOUND",
+            "observationResult": "NO_DEPARTURE_BOUND"
+          },
+          {
+            "line": "LINE_2",
+            "station": "신림",
+            "event": "ALIGHTING",
+            "predictionReferenceEvent": "ARRIVAL",
+            "beforeAt": "2026-11-19T15:18:00Z",
+            "afterAt": "2026-11-19T15:18:00Z",
+            "beforeTrain": "2510",
+            "afterTrain": "2510",
+            "lower": null,
+            "upper": null,
+            "result": "NO_OBSERVATION_BOUND",
+            "observationResult": "NO_ARRIVAL_BOUND"
+          }
+        ],
+        "result": "COMPARED_WITH_INITIAL_PUBLIC_PLAN"
+      }
+    ]
+  },
+  "passengerAlightingOrDestinationArrivalMeasured": false
+}

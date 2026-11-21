@@ -1,0 +1,396 @@
+{
+  "classification": "OFFLINE_PAIRED_REPLAY_WITH_CONTROLLED_STATION_FORECASTS",
+  "newPublicTrafficRequests": 0,
+  "newComparableNaverJourneys": 0,
+  "newObservedTrainTrips": 0,
+  "installedAppOnThisRevisionTested": false,
+  "productionLogic": "Before departure, the early transfer-station forecast can end the transfer wait only after walking and the complete boarding margin. The alighting timetable remains in effect. After departure an improved forecast can supersede a delay or withdraw an infeasible transfer. Switching back from a later train requires fresh matching evidence at both stations.",
+  "postdeparture": {
+    "inputs": "Two previously captured real ODsay/Seoul timetable plans. The three Sadang station rows per plan are controlled inputs, not historical observations. Each row was identical for both binaries. The archived recommendation was carried into this replay; this did not run an alert scheduler.",
+    "server": "PlannedTransitRouteRefresher, TransitTransferRealtimeGuard, EffectiveTransitRouteSnapshot.plannedJourneyArrivalPrediction",
+    "app": "Current getDisplayedPlannedTransitRoute, buildPlannedJourneyArrivalPresentation and subwayTransferWaitSeconds for both server outputs.",
+    "cases": {
+      "short": {
+        "archive": "e2e/evidence/2026-11-19-ride-arrival-recalculation/short-first-real/evaluation-1.json",
+        "archiveSha256": "e30ff243646c2ff03ea84bcc69db1441cc4a5c9a9d187ccff174992a59824d42",
+        "inputRows": [
+          {
+            "readAt": "2026-11-19T12:36:30Z",
+            "train": "2462",
+            "station": "사당",
+            "arrivalForecast": "2026-11-19T12:43:40Z",
+            "sourceUpdatedAt": "2026-11-19T12:36:29Z"
+          },
+          {
+            "readAt": "2026-11-19T12:36:50Z",
+            "train": "2462",
+            "station": "사당",
+            "arrivalForecast": "2026-11-19T12:41:20Z",
+            "sourceUpdatedAt": "2026-11-19T12:36:49Z"
+          },
+          {
+            "readAt": "2026-11-19T12:36:51Z",
+            "train": "2462",
+            "station": "사당",
+            "arrivalForecast": "2026-11-19T12:43:40Z",
+            "sourceUpdatedAt": "2026-11-19T12:36:35Z"
+          }
+        ],
+        "archivedRecommendation": "2026-11-19T12:20:00Z",
+        "routeDepartureAt": "2026-11-19T12:15:00Z",
+        "earliestTransferWithMarginAt": "2026-11-19T12:37:37Z",
+        "before": [
+          {
+            "updated": true,
+            "departureAt": "2026-11-19T12:15:00Z",
+            "previousArrivalAt": "2026-11-19T12:34:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2462",
+            "transferStationArrivalAt": "2026-11-19T12:43:40Z",
+            "transferWaitSeconds": 423,
+            "rideSeconds": 510,
+            "finalStationArrivalAt": "2026-11-19T12:52:10Z",
+            "destinationAt": "2026-11-19T12:52:10Z",
+            "stationEvidence": "PLANNED_RIDE_BOARDING_REALTIME",
+            "appSummary": "21:52 도착 예상 · 탑승 미확인"
+          },
+          {
+            "updated": false,
+            "departureAt": "2026-11-19T12:15:00Z",
+            "previousArrivalAt": "2026-11-19T12:34:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2462",
+            "transferStationArrivalAt": "2026-11-19T12:43:40Z",
+            "transferWaitSeconds": 423,
+            "rideSeconds": 510,
+            "finalStationArrivalAt": "2026-11-19T12:52:10Z",
+            "destinationAt": "2026-11-19T12:52:10Z",
+            "stationEvidence": "PLANNED_RIDE_BOARDING_REALTIME",
+            "appSummary": "21:52 도착 예상 · 탑승 미확인"
+          },
+          {
+            "updated": true,
+            "departureAt": "2026-11-19T12:15:00Z",
+            "previousArrivalAt": "2026-11-19T12:34:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2462",
+            "transferStationArrivalAt": "2026-11-19T12:43:40Z",
+            "transferWaitSeconds": 423,
+            "rideSeconds": 510,
+            "finalStationArrivalAt": "2026-11-19T12:52:10Z",
+            "destinationAt": "2026-11-19T12:52:10Z",
+            "stationEvidence": "PLANNED_RIDE_BOARDING_REALTIME",
+            "appSummary": "21:52 도착 예상 · 탑승 미확인"
+          }
+        ],
+        "beforeStationFeedsSha256": "4505f2e903781757d4fab9c5ed5053ec8fea327ceda4303dadeed57b41018d9b",
+        "after": [
+          {
+            "updated": true,
+            "departureAt": "2026-11-19T12:15:00Z",
+            "previousArrivalAt": "2026-11-19T12:34:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2462",
+            "transferStationArrivalAt": "2026-11-19T12:43:40Z",
+            "transferWaitSeconds": 423,
+            "rideSeconds": 510,
+            "finalStationArrivalAt": "2026-11-19T12:52:10Z",
+            "destinationAt": "2026-11-19T12:52:10Z",
+            "stationEvidence": "PLANNED_RIDE_BOARDING_REALTIME",
+            "appSummary": "21:52 도착 예상 · 탑승 미확인"
+          },
+          {
+            "updated": true,
+            "departureAt": "2026-11-19T12:15:00Z",
+            "previousArrivalAt": "2026-11-19T12:34:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2462",
+            "transferStationArrivalAt": "2026-11-19T12:41:20Z",
+            "transferWaitSeconds": 283,
+            "rideSeconds": 520,
+            "finalStationArrivalAt": "2026-11-19T12:50:00Z",
+            "destinationAt": "2026-11-19T12:50:00Z",
+            "stationEvidence": "TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING",
+            "appSummary": "21:50 도착 예상 · 탑승 미확인"
+          },
+          {
+            "updated": false,
+            "departureAt": "2026-11-19T12:15:00Z",
+            "previousArrivalAt": "2026-11-19T12:34:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2462",
+            "transferStationArrivalAt": "2026-11-19T12:41:20Z",
+            "transferWaitSeconds": 283,
+            "rideSeconds": 520,
+            "finalStationArrivalAt": "2026-11-19T12:50:00Z",
+            "destinationAt": "2026-11-19T12:50:00Z",
+            "stationEvidence": "TRANSFER_BOARDING_REALTIME_TIMETABLE_ALIGHTING",
+            "appSummary": "21:50 도착 예상 · 탑승 미확인"
+          }
+        ],
+        "afterStationFeedsSha256": "4505f2e903781757d4fab9c5ed5053ec8fea327ceda4303dadeed57b41018d9b"
+      },
+      "long": {
+        "archive": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-response-clock-fixed/evaluation-1.json",
+        "archiveSha256": "99aa4d891a07a6e01337d6f1f4a930706f7a6bd24914c836d08346c207b6a2b9",
+        "inputRows": [
+          {
+            "readAt": "2026-11-19T15:04:30Z",
+            "train": "2510",
+            "station": "사당",
+            "arrivalForecast": "2026-11-19T15:11:40Z",
+            "sourceUpdatedAt": "2026-11-19T15:04:29Z"
+          },
+          {
+            "readAt": "2026-11-19T15:04:50Z",
+            "train": "2510",
+            "station": "사당",
+            "arrivalForecast": "2026-11-19T15:09:20Z",
+            "sourceUpdatedAt": "2026-11-19T15:04:49Z"
+          },
+          {
+            "readAt": "2026-11-19T15:04:51Z",
+            "train": "2510",
+            "station": "사당",
+            "arrivalForecast": "2026-11-19T15:11:40Z",
+            "sourceUpdatedAt": "2026-11-19T15:04:35Z"
+          }
+        ],
+        "archivedRecommendation": "2026-11-19T14:11:00Z",
+        "routeDepartureAt": "2026-11-19T14:11:00Z",
+        "earliestTransferWithMarginAt": "2026-11-19T15:09:37Z",
+        "before": [
+          {
+            "updated": true,
+            "departureAt": "2026-11-19T14:11:00Z",
+            "previousArrivalAt": "2026-11-19T15:06:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2510",
+            "transferStationArrivalAt": "2026-11-19T15:11:40Z",
+            "transferWaitSeconds": 183,
+            "rideSeconds": 510,
+            "finalStationArrivalAt": "2026-11-19T15:20:10Z",
+            "destinationAt": "2026-11-19T15:21:23Z",
+            "stationEvidence": "PLANNED_RIDE_BOARDING_REALTIME",
+            "appSummary": "00:21 도착 예상 · 탑승 미확인"
+          },
+          {
+            "updated": false,
+            "departureAt": "2026-11-19T14:11:00Z",
+            "previousArrivalAt": "2026-11-19T15:06:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2510",
+            "transferStationArrivalAt": "2026-11-19T15:11:40Z",
+            "transferWaitSeconds": 183,
+            "rideSeconds": 510,
+            "finalStationArrivalAt": "2026-11-19T15:20:10Z",
+            "destinationAt": "2026-11-19T15:21:23Z",
+            "stationEvidence": "PLANNED_RIDE_BOARDING_REALTIME",
+            "appSummary": "00:21 도착 예상 · 탑승 미확인"
+          },
+          {
+            "updated": true,
+            "departureAt": "2026-11-19T14:11:00Z",
+            "previousArrivalAt": "2026-11-19T15:06:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2510",
+            "transferStationArrivalAt": "2026-11-19T15:11:40Z",
+            "transferWaitSeconds": 183,
+            "rideSeconds": 510,
+            "finalStationArrivalAt": "2026-11-19T15:20:10Z",
+            "destinationAt": "2026-11-19T15:21:23Z",
+            "stationEvidence": "PLANNED_RIDE_BOARDING_REALTIME",
+            "appSummary": "00:21 도착 예상 · 탑승 미확인"
+          }
+        ],
+        "beforeStationFeedsSha256": "b47be6e7adacee61b24dc91e1cf8006afbbea54e2eaf7b0881cc2b1d2c1fb3ce",
+        "after": [
+          {
+            "updated": true,
+            "departureAt": "2026-11-19T14:11:00Z",
+            "previousArrivalAt": "2026-11-19T15:06:00Z",
+            "walkingSeconds": 157,
+            "confidenceMarginSeconds": 60,
+            "train": "2510",
+            "transferStationArrivalAt": "2026-11-19T15:11:40Z",
+            "transferWaitSeconds": 183,
+            "rideSeconds": 510,
+            "finalStationArrivalAt": "2026-11-19T15:20:10Z",
+            "destinationAt": "2026-11-19T15:21:23Z",
+            "stationEvidence": "PLANNED_RIDE_BOARDING_REALTIME",
+            "appSummary": "00:21 도착 예상 · 탑승 미확인"
+          },
+          {
+            "updated": true,
+            "failureReason": "EARLY_BOARDING_UNCONFIRMED",
+            "appSummary": "승차 재확인 필요"
+          },
+          {
+            "updated": false,
+            "failureReason": "EARLY_BOARDING_UNCONFIRMED",
+            "appSummary": "승차 재확인 필요"
+          }
+        ],
+        "afterStationFeedsSha256": "b47be6e7adacee61b24dc91e1cf8006afbbea54e2eaf7b0881cc2b1d2c1fb3ce"
+      }
+    }
+  },
+  "predeparture": {
+    "inputs": "Controlled ODsay and Seoul route fixture used by TransitEtaCalculationServiceTest. Transfer arrival forecast 09:13:00 KST, timetabled station arrival 09:14:30, departure 09:15:00, alighting 09:22:00. Incoming train arrives at 09:09:00; boarding margin 60 seconds. Each evaluated walking duration was held identical across binaries.",
+    "server": "TransitEtaCalculationService.calculate",
+    "app": "Current buildEffectiveTransitRoutePresentation and subwayTransferWaitSeconds with each calculated result and unchanged-route flag.",
+    "before": [
+      {
+        "walkSeconds": 120,
+        "departureAt": "2026-07-29T00:00:00Z",
+        "destinationAt": "2026-07-29T00:24:00Z",
+        "earlierTransferForecastUsed": false,
+        "waitSeconds": 240,
+        "rideSeconds": 420,
+        "transferAt": "2026-07-29T00:15:00Z",
+        "alightingAt": "2026-07-29T00:22:00Z",
+        "sourceUpdatedAt": null,
+        "appSummary": "09:00 출발 · 09:24 도착 · 총 24분"
+      },
+      {
+        "walkSeconds": 180,
+        "departureAt": "2026-07-29T00:00:00Z",
+        "destinationAt": "2026-07-29T00:24:00Z",
+        "earlierTransferForecastUsed": false,
+        "waitSeconds": 180,
+        "rideSeconds": 420,
+        "transferAt": "2026-07-29T00:15:00Z",
+        "alightingAt": "2026-07-29T00:22:00Z",
+        "sourceUpdatedAt": null,
+        "appSummary": "09:00 출발 · 09:24 도착 · 총 24분"
+      },
+      {
+        "walkSeconds": 181,
+        "departureAt": "2026-07-29T00:00:00Z",
+        "destinationAt": "2026-07-29T00:24:00Z",
+        "earlierTransferForecastUsed": false,
+        "waitSeconds": 179,
+        "rideSeconds": 420,
+        "transferAt": "2026-07-29T00:15:00Z",
+        "alightingAt": "2026-07-29T00:22:00Z",
+        "sourceUpdatedAt": null,
+        "appSummary": "09:00 출발 · 09:24 도착 · 총 24분"
+      },
+      {
+        "walkSeconds": 210,
+        "departureAt": "2026-07-29T00:00:00Z",
+        "destinationAt": "2026-07-29T00:24:00Z",
+        "earlierTransferForecastUsed": false,
+        "waitSeconds": 150,
+        "rideSeconds": 420,
+        "transferAt": "2026-07-29T00:15:00Z",
+        "alightingAt": "2026-07-29T00:22:00Z",
+        "sourceUpdatedAt": null,
+        "appSummary": "09:00 출발 · 09:24 도착 · 총 24분"
+      },
+      {
+        "walkSeconds": 211,
+        "code": "TRANSIT_TRANSFER_TIMING_UNKNOWN"
+      },
+      {
+        "walkSeconds": 300,
+        "code": "TRANSIT_TRANSFER_TIMING_UNKNOWN"
+      }
+    ],
+    "after": [
+      {
+        "walkSeconds": 120,
+        "departureAt": "2026-07-29T00:00:00Z",
+        "destinationAt": "2026-07-29T00:24:00Z",
+        "earlierTransferForecastUsed": true,
+        "waitSeconds": 120,
+        "rideSeconds": 540,
+        "transferAt": "2026-07-29T00:13:00Z",
+        "alightingAt": "2026-07-29T00:22:00Z",
+        "sourceUpdatedAt": "2026-07-29T00:00:00Z",
+        "appSummary": "09:00 출발 · 09:24 도착 · 총 24분"
+      },
+      {
+        "walkSeconds": 180,
+        "departureAt": "2026-07-29T00:00:00Z",
+        "destinationAt": "2026-07-29T00:24:00Z",
+        "earlierTransferForecastUsed": true,
+        "waitSeconds": 60,
+        "rideSeconds": 540,
+        "transferAt": "2026-07-29T00:13:00Z",
+        "alightingAt": "2026-07-29T00:22:00Z",
+        "sourceUpdatedAt": "2026-07-29T00:00:00Z",
+        "appSummary": "09:00 출발 · 09:24 도착 · 총 24분"
+      },
+      {
+        "walkSeconds": 181,
+        "departureAt": "2026-07-29T00:00:00Z",
+        "destinationAt": "2026-07-29T00:24:00Z",
+        "earlierTransferForecastUsed": false,
+        "waitSeconds": 179,
+        "rideSeconds": 420,
+        "transferAt": "2026-07-29T00:15:00Z",
+        "alightingAt": "2026-07-29T00:22:00Z",
+        "sourceUpdatedAt": null,
+        "appSummary": "09:00 출발 · 09:24 도착 · 총 24분"
+      },
+      {
+        "walkSeconds": 210,
+        "departureAt": "2026-07-29T00:00:00Z",
+        "destinationAt": "2026-07-29T00:24:00Z",
+        "earlierTransferForecastUsed": false,
+        "waitSeconds": 150,
+        "rideSeconds": 420,
+        "transferAt": "2026-07-29T00:15:00Z",
+        "alightingAt": "2026-07-29T00:22:00Z",
+        "sourceUpdatedAt": null,
+        "appSummary": "09:00 출발 · 09:24 도착 · 총 24분"
+      },
+      {
+        "walkSeconds": 211,
+        "code": "TRANSIT_TRANSFER_TIMING_UNKNOWN"
+      },
+      {
+        "walkSeconds": 300,
+        "code": "TRANSIT_TRANSFER_TIMING_UNKNOWN"
+      }
+    ]
+  },
+  "restoredOriginalTransfer": {
+    "inputs": "Controlled station responses in planned-transfer-recovery-synthetic.json and its early-boarding boundary variants in PlannedTransitRouteRefresherTest. Original 2012 and later 2014. Fresh inbound alighting plus original boarding and a separately known scheduled station arrival.",
+    "atExactReadyBoundary": {
+      "beforeTrain": "2014",
+      "afterTrain": "2012",
+      "beforeDestinationSecondsAfterEpoch": 1952,
+      "afterDestinationSecondsAfterEpoch": 1652
+    },
+    "whenOneSecondShortTrain": "2014",
+    "withoutOriginStationArrivalTimetableTrain": "2014",
+    "preFixFailure": "expected 2012 but was 2014"
+  },
+  "regression": {
+    "criticalFilesChecked": 49,
+    "sourceTreeSha256": "65c09ec684c058e7a18e5a2ddbdfbd4b3a120531738bd36736948e08290434c6",
+    "backendSuites": 18,
+    "backendTests": {
+      "tests": 572,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "frontendTests": 67,
+    "frontendTypes": "passed",
+    "frontendOfflineVerifierTests": 277,
+    "backendOfflineVerifierTests": 58
+  },
+  "limits": "These cases establish use of the latest forecast and correct station clock, not error reduction against an independently observed arrival. The replayed ride duration starts at the modeled station arrival or departure shown to the user, and can include dwell. No passenger transfer walk was measured."
+}

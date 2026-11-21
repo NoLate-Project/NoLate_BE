@@ -1,0 +1,89 @@
+{
+  "classification": "SYNTHETIC_IDENTICAL_STATION_RESPONSE_REPLAY",
+  "input": "src/test/resources/eta/planned-station-forecasts.json",
+  "inputSha256": "ac346b1e3fcdeb90b3a309a893a76506b8af888534183aef76cb6be18c5bed02",
+  "scope": "Two JVM engine revisions with the same timetable, selected route, stored alighting forecast and incoming boarding forecast. Each result passed through the server status projection and the current FE presentation function.",
+  "before": {
+    "departureAt": "2026-11-19T12:00:39Z",
+    "firstTrain": "4012",
+    "firstBoardingStationArrivalAt": "2026-11-19T12:06:40Z",
+    "firstAlightingAt": "2026-11-19T12:11:43Z",
+    "firstRideBasis": "PLANNED_RIDE_BOARDING_REALTIME",
+    "firstAlightingSourceAt": null,
+    "firstBoardingSourceAt": "2026-11-19T12:01:39Z",
+    "transferWalkingSeconds": 243,
+    "transferSafetyMarginSeconds": 60,
+    "transferReadyAt": "2026-11-19T12:16:46Z",
+    "selectedTransferTrain": "2014",
+    "selectedTransferDepartureAt": "2026-11-19T12:21:40Z",
+    "finalPredictedArrivalAt": "2026-11-19T12:32:32Z",
+    "overallObservationSourceAt": "2026-11-19T12:01:39Z",
+    "statusAndPresentation": {
+      "fresh": {
+        "presentedAt": "2026-11-19T12:01:40Z",
+        "serverBasis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+        "serverArrivalAt": "2026-11-19T12:32:32Z",
+        "appBasis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+        "appSummary": "21:32 도착 예상 · 총 32분"
+      },
+      "expired": {
+        "presentedAt": "2026-11-19T12:03:45Z",
+        "serverBasis": "LAST_ACCEPTED_PLAN",
+        "serverArrivalAt": "2026-11-19T12:32:32Z",
+        "appBasis": "LAST_ACCEPTED_PLAN",
+        "appSummary": "21:32 도착 예상 · 총 32분"
+      }
+    }
+  },
+  "after": {
+    "departureAt": "2026-11-19T12:00:39Z",
+    "firstTrain": "4012",
+    "firstBoardingStationArrivalAt": "2026-11-19T12:06:40Z",
+    "firstAlightingAt": "2026-11-19T12:10:50Z",
+    "firstRideBasis": "FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME",
+    "firstAlightingSourceAt": "2026-11-19T12:00:40Z",
+    "firstBoardingSourceAt": "2026-11-19T12:01:39Z",
+    "transferWalkingSeconds": 243,
+    "transferSafetyMarginSeconds": 60,
+    "transferReadyAt": "2026-11-19T12:15:53Z",
+    "selectedTransferTrain": "2012",
+    "selectedTransferDepartureAt": "2026-11-19T12:16:40Z",
+    "finalPredictedArrivalAt": "2026-11-19T12:27:32Z",
+    "overallObservationSourceAt": "2026-11-19T12:00:40Z",
+    "statusAndPresentation": {
+      "fresh": {
+        "presentedAt": "2026-11-19T12:01:40Z",
+        "serverBasis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+        "serverArrivalAt": "2026-11-19T12:27:32Z",
+        "appBasis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+        "appSummary": "21:27 도착 예상 · 총 27분"
+      },
+      "expired": {
+        "presentedAt": "2026-11-19T12:03:45Z",
+        "serverBasis": "LAST_ACCEPTED_PLAN",
+        "serverArrivalAt": "2026-11-19T12:27:32Z",
+        "appBasis": "LAST_ACCEPTED_PLAN",
+        "appSummary": "21:27 도착 예상 · 총 27분"
+      }
+    }
+  },
+  "changeInPredictedArrivalSeconds": -300,
+  "physicalArrivalMeasured": false,
+  "naverSameConditionComparison": false,
+  "installedAppRun": false,
+  "newTrafficHttpRequests": 0,
+  "archivedProviderReplay": {
+    "serviceDate": "2026-11-18",
+    "kind": "replayed saved observation at departure boundary",
+    "trainNumbers": [
+      "K4621",
+      "2278"
+    ],
+    "projectedAlightingTimes": [
+      "2026-11-18T06:30:00Z",
+      "2026-11-18T06:46:00Z"
+    ],
+    "finalPredictedArrivalAt": "2026-11-18T06:47:13Z",
+    "actualFinalArrivalMeasured": false
+  }
+}

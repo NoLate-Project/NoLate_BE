@@ -1,0 +1,34 @@
+{
+  "classification": "OFFLINE_REPLAY_OF_TWO_CAPTURED_PUBLIC_APP_STATUS_RESPONSES",
+  "newProviderCalls": 0,
+  "previousAndCurrentAppPresentationExecutedInNode": true,
+  "installedAppRun": false,
+  "passengerArrivalMeasured": false,
+  "strictNaverMatch": false,
+  "sourceSha256": {
+    "ui-status-1.json": "5f0a59a090e8e4419f25e221817072793464a1e8ff9d30a1908697339441a1af",
+    "ui-status-after-evaluation-2.json": "a92b898b2437e5b59dfa258ee76e80b056def245f559062e131437822297f746",
+    "selected-route.json": "7af01c6457b1ce567be36e39b79aa3c36785f0e02fb954305bdd1aacc5967579"
+  },
+  "savedGeometryAnchor": "ui-status-1.savedRouteEstimatedDepartureAt",
+  "railStatus": "ui-status-after-evaluation-2.json",
+  "cardsFrom": [
+    "ui-status-1.json",
+    "ui-status-after-evaluation-2.json"
+  ],
+  "originDepartureAt": "2026-11-19T14:11:00Z",
+  "destinationArrivalAt": "2026-11-19T15:19:13Z",
+  "elapsedSeconds": 4093,
+  "displayedRailIntervalsSumBeforeSeconds": 3810,
+  "displayedRailIntervalsSumAfterSeconds": 4093,
+  "accessSeconds": 137,
+  "firstWaitToScheduledDepartureSeconds": 283,
+  "firstTrainScheduledRunSeconds": 2880,
+  "transferWalkSeconds": 157,
+  "transferWaitToScheduledDepartureSeconds": 113,
+  "secondTrainScheduledRunSeconds": 450,
+  "egressSeconds": 73,
+  "firstRideCardBefore": "수도권 4호선 · 노원→사당 · 약 53분 · K4335열차 · 시간표 · 23:18:00 승차 → 00:06:00 하차 예측",
+  "firstRideCardAfter": "수도권 4호선 · 노원→사당 · 첫 승차 대기 약 4분 43초 (열차 출발 기준) · 승차역부터 하차역까지 약 48분 · K4335열차 · 시간표 · 23:18:00 승차 → 00:06:00 하차 예측",
+  "note": "Station departure includes the scheduled stop. No platform dwell or passenger walking time was independently measured."
+}

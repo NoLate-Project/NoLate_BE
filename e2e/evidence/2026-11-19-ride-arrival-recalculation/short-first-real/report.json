@@ -1,0 +1,72 @@
+{
+  "classification": "REAL_PROVIDER_WORKER_API_SIMULATOR_E2E",
+  "result": "PARTIAL",
+  "productionDatabaseModified": false,
+  "existingServersStopped": false,
+  "evaluations": [
+    {
+      "index": 1,
+      "accepted": false,
+      "uiResult": "NOT_RUN",
+      "evaluatedAt": "2026-11-19T12:14:25.631549Z",
+      "recommendedDepartureAt": "2026-11-19T12:20:00Z",
+      "automaticAlarmStateCount": 0,
+      "failureCode": "TRANSIT_TRAIN_NOT_YET_OBSERVED",
+      "providerWire": [
+        {
+          "provider": "seoul_subway",
+          "operation": "arrival",
+          "outcome": "success",
+          "count": 1
+        },
+        {
+          "provider": "seoul_timetable",
+          "operation": "station_lookup",
+          "outcome": "success",
+          "count": 5
+        },
+        {
+          "provider": "seoul_timetable",
+          "operation": "timetable",
+          "outcome": "success",
+          "count": 9
+        },
+        {
+          "provider": "seoul_bus",
+          "operation": "arrival",
+          "outcome": "empty",
+          "count": 1
+        },
+        {
+          "provider": "seoul_bus",
+          "operation": "arrival",
+          "outcome": "success",
+          "count": 2
+        }
+      ],
+      "providerFailures": []
+    }
+  ],
+  "physicalIphone": "DEFERRED_BY_USER",
+  "fcmDeliveryVerified": false,
+  "mapAccuracyWithinTwoMinutesVerified": false,
+  "actualTripAccuracyVerified": false,
+  "journeyProvider": "odsay",
+  "apiBase": "http://127.0.0.1:5523",
+  "targetLeadMinutes": 75,
+  "comparisonRequestedDepartureAt": "2026-11-19T21:20:00+09:00",
+  "comparisonTargetArrivalAt": "2026-11-19T12:45:00+00:00",
+  "evaluationNotBefore": null,
+  "plannedPostdepartureRequested": false,
+  "startupTransport": {
+    "classification": "PINNED_XCTEST_LIFECYCLE_TRANSPORT_ONLY",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "appDataDeleted": false,
+    "otherDevicesTouched": false,
+    "etaValidated": false,
+    "result": "PASSED",
+    "evidenceRoot": "/private/tmp/nolate-eta-real-e2e.ix9gf9qe/ui-private-lifecycle"
+  },
+  "failureKind": "RuntimeError",
+  "originalAppEndpointRestored": true
+}

@@ -1,0 +1,214 @@
+{
+  "classification": "COMPLETED_BOUNDED_REAL_RUN_WITH_UNRESOLVED_NEW_SERVICE_CONNECTION",
+  "root": "/private/tmp/nolate-eta-real-e2e.tdmhogat",
+  "result": "PARTIAL",
+  "evaluations": 3,
+  "positionHttpCalls": 16,
+  "independentCounterfactualStationHttpCalls": 1,
+  "analysisHttpCalls": 0,
+  "providerErrors": 0,
+  "installedAppTests": {
+    "ui-diagnostic-1": {
+      "devicesAndConfigurations": [
+        {
+          "device": {
+            "architecture": "arm64",
+            "deviceId": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+            "deviceName": "NoLate XCUITest 20261003",
+            "modelName": "iPhone 18 Pro",
+            "osBuildNumber": "24A434",
+            "osVersion": "27.0",
+            "platform": "iOS Simulator"
+          },
+          "expectedFailures": 0,
+          "failedTests": 0,
+          "passedTests": 1,
+          "skippedTests": 0,
+          "testPlanConfiguration": {
+            "configurationId": "1",
+            "configurationName": "Test Scheme Action"
+          }
+        }
+      ],
+      "environmentDescription": "NoLateE2E · Built with macOS 27.0.1",
+      "expectedFailures": 0,
+      "failedTests": 0,
+      "finishTime": 1795159195.338,
+      "passedTests": 1,
+      "result": "Passed",
+      "runtimeWarnings": [],
+      "skippedTests": 0,
+      "startTime": 1795159145.793,
+      "statistics": [],
+      "testFailures": [],
+      "title": "Test - NoLateE2E",
+      "topInsights": [],
+      "totalTestCount": 1
+    },
+    "ui-planned-2": {
+      "devicesAndConfigurations": [
+        {
+          "device": {
+            "architecture": "arm64",
+            "deviceId": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+            "deviceName": "NoLate XCUITest 20261003",
+            "modelName": "iPhone 18 Pro",
+            "osBuildNumber": "24A434",
+            "osVersion": "27.0",
+            "platform": "iOS Simulator"
+          },
+          "expectedFailures": 0,
+          "failedTests": 0,
+          "passedTests": 1,
+          "skippedTests": 0,
+          "testPlanConfiguration": {
+            "configurationId": "1",
+            "configurationName": "Test Scheme Action"
+          }
+        }
+      ],
+      "environmentDescription": "NoLateE2E · Built with macOS 27.0.1",
+      "expectedFailures": 0,
+      "failedTests": 0,
+      "finishTime": 1795162218.225,
+      "passedTests": 1,
+      "result": "Passed",
+      "runtimeWarnings": [],
+      "skippedTests": 0,
+      "startTime": 1795162175.023,
+      "statistics": [],
+      "testFailures": [],
+      "title": "Test - NoLateE2E",
+      "topInsights": [],
+      "totalTestCount": 1
+    },
+    "ui-planned-fallback-3": {
+      "devicesAndConfigurations": [
+        {
+          "device": {
+            "architecture": "arm64",
+            "deviceId": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+            "deviceName": "NoLate XCUITest 20261003",
+            "modelName": "iPhone 18 Pro",
+            "osBuildNumber": "24A434",
+            "osVersion": "27.0",
+            "platform": "iOS Simulator"
+          },
+          "expectedFailures": 0,
+          "failedTests": 0,
+          "passedTests": 1,
+          "skippedTests": 0,
+          "testPlanConfiguration": {
+            "configurationId": "1",
+            "configurationName": "Test Scheme Action"
+          }
+        }
+      ],
+      "environmentDescription": "NoLateE2E · Built with macOS 27.0.1",
+      "expectedFailures": 0,
+      "failedTests": 0,
+      "finishTime": 1795163175.115,
+      "passedTests": 1,
+      "result": "Passed",
+      "runtimeWarnings": [],
+      "skippedTests": 0,
+      "startTime": 1795163134.849,
+      "statistics": [],
+      "testFailures": [],
+      "title": "Test - NoLateE2E",
+      "topInsights": [],
+      "totalTestCount": 1
+    }
+  },
+  "normalRealtimeAcceptanceVerified": false,
+  "newActualServiceConnectionVerified": false,
+  "originalDepartureUnchanged": true,
+  "rawStationEndpointsQueried": [
+    [
+      "사당",
+      "4호선"
+    ],
+    [
+      "사당",
+      "2호선"
+    ],
+    [
+      "신림",
+      "2호선"
+    ]
+  ],
+  "sameInputUnionReplay": {
+    "result": "PAIRED_LOCAL_REFRESH",
+    "originalCurrentComputationStrictlyReproduced": true,
+    "bothOutputNull": true,
+    "improvementProven": false
+  },
+  "backendSourceParity": {
+    "src/main/kotlin/com/noLate/eta/resilience/EtaProviderEndpointValidator.kt": true,
+    "src/main/kotlin/com/noLate/eta/resilience/EtaSoftDeadline.kt": true,
+    "src/main/kotlin/com/noLate/eta/resilience/EtaDeadlineAwareClientHttpRequestFactory.kt": true,
+    "src/main/kotlin/com/noLate/eta/resilience/EtaProviderResilience.kt": true,
+    "src/main/kotlin/com/noLate/eta/resilience/EtaResilienceConfiguration.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/TransitEtaCalculationService.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/TransitRouteIdentity.kt": true,
+    "src/main/kotlin/com/noLate/eta/domain/TransitWalking.kt": true,
+    "src/main/kotlin/com/noLate/eta/domain/TransitTrainPosition.kt": true,
+    "src/main/kotlin/com/noLate/eta/domain/TransitFirstBoardingObservation.kt": true,
+    "src/main/kotlin/com/noLate/eta/domain/TransitLegTimetable.kt": true,
+    "src/main/kotlin/com/noLate/eta/domain/TransitJourney.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/tmap/TmapTransitJourneyProvider.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/tmap/TmapWalkingPathEvidenceDecoder.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/tmap/TmapTransitJourneyMapper.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/seoul/SeoulTransitTimetableProvider.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/seoul/SeoulTimetableServiceDayResolver.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/seoul/SeoulTrainPositionClient.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/seoul/SeoulTransferReferenceCatalog.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/odsay/OdsayWalkingTimeClient.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/odsay/OdsayTransitJourneyClient.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/odsay/OdsayTransitJourneyMapper.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/odsay/OdsayWalkingDecoder.kt": true,
+    "src/main/kotlin/com/noLate/eta/infrastructure/routejson/SelectedTransitRouteDecoder.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitJourneyTimetableEnricher.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferFeasibilityEvaluator.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitRideArrivalPredictor.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/SafeDepartureResolver.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitWalkingTimeEnricher.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/SeoulBusEta.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/FirstBoardingRealtimeOverlay.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/ObservedFirstBoardingDepartureProjector.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitJourneyMatcher.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/port/TransitJourneyProvider.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/port/TransitTimetableProvider.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/port/TransitWalkingTimeProvider.kt": true,
+    "src/main/kotlin/com/noLate/eta/application/port/TransitTrainPositionProvider.kt": true,
+    "src/main/kotlin/com/noLate/schedule/application/TrafficClient.kt": true,
+    "src/main/kotlin/com/noLate/schedule/application/ObservedTransitSubwayService.kt": true,
+    "src/main/kotlin/com/noLate/schedule/application/EffectiveTransitRouteSnapshot.kt": true,
+    "src/main/kotlin/com/noLate/schedule/application/PlannedTransitRouteUpdate.kt": true,
+    "src/main/kotlin/com/noLate/schedule/application/TimetableDeparturePlanPolicy.kt": true,
+    "src/main/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorker.kt": true,
+    "src/main/kotlin/com/noLate/schedule/application/service/policy/PlannedTransitRefreshCadencePolicy.kt": true,
+    "src/main/kotlin/com/noLate/schedule/application/service/ScheduleDepartureEtaService.kt": true,
+    "src/main/kotlin/com/noLate/schedule/domain/ScheduleEta.kt": true,
+    "src/main/kotlin/com/noLate/transit/infrastructure/SeoulTransitArrivalClient.kt": true,
+    "src/test/kotlin/com/noLate/eta/simulator/EtaRealProviderSimulatorServer.kt": true,
+    "src/test/kotlin/com/noLate/eta/simulator/RealPlannedRouteRefreshTrace.kt": true,
+    "src/test/kotlin/com/noLate/eta/simulator/ReplayRecordedPlannedRefresh.kt": true,
+    "src/test/kotlin/com/noLate/eta/simulator/RealPlannedRideObservationTrace.kt": true,
+    "src/test/kotlin/com/noLate/eta/simulator/RealTimetableSelectionTrace.kt": true,
+    "src/test/kotlin/com/noLate/eta/simulator/RealOdsaySelectedRouteFixture.kt": true
+  },
+  "frontendSourceParity": {
+    "src/routeSupport/schedule/scheduleDetailPresentationModel.ts": true,
+    "src/modules/schedule/transitEtaTrustPresentation.ts": true,
+    "src/modules/schedule/effectiveTransitRoutePresentation.ts": true,
+    "src/modules/schedule/matchedTransitTimeline.ts": true,
+    "src/routeSupport/schedule/ScheduleDetailRouteQuickSummary.tsx": true
+  },
+  "ownedProcessesTerminated": true,
+  "originalEndpointDispatchSucceeded": true,
+  "physicalPassengerArrivalMeasured": false,
+  "nextChange": "Implement a bounded, explicitly historical reported-boarding record and later same-service alighting join; never relabel a stale forecast as an event or alias different vehicle numbers."
+}

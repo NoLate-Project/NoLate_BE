@@ -1,0 +1,25 @@
+{
+  "classification": "SAME_DATE_OFFICIAL_SCHEDULE_DOES_NOT_RESOLVE_OBSERVED_SERVICE_ID_GAP",
+  "queriedAt": "2026-11-20T03:12:34.313174Z",
+  "clientFetches": 1,
+  "retryOrKeyChange": false,
+  "queryReadyTime": "2026-11-20T11:51:42+09:00",
+  "orderedStops": [
+    "사당",
+    "낙성대",
+    "서울대입구",
+    "봉천",
+    "신림"
+  ],
+  "genericWeekdaySelectedTrain": "2202",
+  "datedOfficialSelectedTrain": "2202",
+  "datedOfficialBoardingAt": "2026-11-20T02:57:00+00:00",
+  "datedOfficialAlightingAt": "2026-11-20T03:04:30+00:00",
+  "realPositionTrain2202Observed": false,
+  "differentRealTrain3202Observed": true,
+  "sameVehicleAliasProven": false,
+  "timetableProviderSwitchImplemented": false,
+  "conclusion": "Both official timetable sources select2202 for the recorded ready-time. No observed train identity mapping to3202 has been established. A provider switch or changing the leading digit is unsupported.",
+  "nextCalculationWork": "Retain the timetable as a planning reference. When a planned outgoing service is unobserved, consider a different actual service only when fresh boarding AND alighting predictions independently identify the same raw vehicle on the same selected line/direction/terminal/class and ordered ride. Record this as a new selected service, never an alias or the same prior planned train. Recompute downstream waits/transfer/final arrival and verify the actual selected vehicle outcome.",
+  "noAccuracyClaimFromThisHistoricalScheduleQuery": true
+}

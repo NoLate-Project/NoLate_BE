@@ -1,0 +1,40 @@
+
+> NoLate_FE@1.3.0 test
+> jest --runInBand --no-watchman --runTestsByPath __tests__/scheduleDetailTimingTrust.test.ts
+
+FAIL __tests__/scheduleDetailTimingTrust.test.ts
+  ✓ shows matching saved endpoints once in the standard route header (3 ms)
+  schedule detail timing trust
+    ✓ summarizes the saved timetable walk rather than the older provider walk (2 ms)
+    ✓ keeps transit details when the saved route has stops but no drawable lines (2 ms)
+    ✓ shows an estimate without repeating an unverified-time warning or claiming an arrival
+    ✕ keeps the actual rejected route estimate visible in compact and expanded metadata (4 ms)
+    ✓ does not apply my failed route lookup to another participant’s saved estimate
+    ✓ keeps confirmed late-arrival diagnostics visible in the expanded route metadata
+    ✓ preserves CAR route title and target metadata
+    ✓ preserves WALK route title and target metadata (1 ms)
+    ✓ preserves BIKE route title and target metadata
+    ✓ preserves ETC route title and target metadata
+
+  ● schedule detail timing trust › keeps the actual rejected route estimate visible in compact and expanded metadata
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "운행시각 미확인 · 저장 경로 기준"
+    Received: undefined
+
+      120 |
+      121 |     expect(presentation.departureTimeLabel).toBe('예상 출발');
+    > 122 |     expect(presentation.routeArrivalSummary).toBe('운행시각 미확인 · 저장 경로 기준');
+          |                                              ^
+      123 |     expect(presentation.routeDetailMeta).toBe('운행시각 미확인 · 저장 경로 기준 · 환승 1회');
+      124 |     expect(presentation.effectiveTransitRoutePresentation).toBeUndefined();
+      125 |   });
+
+      at Object.toBe (__tests__/scheduleDetailTimingTrust.test.ts:122:46)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 10 passed, 11 total
+Snapshots:   0 total
+Time:        0.697 s, estimated 1 s
+Ran all test suites within paths "__tests__/scheduleDetailTimingTrust.test.ts".

@@ -1,0 +1,665 @@
+--- a/src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt
++++ b/src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt
+@@ -27,7 +27,13 @@
+     val expectedAt: Instant,
+     val sourceUpdatedAt: Instant,
+     val earlyBoardingArrival: Boolean = false,
+-)
++    /** 신선한 ARRIVED 상태가 게시된 시각. 미래 예보나 승객의 탑승 확인이 아니다. */
++    val reportedBoardingArrival: Boolean = false,
++) {
++    init {
++        require(!reportedBoardingArrival || point == TransitRideObservationPoint.BOARDING && expectedAt == sourceUpdatedAt)
++    }
++}
+ 
+ internal data class PlannedTransferObservations(
+     val current: List<TransitRideRealtimeObservation> = emptyList(),
+@@ -97,7 +103,11 @@
+                 }
+             }
+             if (point == TransitRideObservationPoint.BOARDING && !boardingInWindow) return@mapNotNull null
+-            val (expected, sourceAt) = observedArrivalAt(station, table, evaluatedAt, rows) ?: return@mapNotNull null
++            val reportedBoarding = if (point == TransitRideObservationPoint.BOARDING) {
++                reportedLateBoardingArrival(station, table, evaluatedAt, rows)
++            } else null
++            val (expected, sourceAt) = reportedBoarding
++                ?: observedArrivalAt(station, table, evaluatedAt, rows) ?: return@mapNotNull null
+             val previousSource = if (point == TransitRideObservationPoint.ALIGHTING) timing.alightingSourceAt()
+                 else timing.boardingSourceAt()
+             if (previousSource != null && sourceAt <= previousSource) {
+@@ -113,7 +123,8 @@
+             if (point == TransitRideObservationPoint.ALIGHTING && expected <= timing.predictedBoardingAt) return@mapNotNull null
+             TransitRideRealtimeObservation(index, point, expected, sourceAt,
+                 earlyBoardingArrival = point == TransitRideObservationPoint.BOARDING &&
+-                    expected < (table.boardingStationArrivalAt ?: table.boardingAt))
++                    expected < (table.boardingStationArrivalAt ?: table.boardingAt),
++                reportedBoardingArrival = reportedBoarding != null)
+         }
+         return PlannedTransferObservations(current, originalBoardings)
+     }
+@@ -238,6 +249,24 @@
+             emptyList()
+         }
+ 
++    /**
++     * 출발 뒤의 기존 계획에만 사용한다. 정상 정차 시간을 지연으로 세지 않도록 원래 출발보다
++     * 늦게 게시된 ARRIVED/대기 0/예보=게시시각만 허용한다. 게시 시각은 정확한 물리 도착 초가 아니다.
++     * 지난 미래 예보·DEPARTED·미확인 정차는 여전히 제외하며, 새 출발 안내의 탑승 가능 근거로 쓰지 않는다.
++     */
++    private fun reportedLateBoardingArrival(
++        station: String, table: TransitLegTimetable, evaluatedAt: Instant, rows: List<TransitArrivalDto>,
++    ): Pair<Instant, Instant>? {
++        if (table.boardingStationArrivalAt == null) return null
++        val matches = rows.filter { it.matches(station, table, evaluatedAt) }
++        val sourceAt = matches.maxOfOrNull { Instant.parse(it.sourceUpdatedAt) } ?: return null
++        if (sourceAt > evaluatedAt || sourceAt <= table.boardingAt) return null
++        val latest = matches.filter { Instant.parse(it.sourceUpdatedAt) == sourceAt }
++        if (latest.any { it.arrivalStatus != TransitArrivalStatus.ARRIVED || it.waitSeconds != 0 ||
++                it.expectedAt?.let { value -> runCatching { Instant.parse(value) }.getOrNull() } != sourceAt }) return null
++        return sourceAt to sourceAt
++    }
++
+     private fun observedArrivalAt(
+         stationName: String,
+         table: TransitLegTimetable,
+--- a/src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt
++++ b/src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt
+@@ -46,7 +46,9 @@
+         } else guard.observePlannedTransfers(plan, evaluatedAt, originalTrains, recheckBoardingIndex = recheckIndex)
+         val observations = readings.current.filter {
+             it.legIndex in rides && it.sourceUpdatedAt in freshWindow &&
+-                it.expectedAt > evaluatedAt.minusSeconds(5)
++                (it.expectedAt > evaluatedAt.minusSeconds(5) ||
++                    it.reportedBoardingArrival && it.expectedAt <= evaluatedAt &&
++                    it.expectedAt >= evaluatedAt.minusSeconds(120))
+         }
+         val firstBoarding = observations.firstOrNull {
+             it.legIndex == rides.first() && it.point == TransitRideObservationPoint.BOARDING
+--- a/src/test/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuardTest.kt
++++ b/src/test/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuardTest.kt
+@@ -40,6 +40,37 @@
+     private val evaluatedAt = Instant.parse("2026-10-20T12:00:00Z")
+     private val arrivals = mock<TransitArrivalService>()
+     private val guard = TransitTransferRealtimeGuard(arrivals)
++
++    @ParameterizedTest
++    @CsvSource("ARRIVED,36,0,0,4012,true", "ARRIVED,120,0,0,4012,true",
++        "ARRIVED,121,0,0,4012,false", "DEPARTED,36,0,0,4012,false",
++        "IN_TRANSIT,36,0,0,4012,false", "ARRIVED,36,10,0,4012,false",
++        "ARRIVED,36,0,1,4012,false", "ARRIVED,36,0,0,4014,false")
++    fun `출발 뒤 늦게 게시된 같은 편의 도착 상태는 지난 미래 예보와 구분한다`(
++        status: TransitArrivalStatus, age: Long, wait: Int, expectedOffset: Long, train: String, accepted: Boolean,
++    ) {
++        val original = plannedRoute(evaluatedAt.plusSeconds(2400))
++        val segment = original.segments.first()
++        val table = requireNotNull(segment.rideTiming).timetable.copy(directionCode = "DOWN", terminalName = "오이도",
++            boardingAt = evaluatedAt.minusSeconds(180), boardingStationArrivalAt = evaluatedAt.minusSeconds(210),
++            arrivalAt = evaluatedAt.plusSeconds(1800))
++        val plan = original.copy(segments = listOf(segment.copy(rideTiming = EffectiveTransitRideTiming(
++            table, table.boardingAt, table.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE))) + original.segments.drop(1))
++        val source = evaluatedAt.minusSeconds(age)
++        whenever(arrivals.getSubwayArrivalsForEta(eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
++            .thenReturn(listOf(liveArrival().copy(stationName = "노원", subwayLineId = "1004", lineName = "4호선",
++                trainNumber = train, direction = "하행", destinationName = "오이도", arrivalStatus = status,
++                waitSeconds = wait, sourceUpdatedAt = source.toString(), expectedAt = source.plusSeconds(expectedOffset).toString())))
++
++        val observed = guard.observePlannedRideChanges(plan, evaluatedAt)
++
++        assertEquals(accepted, observed.isNotEmpty())
++        if (accepted) {
++            assertTrue(observed.single().reportedBoardingArrival)
++            assertEquals(source, observed.single().expectedAt)
++            assertEquals(source, observed.single().sourceUpdatedAt)
++        }
++    }
+ 
+     @ParameterizedTest
+     @CsvSource("180,0,4012,true,true", "180,121,4012,false,true", "180,0,4014,false,true",
+--- a/src/test/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresherTest.kt
++++ b/src/test/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresherTest.kt
+@@ -22,6 +22,38 @@
+     private val refresher = PlannedTransitRouteRefresher(guard,
+         TransitJourneyTimetableEnricher(listOf(timetable)), TransitTransferFeasibilityEvaluator())
+     private fun at(seconds: Long) = epoch.plusSeconds(seconds)
++
++    @Test
++    fun `4075편의 신선한 도착 상태를 원래 출발 계획의 구간과 환승 대기에 반영한다`() {
++        val mapper = jacksonObjectMapper().findAndRegisterModules()
++        val input = requireNotNull(javaClass.getResourceAsStream("/eta/reported-boarding-arrival-20261120.json"))
++            .use(mapper::readTree)
++        val route = mapper.treeToValue(input["plan"], EffectiveTransitRoute::class.java)
++        val evaluated = Instant.parse(input["evaluatedAt"].asText())
++        val rows = input["station"]["rows"].map { mapper.treeToValue(it, TransitArrivalDto::class.java) }
++        val arrivals = mock<TransitArrivalService>()
++        whenever(arrivals.getSubwayArrivalsForEta(eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
++            .thenReturn(rows)
++        val engine = PlannedTransitRouteRefresher(TransitTransferRealtimeGuard(arrivals),
++            TransitJourneyTimetableEnricher(listOf(timetable)), TransitTransferFeasibilityEvaluator())
++
++        val update = requireNotNull(engine.refresh(route, evaluated))
++        val changed = requireNotNull(update.route)
++        val first = requireNotNull(changed.segments[1].rideTiming)
++
++        assertEquals(route.departureAt, changed.departureAt)
++        assertEquals("4075", first.timetable.trainNumber)
++        assertEquals(Instant.parse("2026-11-20T01:58:25Z"), first.predictedBoardingAt)
++        assertEquals(Instant.parse("2026-11-20T02:46:55Z"), first.predictedArrivalAt)
++        assertEquals(EffectiveTransitRideTimingBasis.PLANNED_RIDE_BOARDING_REALTIME, first.basis)
++        assertEquals(Instant.parse("2026-11-20T01:58:25Z"), update.sourceUpdatedAt)
++        assertEquals("2200", changed.segments[3].rideTiming?.timetable?.trainNumber)
++        assertEquals(88, changed.segments[3].transferTiming?.let {
++            java.time.Duration.between(it.physicalReadyAt, it.boardingAt).seconds.toInt()
++        })
++        assertEquals(route.arrivalAt, changed.arrivalAt)
++        verifyNoInteractions(timetable)
++    }
+ 
+     @Test
+     fun `예정 승차를 2분 넘게 지난 첫 열차의 새 예보로 환승과 최종 도착을 갱신한다`() {
+--- /dev/null
++++ b/src/test/resources/eta/reported-boarding-arrival-20261120.json
+@@ -0,0 +1,503 @@
++{
++  "classification": "RECORDED_PUBLIC_STATION_STATE_NOT_PHYSICAL_ARRIVAL",
++  "evaluatedAt": "2026-11-20T01:59:01.068530Z",
++  "plan": {
++    "provider": "odsay",
++    "identity": "5efbee2d61165d6d5f6aaa7832284ed140d5a45d0e09db9da0602666f45f127b",
++    "departureAt": "2026-11-20T01:50:00Z",
++    "arrivalAt": "2026-11-20T02:59:43Z",
++    "totalMinutes": 70,
++    "segments": [
++      {
++        "sequence": 0,
++        "kind": "WALK",
++        "durationMinutes": 3,
++        "waitingMinutes": null,
++        "lineName": null,
++        "fromName": null,
++        "toName": null,
++        "directionName": null,
++        "walkingScope": "ACCESS",
++        "durationSeconds": 137,
++        "walkingGeometry": {
++          "from": {
++            "lat": 37.65636121651711,
++            "lng": 127.06342767617363
++          },
++          "to": {
++            "lat": 37.65660244931353,
++            "lng": 127.06400986889055
++          },
++          "distanceMeters": 148,
++          "endpointBasis": "PROVIDER_PATH_ENDPOINTS",
++          "pathEvidence": null,
++          "providerQueryEndpoints": {
++            "start": {
++              "lat": 37.65636195,
++              "lng": 127.06342739
++            },
++            "end": {
++              "lat": 37.656590053614906,
++              "lng": 127.06400007271506
++            },
++            "originalEgressEndpoint": null
++          }
++        },
++        "rideTiming": null,
++        "walkingTiming": {
++          "source": "ODSAY_ENTRANCE_WALK_SECONDS",
++          "originalDurationMinutes": 1,
++          "movementSeconds": 137,
++          "fetchedAt": "2026-11-20T01:48:01.893581Z",
++          "sameOrderedPathVerified": false,
++          "transferReference": null
++        },
++        "transferTiming": null,
++        "busRidePrediction": null
++      },
++      {
++        "sequence": 1,
++        "kind": "SUBWAY",
++        "durationMinutes": 53,
++        "waitingMinutes": 5,
++        "lineName": "수도권 4호선",
++        "fromName": "노원",
++        "toName": "사당",
++        "directionName": null,
++        "walkingScope": null,
++        "durationSeconds": null,
++        "walkingGeometry": null,
++        "rideTiming": {
++          "timetable": {
++            "provider": "seoul-timetable",
++            "line": "LINE_4",
++            "serviceDate": "2026-11-20",
++            "trainNumber": "4075",
++            "directionCode": "DOWN",
++            "serviceClass": "LOCAL",
++            "fromStationCode": "0411",
++            "toStationCode": "0433",
++            "terminalName": "사당",
++            "boardingAt": "2026-11-20T01:57:00Z",
++            "arrivalAt": "2026-11-20T02:45:00Z",
++            "fetchedAt": "2026-11-20T01:48:02.185997Z",
++            "realtimeTrainNumber": null,
++            "boardingStationArrivalAt": "2026-11-20T01:56:30Z"
++          },
++          "predictedBoardingAt": "2026-11-20T01:57:00Z",
++          "predictedArrivalAt": "2026-11-20T02:45:00Z",
++          "basis": "TIMETABLE",
++          "observationSourceUpdatedAt": null,
++          "plannedBoardingIsStationArrival": null,
++          "boardingObservationSourceUpdatedAt": null
++        },
++        "walkingTiming": null,
++        "transferTiming": null,
++        "busRidePrediction": null,
++        "orderedStopNames": [
++          "노원",
++          "창동",
++          "쌍문",
++          "수유(강북구청)",
++          "미아",
++          "미아사거리",
++          "길음",
++          "성신여대입구",
++          "한성대입구",
++          "혜화",
++          "동대문",
++          "동대문역사문화공원",
++          "충무로",
++          "명동",
++          "회현",
++          "서울역",
++          "숙대입구",
++          "삼각지",
++          "신용산",
++          "이촌",
++          "동작",
++          "총신대입구(이수)",
++          "사당"
++        ]
++      },
++      {
++        "sequence": 2,
++        "kind": "WALK",
++        "durationMinutes": 3,
++        "waitingMinutes": 0,
++        "lineName": null,
++        "fromName": null,
++        "toName": null,
++        "directionName": null,
++        "walkingScope": "TRANSFER",
++        "durationSeconds": 157,
++        "walkingGeometry": {
++          "from": null,
++          "to": null,
++          "distanceMeters": 170,
++          "endpointBasis": "UNKNOWN",
++          "pathEvidence": {
++            "provider": "odsay",
++            "status": "PROVIDED",
++            "steps": [
++              {
++                "coordinates": [
++                  {
++                    "lat": 37.47679013032343,
++                    "lng": 126.98167283045825
++                  },
++                  {
++                    "lat": 37.47679030082541,
++                    "lng": 126.98166816752526
++                  },
++                  {
++                    "lat": 37.476790777126816,
++                    "lng": 126.98165346140914
++                  },
++                  {
++                    "lat": 37.47679834053122,
++                    "lng": 126.98144621239518
++                  }
++                ],
++                "distanceMeters": 20.0,
++                "description": null
++              },
++              {
++                "coordinates": [
++                  {
++                    "lat": 37.47679834053122,
++                    "lng": 126.98144621239518
++                  },
++                  {
++                    "lat": 37.47696413646154,
++                    "lng": 126.98122848234775
++                  }
++                ],
++                "distanceMeters": 26.0,
++                "description": null
++              },
++              {
++                "coordinates": [
++                  {
++                    "lat": 37.47696413646154,
++                    "lng": 126.98122848234775
++                  },
++                  {
++                    "lat": 37.47705003375247,
++                    "lng": 126.9811253077268
++                  }
++                ],
++                "distanceMeters": 13.0,
++                "description": null
++              },
++              {
++                "coordinates": [
++                  {
++                    "lat": 37.47705003375247,
++                    "lng": 126.9811253077268
++                  },
++                  {
++                    "lat": 37.47718564112053,
++                    "lng": 126.981319805645
++                  }
++                ],
++                "distanceMeters": 22.0,
++                "description": null
++              },
++              {
++                "coordinates": [
++                  {
++                    "lat": 37.47718564112053,
++                    "lng": 126.981319805645
++                  },
++                  {
++                    "lat": 37.4771776339575,
++                    "lng": 126.98126161487467
++                  },
++                  {
++                    "lat": 37.47708185925482,
++                    "lng": 126.9811270103682
++                  }
++                ],
++                "distanceMeters": 21.0,
++                "description": null
++              },
++              {
++                "coordinates": [
++                  {
++                    "lat": 37.47708185925482,
++                    "lng": 126.9811270103682
++                  },
++                  {
++                    "lat": 37.47701710373018,
++                    "lng": 126.98103630029293
++                  }
++                ],
++                "distanceMeters": 10.0,
++                "description": null
++              },
++              {
++                "coordinates": [
++                  {
++                    "lat": 37.47701710373018,
++                    "lng": 126.98103630029293
++                  },
++                  {
++                    "lat": 37.47701101142366,
++                    "lng": 126.98104471174815
++                  },
++                  {
++                    "lat": 37.47700267869859,
++                    "lng": 126.98105607926804
++                  },
++                  {
++                    "lat": 37.47683414407021,
++                    "lng": 126.98128638269647
++                  },
++                  {
++                    "lat": 37.476777038003036,
++                    "lng": 126.98131606995292
++                  },
++                  {
++                    "lat": 37.47659639019979,
++                    "lng": 126.98133315225579
++                  }
++                ],
++                "distanceMeters": 56.0,
++                "description": null
++              },
++              {
++                "coordinates": [
++                  {
++                    "lat": 37.47659639019979,
++                    "lng": 126.98133315225579
++                  },
++                  {
++                    "lat": 37.476593635930946,
++                    "lng": 126.9813618086199
++                  }
++                ],
++                "distanceMeters": 2.0,
++                "description": null
++              }
++            ],
++            "stationInteriorCoverage": "UNKNOWN"
++          },
++          "providerQueryEndpoints": {
++            "start": {
++              "lat": 37.476793075344084,
++              "lng": 126.98167300000001
++            },
++            "end": {
++              "lat": 37.47657507534361,
++              "lng": 126.981359
++            },
++            "originalEgressEndpoint": null
++          }
++        },
++        "rideTiming": null,
++        "walkingTiming": {
++          "source": "ODSAY_FULL_PATH_SECONDS",
++          "originalDurationMinutes": 3,
++          "movementSeconds": 157,
++          "fetchedAt": "2026-11-20T01:48:01.893710Z",
++          "sameOrderedPathVerified": true,
++          "transferReference": {
++            "stationName": "사당",
++            "fromLine": "4호선",
++            "toLine": "2호선",
++            "distanceMeters": 74,
++            "durationSeconds": 62,
++            "datasetDate": "2025-03-31",
++            "provider": "seoulmetro",
++            "walkingSpeedMetersPerSecond": 1.2,
++            "application": "REFERENCE_ONLY_DIRECTION_AND_PATH_UNVERIFIED",
++            "sourceUrl": "https://data.seoul.go.kr/dataList/OA-13290/F/1/datasetView.do"
++          }
++        },
++        "transferTiming": null,
++        "busRidePrediction": null
++      },
++      {
++        "sequence": 3,
++        "kind": "SUBWAY",
++        "durationMinutes": 11,
++        "waitingMinutes": 4,
++        "lineName": "수도권 2호선",
++        "fromName": "사당",
++        "toName": "신림",
++        "directionName": null,
++        "walkingScope": null,
++        "durationSeconds": null,
++        "walkingGeometry": null,
++        "rideTiming": {
++          "timetable": {
++            "provider": "seoul-timetable",
++            "line": "LINE_2",
++            "serviceDate": "2026-11-20",
++            "trainNumber": "2200",
++            "directionCode": "UP",
++            "serviceClass": "LOCAL",
++            "fromStationCode": "0226",
++            "toStationCode": "0230",
++            "terminalName": "성수",
++            "boardingAt": "2026-11-20T02:51:00Z",
++            "arrivalAt": "2026-11-20T02:58:30Z",
++            "fetchedAt": "2026-11-20T01:48:02.848367Z",
++            "realtimeTrainNumber": null,
++            "boardingStationArrivalAt": "2026-11-20T02:50:30Z"
++          },
++          "predictedBoardingAt": "2026-11-20T02:51:00Z",
++          "predictedArrivalAt": "2026-11-20T02:58:30Z",
++          "basis": "TIMETABLE",
++          "observationSourceUpdatedAt": null,
++          "plannedBoardingIsStationArrival": null,
++          "boardingObservationSourceUpdatedAt": null
++        },
++        "walkingTiming": null,
++        "transferTiming": {
++          "previousArrivalAt": "2026-11-20T02:45:00Z",
++          "walkingSeconds": 157,
++          "bufferSeconds": 0,
++          "confidenceMarginSeconds": 60,
++          "boardingAt": "2026-11-20T02:51:00Z",
++          "requiredMarginSeconds": 60,
++          "confidenceReadyAt": "2026-11-20T02:48:37Z",
++          "physicalReadyAt": "2026-11-20T02:47:37Z",
++          "remainingSlackSeconds": 143
++        },
++        "busRidePrediction": null,
++        "orderedStopNames": [
++          "사당",
++          "낙성대",
++          "서울대입구",
++          "봉천",
++          "신림"
++        ]
++      },
++      {
++        "sequence": 4,
++        "kind": "WALK",
++        "durationMinutes": 2,
++        "waitingMinutes": null,
++        "lineName": null,
++        "fromName": null,
++        "toName": null,
++        "directionName": null,
++        "walkingScope": "EGRESS",
++        "durationSeconds": 73,
++        "walkingGeometry": {
++          "from": {
++            "lat": 37.4839123631212,
++            "lng": 126.92990999996168
++          },
++          "to": {
++            "lat": 37.48429580055334,
++            "lng": 126.92977191554935
++          },
++          "distanceMeters": 78,
++          "endpointBasis": "PROVIDER_PATH_ENDPOINTS",
++          "pathEvidence": null,
++          "providerQueryEndpoints": {
++            "start": {
++              "lat": 37.48392182495826,
++              "lng": 126.92989416822
++            },
++            "end": {
++              "lat": 37.48426844,
++              "lng": 126.92977778
++            },
++            "originalEgressEndpoint": {
++              "lat": 37.48429580055334,
++              "lng": 126.92977191554935
++            }
++          }
++        },
++        "rideTiming": null,
++        "walkingTiming": {
++          "source": "ODSAY_EXIT_WALK_SECONDS",
++          "originalDurationMinutes": 1,
++          "movementSeconds": 73,
++          "fetchedAt": "2026-11-20T01:48:01.893627Z",
++          "sameOrderedPathVerified": false,
++          "transferReference": null
++        },
++        "transferTiming": null,
++        "busRidePrediction": null
++      }
++    ]
++  },
++  "station": {
++    "station": "노원",
++    "line": "4호선",
++    "directionName": null,
++    "directionCode": "DOWN",
++    "limit": 10,
++    "rows": [
++      {
++        "provider": "seoul-openapi",
++        "kind": "SUBWAY",
++        "lineName": "4호선",
++        "routeName": null,
++        "stationName": "노원",
++        "direction": "하행",
++        "destinationName": "사당",
++        "arrivalMessage": "노원 도착",
++        "waitSeconds": 0,
++        "waitMinutes": 0,
++        "expectedAt": "2026-11-20T01:58:25Z",
++        "lastTrain": false,
++        "realtime": true,
++        "arrivalStatus": "ARRIVED",
++        "arrivalStatusLabel": "도착",
++        "observedAt": "2026-11-20T01:59:01.443143Z",
++        "sourceUpdatedAt": "2026-11-20T01:58:25Z",
++        "freshnessEvidence": "PROVIDER_SOURCE_TIMESTAMP",
++        "remainingStops": null,
++        "vehicleType": "일반",
++        "lowFloor": null,
++        "express": false,
++        "cityCode": null,
++        "nodeId": null,
++        "arsId": null,
++        "subwayLineId": "1004",
++        "subwayStationId": "1004000411",
++        "trainNumber": "4075",
++        "providerRouteId": null,
++        "vehicleId": null
++      },
++      {
++        "provider": "seoul-openapi",
++        "kind": "SUBWAY",
++        "lineName": "4호선",
++        "routeName": null,
++        "stationName": "노원",
++        "direction": "하행",
++        "destinationName": "오이도",
++        "arrivalMessage": "5분 후 (불암산)",
++        "waitSeconds": 300,
++        "waitMinutes": 5,
++        "expectedAt": "2026-11-20T02:03:25Z",
++        "lastTrain": false,
++        "realtime": true,
++        "arrivalStatus": "IN_TRANSIT",
++        "arrivalStatusLabel": "운행 중",
++        "observedAt": "2026-11-20T01:59:01.443143Z",
++        "sourceUpdatedAt": "2026-11-20T01:58:25Z",
++        "freshnessEvidence": "PROVIDER_SOURCE_TIMESTAMP",
++        "remainingStops": null,
++        "vehicleType": "일반",
++        "lowFloor": null,
++        "express": false,
++        "cityCode": null,
++        "nodeId": null,
++        "arsId": null,
++        "subwayLineId": "1004",
++        "subwayStationId": "1004000411",
++        "trainNumber": "4581",
++        "providerRouteId": null,
++        "vehicleId": null
++      }
++    ]
++  }
++}

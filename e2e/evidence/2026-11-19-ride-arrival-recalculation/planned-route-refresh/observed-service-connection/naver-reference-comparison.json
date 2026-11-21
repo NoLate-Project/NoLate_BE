@@ -1,0 +1,51 @@
+{
+  "classification": "PUBLIC_NAVER_UI_DISPLAY_REFERENCE",
+  "observedAt": "2026-11-20T03:59:14.720503+00:00",
+  "inputDepartureAt": "2026-11-20T13:10:00+09:00",
+  "serviceDate": "2026-11-20",
+  "origin": {
+    "lat": 37.65636195,
+    "lng": 127.06342739
+  },
+  "destination": {
+    "lat": 37.48426844,
+    "lng": 126.92977778
+  },
+  "path": [
+    "노원 4호선",
+    "사당 2호선",
+    "신림"
+  ],
+  "display": {
+    "firstBoarding": "13:14",
+    "firstTerminal": "사당",
+    "firstRideMinutes": 48,
+    "transferWalkMinutes": 2,
+    "transferWalkMeters": 155,
+    "onwardBoarding": "14:08",
+    "onwardTerminal": "내선순환",
+    "onwardRideMinutes": 7,
+    "destinationArrival": "14:16"
+  },
+  "appEvaluationCompared": true,
+  "fullWalkingScopeVerified": false,
+  "physicalArrivalVerified": false,
+  "limits": [
+    "Exact seconds and rounding are not disclosed.",
+    "The public route shows no separate access/egress walk; no matching full walking scope is inferred."
+  ],
+  "evidence": [
+    "output/playwright/naver-1310-before-evaluation.txt",
+    "output/playwright/naver-1310-before-evaluation.png"
+  ],
+  "appEvaluationFile": "evaluation-1.json",
+  "appEvaluatedAt": "2026-11-20T04:00:05.524008Z",
+  "appDepartureAt": "2026-11-20T04:01:18Z",
+  "appArrivalAt": "2026-11-20T05:06:13Z",
+  "displayReferenceOnly": true,
+  "strictComparable": false,
+  "exclusionReasons": [
+    "Computed app departure 13:01:18 differs from public Naver future input 13:10; result is not overwritten.",
+    "Public UI exposes neither matching exact access/egress scope nor departure seconds."
+  ]
+}

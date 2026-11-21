@@ -1,0 +1,58 @@
+--- a/e2e/verify_accepted_train_observation.py
++++ b/e2e/verify_accepted_train_observation.py
+@@ -198,16 +198,31 @@
+             continue
+         timing = segment['rideTiming']
+         table = timing['timetable']
++        service = timing.get('observedService')
++        if service and (service.get('provider') != 'seoul-openapi' or
++                        any(service.get(key) != table[key] for key in
++                            ('line', 'serviceDate', 'directionCode', 'serviceClass')) or
++                        terminal_key(service['terminalName']) != terminal_key(table['terminalName']) or
++                        station(service['boardingStationName']) != station(segment['fromName']) or
++                        station(service['alightingStationName']) != station(segment['toName'])):
++            raise ValueError('Observed service conflicts with the retained ride context')
++        number = service['trainNumber'] if service else table['trainNumber']
+         board, alight = map(instant, (timing['predictedBoardingAt'], timing['predictedArrivalAt']))
+         predicted = (alight - board).total_seconds()
+         assert predicted > 0
+         start_event = 'ARRIVAL' if boarding_references_arrival(timing) else 'DEPARTURE'
+         def station_event(kind, station_name, scheduled):
++            def same_reference(event):
++                # 실제로 새로 선택한 편은 비교 시간표의 편·정차시각과 연결하지 않는다.
++                # 같은 숫자여도 명시적인 실제 편에 가짜 시간표 기준을 만들지 않는다.
++                if service:
++                    return 'scheduledAt' in event and event['scheduledAt'] is None
++                return event.get('scheduledAt') is not None and instant(event['scheduledAt']) == instant(scheduled)
+             matches = [event for event in events if event['event'] == kind and event['line'] == table['line']
+-                       and event['trainNumbers'][0] == table['trainNumber'] and event['direction'] == table['directionCode']
++                       and event['trainNumbers'][0] == number and event['direction'] == table['directionCode']
+                        and event['serviceClass'] == table['serviceClass'] and terminal_key(event['terminal']) == terminal_key(table['terminalName'])
+                        and event.get('serviceDate', table['serviceDate']) == table['serviceDate']
+-                       and station(event['station']) == station(station_name) and instant(event['scheduledAt']) == instant(scheduled)]
++                       and station(event['station']) == station(station_name) and same_reference(event)]
+             return matches[0] if len(matches) == 1 else {}
+ 
+         origin = station_event('BOARDING', segment['fromName'], table['boardingAt'])
+@@ -218,16 +233,18 @@
+         def difference(end, start):
+             return (end - start).total_seconds() if end is not None and start is not None else None
+         duration = elapsed_bounds(boarding, alighting, same_train=True)
+-        scheduled_run = (instant(table['arrivalAt']) - instant(table['boardingAt'])).total_seconds()
++        scheduled_run = None if service else (instant(table['arrivalAt']) - instant(table['boardingAt'])).total_seconds()
+         observed_run = elapsed_bounds(origin_departure, alighting, same_train=True)
+-        report = {'sequence': segment['sequence'], 'trainNumber': table['trainNumber'], 'serviceDate': table['serviceDate'],
++        report = {'sequence': segment['sequence'], 'trainNumber': number, 'serviceDate': table['serviceDate'],
+                   'from': segment['fromName'], 'to': segment['toName'], 'startEvent': start_event, 'endEvent': 'ARRIVAL',
+                   'observedBoardingStationDwellBoundsSeconds': elapsed_bounds(origin_arrival, origin_departure, same_train=True),
+                   'timetableDepartureToAlightingSeconds': scheduled_run,
+                   'observedDepartureToAlightingBoundsSeconds': observed_run,
+-                  'departureToAlightingMinusTimetableBoundsSeconds': [d - scheduled_run if d is not None else None for d in observed_run],
++                  'departureToAlightingMinusTimetableBoundsSeconds': [d - scheduled_run if d is not None and scheduled_run is not None else None for d in observed_run],
+                   'predictedStationToStationSeconds': predicted, 'observedStationToStationBoundsSeconds': duration,
+                   'stationToStationMinusPredictionBoundsSeconds': [d - predicted if d is not None else None for d in duration]}
++        if service:
++            report['comparisonTimetableTrainNumber'] = table['trainNumber']
+         if access_end is not None:
+             report['firstBoardingWithModeledAccess'] = {
+                 'modeledAccessEndAt': access_end.isoformat(), 'predictedGapSeconds': difference(board, access_end),

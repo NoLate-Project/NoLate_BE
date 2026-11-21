@@ -1,0 +1,163 @@
+{
+  "classification": "OFFLINE_PAIRED_REPLAY_OF_ARCHIVED_STATION_TABLES_WITH_CONTROLLED_POSTMIDNIGHT_ORIGIN",
+  "serviceDate": "2026-11-19",
+  "civilDateInSeoul": "2026-11-20",
+  "evaluationAt": "2026-11-19T15:01:03.245593Z",
+  "inputs": {
+    "evaluation-1.json": "99aa4d891a07a6e01337d6f1f4a930706f7a6bd24914c836d08346c207b6a2b9",
+    "selected-route.json": "7af01c6457b1ce567be36e39b79aa3c36785f0e02fb954305bdd1aacc5967579",
+    "odsay-seed-journey.json": "6a94c7058931fe4329b25e1a6f59f460a7e37f95f63fff1fbbd2055528f1710f",
+    "overnight-service-day/inputs.json": "e5699720f494c1953180aef3e89363113c0df3dbce757ebfb8d5be8f249c2465",
+    "terminal-identification/trace-input.json": "b0dd18d5c80bf98f0cef5230905198a29430afe9bcbbbed83ff9314f3ce1f845"
+  },
+  "replaySource": "ReplayStationDeparture.kt",
+  "normalBackendEntryPoint": "TransitTimetablePreviewService.preview",
+  "normalFrontendCode": [
+    "getOdsayTimetablePreview",
+    "buildRouteInfoFromAlternative"
+  ],
+  "scope": "The ODsay station-origin journey is the saved second ride and the original 73 s exit walk. The departure coordinate is the end of the recorded transfer walk. There is no new user journey or route search over the network. The supplied origin and appointment are controlled. Seoul times and stop sequence are recorded.",
+  "recordedStationQuery": {
+    "line": "LINE_2",
+    "fromName": "사당",
+    "toName": "신림",
+    "nextStopName": "낙성대",
+    "serviceClass": "LOCAL",
+    "notBefore": "2026-11-19T15:09:37Z",
+    "directionCode": null,
+    "serviceDate": "2026-11-19"
+  },
+  "requestDifferences": {
+    "before": {
+      "serviceDate": "2026-11-20"
+    },
+    "after": {}
+  },
+  "sameQueryBinding": "The route response is replayed at the normalized provider boundary only for an exact original station query match. The three other timing controls use reconstructed local Seoul envelopes and the direction from the previously matched ride. The envelopes are not original wire bodies.",
+  "cases": {
+    "sameOdsayStationQuery": {
+      "before": null,
+      "after": {
+        "departureAt": "2026-11-19T15:08:37Z",
+        "arrivalAt": "2026-11-19T15:19:13Z",
+        "trainNumber": "2510",
+        "serviceDate": "2026-11-19",
+        "boardingAt": "2026-11-19T15:10:30Z",
+        "stationArrivalAt": "2026-11-19T15:18:00Z"
+      }
+    },
+    "arriveBy": {
+      "before": null,
+      "after": {
+        "departureAt": "2026-11-19T15:09:30Z",
+        "arrivalAt": "2026-11-19T15:19:13Z",
+        "trainNumber": "2510",
+        "serviceDate": "2026-11-19",
+        "boardingAt": "2026-11-19T15:10:30Z",
+        "stationArrivalAt": "2026-11-19T15:18:00Z"
+      }
+    },
+    "oneSecondPastBoardingCutoff": {
+      "before": null,
+      "after": {
+        "departureAt": "2026-11-19T15:09:31Z",
+        "arrivalAt": "2026-11-19T15:28:13Z",
+        "trainNumber": "2512",
+        "serviceDate": "2026-11-19",
+        "boardingAt": "2026-11-19T15:19:30Z",
+        "stationArrivalAt": "2026-11-19T15:27:00Z"
+      }
+    },
+    "departAtStation": {
+      "before": null,
+      "after": {
+        "departureAt": "2026-11-19T15:06:00Z",
+        "arrivalAt": "2026-11-19T15:19:13Z",
+        "trainNumber": "2510",
+        "serviceDate": "2026-11-19",
+        "boardingAt": "2026-11-19T15:10:30Z",
+        "stationArrivalAt": "2026-11-19T15:18:00Z"
+      }
+    }
+  },
+  "frontendRouteModel": {
+    "before": {
+      "departAtStation": null,
+      "arriveBy": null,
+      "oneSecondPastBoardingCutoff": null,
+      "sameOdsayStationQuery": null
+    },
+    "after": {
+      "departAtStation": {
+        "departureTime": "2026-11-19T15:06:00.000Z",
+        "stationBoardingAt": "2026-11-19T15:10:30Z",
+        "stationAlightingAt": "2026-11-19T15:18:00Z",
+        "destinationTime": "2026-11-19T15:19:13.000Z",
+        "routeSeconds": 793,
+        "waitSeconds": 270,
+        "rideSeconds": 450,
+        "exitSeconds": 73
+      },
+      "arriveBy": {
+        "departureTime": "2026-11-19T15:09:30.000Z",
+        "stationBoardingAt": "2026-11-19T15:10:30Z",
+        "stationAlightingAt": "2026-11-19T15:18:00Z",
+        "destinationTime": "2026-11-19T15:19:13.000Z",
+        "routeSeconds": 583,
+        "waitSeconds": 60,
+        "rideSeconds": 450,
+        "exitSeconds": 73
+      },
+      "oneSecondPastBoardingCutoff": {
+        "departureTime": "2026-11-19T15:09:31.000Z",
+        "stationBoardingAt": "2026-11-19T15:19:30Z",
+        "stationAlightingAt": "2026-11-19T15:27:00Z",
+        "destinationTime": "2026-11-19T15:28:13.000Z",
+        "routeSeconds": 1122,
+        "waitSeconds": 599,
+        "rideSeconds": 450,
+        "exitSeconds": 73
+      },
+      "sameOdsayStationQuery": {
+        "departureTime": "2026-11-19T15:08:37.000Z",
+        "stationBoardingAt": "2026-11-19T15:10:30Z",
+        "stationAlightingAt": "2026-11-19T15:18:00Z",
+        "destinationTime": "2026-11-19T15:19:13.000Z",
+        "routeSeconds": 636,
+        "waitSeconds": 113,
+        "rideSeconds": 450,
+        "exitSeconds": 73
+      }
+    }
+  },
+  "frontendTransport": "serialized backend replay result, no network",
+  "verification": {
+    "beforeBackend": {
+      "total": 192,
+      "passed": 188,
+      "failed": 4
+    },
+    "afterGradle": {
+      "tests": 192,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "suites": 7
+    },
+    "feJest": {
+      "suites": 3,
+      "tests": 64,
+      "failed": 0
+    },
+    "loopbackResponses": {
+      "before": 0,
+      "after": 4
+    },
+    "publicTransitRequests": 0,
+    "newNaverComparisons": 0,
+    "newObservedTrips": 0,
+    "simulatorRunForThisChange": false,
+    "onTimeAccuracyImprovementMeasured": false
+  },
+  "snapshot": "/private/tmp/nolate-be-planned-build.342rmadc"
+}

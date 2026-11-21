@@ -1,0 +1,10 @@
+{
+  "classification": "CONTROLLED_SHADOW_COLLECTOR_FENCE_CHECKS_NOT_REAL_OBSERVATION",
+  "positiveProspectiveWindowChecks": 1,
+  "positiveClockChecks": 1,
+  "clockExclusions": 4,
+  "scopeExclusions": 5,
+  "additionalHttpCalls": 0,
+  "javaProductionParserChecks": 1,
+  "productionParserClockPreserved": true
+}

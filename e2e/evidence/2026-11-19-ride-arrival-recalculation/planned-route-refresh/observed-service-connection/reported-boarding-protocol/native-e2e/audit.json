@@ -1,0 +1,10 @@
+{
+  "result": "PASSED_SYNTHETIC_WORKER_API_PINNED_APP_CHAIN",
+  "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+  "backendSourcesUnchanged": 48,
+  "frontendSourcesUnchanged": 6,
+  "actualAccuracyVerified": false,
+  "publicTransitHttpCalls": 0,
+  "endpointRestored": true,
+  "visualInspection": "Historical boarding label, unchanged departure, transfer walking, conditional rail clocks visible"
+}

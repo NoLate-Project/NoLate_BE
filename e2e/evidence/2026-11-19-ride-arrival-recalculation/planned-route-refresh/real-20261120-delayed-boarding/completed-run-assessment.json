@@ -1,0 +1,36 @@
+{
+  "classification": "COMPLETED_REAL_JOURNEY_WITH_PARTIAL_LATEST_TRAIN_OBSERVABILITY",
+  "completedAt": "2026-11-20T03:10:28.846022+00:00",
+  "originalRoot": "/private/tmp/nolate-eta-real-e2e.w9vtd97p",
+  "runtimeCompiledSource": "/private/tmp/nolate-be-planned-build.5cs_r9s9",
+  "etaEvaluations": 3,
+  "positionRequests": 16,
+  "providerTransportErrors": 0,
+  "positionWireAccountingComplete": true,
+  "originalEndpointRestored": true,
+  "ownedServersStopped": true,
+  "productionDatabaseModified": false,
+  "initialFourStationPredictionEventsBounded": 4,
+  "latestFourStationPredictionEventsBounded": 2,
+  "initialFinalTrain": "2200",
+  "initialFinalAlightingAt": "2026-11-20T02:58:30Z",
+  "initialFinalAlightingObservedMinusPredictedSeconds": [
+    271,
+    383
+  ],
+  "latestFinalTrain": "2202",
+  "latestFinalTrainObserved": false,
+  "separateRealTrain3202NotAliasedTo2202": true,
+  "latestFinalArrivalAccuracyResult": "NOT_VERIFIED_SAME_TRAIN_NOT_OBSERVED",
+  "firstAlightingDirectForecastErrorSeconds": [
+    -30,
+    26
+  ],
+  "candidateFirstAlightingErrorReductionSeconds": 115,
+  "candidateWasOfflineDuringThisRun": true,
+  "installedInitialDiagnosticPassed": true,
+  "installedOriginalPlanFallbackPassed": true,
+  "installedFirstAlightingAndReconnectedRoutePassed": true,
+  "globalAccuracyVerified": false,
+  "physicalPassengerArrivalVerified": false
+}

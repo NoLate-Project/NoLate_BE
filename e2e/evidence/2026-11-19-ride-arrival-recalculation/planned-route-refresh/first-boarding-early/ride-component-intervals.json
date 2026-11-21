@@ -1,0 +1,137 @@
+{
+  "classification": "ONE_RECORDED_JOURNEY_PROVIDER_POSITION_COMPONENT_BOUNDS",
+  "independentJourneys": 1,
+  "newTransportRequests": 0,
+  "sourceHashes": {
+    "positions.jsonl": "78ec95e43957d88d5e3428cc1c957b9321c32f7799fe3561f467eb8512f20e91",
+    "collection-report.json": "c6977dd9a0da8f68db7491f01ba15f116ac8149c0f6441fe2bfe896e0ae0cc33",
+    "evaluation-1.json": "8f916e6aa9a753c798d018fe35faad56065d1ad361bc89728691a23f0564f458",
+    "paired-replay.json": "a6552db4cf5efb8980a282b103f1ee0acd5d101faa337d012530fae37fa24012"
+  },
+  "startForecastIssuedAt": "2026-11-18T05:35:17.616170Z",
+  "counterfactualEvaluatedAt": "2026-11-18T05:36:23Z",
+  "sameSourceAt": "2026-11-18T05:34:40Z",
+  "firstBoardingObservation": {
+    "station": "노원",
+    "trainNumbers": [
+      "K4621",
+      "4621"
+    ],
+    "lower": "2026-11-18T05:39:55+00:00",
+    "upper": "2026-11-18T05:41:36+00:00"
+  },
+  "firstAlightingObservation": {
+    "station": "사당",
+    "trainNumbers": [
+      "K4621",
+      "4621"
+    ],
+    "lastConfirmedBeforeEventAt": "2026-11-18T06:31:45+00:00",
+    "upper": null
+  },
+  "baseline": [
+    {
+      "sequence": 1,
+      "trainNumber": "K4621",
+      "serviceDate": "2026-11-18",
+      "from": "노원",
+      "to": "사당",
+      "startEvent": "ARRIVAL",
+      "endEvent": "ARRIVAL",
+      "predictedStationToStationSeconds": 2910.0,
+      "observedStationToStationBoundsSeconds": [
+        3009.0,
+        null
+      ],
+      "stationToStationMinusPredictionBoundsSeconds": [
+        99.0,
+        null
+      ],
+      "firstBoardingWithModeledAccess": {
+        "modeledAccessEndAt": "2026-11-18T05:38:40+00:00",
+        "predictedGapSeconds": 60.0,
+        "observedGapBoundsSeconds": [
+          75.0,
+          176.0
+        ],
+        "gapMinusPredictionBoundsSeconds": [
+          15.0,
+          116.0
+        ]
+      }
+    },
+    {
+      "sequence": 3,
+      "trainNumber": "2276",
+      "serviceDate": "2026-11-18",
+      "from": "사당",
+      "to": "신림",
+      "startEvent": "DEPARTURE",
+      "endEvent": "ARRIVAL",
+      "predictedStationToStationSeconds": 450.0,
+      "observedStationToStationBoundsSeconds": [
+        null,
+        null
+      ],
+      "stationToStationMinusPredictionBoundsSeconds": [
+        null,
+        null
+      ]
+    }
+  ],
+  "replayWithTimetableAlighting": [
+    {
+      "sequence": 1,
+      "trainNumber": "K4621",
+      "serviceDate": "2026-11-18",
+      "from": "노원",
+      "to": "사당",
+      "startEvent": "ARRIVAL",
+      "endEvent": "ARRIVAL",
+      "predictedStationToStationSeconds": 3020.0,
+      "observedStationToStationBoundsSeconds": [
+        3009.0,
+        null
+      ],
+      "stationToStationMinusPredictionBoundsSeconds": [
+        -11.0,
+        null
+      ],
+      "firstBoardingWithModeledAccess": {
+        "modeledAccessEndAt": "2026-11-18T05:38:40+00:00",
+        "predictedGapSeconds": 60.0,
+        "observedGapBoundsSeconds": [
+          75.0,
+          176.0
+        ],
+        "gapMinusPredictionBoundsSeconds": [
+          15.0,
+          116.0
+        ]
+      }
+    },
+    {
+      "sequence": 3,
+      "trainNumber": "2278",
+      "serviceDate": "2026-11-18",
+      "from": "사당",
+      "to": "신림",
+      "startEvent": "DEPARTURE",
+      "endEvent": "ARRIVAL",
+      "predictedStationToStationSeconds": 450.0,
+      "observedStationToStationBoundsSeconds": [
+        null,
+        null
+      ],
+      "stationToStationMinusPredictionBoundsSeconds": [
+        null,
+        null
+      ]
+    }
+  ],
+  "pairedRideDurationErrorShiftSeconds": -110,
+  "interpretation": "The published first arrival prediction was 15 to 116 seconds early at the boarding station. The time from that station arrival to alighting was at least 99 seconds longer than the baseline forecast. The revised forecast moves by 110 seconds. Its signed duration-error lower bound is now -11 seconds; duration absolute error improvement is not certain without an upper bound. This is separate from the earlier 110-second improvement in the first alighting clock.",
+  "passengerWaitMeasured": false,
+  "passengerArrivalMeasured": false,
+  "strictNaverComparison": false
+}

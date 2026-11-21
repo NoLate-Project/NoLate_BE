@@ -1,0 +1,42 @@
+{
+  "classification": "PASSIVE_ALARM_LIFECYCLE_AND_ETA_BOUNDARY_OBSERVER",
+  "productionCalculationChanged": false,
+  "expiryPolicyChanged": false,
+  "originalFailedRunRetrospectivelyPassed": false,
+  "additionalHttpCallsInOfflineTests": 0,
+  "jvmSuites": [
+    {
+      "name": "com.noLate.eta.simulator.RealPlannedRouteRefreshTraceTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.noLate.eta.simulator.RealFutureTimetablePlanTraceTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "com.noLate.eta.simulator.RealAutomaticAlarmTraceTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    }
+  ],
+  "pythonVerifierTestsPassed": 13,
+  "newVerifierCasesFailedBeforeFix": 2,
+  "sourceSha256": {
+    "/Users/mac/IdeaProjects/NoLate/NoLate_BE/src/test/kotlin/com/noLate/eta/simulator/RealAutomaticAlarmTrace.kt": "c739cb1ee92f69de1a0f27b201af615eaf70497de6d77b3d50c9c48eace4d3bf",
+    "/Users/mac/IdeaProjects/NoLate/NoLate_BE/src/test/kotlin/com/noLate/eta/simulator/RealAutomaticAlarmTraceTest.kt": "ec4b8ea5865526b29ee846790d077c9695d00e1c8f7ccc5de2b011f0da968c11",
+    "/Users/mac/IdeaProjects/NoLate/NoLate_FE/e2e/ios/eta_automatic_cadence.py": "04231bb318f3a3b7b08bfcf9232446c027d71b272a18a2216a72d943c5311df3",
+    "/Users/mac/IdeaProjects/NoLate/NoLate_FE/e2e/ios/test_eta_automatic_cadence.py": "ad1830f0b0cf41450e1b98dba20057fd10ca9f466652ddc862888e7684871185"
+  },
+  "ownedBuild": "/private/tmp/nolate-be-planned-build.c7o67nlo",
+  "criticalSourceCount": 221,
+  "criticalSourcesMatchMain": true,
+  "realObserverVerified": false
+}

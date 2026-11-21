@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" tests="17" skipped="0" failures="0" errors="0" timestamp="2026-11-20T10:21:05.677Z" hostname="macui-MacBookPro.local" time="0.131">
+  <properties/>
+  <testcase name="degraded evaluation keeps accepted baseline and same route recovery does not notify again()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.001"/>
+  <testcase name="도보 메타데이터는 스냅샷에 왕복 보존하고 기존 JSON은 null로 읽는다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.01"/>
+  <testcase name="미수락 경로의 이른 환승역 도착만으로 목적지 실시간 예측을 덮어쓰지 않는다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.006"/>
+  <testcase name="alternative returning to selected route clears state and emits one transition()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.0"/>
+  <testcase name="첫 승차 출처는 같은 편과 같은 예측을 수락한 계획에만 연결한다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.006"/>
+  <testcase name="구간별 갱신의 전체 경로를 반환하고 관측 만료 후에도 이전 환승편으로 되돌리지 않는다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.012"/>
+  <testcase name="확인된 환승 연결 실패는 다음 미관측 회차에도 이전 도착 예측을 숨긴다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.001"/>
+  <testcase name="도보 상세는 정상과 degraded 스냅샷에 보존하고 구버전 명목 좌표는 UNKNOWN이다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.013"/>
+  <testcase name="출발 후 같은 환승 열차의 신선한 관측만 잠정 도착에 반영한다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.01"/>
+  <testcase name="첫 차량 관측은 JSON에 보존하지만 다음 실패 회차로 승계하거나 ETA 채택으로 바꾸지 않는다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.007"/>
+  <testcase name="열차 시각 근거를 스냅샷에 보존하고 기존 승차 JSON에는 시각을 만들지 않는다()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.012"/>
+  <testcase name="[1] basis=FIRST_BOARDING_REALTIME_ROUTE_ESTIMATE" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.01"/>
+  <testcase name="[2] basis=ROUTE_ESTIMATE_ONLY" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.009"/>
+  <testcase name="live activity route bar preserves both ends when itinerary is long()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.001"/>
+  <testcase name="snapshot round trip is fail soft and keeps exact route contract()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.011"/>
+  <testcase name="snooze generation change does not replay a check zero route transition()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.004"/>
+  <testcase name="first verified alternative is a route change and survives the same check retry()" classname="com.noLate.schedule.application.EffectiveTransitRouteSnapshotTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

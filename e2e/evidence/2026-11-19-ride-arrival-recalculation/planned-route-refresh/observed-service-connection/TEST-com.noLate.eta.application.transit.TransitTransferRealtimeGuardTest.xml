@@ -1,0 +1,41 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuite name="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" tests="38" skipped="0" failures="0" errors="0" timestamp="2026-11-20T03:55:13.441Z" hostname="macui-MacBookPro.local" time="0.034">
+  <testcase name="승차역이 조회 가능하면 같은 평가에서 하차역을 중복 조회하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.002" />
+  <testcase name="접근 출발 뒤 첫 승차 전에도 같은 열차의 승차역 관측을 조회한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="하차역 예측이 있는 계획에 승차역 지연을 다시 더하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="자정을 넘는 운행일의 동일 환승편을 신선한 하차 관측으로 보정한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="두 역이 같은 시각에 게시해도 첫 하차 관측은 채택하고 동일 하차 응답의 재사용은 막는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="같은 환승 열차의 신선한 2분 지연을 판정한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="자정 후 출발한 일정도 전날 운행편의 신선한 하차 예측을 받는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="환승 없는 지하철도 승차 경계 이후 같은 열차 하차 시각만 보정한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="환승 승차역을 지난 뒤 하차역의 동일 편 지연을 판정한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="계획 관측도 오래된 원본 또는 다른 열차를 채택하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="[1] status=ARRIVED, age=36, wait=0, expectedOffset=0, train=4012, accepted=true" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="[2] status=ARRIVED, age=120, wait=0, expectedOffset=0, train=4012, accepted=true" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="[3] status=ARRIVED, age=121, wait=0, expectedOffset=0, train=4012, accepted=false" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="[4] status=DEPARTED, age=36, wait=0, expectedOffset=0, train=4012, accepted=false" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="[5] status=IN_TRANSIT, age=36, wait=0, expectedOffset=0, train=4012, accepted=false" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="[6] status=ARRIVED, age=36, wait=10, expectedOffset=0, train=4012, accepted=false" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="[7] status=ARRIVED, age=36, wait=0, expectedOffset=1, train=4012, accepted=false" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="[8] status=ARRIVED, age=36, wait=0, expectedOffset=0, train=4014, accepted=false" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="[1] elapsedSeconds=180, sourceAgeSeconds=0, train=4012, accepted=true, queried=true" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="[2] elapsedSeconds=180, sourceAgeSeconds=121, train=4012, accepted=false, queried=true" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="[3] elapsedSeconds=180, sourceAgeSeconds=0, train=4014, accepted=false, queried=true" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="[4] elapsedSeconds=1200, sourceAgeSeconds=0, train=4012, accepted=true, queried=true" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="[5] elapsedSeconds=1201, sourceAgeSeconds=0, train=4012, accepted=false, queried=false" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="별도 역 도착 시간표가 있으면 신선한 동일 환승편의 조기 도착도 반환한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="첫 하차역 근거는 조회 창 안에서 같은 첫 열차의 신선한 응답만 받는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="도착 API 오류는 지연 증거가 아니며 같은 평가에서 재시도하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="자정 전 하차로 끝난 전날 편과 27시 이후 편의 번호는 재조회하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="작업 취소는 보통 조회 오류로 삼키지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="계획 하차 시각을 5분 지난 첫 열차도 신선한 같은 편 관측으로 확인한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="환승 승차역의 실시간 도착 지연은 시간표상 역 도착과 대조한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="출발 후에도 다른 편 또는 오래된 환승 관측은 반영하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="하차역의 다른 열차나 오래된 예측은 지연 증거가 아니다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="긴 후속 구간도 예정 승차가 지연되면 같은 편의 승차역 예보를 확인한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="출발 후 저장한 마지막 환승편만 직접 관측해 잠정 도착을 늦춘다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  <testcase name="원래 시간표가 지나도 보정 시각까지 같은 열차의 신선한 하차 관측을 계속 확인한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="승차 시각을 30초 지나면 이전 역 대신 하차역을 한 번 조회한다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="다른 편 방향 종착 종별 또는 오래된 응답은 환승 지연의 증거가 아니다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.001" />
+  <testcase name="먼 미래 환승은 API를 조회하지 않고 지연이라고 추정하지 않는다()" classname="com.noLate.eta.application.transit.TransitTransferRealtimeGuardTest" time="0.0" />
+  </testsuite>

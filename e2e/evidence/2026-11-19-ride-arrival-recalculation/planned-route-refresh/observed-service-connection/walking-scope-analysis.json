@@ -1,0 +1,97 @@
+{
+  "classification": "RECORDED_WALKING_SCOPE_AND_TIMING_CAUSES",
+  "additionalHttpCalls": 0,
+  "evaluationFile": "evaluation-1.json",
+  "modeledNotMeasured": true,
+  "walks": [
+    {
+      "sequence": 0,
+      "scope": "ACCESS",
+      "seconds": 137,
+      "meters": 148,
+      "source": "ODSAY_ENTRANCE_WALK_SECONDS",
+      "sameOrderedPathVerified": false,
+      "endpoints": {
+        "start": {
+          "lat": 37.65636195,
+          "lng": 127.06342739
+        },
+        "end": {
+          "lat": 37.656590053614906,
+          "lng": 127.06400007271506
+        },
+        "originalEgressEndpoint": null
+      },
+      "transferReference": null
+    },
+    {
+      "sequence": 2,
+      "scope": "TRANSFER",
+      "seconds": 157,
+      "meters": 170,
+      "source": "ODSAY_FULL_PATH_SECONDS",
+      "sameOrderedPathVerified": true,
+      "endpoints": {
+        "start": {
+          "lat": 37.476793075344084,
+          "lng": 126.98167300000001
+        },
+        "end": {
+          "lat": 37.47657507534361,
+          "lng": 126.981359
+        },
+        "originalEgressEndpoint": null
+      },
+      "transferReference": {
+        "stationName": "사당",
+        "fromLine": "4호선",
+        "toLine": "2호선",
+        "distanceMeters": 74,
+        "durationSeconds": 62,
+        "datasetDate": "2025-03-31",
+        "provider": "seoulmetro",
+        "walkingSpeedMetersPerSecond": 1.2,
+        "application": "REFERENCE_ONLY_DIRECTION_AND_PATH_UNVERIFIED",
+        "sourceUrl": "https://data.seoul.go.kr/dataList/OA-13290/F/1/datasetView.do"
+      }
+    },
+    {
+      "sequence": 4,
+      "scope": "EGRESS",
+      "seconds": 73,
+      "meters": 78,
+      "source": "ODSAY_EXIT_WALK_SECONDS",
+      "sameOrderedPathVerified": false,
+      "endpoints": {
+        "start": {
+          "lat": 37.48392182495826,
+          "lng": 126.92989416822
+        },
+        "end": {
+          "lat": 37.48426844,
+          "lng": 126.92977778
+        },
+        "originalEgressEndpoint": {
+          "lat": 37.48429580055334,
+          "lng": 126.92977191554935
+        }
+      },
+      "transferReference": null
+    }
+  ],
+  "naverPublicTransferWalk": {
+    "displayMinutes": 2,
+    "meters": 155
+  },
+  "notAllowedInferences": [
+    "Naver display minutes are not converted into exact seconds.",
+    "The 74m official reference has unverified direction and path; it cannot replace the verified 170m ODsay path.",
+    "No walking or boarding/transfer margin is reduced to match map output.",
+    "A Naver missing access/egress label does not prove zero station-interior walk."
+  ],
+  "remainingPhysicalUncertainty": [
+    "individual walking pace",
+    "platform/car position",
+    "access and egress station-interior coverage"
+  ]
+}

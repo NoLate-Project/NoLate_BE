@@ -1,0 +1,15 @@
+{
+  "correctedField": "appLastTerminal",
+  "originalRecordedLabel": "성수",
+  "correctedLabel": "신도림",
+  "sourceField": "effectiveSnapshot.lastTimetablePlannedRoute.segments[3].rideTiming.timetable.terminalName",
+  "trainNumber": "2510",
+  "sourceEvaluationSha256": "99aa4d891a07a6e01337d6f1f4a930706f7a6bd24914c836d08346c207b6a2b9",
+  "naverDisplayedTerminal": "신도림",
+  "samePhysicalTrainConfirmed": false,
+  "eligibleForStrictPairedAccuracy": false,
+  "exclusions": [
+    "DEPARTURE_INPUT_MISMATCH_60_SECONDS",
+    "ACCESS_EGRESS_SCOPE_NOT_CONFIRMED"
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "forecastRequestAt": "2026-11-19T15:01:03.198583Z",
+  "plannedTrainNumbers": [
+    "2510"
+  ],
+  "station": "사당",
+  "candidates": [
+    {
+      "trainNumber": "6508",
+      "terminal": "성수",
+      "sourceUpdatedAt": "2026-11-19T15:00:38Z",
+      "predictedStationArrivalAt": "2026-11-19T15:05:08Z",
+      "numberInSavedTimetable": false,
+      "observation": {
+        "result": "UPPER_BOUND_ONLY",
+        "upper": "2026-11-19T15:14:24+00:00"
+      },
+      "result": "UPPER_BOUND_ONLY"
+    },
+    {
+      "trainNumber": "4510",
+      "terminal": "신도림",
+      "sourceUpdatedAt": "2026-11-19T15:00:38Z",
+      "predictedStationArrivalAt": "2026-11-19T15:11:38Z",
+      "numberInSavedTimetable": false,
+      "observation": {
+        "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+        "lower": "2026-11-19T15:14:01+00:00",
+        "upper": "2026-11-19T15:16:31+00:00",
+        "widthSeconds": 150.0
+      },
+      "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+      "observedMinusForecastSeconds": [
+        143.0,
+        293.0
+      ]
+    }
+  ],
+  "stationForecastsWithTwoSidedBounds": 1,
+  "physicalPassengerArrivalMeasured": false
+}

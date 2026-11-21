@@ -1,0 +1,162 @@
+--- a/src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt
++++ b/src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt
+@@ -165,13 +165,9 @@
+                     if (otherRows != null) {
+                         val boards = if (station == from) eligibleHere else endpointForecasts(from, table, evaluatedAt, otherRows)
+                         val alights = if (station == to) eligibleHere else endpointForecasts(to, table, evaluatedAt, otherRows)
++                        // 승차 가능성은 앞 구간 갱신 뒤에 판단한다. 현재 편이 조회됐다는
++                        // 사실만으로 다른 편을 여기서 버리면 지연 후 다음 편을 연결하지 못한다.
+                         val candidates = pairedServices(segment, table, boards, alights, evaluatedAt)
+-                            .let { all ->
+-                                // 선택한 실제 차량의 승차 예보가 있으면 다른 차량으로 바꾸지 않는다.
+-                                if (timing.observedService != null && timing.selectedTrainNumber() in boards)
+-                                    all.filter { it.service.trainNumber == timing.selectedTrainNumber() }
+-                                else all
+-                            }
+                         if (candidates.isNotEmpty()) serviceCandidates[index] = candidates
+                     }
+                 }
+--- a/src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt
++++ b/src/main/kotlin/com/noLate/eta/application/transit/PlannedTransitRouteRefresher.kt
+@@ -183,14 +183,22 @@
+                 walkingSeconds(segments, 0, index) + timetableEnricher.boardingBufferSeconds)
+             else timings.getValue(rides[ordinal - 1]).predictedArrivalAt.plusSeconds(
+                 walkingSeconds(segments, rides[ordinal - 1] + 1, index) + evaluator.requiredTransferMarginSeconds)
+-            val eligible = candidates[index].orEmpty().filter { candidate ->
+-                candidate.boardingAt >= ready &&
++            val available = candidates[index].orEmpty().filter { candidate ->
+                     (candidate.service != prior.observedService ||
+                         (prior.boardingSourceAt()?.let { candidate.boardingSourceAt >= it } != false &&
+                          prior.alightingSourceAt()?.let { candidate.alightingSourceAt >= it } != false))
+             }
+-            val selected = eligible.minWithOrNull(compareBy<ObservedSubwayRideCandidate> { it.alightingAt }
+-                .thenBy { it.boardingAt }.thenBy { it.service.trainNumber }) ?: continue
++            val eligible = available.filter { it.boardingAt >= ready }
++            // 현재 편도 새 준비시각으로 탈 수 있을 때만 우선한다. 불가능해졌다면 두 역이
++            // 확인한 다른 편을 선택한다. 어느 편도 탈 수 없으면 새 모순을 버리지 않는다.
++            val currentEligible = eligible.filter { it.service == prior.observedService }
++            val selected = currentEligible.ifEmpty { eligible }.minWithOrNull(compareBy<ObservedSubwayRideCandidate> { it.alightingAt }
++                .thenBy { it.boardingAt }.thenBy { it.service.trainNumber })
++                ?: available.firstOrNull { it.service == prior.observedService && it.boardingAt < ready }
++                ?: continue
++            if (ordinal == 0 && selected.boardingAt < ready) return PlannedTransitRouteUpdate(plan.identity,
++                minOf(selected.boardingSourceAt, selected.alightingSourceAt),
++                failure = PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED)
+             if (selected.service == prior.observedService && selected.boardingAt == prior.predictedBoardingAt &&
+                 selected.alightingAt == prior.predictedArrivalAt && selected.boardingSourceAt == prior.boardingSourceAt() &&
+                 selected.alightingSourceAt == prior.alightingSourceAt()) continue
+@@ -241,6 +249,11 @@
+                     val removed = applied.remove(index)
+                     if (index == next && removed?.point == TransitRideObservationPoint.BOARDING) {
+                         replacedBoardingSources += removed.sourceUpdatedAt
++                    } else if (index == next && removed != null && old.observedService != null &&
++                        old.predictedBoardingAt < ready) {
++                        // 두 역 예보로 현재 실제 편을 놓친 근거다. 다음 시간표로 연결한 뒤에도
++                        // 이 승차역 출처를 보존해 새 계획을 실시간 하차 예보로 오인하지 않는다.
++                        old.boardingSourceAt()?.let { replacedBoardingSources += it }
+                     }
+                 }
+             }
+--- a/src/test/kotlin/com/noLate/eta/application/transit/ObservedSubwayServiceRefreshTest.kt
++++ b/src/test/kotlin/com/noLate/eta/application/transit/ObservedSubwayServiceRefreshTest.kt
+@@ -174,6 +174,91 @@
+     }
+ 
+     @Test
++    fun `상류 재계산으로 선택 편을 놓치면 다른 실제 편의 두 역 예보로 연결한다`() {
++        val original = plan()
++        rows = listOf(row("사당", "3202", 1100, source = 700), row("신림", "3202", 1600, source = 700))
++        val selected = requireNotNull(engine.refresh(original, at(700))?.route)
++        rows = listOf(row("사당", "4012", 1000, line = SeoulSubwayLine.LINE_4),
++            row("사당", "3202", 1150), row("신림", "3202", 1600),
++            row("사당", "3204", 1320), row("신림", "3204", 1680))
++        val update = requireNotNull(engine.refresh(selected, at(800), original))
++        assertNull(update.failure, "앞 구간 하차1000 + 도보243 + 여유60 이후에는1320편을 탈 수 있다")
++        val route = requireNotNull(update.route)
++        assertEquals("3204", route.segments[3].rideTiming?.selectedTrainNumber())
++        assertEquals("2202", route.segments[3].rideTiming?.timetable?.trainNumber)
++        assertEquals(at(1851), route.arrivalAt)
++        assertEquals(original.departureAt, route.departureAt)
++        verifyNoInteractions(timetable)
++    }
++
++    @Test
++    fun `선택 편이 최신 준비 시각으로도 가능하면 더 이른 다른 편으로 임의 변경하지 않는다`() {
++        val original = plan()
++        rows = listOf(row("사당", "3202", 1100, source = 700), row("신림", "3202", 1600, source = 700))
++        val selected = requireNotNull(engine.refresh(original, at(700))?.route)
++        rows = listOf(row("사당", "3202", 1150), row("신림", "3202", 1640),
++            row("사당", "3204", 1000), row("신림", "3204", 1450))
++        val route = requireNotNull(engine.refresh(selected, at(800), original)?.route)
++        assertEquals("3202", route.segments[3].rideTiming?.selectedTrainNumber())
++        assertEquals(at(1150), route.segments[3].rideTiming?.predictedBoardingAt)
++        assertEquals(at(1811), route.arrivalAt)
++        verifyNoInteractions(timetable)
++    }
++
++    @Test
++    fun `선택 편의 새 예보가 환승 준비보다 빨라지면 이전의 늦은 승차 계획을 유지하지 않는다`() {
++        val original = plan()
++        rows = listOf(row("사당", "3202", 1100, source = 700), row("신림", "3202", 1600, source = 700))
++        val selected = requireNotNull(engine.refresh(original, at(700))?.route)
++        // 앞 구간513 + 도보243 + 여유60 = 816초. 새810초 예보는 더는 탈 수 없다.
++        rows = listOf(row("사당", "3202", 810), row("신림", "3202", 1400))
++        val update = requireNotNull(engine.refresh(selected, at(800), original))
++        assertEquals(PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE, update.failure)
++        assertNull(update.route)
++    }
++
++    @Test
++    fun `같은 실제 편을 놓친 새 예보가 오면 가능한 다음 시간표로 전체 도착을 다시 연결한다`() {
++        val original = plan()
++        rows = listOf(row("사당", "3202", 1100, source = 700), row("신림", "3202", 1600, source = 700))
++        val selected = requireNotNull(engine.refresh(original, at(700))?.route)
++        rows = listOf(row("사당", "3202", 810), row("신림", "3202", 1400))
++        val nextTable = requireNotNull(original.segments[3].rideTiming).timetable.copy(
++            trainNumber = "2204", boardingAt = at(1200), arrivalAt = at(1681), fetchedAt = at(800))
++        whenever(timetable.findRides(any())).thenReturn(listOf(nextTable))
++        val route = requireNotNull(engine.refresh(selected, at(800), original)?.route)
++        assertEquals("2204", route.segments[3].rideTiming?.selectedTrainNumber())
++        assertNull(route.segments[3].rideTiming?.observedService)
++        assertEquals(EffectiveTransitRideTimingBasis.TIMETABLE, route.segments[3].rideTiming?.basis)
++        assertEquals(at(1852), route.arrivalAt)
++        assertEquals(original.departureAt, route.departureAt)
++        verify(timetable).findRides(check { assertEquals(at(816), it.notBefore) })
++    }
++
++    @Test
++    fun `첫 실제 편이 접근 준비보다 빨라지면 경고하고 다음 신선한 쌍으로 회복한다`() {
++        val base = plan()
++        val original = base.copy(identity = "b".repeat(64), arrivalAt = at(684), totalMinutes = 11,
++            segments = base.segments.take(2) + base.segments.last().copy(sequence = 2))
++        rows = listOf(row("노원", "4014", 240, source = 50, line = SeoulSubwayLine.LINE_4),
++            row("사당", "4014", 600, source = 50, line = SeoulSubwayLine.LINE_4))
++        val selected = requireNotNull(engine.refresh(original, at(50))?.route)
++        rows = listOf(row("노원", "4014", 200, source = 100, line = SeoulSubwayLine.LINE_4),
++            row("사당", "4014", 650, source = 100, line = SeoulSubwayLine.LINE_4))
++        val warning = requireNotNull(engine.refresh(selected, at(100), original))
++        assertEquals(PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED, warning.failure)
++        assertNull(warning.route)
++        assertFalse(warning.requiresFirstBoardingRecheck)
++        rows = listOf(row("노원", "4014", 230, source = 101, line = SeoulSubwayLine.LINE_4),
++            row("사당", "4014", 650, source = 101, line = SeoulSubwayLine.LINE_4))
++        val recovered = requireNotNull(engine.refresh(selected, at(101), original, warning)?.route)
++        assertEquals("4014", recovered.segments[1].rideTiming?.selectedTrainNumber())
++        assertEquals(at(821), recovered.arrivalAt)
++        assertEquals(original.departureAt, recovered.departureAt)
++        verifyNoInteractions(timetable)
++    }
++
++    @Test
+     fun `응답 오류 뒤에는 다른 역을 추가 호출하지 않고 취소는 전파한다`() {
+         whenever(arrivals.getSubwayArrivalsForEta(any(), anyOrNull(), anyOrNull(), anyOrNull(), any()))
+             .thenThrow(IllegalStateException("provider unavailable"))
+@@ -203,7 +288,7 @@
+             ((seconds + 59) / 60).toInt(), durationSeconds = seconds)
+         fun ride(sequence: Int, line: SeoulSubwayLine, train: String, from: String, to: String,
+                  boarding: Long, arrival: Long, stops: List<String>) = EffectiveTransitRouteSegment(
+-            sequence, EffectiveTransitRouteSegmentKind.SUBWAY, 10, lineName = line.displayName, fromName = from, toName = to,
++            sequence, EffectiveTransitRouteSegmentKind.SUBWAY, if (sequence == 1) 7 else 13, lineName = line.displayName, fromName = from, toName = to,
+             rideTiming = EffectiveTransitRideTiming(table(line, train, boarding, arrival), at(boarding), at(arrival),
+                 EffectiveTransitRideTimingBasis.TIMETABLE), orderedStopNames = stops)
+         return EffectiveTransitRoute("odsay", "a".repeat(64), at(39), at(1652), 27, listOf(walk(0, 111),

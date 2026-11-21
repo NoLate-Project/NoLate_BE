@@ -1,0 +1,27 @@
+{
+  "classification": "FRESH_SAME_TRAIN_STILL_UPSTREAM_AFTER_ISSUED_TIMETABLE_BOARDING",
+  "sourceSha256": "89476285721110101247102a889aac55fff1a3d28e1a9d642c608bf9903e1574",
+  "evaluationSha256": "daf75bda741515618c5f2aba512b0b315a04e217bbac6d9d4112854438dc3f45",
+  "issuedDoorDepartureAt": "2026-11-19T23:05:00Z",
+  "plannedBoardingStation": "노원",
+  "plannedBoardingAt": "2026-11-19T23:09:30Z",
+  "sameTrainObservation": {
+    "line": "LINE_4",
+    "trainNumber": "4041",
+    "stationName": "불암산",
+    "directionCode": "DOWN",
+    "terminalName": "사당",
+    "serviceClass": "LOCAL",
+    "state": "DEPARTED",
+    "sourceUpdatedAt": "2026-11-19T23:10:38Z",
+    "receivedAt": "2026-11-19T23:11:00.462474Z"
+  },
+  "observedAfterPlannedBoardingSeconds": 68.0,
+  "interpretation": "The same train was still departing Bulamsan upstream of Sanggye and Nowon after the planned Nowon boarding. A final Nowon arrival/departure bracket is not yet available. This provides a one-sided contradiction to the original timetable boarding, not a physical passenger boarding time.",
+  "usableAsInitialDepartureFeature": false,
+  "reason": "The public observation occurred after the issued 08:05 door departure. Do not feed it back into the original forecast.",
+  "normalRealtimeAccepted": false,
+  "workerPersistedNextCheckAt": "2026-11-19T23:03:47.932944Z",
+  "isolatedRunnerNextComparisonAt": "2026-11-19T23:52:30Z",
+  "isolatedRunnerScope": "Bounded manually triggered real-clock Worker comparisons. This run does not exercise production automatic scheduling."
+}

@@ -1,0 +1,13 @@
+{
+  "classification": "CONTROLLED_UNION_ORCHESTRATION_SMOKE_NOT_REAL_ACCURACY",
+  "sameInputSha256": "680a2cf608bd8c667e484f61e7ac617c70ac24d12aedae583062d9522d51c2ce",
+  "beforeResult": "REPLAYED",
+  "afterResult": "REPLAYED",
+  "beforeUpdate": null,
+  "afterRawSelectedTrain": "2268",
+  "beforeReadCount": 3,
+  "afterReadCount": 3,
+  "syntheticUnrecordedShinlimRow": true,
+  "additionalHttpCalls": 0,
+  "verifiedAgainstRecordedResultFlagOverridden": false
+}

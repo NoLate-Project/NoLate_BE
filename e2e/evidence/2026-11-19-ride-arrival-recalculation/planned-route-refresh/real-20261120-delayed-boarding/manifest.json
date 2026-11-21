@@ -1,0 +1,196 @@
+{
+  "classification": "ONGOING_REAL_JOURNEY_EVIDENCE_ARCHIVE",
+  "originalRoot": "/private/tmp/nolate-eta-real-e2e.w9vtd97p",
+  "journeyCompleted": true,
+  "files": [
+    {
+      "path": "naver-reference-1050.json",
+      "sha256": "aa1a97582537f195b70491c68265734024b33bd34efca5c540c38b611a1a3e10"
+    },
+    {
+      "path": "naver-1050-detail.txt",
+      "sha256": "f490bc373714566c6f9f1964f85155807083d6564fb83789211c87355c14efe4"
+    },
+    {
+      "path": "naver-1050-summary.txt",
+      "sha256": "0e97d7f513ead332d1b1a366e40a339e5512f747862ea3c9bdc7a2a06e9c78f8"
+    },
+    {
+      "path": "naver-1050-detail.png",
+      "sha256": "1653b9a29cc8ab719d04847add43385cb0a3fa02cf1b421125ef6b9415e11713"
+    },
+    {
+      "path": "native-preflight-recovery.json",
+      "sha256": "d15a96c0558efb3cdec44a4d36336066028dd0d5d74300485dd4cc519497d08c"
+    },
+    {
+      "path": "offline-candidate-not-applied.patch",
+      "sha256": "81e7c98944b8a4d26d5b0fd4a4f092451f4ce78b2c2e7595d1758e27f9137d56"
+    },
+    {
+      "path": "evaluation-2.json",
+      "sha256": "d67522b445fda70f5c632aba7d847d453ed8085207ec4bf25f1da484c7dac2eb"
+    },
+    {
+      "path": "paired-delayed-boarding-evaluation-2.json",
+      "sha256": "7de18facb8b6c72e966b5a70e2052c91f6e0baeb19b256a91bf81d9998a0c433"
+    },
+    {
+      "path": "reported-arrived-state-candidate-evaluation-2.json",
+      "sha256": "86f942d88025dc1d4ca6d7a5731d5036af0acda61a8976628287fed23ded02d7"
+    },
+    {
+      "path": "reported-arrived-state-prospective-candidate.json",
+      "sha256": "cc2c5ce7c6725908a613c94b51b781e25d78d2ee3620d0dce628bb96878da54e"
+    },
+    {
+      "path": "reported-arrived-state-freeze-addendum.json",
+      "sha256": "d04cf6f347f411b646396d38381eb77ae82396737ec83e936d7263ad6516eb5f"
+    },
+    {
+      "path": "reported-arrived-state-full-regression.json",
+      "sha256": "dbd60ce311b15d6ce9a0d974191a1e63e72a1c4e7caed46d003b6ea6ecaa5d86"
+    },
+    {
+      "path": "candidate-assessment-pending-outcome.json",
+      "sha256": "70b7b4816bba3fc4caa9d8bed97b1a38152cc047ebb0e968fd0b3bd01d1de685"
+    },
+    {
+      "path": "evaluation-3.json",
+      "sha256": "d791b4a4acd76599d4e97dc67487359d3016b96b420265dd0ee12cf3130e75ae"
+    },
+    {
+      "path": "paired-delayed-boarding-evaluation-3.json",
+      "sha256": "3b51497163c55b563cd2b61dd3a0e89fd5bdd781f5a8915f86a747b44c08efd0"
+    },
+    {
+      "path": "ui-status-planned-3.json",
+      "sha256": "ff118c5a905bdb1220116c8fe03d908fa907897b41c486a8245e350544a812e0"
+    },
+    {
+      "path": "third-real-ui-summary.json",
+      "sha256": "800b90b8af53d69fc6d42047ba3b446e37de13c4dadc913856edd761966fe308"
+    },
+    {
+      "path": "prospective-reported-arrival-first-outcome.json",
+      "sha256": "bcbb41e127486832d0da1a4a650b27c5cc786b2ed21dd3253c88e48bc956fcf8"
+    },
+    {
+      "path": "prospective-reported-arrival-gate.json",
+      "sha256": "abe2d0709ab2cf574c7cc527b2a29c1bf3639b31bf54ac9c266dd339ea741c87"
+    },
+    {
+      "path": "train-position-5.json",
+      "sha256": "2ad79e3733e5b45571cae3c197156bf208f83a603f96e4ccdf68673611887707"
+    },
+    {
+      "path": "train-position-6.json",
+      "sha256": "357dde4f2e04b1f7f09a3aa95b0e16b1ffc2157fb7ae5a8a4d8bd54a699867e6"
+    },
+    {
+      "path": "train-position-7.json",
+      "sha256": "8952efe58fdc0bd0999c896f2e51265164d73e1983728e7e0b8f28a4a9bd6b85"
+    },
+    {
+      "path": "promoted-after-prospective-pilot.patch",
+      "sha256": "4712d6b832a3241183de9fafb1a67606c1b6ba8261dba43af3fc66b36685c0d3"
+    },
+    {
+      "path": "promoted-after-prospective-pilot.json",
+      "sha256": "28b1bb6802a1068ee356f24e12d4020aad2186bcb8fecdb16ec3608d3c4c2934"
+    },
+    {
+      "path": "report.json",
+      "sha256": "a1b27714bffbf636851053e135fff0f5576c66b1b71aca73f3a29e757e105cb3"
+    },
+    {
+      "path": "evaluation-1.json",
+      "sha256": "2d7da16ce91282061315d655d653f01b661b8787c4a53c277a061a01660cce88"
+    },
+    {
+      "path": "odsay-seed-journey.json",
+      "sha256": "20d8e5a4a2c8261ef2ead3f331938e22143224128e05f2a5bc468730e7ca455e"
+    },
+    {
+      "path": "selected-route.json",
+      "sha256": "4dcc5e904df5bedc04cceee8ba7dc79187b238ed10095a0f62fd642ef36c1f50"
+    },
+    {
+      "path": "final-paired-position-audit.json",
+      "sha256": "4480ae382f80f384bb4401c2f38108792a32aa974f8597b9bd6e4d484b7b9bf6"
+    },
+    {
+      "path": "ui-status-1.json",
+      "sha256": "6897dd9334a315f6fd1575cd23c2864e60d8e5a52192b3da6e3f0726466cb89f"
+    },
+    {
+      "path": "ui-status-planned-fallback-2.json",
+      "sha256": "398572000938918570f2c1c94ef773d2ccf17194ec882725aeeb63fd6fadf541"
+    },
+    {
+      "path": "train-position-1.json",
+      "sha256": "37eed8282ea19583d1290fd9c7ce7a7aa4e28fb4512f4e194ac3490139bf8305"
+    },
+    {
+      "path": "train-position-2.json",
+      "sha256": "34a39f02c9237ff9044d9be147c6133c5b5ff36c3847a8a14f5e705cf25f3ea5"
+    },
+    {
+      "path": "train-position-3.json",
+      "sha256": "7013f26101a78f75ffb9b617cb0a1eea477b2494821e1a60001b3a013f011276"
+    },
+    {
+      "path": "train-position-4.json",
+      "sha256": "cbb34f5262d82e76c9ad8640049248686ca5fdc4735cf8aa52d3ca19f1391fed"
+    },
+    {
+      "path": "train-position-8.json",
+      "sha256": "8293bb5093b414691502705ec081c386497de99c1ceb98090356ebcbe87350f9"
+    },
+    {
+      "path": "train-position-9.json",
+      "sha256": "9745acfa0f6009bfaea6b6940205f9fbcfb7b43290cd0b29c69aece342c1f0ce"
+    },
+    {
+      "path": "train-position-10.json",
+      "sha256": "d32861cec0db197e44ea36e02a68df90f9b6512cab03f6916018dc8f649d738a"
+    },
+    {
+      "path": "train-position-11.json",
+      "sha256": "9bc23f4670b962bc04862f799463fe9141b6d93e0e17055fad9d48906bca57b8"
+    },
+    {
+      "path": "train-position-12.json",
+      "sha256": "4b2e5fae8b152c420e0190e2f6df18de3f88a2a0e0286e85f72d8f386d43b633"
+    },
+    {
+      "path": "train-position-13.json",
+      "sha256": "ea1282bd3b70549808346f5f9a31b625c71f098ed7f076e24d71b238dacd83dd"
+    },
+    {
+      "path": "train-position-14.json",
+      "sha256": "09e86ceb9aea346e78808fab6439b215c0ad8d9c2dc02f77a019e5f7e560f143"
+    },
+    {
+      "path": "train-position-15.json",
+      "sha256": "74a7214287605482575c87196c91e8f04e26f2b9cf12bee504f25922abe8ab7a"
+    },
+    {
+      "path": "train-position-16.json",
+      "sha256": "664c278edacb8e963b4310d807b93d47e57f9179fe0e6800da50fd41a9786d0c"
+    },
+    {
+      "path": "completed-run-assessment.json",
+      "sha256": "f45d69e0546a3199ce0fb5ecba6a6016806e0dba998fe35009d06ad620dc7628"
+    },
+    {
+      "path": "dated-official-schedule-comparison.json",
+      "sha256": "25df83bbc8bcfe4930a26e862edc18368b830f9224410856d26eb137979d4a89"
+    },
+    {
+      "path": "last-service-identity-gap.json",
+      "sha256": "eae8f681ba497071b0cfd919fda2907f74eab259eaacc501205e666c5fdb832f"
+    }
+  ],
+  "overallEtaAccuracyComplete": false
+}

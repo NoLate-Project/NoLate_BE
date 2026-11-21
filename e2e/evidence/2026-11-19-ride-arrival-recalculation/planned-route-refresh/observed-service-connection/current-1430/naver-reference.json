@@ -1,0 +1,37 @@
+{
+  "classification": "PUBLIC_NAVER_UI_FUTURE_DEPARTURE_REFERENCE_PENDING_SAME_SCOPE_AUDIT",
+  "observedAt": "2026-11-20T05:28:17.495096+00:00",
+  "observationMethod": "Playwright public visible UI only",
+  "serviceDate": "2026-11-20",
+  "requestedDepartureAt": "2026-11-20T14:40:00+09:00",
+  "origin": {
+    "latitude": 37.65636195,
+    "longitude": 127.06342739
+  },
+  "destination": {
+    "latitude": 37.48426844,
+    "longitude": 126.92977778
+  },
+  "topology": [
+    "LINE_4:노원→사당",
+    "WALK:사당환승",
+    "LINE_2:사당→신림"
+  ],
+  "firstVisibleBoarding": "14:42",
+  "firstVisibleDurationMinutes": 48,
+  "transferWalk": {
+    "displayedMinutes": 2,
+    "displayedMeters": 155
+  },
+  "lastVisibleBoarding": "15:33",
+  "lastVisibleRideMinutes": 7,
+  "displayedArrival": "15:41",
+  "totalDisplayedMinutes": 59,
+  "visibleSummaryStartsAt": "14:42",
+  "stationCenterVersusCoordinateWalkingScopeVerified": false,
+  "hiddenTrainNumberOrSecondsInferred": false,
+  "strictComparisonStatus": "PENDING_ACTUAL_APP_AND_SCOPE_CHECK",
+  "initialInputSnapshot": "/private/tmp/nolate-naver-1440-initial-snapshot.txt",
+  "detailSnapshot": "/private/tmp/nolate-naver-1440-detail-panel.txt",
+  "screenshot": "NoLate_FE/output/playwright/eta-20261120-1430/naver-1440-reference.png"
+}

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-11-20T08:58:31.418Z" hostname="macui-MacBookPro.local" time="0.178">
+  <properties/>
+  <testcase name="상류 지연이 생기면 만료된 실제 편 예보로 미래 환승을 보장하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.006"/>
+  <testcase name="만료된 미래 승차 예보나 출발 상태는 ARRIVED 기록으로 바꾸지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.004"/>
+  <testcase name="첫 실제 편이 접근 준비보다 빨라지면 경고하고 다음 신선한 쌍으로 회복한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.003"/>
+  <testcase name="각 구간을 먼저 갱신한 준비 시각으로 환승 가능한 실제 편을 고른다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.002"/>
+  <testcase name="선택 편이 최신 준비 시각으로도 가능하면 더 이른 다른 편으로 임의 변경하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.002"/>
+  <testcase name="실제 캡처의 오래 지난 첫 승차역에 보충 예산을 낭비하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.045"/>
+  <testcase name="상류 재계산으로 선택 편을 놓치면 다른 실제 편의 두 역 예보로 연결한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.004"/>
+  <testcase name="다른 실제 편은 두 역에서 같은 차량으로 확인한 뒤 원본 시간표와 분리해 선택한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.031"/>
+  <testcase name="다가오는 환승의 두 역 대조를 지난 구간의 대체 편 검색보다 우선한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.001"/>
+  <testcase name="첫 구간의 실제 편을 선택한 뒤 뒤쪽 시간표 환승도 같은 경로에서 다시 연결한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.002"/>
+  <testcase name="실제 선택 차량의 승차 예보만으로 원래 다른 편의 운행시간을 적용하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.003"/>
+  <testcase name="양 끝 차량번호가 다르거나 최신 행이 충돌하면 연결하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.014"/>
+  <testcase name="선택 편의 새 예보가 환승 준비보다 빨라지면 이전의 늦은 승차 계획을 유지하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.002"/>
+  <testcase name="과거 기록과 다른 차량 또는 상충하거나 오래된 하차 예보는 연결하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.004"/>
+  <testcase name="같은 실제 편을 놓친 새 예보가 오면 가능한 다음 시간표로 전체 도착을 다시 연결한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.003"/>
+  <testcase name="같은 도착 상태의 재게시로 과거 승차 마감을 뒤로 미루지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.002"/>
+  <testcase name="과거 도착 차량도 앞 구간 도착과 환승 여유보다 빠르면 연결하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.001"/>
+  <testcase name="승차역의 도착 상태를 보존하고 나중의 같은 실제 차량 하차 예보와 연결한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.035"/>
+  <testcase name="먼 하차역과 빈 예보와 정차 순서 없는 경로에는 보충 역을 조회하지 않는다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.001"/>
+  <testcase name="응답 오류 뒤에는 다른 역을 추가 호출하지 않고 취소는 전파한다()" classname="com.noLate.eta.application.transit.ObservedSubwayServiceRefreshTest" time="0.007"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

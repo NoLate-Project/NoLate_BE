@@ -1,0 +1,57 @@
+{
+  "classification": "SAME_COORDINATES_SERVICE_DAY_DEPARTURE_INPUT_PUBLIC_UI_DISPLAY_COMPARISON",
+  "workerEvaluationSha256": "2d7da16ce91282061315d655d653f01b661b8787c4a53c277a061a01660cce88",
+  "workerEvaluatedAt": "2026-11-20T01:48:04.022340Z",
+  "naverSnapshotObservedAt": "2026-11-20T01:50:05.999228+00:00",
+  "observationGapSeconds": 121.976888,
+  "coordinates": {
+    "origin": {
+      "lat": 37.65636195,
+      "lng": 127.06342739
+    },
+    "destination": {
+      "lat": 37.48426844,
+      "lng": 126.92977778
+    }
+  },
+  "serviceDate": "2026-11-20",
+  "topology": [
+    "노원 4호선",
+    "사당 환승",
+    "신림 2호선"
+  ],
+  "naverDepartureInput": "2026-11-20T10:50:00+09:00",
+  "appCalculatedDoorDepartureAt": "2026-11-20T01:50:00Z",
+  "originalOdsaySeedSearchInput": "2026-11-20T02:00:00Z",
+  "seedInputIsNotUsedAsMapDeparture": true,
+  "appPredictedArrivalAt": "2026-11-20T02:59:43Z",
+  "naverDisplayedFinalArrivalMinute": "2026-11-20T11:52+09:00",
+  "appClockMinusNaverDisplayedMinuteSeconds": 463,
+  "appClockAndMapMinuteHaveDifferentPrecision": true,
+  "naverInternalRoundingUnknown": true,
+  "samePublicDepartureMinuteInput": true,
+  "sameSelectedVehicleProven": false,
+  "components": {
+    "appAccessWalkSeconds": 137,
+    "appFirstBoardingMarginSeconds": 60,
+    "naverAccessWalkExplicitlyShown": false,
+    "appFirstBoardingAt": "2026-11-20T10:57:00+09:00",
+    "naverFirstBoardingDisplayedMinute": "2026-11-20T10:51+09:00",
+    "appFirstRideScheduledSeconds": 2880,
+    "naverFirstRideDisplayedMinutes": 48,
+    "appTransferWalkSeconds": 157,
+    "naverTransferWalkDisplayedMinutes": 2,
+    "naverTransferWalkDisplayedMeters": 155,
+    "appTransferBoardingAt": "2026-11-20T11:51:00+09:00",
+    "naverTransferBoardingDisplayedMinute": "2026-11-20T11:45+09:00",
+    "appFinalRideScheduledSeconds": 450,
+    "naverFinalRideDisplayedMinutes": 7,
+    "appEgressWalkSeconds": 73,
+    "naverEgressWalkExplicitlyShown": false
+  },
+  "interpretation": "Public UI displayed arrival differs at the same coordinate and departure-minute input. Different chosen trains and unspecified Naver access/egress/platform scope remain causes to analyze; this is not same-train physical arrival accuracy. Do not subtract walking or change margins to force agreement. The first boarding display difference is six minutes, and both first scheduled ride durations are 48 minutes.",
+  "physicalArrivalAccuracyVerified": false,
+  "wholeRouteWalkingScopeEquivalentProven": false,
+  "mapUiOnly": true,
+  "hiddenApiUsed": false
+}

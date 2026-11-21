@@ -1,0 +1,119 @@
+{
+  "classification": "OFFLINE_READING_OF_MATCHED_PUBLIC_NAVER_AND_PROVIDER_TIMETABLE",
+  "inputs": {
+    "directory": "NoLate_FE/e2e/evidence/2026-11-19-transfer-requery",
+    "sha256": {
+      "paired-input.json": "2b2d5f7a4a7e327f37f2d19c5dafe51d062c599227223400f6aa72bf1c5d9018",
+      "naver-detail.yml": "a25b940b2d2bce00ef0d6523a5360fdc5f35c747f198668e6a4de0f6660a0d5c",
+      "before.json": "52d508265eca41308841a361c4387340af6cde07bf4b587efa5df6f8315cec34",
+      "after.json": "e036e8e748d3e5fb50941d75c26a95e50e547f4c017a16feab6de934ed891899",
+      "captured-journey.json": "9cc412a48d0f51201b227d60e99f8e187f09fcb170d40e11f2f01940cc40af24"
+    },
+    "addedPublicReferences": {
+      "departureAt": "e4544",
+      "rides[0].boardingAt": "e4576",
+      "rides[1].boardingAt": "e4680",
+      "displayedDestination": "e4716"
+    }
+  },
+  "observedAt": {
+    "before": "2026-11-19T11:00:01.715681Z",
+    "after": "2026-11-19T11:00:01.715681Z",
+    "naver": "2026-11-19T11:01:34Z"
+  },
+  "wholeJourneyComparableCount": 1,
+  "confirmedSamePhysicalTrainCount": 0,
+  "walkingComparisonScope": "WHOLE_JOURNEY",
+  "beforeAndAfterClockRowsEqual": true,
+  "minuteCheckpoints": [
+    {
+      "event": "QUERY_DEPARTURE",
+      "appMinute": "2026-11-20T12:10:00+00:00",
+      "mapMinute": "2026-11-20T12:10:00+00:00",
+      "appMinusMapMinutes": 0,
+      "fromEvent": null,
+      "changeInGapMinutes": null
+    },
+    {
+      "event": "ROUTE_DEPARTURE",
+      "appMinute": "2026-11-20T12:10:00+00:00",
+      "mapMinute": "2026-11-20T21:13:00+09:00",
+      "appMinusMapMinutes": -3,
+      "fromEvent": "QUERY_DEPARTURE",
+      "changeInGapMinutes": -3
+    },
+    {
+      "event": "RIDE_1_BOARDING",
+      "appMinute": "2026-11-20T12:17:00+00:00",
+      "mapMinute": "2026-11-20T21:17:00+09:00",
+      "appMinusMapMinutes": 0,
+      "fromEvent": "ROUTE_DEPARTURE",
+      "changeInGapMinutes": 3
+    },
+    {
+      "event": "RIDE_1_ALIGHTING",
+      "appMinute": "2026-11-20T13:05:00+00:00",
+      "mapMinute": null,
+      "appMinusMapMinutes": null,
+      "fromEvent": null,
+      "changeInGapMinutes": null
+    },
+    {
+      "event": "RIDE_2_BOARDING",
+      "appMinute": "2026-11-20T13:11:00+00:00",
+      "mapMinute": "2026-11-20T22:11:00+09:00",
+      "appMinusMapMinutes": 0,
+      "fromEvent": "RIDE_1_BOARDING",
+      "changeInGapMinutes": 0
+    },
+    {
+      "event": "RIDE_2_ALIGHTING",
+      "appMinute": "2026-11-20T13:19:00+00:00",
+      "mapMinute": null,
+      "appMinusMapMinutes": null,
+      "fromEvent": null,
+      "changeInGapMinutes": null
+    },
+    {
+      "event": "DESTINATION",
+      "appMinute": "2026-11-20T13:24:00+00:00",
+      "mapMinute": "2026-11-20T22:22:00+09:00",
+      "appMinusMapMinutes": 2,
+      "fromEvent": "RIDE_2_BOARDING",
+      "changeInGapMinutes": 2
+    }
+  ],
+  "limitations": [
+    "App model seconds are grouped by civil minute for this diagnostic. Naver publishes minute clocks and does not give exact seconds.",
+    "Neither Naver alighting clock was published. The final two minutes cannot be assigned to the final ride, station interior or exit walk separately.",
+    "This archived paired case contains timetable predictions. It does not test recovery of a delayed transfer or measured passenger travel."
+  ],
+  "egressEvidence": {
+    "appRouteMinutes": 5,
+    "appRefinedSeconds": null,
+    "appDistanceMeters": 266,
+    "linkCount": 9,
+    "sumOfLinkLengthsMeters": 266.0,
+    "firstDiscontinuityAfterLink": 1,
+    "distanceBetweenLinkEndpointsMetersApprox": 0.81,
+    "providerQueryEndpointsAvailable": false,
+    "naverDisplayedWalkMinutes": 3,
+    "naverDisplayedWalkMeters": 265,
+    "scope": "The saved egress links fail exact continuity. Alighting clocks and station interior boundaries remain unpaired; the visible walking-duration difference is not an observed cause of the final arrival error."
+  },
+  "destinationMinuteDistribution": {
+    "distinctRouteQueryCount": 1,
+    "repeatCaptureIds": [],
+    "percentileMethod": "NEAREST_RANK",
+    "before": {
+      "medianAbsoluteMinutes": 2,
+      "p90AbsoluteMinutes": 2,
+      "maximumAbsoluteMinutes": 2
+    },
+    "after": {
+      "medianAbsoluteMinutes": 2,
+      "p90AbsoluteMinutes": 2,
+      "maximumAbsoluteMinutes": 2
+    }
+  }
+}

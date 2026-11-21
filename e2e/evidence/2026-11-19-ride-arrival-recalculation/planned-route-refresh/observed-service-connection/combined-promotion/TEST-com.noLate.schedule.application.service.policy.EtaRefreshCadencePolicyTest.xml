@@ -1,0 +1,34 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuite name="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" tests="30" skipped="0" failures="0" errors="0" timestamp="2026-11-20T06:54:19.784Z" hostname="macui-MacBookPro.local" time="0.01">
+  <properties />
+  <testcase name="future monitoring window is not opened early()" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[1] boardingDelay=180, expectedDelay=60" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[2] boardingDelay=30, expectedDelay=30" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[3] boardingDelay=0, expectedDelay=0" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[4] boardingDelay=-1, expectedDelay=0" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="미관측 확인 창이 끝나도 신선한 관측 차량의 기존 주기는 유지한다()" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="existing twenty minute job is advanced to shared cadence without resetting notification history()" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[1] late=899, delay=1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[2] late=900, delay=-1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[3] late=901, delay=-1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[4] late=1800, delay=-1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="retry timing and in-flight leases survive cadence rollout()" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[1] boardingDelay=1, delay=1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.001" />
+  <testcase name="[2] boardingDelay=60, delay=60" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[3] boardingDelay=300, delay=60" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[4] boardingDelay=1200, delay=60" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[5] boardingDelay=1201, delay=-1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[6] boardingDelay=0, delay=-1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.001" />
+  <testcase name="[7] boardingDelay=-1, delay=-1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[1] remainingSeconds=0" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.001" />
+  <testcase name="[2] remainingSeconds=-60" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[1] remainingSeconds=3600, expectedDelaySeconds=300" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[2] remainingSeconds=1860, expectedDelaySeconds=60" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[3] remainingSeconds=1801, expectedDelaySeconds=1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[4] remainingSeconds=1800, expectedDelaySeconds=120" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.001" />
+  <testcase name="[5] remainingSeconds=1200, expectedDelaySeconds=120" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[6] remainingSeconds=960, expectedDelaySeconds=60" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[7] remainingSeconds=901, expectedDelaySeconds=1" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[8] remainingSeconds=900, expectedDelaySeconds=60" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  <testcase name="[9] remainingSeconds=30, expectedDelaySeconds=30" classname="com.noLate.schedule.application.service.policy.EtaRefreshCadencePolicyTest" time="0.0" />
+  </testsuite>

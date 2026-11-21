@@ -1,0 +1,54 @@
+{
+  "classification": "OFFLINE_CURRENT_EVALUATION_JOIN_FIX_NOT_FRESHNESS_RELAXATION_OR_REAL_PAIR_PROOF",
+  "privateRoot": "/private/tmp/nolate-evaluation-correlation-proof.nw6ly97d",
+  "actualClockMismatches": [
+    {
+      "root": "/private/tmp/nolate-eta-real-e2e.w9vtd97p",
+      "workerFinishedAt": "2026-11-20T02:40:03.480406Z",
+      "latestRefreshStartedAt": "2026-11-20T02:40:00.195028Z",
+      "differenceSeconds": 3.285378,
+      "historyCount": 3,
+      "capturedRefreshes": 2,
+      "observedServiceConnectionBefore": null,
+      "observedServiceConnectionAfter": null,
+      "existingActualRunRemainsUnverifiedForNewServicePair": true
+    },
+    {
+      "root": "/private/tmp/nolate-eta-real-e2e.dzhrdc0h",
+      "workerFinishedAt": "2026-11-20T04:54:32.367176Z",
+      "latestRefreshStartedAt": "2026-11-20T04:54:30.101316Z",
+      "differenceSeconds": 2.26586,
+      "historyCount": 3,
+      "capturedRefreshes": 2,
+      "observedServiceConnectionBefore": null,
+      "observedServiceConnectionAfter": null,
+      "existingActualRunRemainsUnverifiedForNewServicePair": true
+    }
+  ],
+  "beforeNewRegressions": 4,
+  "beforeFailures": 2,
+  "afterRelatedTests": 79,
+  "afterFailures": 0,
+  "sourceFreshnessSecondsUnchanged": 120,
+  "sourceMustBeFreshAtDecisionAndFinish": true,
+  "joinRequires": "historyCount2or3; one cumulative refresh per post-initial evaluation; latest complete strictly ordered frame; matching departure plan and exact persisted current result",
+  "mainWorktreeAndLiveRunnerChanged": false,
+  "newPublicCalls": 0,
+  "mayPromoteWhileCurrentRunAlive": false,
+  "currentLiveRun": "/private/tmp/nolate-eta-real-e2e.uf14uvsd",
+  "afterCurrentRun": "Preserve original report. Apply scoped correlation/test patch after checking source hashes; reevaluate current exact recorded endpoint frames and public/native witnesses in a new report without live retries or falsifying timestamps.",
+  "sourceSha256": {
+    "eta_observed_service.py": {
+      "before": "a1ccc7775cb5d18bb68dcb84ab623884ca2bc017a1e9b63265e99971ff0f917c",
+      "after": "21c9def743725441d73d9c2d7f95a9a3d7a53c04650d6be1208ecbe90cbcd7c2"
+    },
+    "test_eta_observed_service.py": {
+      "before": "1a33d09dd80295165869a067c0614c65513a125ca9ca77861ae7a5cc53e087a3",
+      "after": "da64372df9001d77940cc625b9209d98684a1f6017b433b17d3276a6274bdd85"
+    },
+    "test_eta_evaluation_correlation.py": {
+      "before": null,
+      "after": "4ea54f4288941e5a9c0b0e79f99dcc683758a7e1c9d8d4f8391c93f8c7ed385b"
+    }
+  }
+}

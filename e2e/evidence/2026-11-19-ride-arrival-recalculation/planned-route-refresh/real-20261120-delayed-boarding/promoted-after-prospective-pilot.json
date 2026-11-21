@@ -1,0 +1,28 @@
+{
+  "classification": "PROMOTED_TO_WORKTREE_AFTER_SAME_TRAIN_PROSPECTIVE_PILOT",
+  "recordedAt": "2026-11-20T02:54:10.148798+00:00",
+  "sourceFilesMatchTestedSnapshot": "/private/tmp/nolate-be-planned-build.9h4y8nrr",
+  "sourceMainHashMatchesPreOutcomeFreeze": true,
+  "operatingServerDeployed": false,
+  "oldLiveJvm5csUnmodified": true,
+  "sameTrainActualFirstAlightingInterval": [
+    "2026-11-20T02:47:35Z",
+    "2026-11-20T02:48:31Z"
+  ],
+  "candidateWorstCaseErrorSecondsBeforeAfter": [
+    211,
+    96
+  ],
+  "errorReductionForEveryTimeInBracketSeconds": 115,
+  "actualTrains": 1,
+  "fullRegression": {
+    "suites": 12,
+    "tests": 458,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "sequentialRecordedResponseTest": "The later direct alighting forecast replaces the earlier boarding-based shift, reconnects to2202 and arrives12:05:43 without double counting.",
+  "pending": "New candidate runtime API/installed-app E2E. Previous running root used old5cs only.",
+  "previousOfflineNotAppliedArtifactsPreservedAsHistoricalState": true
+}

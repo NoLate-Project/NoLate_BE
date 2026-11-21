@@ -1,0 +1,12 @@
+{
+  "classification" : "REAL_PUBLIC_POSITION_OBSERVATION_OF_UNACCEPTED_TIMETABLE_CANDIDATE",
+  "completedRequests" : 8,
+  "maximumHttpCalls" : 8,
+  "physicalHttpCalls" : 8,
+  "failureCode" : null,
+  "clockMode" : "SYSTEM_WALL_CLOCK",
+  "providersMocked" : false,
+  "serversOrSimulatorsModified" : false,
+  "productionDatabaseModified" : false,
+  "exactPhysicalArrivalSecondsMeasured" : false
+}

@@ -1,0 +1,67 @@
+{
+  "classification": "CONTROLLED_WORKER_SCHEDULING_FIX_NOT_NEW_LIVE_ACCURACY",
+  "updatedAt": "2026-11-20T06:01:54.679961+00:00",
+  "privateRoot": "/private/tmp/nolate-planned-cadence-proof.6v1bmmdw",
+  "beforeMainRoot": "/private/tmp/nolate-be-planned-build.7ylfd8u6",
+  "liveJvmAndMainWorktreeChanged": false,
+  "newPublicTransportCalls": 0,
+  "beforeSameWorkerInputs": 4,
+  "beforeFailures": 3,
+  "beforeErrors": 0,
+  "afterSameWorkerInputs": 4,
+  "afterFailures": 0,
+  "afterErrors": 0,
+  "fullRegressionSuites": 17,
+  "fullRegressionTests": 521,
+  "fullRegressionFailures": 0,
+  "fullRegressionErrors": 0,
+  "fullRegressionSkipped": 0,
+  "finalAdditionalAssertions": "Worker persists matching nextCheckAt/lastEtaRefreshDueAt, unchanged original plan and stale acceptance; all four affected cases pass.",
+  "cause": "After departure and first observation confirmation, ETA cadence can fall to ten-minute periodic checks while admitted station observations expire after120seconds; query opening at a later ride event can be skipped.",
+  "fix": "For retained same-identity subway journeys, add a one-minute cadence only inside existing15minute-lookahead/20minute-late-observation windows, otherwise wake at the earliest future observation-window opening while preserving existing low-frequency periodic policy. Keep existing schedule deadline.",
+  "changedAdmissionGates": false,
+  "walkingOrBoardingMarginsChanged": false,
+  "departureAlarmClockChanged": false,
+  "serviceDayPredicate": "Exact previous guard predicate moved to the timetable model for both guard and cadence; no changed boolean conditions.",
+  "additionalProviderCallRisk": "More refreshes near journey events. Origin diagnostic searches still run with the existing per-evaluation limits; this patch does not solve provider cost or quota. No live calls are made by these regressions.",
+  "initialBaselineHarnessFailureExcluded": "Early init-script classpath configuration omitted JUnit engine; rerun with doFirst overlay produced the authoritative4cases/3assertion failures/0errors.",
+  "mayPromoteWhileCurrentRunAlive": false,
+  "currentLiveRunDoesNotExerciseThisCandidate": "/private/tmp/nolate-eta-real-e2e.uf14uvsd",
+  "nextRequired": [
+    "Wait for current run terminal/endpoint restoration; preserve its original evidence.",
+    "Apply only scoped patch after checking user changes and original source hashes.",
+    "Verify persisted public due time and actual automatic station-window requery, API/app consistency and bounded real-provider behavior; do not equate these521regressions with accuracy."
+  ],
+  "sourceSha256": {
+    "src/main/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorker.kt": {
+      "before": "f09fdda2863da2cbe8f74435a41df96a7f2366e0a61fa620ff131f67514d46c3",
+      "after": "8d8aa9c5d5da404b3cdd5693dc1bb97c749508271c867153a2e72a19e27a1a45",
+      "worktreeMatchesFrozenBase": true
+    },
+    "src/main/kotlin/com/noLate/schedule/application/service/policy/PlannedTransitRefreshCadencePolicy.kt": {
+      "before": null,
+      "after": "4527757c98a5732b9e4fdaf042a6c8f1dd37c484f33a40161445188b43ca5543",
+      "worktreeMatchesFrozenBase": true
+    },
+    "src/main/kotlin/com/noLate/eta/application/transit/TransitTransferRealtimeGuard.kt": {
+      "before": "6d8762c7986b2574ede0a41ef64c68791104eb831b8ef005d893dcadc758595c",
+      "after": "7ea1eec3381f249ba08d26b2ab48158f1ad6d03edd45b9019b1951a019adcfab",
+      "worktreeMatchesFrozenBase": true
+    },
+    "src/main/kotlin/com/noLate/eta/domain/TransitLegTimetable.kt": {
+      "before": "be6745fb45e559ede78501307f565268e6ff251dec97d8ed418de7f98e7c3010",
+      "after": "02dc2cfc11390e3733717a2e6ff4c62cd6419074e20f6c63115a2619952382d9",
+      "worktreeMatchesFrozenBase": true
+    },
+    "src/test/kotlin/com/noLate/schedule/application/service/SchedulePushJobWorkerTest.kt": {
+      "before": "3d98d6ed4e949f4fbc365d006743e1a219bc03d3c4d501cbd17653a0e4f7c95a",
+      "after": "77242bcf7d1e18d26d7c6dad637e92eb679ac194610d009b7f59b244d4ff3b5f",
+      "worktreeMatchesFrozenBase": true
+    },
+    "src/test/kotlin/com/noLate/schedule/application/service/policy/PlannedTransitRefreshCadencePolicyTest.kt": {
+      "before": null,
+      "after": "364c36c95193eaf4ac7eaefacfcab9963305e538fcb680f196884764ad55daea",
+      "worktreeMatchesFrozenBase": true
+    }
+  }
+}

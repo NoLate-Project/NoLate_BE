@@ -1,0 +1,7 @@
+<testsuite name="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-11-20T05:59:44.729Z" hostname="macui-MacBookPro.local" time="1.833">
+  <properties />
+  <testcase name="[1] secondsBeforeArrival=600, expectedDelay=60" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="1.698" />
+  <testcase name="[2] secondsBeforeArrival=930, expectedDelay=30" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.053" />
+  <testcase name="[3] secondsBeforeArrival=1800, expectedDelay=60" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.039" />
+  <testcase name="[4] secondsBeforeArrival=1500, expectedDelay=600" classname="com.noLate.schedule.application.service.SchedulePushJobWorkerTest" time="0.035" />
+  </testsuite>

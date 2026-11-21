@@ -1,0 +1,124 @@
+{
+  "classification": "OFFLINE_SAME_CAPTURE_BACKEND_AND_FRONTEND_REPLAY",
+  "source": "nolate-eta-real-e2e.f73idd8i/evaluation-1.json",
+  "comparisonScope": "One previously verified ODsay route and Seoul timetable at its captured evaluation time. Frontend runs presentation functions in Node, not an installed app.",
+  "model": {
+    "classification": "OFFLINE_RECORDED_SERVICE_TIMETABLE_PROJECTION",
+    "source": "nolate-eta-real-e2e.f73idd8i",
+    "captureSha256": "99aa4d891a07a6e01337d6f1f4a930706f7a6bd24914c836d08346c207b6a2b9",
+    "inputSha256": "10d8e24c545f4fa6801c2ed39d0a9acc3b8b4b3b0baaef0b916ceb4483409e80",
+    "publicHttpCalls": 0,
+    "forecastCount": 1,
+    "originDepartureAt": "2026-11-19T14:11:00Z",
+    "finalArrivalAt": "2026-11-19T15:19:13Z",
+    "oldTransferEvidence": null,
+    "newTransferEvidence": {
+      "previousArrivalAt": "2026-11-19T15:06:00Z",
+      "walkingSeconds": 157,
+      "bufferSeconds": 0,
+      "confidenceMarginSeconds": 60,
+      "boardingAt": "2026-11-19T15:10:30Z",
+      "requiredMarginSeconds": 60,
+      "physicalReadyAt": "2026-11-19T15:08:37Z",
+      "confidenceReadyAt": "2026-11-19T15:09:37Z",
+      "remainingSlackSeconds": 53
+    },
+    "platformWaitWithModeledWalkingSeconds": 113,
+    "directPassengerEvidence": false,
+    "observedFinalDestination": false,
+    "newArrivalTimeGainSeconds": 0,
+    "backendProjectionKeyFieldsIdenticalToRecordedBaseline": true
+  },
+  "savedClockSource": "ui-status-1.savedRouteEstimatedDepartureAt used as input to buildSavedRouteDetailInfo in both compatibility replays. Native old rail was not observed.",
+  "originalFrontendProjectionWithoutSavedClockAnchor": {
+    "phase": "before",
+    "replayEvaluatedAt": "2026-11-19T14:03:29.771959Z",
+    "card": "23:11 출발 예측 · 00:19 도착 예측 · 총 69분",
+    "cardTransferWait": null,
+    "railMatches": false,
+    "railBasis": null,
+    "railDeparture": "2026-11-19T14:03:00Z",
+    "railArrival": "2026-11-19T15:03:00Z",
+    "rides": [
+      {
+        "id": "odsay-leg-1",
+        "clocks": null
+      },
+      {
+        "id": "odsay-leg-3",
+        "clocks": null
+      }
+    ],
+    "protectedDeparture": "2026-11-19T14:11:00Z"
+  },
+  "legacyStatusOnSavedRoute": {
+    "phase": "before",
+    "replayEvaluatedAt": "2026-11-19T14:03:29.771959Z",
+    "card": "23:11 출발 예측 · 00:19 도착 예측 · 총 69분",
+    "cardTransferWait": null,
+    "railMatches": false,
+    "railBasis": null,
+    "railDeparture": "2026-11-19T14:32:00.000Z",
+    "railArrival": "2026-11-19T15:32:00.000Z",
+    "rides": [
+      {
+        "id": "odsay-leg-1",
+        "clocks": null
+      },
+      {
+        "id": "odsay-leg-3",
+        "clocks": null
+      }
+    ],
+    "protectedDeparture": "2026-11-19T14:11:00Z"
+  },
+  "currentStatusOnSavedRoute": {
+    "phase": "after",
+    "replayEvaluatedAt": "2026-11-19T14:03:29.771959Z",
+    "card": "23:11 출발 예측 · 00:19 도착 예측 · 총 69분",
+    "cardTransferWait": "환승 대기 약 1분 53초",
+    "railMatches": true,
+    "railBasis": "TIMETABLE",
+    "railDeparture": "2026-11-19T14:11:00Z",
+    "railArrival": "2026-11-19T15:19:13Z",
+    "rides": [
+      {
+        "id": "odsay-leg-1",
+        "clocks": {
+          "startAt": "2026-11-19T14:18:00.000Z",
+          "endAt": "2026-11-19T15:06:00.000Z",
+          "movementSeconds": 2880,
+          "provisionalPlan": true
+        }
+      },
+      {
+        "id": "odsay-leg-3",
+        "clocks": {
+          "startAt": "2026-11-19T15:10:30.000Z",
+          "endAt": "2026-11-19T15:18:00.000Z",
+          "movementSeconds": 450,
+          "transferWaitSeconds": 113,
+          "provisionalPlan": true
+        }
+      }
+    ],
+    "protectedDeparture": "2026-11-19T14:11:00Z"
+  },
+  "regression": {
+    "backend": 350,
+    "backendSuites": 8,
+    "frontend": 68,
+    "frontendSuites": 4,
+    "python": 67,
+    "typescript": "PASS",
+    "xcuitestBuildForTesting": "PASS",
+    "newNativeRailExecution": "PENDING"
+  },
+  "provenance": "Prior rejected snapshot identified SELECTED_ROUTE_PRESERVED. New public status exposes provenance only for an eligible preview. Unknown and alternative routes leave saved map times alone.",
+  "matchingOutcome": {
+    "newApiRequests": 0,
+    "newStrictMapComparisons": 0,
+    "observedPassengerArrivals": 0,
+    "serverArrivalChangeSeconds": 0
+  }
+}

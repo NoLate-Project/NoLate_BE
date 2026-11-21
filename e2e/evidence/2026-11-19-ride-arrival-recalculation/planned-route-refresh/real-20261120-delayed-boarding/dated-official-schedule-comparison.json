@@ -1,0 +1,125 @@
+{
+  "classification" : "ONE_RECORDED_READY_TIME_VERSUS_DATE_SPECIFIC_OFFICIAL_SCHEDULE",
+  "startedAt" : "2026-11-20T03:12:33.739903Z",
+  "recordedEvaluation" : "evaluation-3.json",
+  "maximumClientFetches" : 1,
+  "clientFetchesStarted" : 1,
+  "sourceQuery" : {
+    "line" : "LINE_2",
+    "fromName" : "사당",
+    "toName" : "신림",
+    "nextStopName" : "낙성대",
+    "serviceClass" : "LOCAL",
+    "notBefore" : "2026-11-20T02:51:42Z",
+    "directionCode" : "UP",
+    "serviceDate" : "2026-11-20"
+  },
+  "timeInputMode" : "EXPLICIT_RECORDED_SCHEDULE_TIME_NOT_CURRENT_ETA",
+  "sameTrainAliasInferred" : false,
+  "passengerAccuracyVerified" : false,
+  "productionDatabaseModified" : false,
+  "simulatorModified" : false,
+  "parsedOfficialSections" : [ {
+    "departure" : {
+      "code" : "0226",
+      "line" : "2호선",
+      "name" : "사당"
+    },
+    "arrival" : {
+      "code" : "0227",
+      "line" : "2호선",
+      "name" : "낙성대"
+    },
+    "terminalCode" : "0211",
+    "direction" : "내선",
+    "transfer" : "N",
+    "express" : "N",
+    "scheduled" : {
+      "trainNumber" : "2202",
+      "terminalName" : "성수",
+      "departureTime" : [ 11, 57 ],
+      "arrivalTime" : [ 11, 59 ]
+    }
+  }, {
+    "departure" : {
+      "code" : "0227",
+      "line" : "2호선",
+      "name" : "낙성대"
+    },
+    "arrival" : {
+      "code" : "0228",
+      "line" : "2호선",
+      "name" : "서울대입구"
+    },
+    "terminalCode" : "0211",
+    "direction" : "내선",
+    "transfer" : "N",
+    "express" : "N",
+    "scheduled" : {
+      "trainNumber" : "2202",
+      "terminalName" : "성수",
+      "departureTime" : [ 11, 59, 30 ],
+      "arrivalTime" : [ 12, 1 ]
+    }
+  }, {
+    "departure" : {
+      "code" : "0228",
+      "line" : "2호선",
+      "name" : "서울대입구"
+    },
+    "arrival" : {
+      "code" : "0229",
+      "line" : "2호선",
+      "name" : "봉천"
+    },
+    "terminalCode" : "0211",
+    "direction" : "내선",
+    "transfer" : "N",
+    "express" : "N",
+    "scheduled" : {
+      "trainNumber" : "2202",
+      "terminalName" : "성수",
+      "departureTime" : [ 12, 1, 30 ],
+      "arrivalTime" : [ 12, 2, 30 ]
+    }
+  }, {
+    "departure" : {
+      "code" : "0229",
+      "line" : "2호선",
+      "name" : "봉천"
+    },
+    "arrival" : {
+      "code" : "0230",
+      "line" : "2호선",
+      "name" : "신림"
+    },
+    "terminalCode" : "0211",
+    "direction" : "내선",
+    "transfer" : "N",
+    "express" : "N",
+    "scheduled" : {
+      "trainNumber" : "2202",
+      "terminalName" : "성수",
+      "departureTime" : [ 12, 3 ],
+      "arrivalTime" : [ 12, 4, 30 ]
+    }
+  } ],
+  "validatedSameOrderedRide" : {
+    "provider" : "seoul-dated-path",
+    "line" : "LINE_2",
+    "serviceDate" : [ 2026, 11, 20 ],
+    "trainNumber" : "2202",
+    "directionCode" : "UP",
+    "serviceClass" : "LOCAL",
+    "fromStationCode" : "0226",
+    "toStationCode" : "0230",
+    "terminalName" : "성수",
+    "boardingAt" : 1795143420.000000000,
+    "arrivalAt" : 1795143870.000000000,
+    "fetchedAt" : 1795144354.313174000,
+    "realtimeTrainNumber" : null,
+    "boardingStationArrivalAt" : null
+  },
+  "fetchedAt" : "2026-11-20T03:12:34.313174Z",
+  "result" : "RESPONSE_CAPTURED_NOT_AN_ALIAS_OR_ACCURACY_CLAIM"
+}

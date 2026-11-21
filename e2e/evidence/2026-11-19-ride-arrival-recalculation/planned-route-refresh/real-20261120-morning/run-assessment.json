@@ -1,0 +1,87 @@
+{
+  "classification": "COMPLETED_BOUNDED_REAL_PROVIDER_AND_INSTALLED_APP_RUN",
+  "result": "PARTIAL",
+  "root": "/private/tmp/nolate-eta-real-e2e.1dcni89z",
+  "evaluations": 3,
+  "positionHttpCalls": 16,
+  "providerFailures": [],
+  "acceptedNormalRealtimeUiCases": 0,
+  "installedDiagnosticPassed": true,
+  "installedFallbackPassed": true,
+  "installedMatchedRideAndOnwardTimetablePassed": true,
+  "initialDepartureAt": "2026-11-19T23:05:00Z",
+  "initialTimetableFinalAt": "2026-11-20T00:11:43Z",
+  "requeriedPlannedFinalAt": "2026-11-20T00:22:13Z",
+  "oldOnwardTrain": "2118",
+  "reconnectedOnwardTrain": "2124",
+  "newTrainArrivalObservation": {
+    "line": "LINE_2",
+    "event": "ALIGHTING",
+    "station": "신림",
+    "scheduledAt": "2026-11-20T00:21:00Z",
+    "predictedAt": "2026-11-20T00:21:00Z",
+    "trainNumbers": [
+      "2124"
+    ],
+    "direction": "UP",
+    "terminal": "성수",
+    "serviceClass": "LOCAL",
+    "serviceDate": "2026-11-20",
+    "from": "2026-11-19T23:59:00.559568+00:00",
+    "until": "2026-11-20T00:24:20.512378+00:00",
+    "result": "BOUNDED_PROVIDER_TRAIN_ARRIVAL",
+    "lower": "2026-11-20T00:22:11+00:00",
+    "upper": "2026-11-20T00:22:56+00:00",
+    "widthSeconds": 45.0,
+    "predictionReferenceEvent": "ARRIVAL",
+    "observedMinusPredictionSeconds": [
+      71.0,
+      116.0
+    ],
+    "minimumObservedMinusPredictionSeconds": null,
+    "sameEventTimetableAt": "2026-11-20T00:21:00Z",
+    "absoluteErrorChangeFromTimetableSeconds": [
+      0.0,
+      0.0
+    ],
+    "observedMinusSameEventTimetableSeconds": [
+      71.0,
+      116.0
+    ],
+    "observedMinusTimetableSeconds": [
+      71.0,
+      116.0
+    ],
+    "positionReadsRelativeToPrediction": {
+      "before": 6,
+      "atOrAfter": 2
+    }
+  },
+  "destinationUsingModeledEgress": {
+    "planningArrivalAt": "2026-11-20T00:22:13Z",
+    "modeledEgressSeconds": 73,
+    "egressTimingSource": "ODSAY_EXIT_WALK_SECONDS",
+    "trainArrivalPlusModeledEgressWindow": {
+      "lower": "2026-11-20T00:23:24+00:00",
+      "upper": "2026-11-20T00:24:09+00:00"
+    },
+    "windowMinusPlanningArrivalSeconds": [
+      71.0,
+      116.0
+    ],
+    "physicalDestinationArrivalVerified": false,
+    "result": "MODELED_DESTINATION_ARRIVAL_WINDOW"
+  },
+  "sameRecordedResponseReplay": "paired-evaluation-3.json",
+  "codeVersionTrainOrClockChanged": [
+    false,
+    false
+  ],
+  "naverDisplayedGapSecondsReferenceOnly": 283,
+  "strictComparableWholeJourneySamples": 0,
+  "normalRealtimeAccuracyCompleted": false,
+  "endpointRecovery": "endpoint-restoration-recovery.json",
+  "allFourLatestPlanEventsBounded": false,
+  "productionDatabaseModified": false,
+  "nextCodeInvestigation": "First-ride boarding lookup stops more than 120 seconds after the scheduled/predicted boarding while its destination remains outside the 15-minute lookup window. Fresh position observations in this run still had train 4041 upstream more than 120 seconds after the planned Nowon boarding. The isolated phase test did not query Nowon then, so the actual arrival-feed response for that interval is unrecorded. Do not invent it or replay an unrelated response."
+}
