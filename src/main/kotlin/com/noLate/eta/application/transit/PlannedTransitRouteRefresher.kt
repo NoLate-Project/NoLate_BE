@@ -244,7 +244,16 @@ class PlannedTransitRouteRefresher(
                 if (ready <= requireNotNull(timings[next]).predictedBoardingAt) continue
                 // 관측한 구간까지 보존하고, 이후 같은 경로에서 탈 수 있는 다음 편을 찾는다.
                 val journey = toJourney(plan, segments, timings, evaluatedAt)
-                val reconnected = timetableEnricher.reconnectAfterObservedRide(journey, current, arrival, maxTravelMinutes)
+                val observedOnwardTimes = rides.filter { it > current }.mapNotNull { index ->
+                    val timing = timings.getValue(index)
+                    if (timing.alightingSourceAt()?.let { it in freshWindow } != true ||
+                        (timing.observedService != null && timing.boardingSourceAt()?.let { it in freshWindow } != true)) {
+                        return@mapNotNull null
+                    }
+                    index to TransitConnectionRideTimes(timing.predictedBoardingAt, timing.predictedArrivalAt)
+                }.toMap()
+                val reconnected = timetableEnricher.reconnectAfterObservedRide(
+                    journey, current, arrival, maxTravelMinutes, observedOnwardTimes)
                 if (reconnected === journey) return failed(PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE)
                 for (index in rides.filter { it > current }) {
                     val table = requireNotNull(reconnected.legs[index].timetable)

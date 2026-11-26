@@ -12,6 +12,8 @@ import com.noLate.transit.domain.TransitArrivalStatus
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.mockito.kotlin.*
 import java.time.Instant
 import java.time.LocalDate
@@ -458,6 +460,53 @@ class PlannedTransitRouteRefresherTest {
         val update = requireNotNull(refresher.refresh(plan, at(300)))
         assertNull(update.route)
         assertEquals(PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE, update.failure)
+    }
+
+    @ParameterizedTest
+    @CsvSource("1120,true", "1200,false")
+    fun `첫 환승을 다시 연결한 뒤 준비 시각으로 마지막 열차의 하차 예보를 검증한다`(secondArrival: Long, lastRideReachable: Boolean) {
+        val original = plan()
+        val second = requireNotNull(original.segments[3].rideTiming).timetable
+        val thirdTable = second.copy(line = SeoulSubwayLine.LINE_1, trainNumber = "1012",
+            fromStationCode = "L", toStationCode = "Y", terminalName = "소요산",
+            boardingAt = at(1300), arrivalAt = at(1370))
+        val third = EffectiveTransitRouteSegment(5, EffectiveTransitRouteSegmentKind.SUBWAY, 4, lineName = "1호선",
+            fromName = "신림", toName = "영등포", rideTiming = EffectiveTransitRideTiming(thirdTable, at(1300), at(1370),
+                EffectiveTransitRideTimingBasis.TIMETABLE))
+        val plan = original.copy(arrivalAt = at(1541), totalMinutes = 26, segments = original.segments.take(4) +
+            EffectiveTransitRouteSegment(4, EffectiveTransitRouteSegmentKind.WALK, 1, durationSeconds = 60) + third +
+            original.segments.last().copy(sequence = 6))
+        stubCurrent(plan, at(500), listOf(
+            TransitRideRealtimeObservation(1, TransitRideObservationPoint.ALIGHTING, at(700), at(499)),
+            TransitRideRealtimeObservation(5, TransitRideObservationPoint.ALIGHTING, at(1380), at(500))))
+        whenever(timetable.findRides(any())).thenAnswer { call ->
+            val query = call.getArgument<TransitTimetableQuery>(0)
+            if (query.line == second.line) listOf(second.copy(trainNumber = "2014", boardingAt = at(1010), arrivalAt = at(secondArrival)))
+            else emptyList()
+        }
+
+        val update = requireNotNull(refresher.refresh(plan, at(500)))
+        verify(timetable).findRides(argThat { line == second.line && notBefore == at(1003) })
+        if (!lastRideReachable) {
+            assertNull(update.route)
+            assertEquals(PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE, update.failure)
+            verify(timetable).findRides(argThat { line == thirdTable.line && notBefore == at(1320) })
+            return
+        }
+        val route = requireNotNull(update.route)
+        assertEquals(plan.departureAt, route.departureAt)
+        assertEquals("2014", route.segments[3].rideTiming?.timetable?.trainNumber)
+        val last = requireNotNull(route.segments[5].rideTiming)
+        assertEquals("1012", last.timetable.trainNumber)
+        assertEquals(at(1380), last.predictedArrivalAt)
+        assertEquals(at(500), last.alightingSourceAt())
+        assertEquals(at(1551), route.arrivalAt)
+        val snapshot = EffectiveTransitRouteSnapshot(accepted = false, inProgressPlannedRoute = plan,
+            routeChanged = false, plannedRouteUpdate = update)
+        val prediction = requireNotNull(snapshot.plannedJourneyArrivalPrediction(at(500), 120))
+        assertEquals(route, prediction.effectiveTransitRoute)
+        assertEquals(at(1551), prediction.predictedArrivalAt)
+        verifyNoMoreInteractions(timetable)
     }
 
     @Test

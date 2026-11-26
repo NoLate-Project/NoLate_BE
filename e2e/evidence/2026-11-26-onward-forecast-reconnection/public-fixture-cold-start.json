@@ -1,0 +1,24 @@
+{
+  "classification": "PUBLIC_FIXTURE_COLD_START_DEADLINE",
+  "originalResult": "PARTIAL",
+  "originalFailureStage": "BoundedAutomaticWait",
+  "root": "/private/tmp/nolate-eta-real-e2e.art_nmr9",
+  "calendar": {
+    "source": "ACTUAL_KASI_MONTH_FETCH_IN_H2",
+    "date": "2026-11-26",
+    "weekTag": "1",
+    "productionDatabaseModified": false
+  },
+  "recordedPreparation": {
+    "database": "H2_MEMORY_ONLY",
+    "publicStationFixture": true,
+    "copiedFromScheduleId": null,
+    "scheduleCountBeforeUi": 0,
+    "jobCountBeforeUi": 0
+  },
+  "simulatorUiDidStart": false,
+  "actualEtaEvaluations": 0,
+  "ownedPortsReleased": true,
+  "coldStartWaitSecondsBefore": 180,
+  "coldStartWaitSecondsAfter": 240
+}

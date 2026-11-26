@@ -1,0 +1,78 @@
+{
+  "classification": "SAME_RECORDED_TIMETABLE_TRANSFER_READINESS_SENSITIVITY",
+  "sourceEvaluationSha256": "cd978b0eccda8bce3186e0f9195469435e9d2a9d08aeb9de9c9135655ad39e9d",
+  "additionalHttpCalls": 0,
+  "capturedTimetableQueriesWithSameStationPair": 3,
+  "capturedTrainCount": 8,
+  "firstTrainAlightingAt": "2026-11-26T13:52:30+00:00",
+  "boardingMarginKeptSeconds": 60,
+  "capturedPrecedingTransferTrain": "2486",
+  "capturedPrecedingTransferBoardingAt": "2026-11-26T13:54:30+00:00",
+  "maximumWalkToCatchPrecedingTrainSeconds": 60,
+  "recordedTransferWalk": {
+    "seconds": 157,
+    "distanceMeters": 170,
+    "sameOrderedPathVerified": true
+  },
+  "seoulMetroReference": {
+    "seconds": 62,
+    "distanceMeters": 74,
+    "pathCoverageMatched": false
+  },
+  "naverDisplayedWalk": {
+    "minutes": 2,
+    "distanceMeters": 155,
+    "pathCoverageMatched": false
+  },
+  "unchangedEgressSeconds": 73,
+  "cases": [
+    {
+      "walkBasis": "RECORDED_ODSAY_SAME_ORDERED_PATH",
+      "assumedWalkingSeconds": 157,
+      "transferReadyAt": "2026-11-26T13:56:07+00:00",
+      "selectedTrainFromCapturedTimetable": "2488",
+      "trainBoardingAt": "2026-11-26T14:01:30+00:00",
+      "stationAlightingAt": "2026-11-26T14:09:00+00:00",
+      "finalArrivalWithUnchangedEgressAt": "2026-11-26T14:10:13+00:00"
+    },
+    {
+      "walkBasis": "NAVER_TWO_MINUTE_LABEL_AS_120S_FOR_SENSITIVITY_ONLY",
+      "assumedWalkingSeconds": 120,
+      "transferReadyAt": "2026-11-26T13:55:30+00:00",
+      "selectedTrainFromCapturedTimetable": "2488",
+      "trainBoardingAt": "2026-11-26T14:01:30+00:00",
+      "stationAlightingAt": "2026-11-26T14:09:00+00:00",
+      "finalArrivalWithUnchangedEgressAt": "2026-11-26T14:10:13+00:00"
+    },
+    {
+      "walkBasis": "SEOUL_METRO_REFERENCE_NOT_PATH_MATCHED",
+      "assumedWalkingSeconds": 62,
+      "transferReadyAt": "2026-11-26T13:54:32+00:00",
+      "selectedTrainFromCapturedTimetable": "2488",
+      "trainBoardingAt": "2026-11-26T14:01:30+00:00",
+      "stationAlightingAt": "2026-11-26T14:09:00+00:00",
+      "finalArrivalWithUnchangedEgressAt": "2026-11-26T14:10:13+00:00"
+    },
+    {
+      "walkBasis": "LAST_SECOND_THAT_CATCHES_PRECEDING_TRAIN",
+      "assumedWalkingSeconds": 60,
+      "transferReadyAt": "2026-11-26T13:54:30+00:00",
+      "selectedTrainFromCapturedTimetable": "2486",
+      "trainBoardingAt": "2026-11-26T13:54:30+00:00",
+      "stationAlightingAt": "2026-11-26T14:02:00+00:00",
+      "finalArrivalWithUnchangedEgressAt": "2026-11-26T14:03:13+00:00"
+    }
+  ],
+  "measurementOfActualWalking": false,
+  "productionPolicyChanged": false,
+  "firstAlightingCutoffsWithRecordedWalkAndMargin": {
+    "2486": {
+      "latestFirstTrainAlightingAt": "2026-11-26T13:50:53+00:00",
+      "secondsFromBaselineFirstAlighting": -97
+    },
+    "2488": {
+      "latestFirstTrainAlightingAt": "2026-11-26T13:57:53+00:00",
+      "secondsFromBaselineFirstAlighting": 323
+    }
+  }
+}

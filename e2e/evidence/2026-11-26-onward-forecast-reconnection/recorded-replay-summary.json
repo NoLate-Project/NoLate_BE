@@ -1,0 +1,99 @@
+{
+  "addedHttpCalls": 0,
+  "cases": [
+    {
+      "capture": "observed-service-connection/completed-1620/evaluation-3.json",
+      "frames": [
+        {
+          "rideCount": 2,
+          "before": "REPLAYED",
+          "after": "REPLAYED",
+          "beforeReason": null,
+          "afterReason": null,
+          "clocksMatch": true,
+          "fullUpdateMatch": true
+        },
+        {
+          "rideCount": 2,
+          "before": "REPLAYED",
+          "after": "REPLAYED",
+          "beforeReason": null,
+          "afterReason": null,
+          "clocksMatch": true,
+          "fullUpdateMatch": true
+        }
+      ]
+    },
+    {
+      "capture": "observed-service-connection/independent-future-timetable-plan/real-final-audit/evaluation-3.json",
+      "frames": [
+        {
+          "rideCount": 2,
+          "before": "REPLAYED",
+          "after": "REPLAYED",
+          "beforeReason": null,
+          "afterReason": null,
+          "clocksMatch": true,
+          "fullUpdateMatch": true
+        },
+        {
+          "rideCount": 2,
+          "before": "REPLAYED",
+          "after": "REPLAYED",
+          "beforeReason": null,
+          "afterReason": null,
+          "clocksMatch": true,
+          "fullUpdateMatch": true
+        }
+      ]
+    },
+    {
+      "capture": "real-20261120-delayed-boarding/evaluation-3.json",
+      "frames": [
+        {
+          "rideCount": 2,
+          "before": "REPLAYED",
+          "after": "REPLAYED",
+          "beforeReason": null,
+          "afterReason": null,
+          "clocksMatch": true,
+          "fullUpdateMatch": true
+        },
+        {
+          "rideCount": 2,
+          "before": "REPLAYED",
+          "after": "REPLAYED",
+          "beforeReason": null,
+          "afterReason": null,
+          "clocksMatch": true,
+          "fullUpdateMatch": true
+        }
+      ]
+    },
+    {
+      "capture": "real-20261120-morning/evaluation-3.json",
+      "frames": [
+        {
+          "rideCount": 2,
+          "before": "REPLAYED",
+          "after": "REPLAYED",
+          "beforeReason": null,
+          "afterReason": null,
+          "clocksMatch": true,
+          "fullUpdateMatch": true
+        },
+        {
+          "rideCount": 2,
+          "before": "REPLAYED",
+          "after": "REPLAYED",
+          "beforeReason": null,
+          "afterReason": null,
+          "clocksMatch": true,
+          "fullUpdateMatch": true
+        }
+      ]
+    }
+  ],
+  "comparableRecordedFrames": 8,
+  "recordedFramesWithAtLeastThreeRides": 0
+}

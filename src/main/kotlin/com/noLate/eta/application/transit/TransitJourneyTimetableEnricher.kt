@@ -24,6 +24,8 @@ data class TransitTimetablePreview(
 
 data class TransitTimetableEntranceWalk(val seconds: Long, val distanceMeters: Long)
 
+internal data class TransitConnectionRideTimes(val boardingAt: Instant, val arrivalAt: Instant)
+
 internal fun TransitJourney.requiresDatedTimetableForAdjacentRingRide(): Boolean =
     provider == "odsay" && rideLegs.any { leg ->
         leg.line?.seoulSubwayLine == SeoulSubwayLine.LINE_2 && leg.directionCode == null &&
@@ -286,6 +288,7 @@ class TransitJourneyTimetableEnricher(
         rideIndex: Int,
         observedArrivalAt: Instant,
         maxTravelMinutes: Int,
+        observedOnwardTimes: Map<Int, TransitConnectionRideTimes> = emptyMap(),
     ): TransitJourney {
         val rideIndexes = journey.legs.indices.filter { journey.legs[it].isRide }
         if (rideIndex !in rideIndexes.dropLast(1)) return journey
@@ -296,7 +299,7 @@ class TransitJourneyTimetableEnricher(
             }) return journey
         val shift = Duration.between(anchor.arrivalAt, observedArrivalAt)
         return reconnectWithTimetable(journey, anchor.provider, shift, maxTravelMinutes,
-            anchorRideIndex = rideIndex) ?: journey
+            anchorRideIndex = rideIndex, observedOnwardTimes = observedOnwardTimes) ?: journey
     }
 
     private fun reconnectWithTimetable(
@@ -305,6 +308,7 @@ class TransitJourneyTimetableEnricher(
         firstShift: Duration,
         maxTravelMinutes: Int,
         anchorRideIndex: Int = journey.legs.indexOfFirst { it.isRide },
+        observedOnwardTimes: Map<Int, TransitConnectionRideTimes> = emptyMap(),
         accept: (TransitJourney) -> Boolean = { true },
     ): TransitJourney? {
         if (providerId == SEOUL_DATED_TIMETABLE_PROVIDER_ID) {
@@ -312,7 +316,7 @@ class TransitJourneyTimetableEnricher(
             return runCatching {
                 // 출발 후 Worker 호출에도 남은 모든 환승이 공유하는 조회 예산을 둔다.
                 calculationDeadline.within {
-                    reconnectWith(journey, firstShift, maxTravelMinutes, anchorRideIndex) { query, leg ->
+                    reconnectWith(journey, firstShift, maxTravelMinutes, anchorRideIndex, observedOnwardTimes) { query, leg ->
                         listOfNotNull(dated.findRide(query, leg.orderedStopNames))
                     }
                 }
@@ -320,7 +324,7 @@ class TransitJourneyTimetableEnricher(
         }
         return providers.firstNotNullOfOrNull { provider ->
             runCatching {
-                reconnectWith(journey, firstShift, maxTravelMinutes, anchorRideIndex) { query, _ -> provider.findRides(query) }
+                reconnectWith(journey, firstShift, maxTravelMinutes, anchorRideIndex, observedOnwardTimes) { query, _ -> provider.findRides(query) }
             }.getOrNull()?.takeIf(accept)
         }
     }
@@ -330,6 +334,7 @@ class TransitJourneyTimetableEnricher(
         firstDelay: Duration,
         maxTravelMinutes: Int,
         anchorRideIndex: Int,
+        observedOnwardTimes: Map<Int, TransitConnectionRideTimes>,
         findRides: (TransitTimetableQuery, TransitJourneyLeg) -> List<TransitLegTimetable>,
     ): TransitJourney? {
         val anchor = requireNotNull(journey.legs[anchorRideIndex].timetable)
@@ -344,10 +349,17 @@ class TransitJourneyTimetableEnricher(
                 leg.copy(scheduledDepartureAt = start, scheduledArrivalAt = cursor)
             } else {
                 val original = leg.timetable ?: return null
+                val readyAt = cursor.plusSeconds(maxOf(transferBufferSeconds, transferMarginSeconds))
+                val observed = observedOnwardTimes[index]
+                if (observed != null && observed.boardingAt >= readyAt && observed.arrivalAt <= latestArrival) {
+                    // 다음 연결도 시간표가 아니라 유지한 열차의 실제 하차 예보에서 계산한다.
+                    cursor = observed.arrivalAt
+                    return@mapIndexed leg
+                }
                 val query = TransitTimetableQuery(
                     original.line, leg.from?.name ?: return null, leg.to?.name ?: return null,
                     leg.nextStopName, original.serviceClass,
-                    cursor.plusSeconds(maxOf(transferBufferSeconds, transferMarginSeconds)), original.directionCode,
+                    readyAt, original.directionCode,
                     // 지연으로 자정을 넘어도 검증한 원래 열차의 운행일을 유지한다.
                     serviceDate = original.serviceDate,
                 )

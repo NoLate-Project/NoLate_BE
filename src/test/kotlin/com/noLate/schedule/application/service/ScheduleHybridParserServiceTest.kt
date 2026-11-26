@@ -22,6 +22,49 @@ class ScheduleHybridParserServiceTest {
     private val ruleParser = ScheduleTextParserService()
 
     @Test
+    fun `AI supplementation never replaces or appends a summary to shared source notes`() {
+        val text = "일정 날짜: 26.11.28\n예약자: 테스트가\n연락처: 010 0000 0001\n준비물: 카메라와 배터리"
+        for (inputType in listOf(ScheduleParseInputType.SHARE_TEXT, ScheduleParseInputType.CONVERSATION)) {
+            val aiParser = RecordingAiParser(
+                ScheduleAiParseOutcome(
+                    attempted = true,
+                    result = ScheduleAiParseResult(
+                        time = "17:00",
+                        timeConfidence = 0.95,
+                        destinationName = "테스트웨딩",
+                        destinationConfidence = 0.95,
+                        summary = "예약",
+                        summaryConfidence = 0.99,
+                    ),
+                ),
+            )
+            val result = ScheduleHybridParserService(ruleParser, aiParser).parse(text, inputType, "2026-11-26", 60)
+
+            assertEquals(1, aiParser.calls)
+            assertEquals("2026-11-28", result.date)
+            assertEquals("17:00", result.time)
+            assertEquals(text, result.notes)
+        }
+    }
+
+    @Test
+    fun `shared source notes survive unavailable AI and rule only parsing`() {
+        for (text in listOf(
+            "일정 날짜: 26.11.28\n시간: 오후 5시\n장소: 테스트웨딩\n안내: 배터리 챙기기",
+            "일정 날짜: 26.11.28\n시간: 오후 5시\n안내: 배터리 챙기기",
+        )) {
+            val aiParser = RecordingAiParser(ScheduleAiParseOutcome(attempted = false))
+            val result = ScheduleHybridParserService(ruleParser, aiParser).parse(
+                text, ScheduleParseInputType.SHARE_TEXT, "2026-11-26", 60,
+            )
+
+            assertEquals(text, result.notes)
+            assertEquals("2026-11-28", result.date)
+            assertEquals("17:00", result.time)
+        }
+    }
+
+    @Test
     fun `does not merge an AI destination that only repeats the OCR title`() {
         val aiParser = RecordingAiParser(
             ScheduleAiParseOutcome(

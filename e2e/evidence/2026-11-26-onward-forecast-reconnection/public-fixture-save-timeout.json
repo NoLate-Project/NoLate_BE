@@ -1,0 +1,45 @@
+{
+  "classification": "REAL_ISOLATED_UI_POST_SAVED_CLIENT_TIMED_OUT",
+  "preflight": {
+    "root": "/private/tmp/nolate-eta-real-e2e.o8ak_2eq",
+    "result": "PARTIAL",
+    "failureStage": "Command '['xcrun', 'simctl', 'get_app_container', '9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69', 'com.anonymous.nolatefe', 'app']' timed out after 30 seconds",
+    "providerCalls": 0
+  },
+  "runtime": {
+    "root": "/private/tmp/nolate-eta-real-e2e.zjzw48l4",
+    "result": "PARTIAL",
+    "failureStage": "UiFailed_ui-create",
+    "nativeCleanup": "PASSED",
+    "originalAppEndpointRestored": true,
+    "productionDatabaseModified": false,
+    "actualEtaEvaluations": 0
+  },
+  "scheduleCreate": {
+    "status": 200,
+    "successfulPostCount": 1,
+    "recordUpdatedAtKst": "2026-11-26T21:14:53.629246+09:00",
+    "responsePreparedAt": "2026-11-26T12:15:07.007562+00:00",
+    "secondsAfterRecordUpdatedAt": 13.378316,
+    "requestStartNotRecordedInRun": true,
+    "clientError": "timeout of 10000ms exceeded",
+    "initialSavedDepartureAt": "2026-11-26T12:28:43Z",
+    "targetArrivalAt": "2026-11-26T13:38:00Z"
+  },
+  "mapPreflight": {
+    "publicFutureMinuteOptions": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50
+    ],
+    "actualEtaComparisonSamples": 0
+  },
+  "change": {
+    "timeoutMsForNewAlarmSchedule": 30000,
+    "automaticPostRetryAdded": false,
+    "sameFlowRetestPending": true
+  }
+}

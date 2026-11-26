@@ -132,33 +132,50 @@ object EtaRealProviderSimulatorServer {
             require(it == it.truncatedTo(ChronoUnit.MINUTES))
         }
         val output = Path.of(args[0]).toRealPath()
-        val input = Path.of(args[1]).toRealPath()
         require(output.toString().startsWith("/private/tmp/nolate-eta-real-e2e."))
-        require(input.toString().startsWith("/private/tmp/nolate-real-naver-requery-04-"))
-        val copied = jacksonObjectMapper().readTree(input.toFile())
-        val original = copied.path("schedules").single()
-        require(original.path("id").asText() == "367" && original.path("member_id").asText() == "296" &&
-            original.path("title").asText() == "ETA E2E NAVER 1007 04")
-        val route = copied.path("routes").single()
-        val personal = copied.path("personalPlans").single()
-        require(personal.path("member_id").asText() == "296" && route.path("travel_mode").asText() == "TRANSIT")
-        require(route.path("schedule_id").asText() == "367" && personal.path("schedule_id").asText() == "367")
-        val copiedSelectedJson = personal.path("route_json").asText()
-        require(jacksonObjectMapper().readTree(copiedSelectedJson).path("provider").asText() == "tmap")
+        val publicNowonSillim = args[1] == "--public-nowon-sillim"
+        val copied = if (publicNowonSillim) {
+            require(journeyProviderId == "odsay" && port == 5523 && !shortFirstRide && datedTimetableTarget == null)
+            if (!automaticDelivery) {
+                val departure = requireNotNull(comparisonDepartureAt).atZone(ZoneId.of("Asia/Seoul"))
+                require(departure.minute % 10 == 0 && comparisonTargetAt != null)
+            }
+            null
+        } else {
+            val input = Path.of(args[1]).toRealPath()
+            require(input.toString().startsWith("/private/tmp/nolate-real-naver-requery-04-"))
+            jacksonObjectMapper().readTree(input.toFile())
+        }
+        val route = copied?.path("routes")?.single()
+        val personal = copied?.path("personalPlans")?.single()
+        val copiedSelectedJson = if (copied != null) {
+            val original = copied.path("schedules").single()
+            val originalRoute = requireNotNull(route)
+            val originalPersonalPlan = requireNotNull(personal)
+            require(original.path("id").asText() == "367" && original.path("member_id").asText() == "296" &&
+                original.path("title").asText() == "ETA E2E NAVER 1007 04")
+            require(originalPersonalPlan.path("member_id").asText() == "296" && originalRoute.path("travel_mode").asText() == "TRANSIT")
+            require(originalRoute.path("schedule_id").asText() == "367" && originalPersonalPlan.path("schedule_id").asText() == "367")
+            originalPersonalPlan.path("route_json").asText().also {
+                require(jacksonObjectMapper().readTree(it).path("provider").asText() == "tmap")
+            }
+        } else null
         // Seoul Metro's published line-4 station coordinates, scoped to the private timetable test.
         val (originLat, originLng) = when {
+            publicNowonSillim -> 37.65636195 to 127.06342739
             seolleungAccess -> 37.497958 to 127.027539
             adjacentRingTimetable -> 37.497952 to 127.027619
             overnightTimetable -> 37.476563 to 126.981746
             directEgress -> 37.656274 to 127.063183
-            else -> personal.path("origin_lat").asDouble() to personal.path("origin_lng").asDouble()
+            else -> requireNotNull(personal).path("origin_lat").asDouble() to personal.path("origin_lng").asDouble()
         }
         val (destinationLat, destinationLng) = when {
+            publicNowonSillim -> 37.48426844 to 126.92977778
             seolleungAccess -> 37.504257 to 127.048174
             adjacentRingTimetable -> 37.500622 to 127.036456
             overnightTimetable -> 37.315381459929 to 126.82309002079
             directEgress -> 37.476563 to 126.981746
-            else -> route.path("destination_lat").asDouble() to route.path("destination_lng").asDouble()
+            else -> requireNotNull(route).path("destination_lat").asDouble() to route.path("destination_lng").asDouble()
         }
         val settings = Properties().apply { Files.newBufferedReader(Path.of("env.local.properties")).use(::load) }
         val app = SpringApplication(NoLateApplication::class.java, RealProviderIsolationConfiguration::class.java)
@@ -239,8 +256,10 @@ object EtaRealProviderSimulatorServer {
             val mapper = context.getBean(ObjectMapper::class.java)
             // Verify calendar evidence BEFORE consuming a route call. Missing/stale production
             // cache may be refreshed only in this already-verified memory-only database.
-            copyPublicCalendar(settings, context.getBean(CalendarDayCacheRepository::class.java),
-                context.getBean(PublicHolidayRepository::class.java))
+            if (!publicNowonSillim) {
+                copyPublicCalendar(settings, context.getBean(CalendarDayCacheRepository::class.java),
+                    context.getBean(PublicHolidayRepository::class.java))
+            }
             val date = LocalDate.now(ZoneId.of("Asia/Seoul"))
             val calendarEvidence = RealCalendarEvidenceBootstrap(
                 context.getBean(SeoulTimetableServiceDayResolver::class.java),
@@ -262,12 +281,12 @@ object EtaRealProviderSimulatorServer {
                     adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess, shortFirstRide = shortFirstRide)
             } else null
             val selectedJson = seed?.let { RealOdsaySelectedRouteFixture.encode(mapper, it) } ?: copiedSelectedJson
-            val selectedMinutes = seed?.totalMinutes ?: personal.path("travel_minutes").asInt()
+            val selectedMinutes = seed?.totalMinutes ?: personal?.path("travel_minutes")?.asInt()
             val requestedCoordinates = mapOf(
                 "origin" to mapOf("lat" to originLat, "lng" to originLng),
                 "destination" to mapOf("lat" to destinationLat, "lng" to destinationLng),
             )
-            mapper.writeValue(output.resolve("selected-route.json").toFile(), mapper.readTree(selectedJson))
+            selectedJson?.let { mapper.writeValue(output.resolve("selected-route.json").toFile(), mapper.readTree(it)) }
             seed?.let { mapper.writeValue(output.resolve("odsay-seed-journey.json").toFile(), it) }
             context.getBean(RealProviderEvidenceState::class.java).output = output
             val jdbc = JdbcTemplate(context.getBean(DataSource::class.java))
@@ -283,7 +302,6 @@ object EtaRealProviderSimulatorServer {
                 "email" to "eta-real-isolated@example.test", "password" to password))
             val target = comparisonTargetAt ?: datedTimetableTarget
                 ?: Instant.now().truncatedTo(ChronoUnit.MINUTES).plusSeconds(targetLeadMinutes * 60)
-            val savedDeparture = comparisonDepartureAt ?: target.minusSeconds(selectedMinutes.toLong() * 60)
             val evidenceState = context.getBean(RealProviderEvidenceState::class.java)
             if (automaticDelivery) {
                 // No schedule/job/history seed: the installed app must POST the only schedule.
@@ -291,49 +309,55 @@ object EtaRealProviderSimulatorServer {
                 context.getBean(com.noLate.routehistory.infrastructure.RecentRoutePlaceRepository::class.java)
                     .saveAllAndFlush(listOf(
                         com.noLate.routehistory.domain.RecentRoutePlace(memberId = 296, label = "노원역", placeName = "노원역",
-                            lat = personal.path("origin_lat").asDouble(), lng = personal.path("origin_lng").asDouble(), provider = "odsay"),
+                            lat = originLat, lng = originLng, provider = "odsay"),
                         com.noLate.routehistory.domain.RecentRoutePlace(memberId = 296, label = "신림역", placeName = "신림역",
-                            lat = route.path("destination_lat").asDouble(), lng = route.path("destination_lng").asDouble(), provider = "odsay"),
+                            lat = destinationLat, lng = destinationLng, provider = "odsay"),
                     ))
             } else jdbc.update("""INSERT INTO schedules (id,member_id,title,start_at,end_at,has_end_time,all_day,
                 route_setup_required,schedule_type,deleted) VALUES (363,296,?,?,?,false,false,false,'NORMAL',false)""",
                 "ETA E2E real isolated fixture", target, target.plusSeconds(1800))
             val schedules = context.getBean(ScheduleRepository::class.java)
+            val jobs = context.getBean(SchedulePushJobRepository::class.java)
             val category = context.getBean(ScheduleCategoryRepository::class.java)
                 .saveAndFlush(ScheduleCategory(memberId = 296, title = "실제 공급자 검증", color = "#2F80FF"))
             if (!automaticDelivery) {
+            val minutes = requireNotNull(selectedMinutes)
+            val savedDeparture = comparisonDepartureAt ?: target.minusSeconds(minutes.toLong() * 60)
             val schedule = requireNotNull(schedules.findScheduleDetail(363, 296))
             schedule.updateCategorySnapshot(requireNotNull(category.id).toString(), category.title, category.color)
             val locationName = when {
+                publicNowonSillim -> "노원역 → 신림역"
                 seolleungAccess -> "강남역 → 선릉역"
                 adjacentRingTimetable -> "강남역 → 역삼역"
                 overnightTimetable -> "사당역 → 제이엠컨벤션"
                 directEgress -> "노원역 → 사당역"
-                else -> route.path("location_name").asText()
+                else -> requireNotNull(route).path("location_name").asText()
             }
             val destinationName = when {
+                publicNowonSillim -> "신림역"
                 seolleungAccess -> "선릉역"
                 adjacentRingTimetable -> "역삼역"
                 overnightTimetable -> "제이엠컨벤션"
                 directEgress -> "사당역"
-                else -> route.path("destination_name").asText()
+                else -> requireNotNull(route).path("destination_name").asText()
             }
             val originName = when {
+                publicNowonSillim -> "노원역"
                 adjacentRingTimetable || seolleungAccess -> "강남역"
                 overnightTimetable -> "사당역"
-                else -> personal.path("origin_name").asText()
+                else -> requireNotNull(personal).path("origin_name").asText()
             }
-            schedule.updateRoute(selectedMinutes, savedDeparture, null,
+            schedule.updateRoute(minutes, savedDeparture, null,
                 ScheduleTravelMode.TRANSIT, locationName, originName, null,
                 originLat, originLng, destinationName, null,
-                destinationLat, destinationLng, selectedJson, true, 15, 10, ScheduleAlertMode.STANDARD)
+                destinationLat, destinationLng, requireNotNull(selectedJson), true, 15, 10, ScheduleAlertMode.STANDARD)
             schedules.saveAndFlush(schedule)
-            }
-            val jobs = context.getBean(SchedulePushJobRepository::class.java)
-            if (!automaticDelivery) jobs.saveAndFlush(SchedulePushJob.create(296, 363, target, savedDeparture,
+            jobs.saveAndFlush(SchedulePushJob.create(296, 363, target, savedDeparture,
                 savedDeparture.minusSeconds(90 * 60), 10))
+            }
             mapper.writeValue(output.resolve("prepared.json").toFile(), mapOf("targetArrivalAt" to target,
-                "memberId" to 296, "scheduleId" to 363, "copiedFromScheduleId" to 367,
+                "memberId" to 296, "scheduleId" to 363, "copiedFromScheduleId" to if (publicNowonSillim) null else 367,
+                "publicStationFixture" to publicNowonSillim,
                 // Stage 5 isolates provider quality. Stage 6 separately exercises real OS alarms.
                 "alertMode" to if (automaticDelivery) "ALARM" else "STANDARD", "nativeAlarmDeliveryTest" to automaticDelivery,
                 "automaticScheduling" to automaticDelivery,
@@ -805,7 +829,8 @@ class RealProviderIsolationConfiguration {
                     mapper.readTree(wrapped.contentAsByteArray).path("success").asBoolean()) {
                     state.successfulUiCreateCount++
                     state.output?.let { mapper.writeValue(it.resolve("ui-created.json").toFile(),
-                        mapOf("successfulUiCreateCount" to state.successfulUiCreateCount, "observedAt" to Instant.now(),
+                        mapOf("successfulUiCreateCount" to state.successfulUiCreateCount,
+                            "requestStartedAt" to readStartedAt, "observedAt" to Instant.now(),
                             "method" to "POST", "status" to wrapped.status, "response" to mapper.readTree(wrapped.contentAsByteArray))) }
                 }
                 if (http.method == "GET" && http.requestURI == "/api/schedules/363/departure-status" && wrapped.status == 200) {

@@ -1,0 +1,53 @@
+{
+  "classification": "PUBLIC_NAVER_AND_ODSAY_SEED_SAME_REQUESTED_DEPARTURE",
+  "requestedDepartureAt": "2026-11-26T13:00:00Z",
+  "targetArrivalAt": "2026-11-26T14:25:00Z",
+  "coordinates": {
+    "origin": {
+      "lat": 37.65636195,
+      "lng": 127.06342739
+    },
+    "destination": {
+      "lat": 37.48426844,
+      "lng": 126.92977778
+    }
+  },
+  "route": [
+    {
+      "line": "4",
+      "from": "노원",
+      "to": "사당"
+    },
+    {
+      "line": "2",
+      "from": "사당",
+      "to": "신림"
+    }
+  ],
+  "odsaySeed": {
+    "capturedFileAt": "2026-11-26T12:35:26.419310+00:00",
+    "departureAt": "2026-11-26T13:00:00Z",
+    "arrivalAt": "2026-11-26T14:00:00Z",
+    "travelMinutes": 60
+  },
+  "naver": {
+    "snapshotAt": "2026-11-26T12:38:07.866000+00:00",
+    "displayedDepartureKst": "22:10",
+    "displayedFirstBoardingKst": "22:10",
+    "displayedTransferBoardingKst": "23:01",
+    "displayedArrivalKst": "23:09",
+    "displayedTransferWalkMeters": 155,
+    "displayedTransferWalkMinutes": 2,
+    "explicitAccessAndEgressWalkRows": false
+  },
+  "elapsedBetweenSeedFileAndNaverSeconds": 161.447,
+  "seedMinusNaverArrivalMinutes": -9,
+  "countsTowardAccuracy": false,
+  "exclusionReasons": [
+    "ODSAY_SEED_IS_ROUTE_ESTIMATE_NOT_WORKER_RESULT",
+    "DISPLAYED_DEPARTURE_DIFFERS",
+    "ACCESS_AND_EGRESS_WALK_SCOPE_UNVERIFIED"
+  ],
+  "nativeE2ERoot": "/private/tmp/nolate-eta-real-e2e.9c_c8gwb",
+  "naverSnapshot": "NoLate_FE/output/playwright/eta-20261126-public/naver-2200-details.yml"
+}

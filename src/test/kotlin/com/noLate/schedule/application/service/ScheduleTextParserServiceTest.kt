@@ -20,6 +20,86 @@ class ScheduleTextParserServiceTest {
     private val parser = ScheduleTextParserService()
 
     @Test
+    fun `preserves explicit afternoon across labeled and compact shared time formats`() {
+        for (text in listOf(
+            "날짜: 26.11.28\n본식(시작)시간 : 오후 5시\n장소: 테스트웨딩",
+            "날짜: 26.11.28\n시간:오후5시\n장소: 테스트웨딩",
+            "날짜: 26.11.28\n시간:오후5:00\n장소: 테스트웨딩",
+            "26.11.28오후5:00 테스트웨딩",
+            "2026.11.28오후5:00 테스트웨딩",
+            "26.11.28 오후 5:00 테스트웨딩",
+        )) {
+            val result = parser.parse(text, ScheduleParseInputType.SHARE_TEXT, "2026-11-26", 60)
+            assertEquals("17:00", result.time, text)
+            assertEquals("2026-11-28T08:00:00Z", result.startAt, text)
+        }
+    }
+
+    @Test
+    fun `shared and pasted reservation keeps full source and explicit two digit year`() {
+        // 실사용 예약 양식의 구조만 재현하며 개인 정보는 가상 값으로 대체한다.
+        val text = """
+            1. 예약자 성함 : 테스트가
+            2. 전화번호(무조건) : 010 0000 0001
+              (카톡 친구 막으신 분은 카톡 아이디) :
+            3. 이메일 : reservation@example.com
+            4. 배우자성함 : 테스트나
+            5. 전화번호 : 010 0000 0002
+            돌스냅의 경우, 아기이름 :
+            6. 촬영종류(메인스냅, 서브스냅, DVD1캠, DVD2캠, 아이폰스냅, 돌스냅, 돌DVD) : 메인스냅,DVD1캠
+            7.현금영수증번호(핸폰/사업자) : (- 없이 번호만): 010 0000 0001
+            8. 본식(촬영)년도 : 26.11.28
+            9. 본식(촬영)날짜 : 26.11.28
+            10. 본식(촬영)요일 : 토요일
+            11. 본식(시작)시간 : 오후 5시
+            12. 웨딩지역(시, 구, 동) : 서울 성북구 예시로 47 3층, 4층 테스트웨딩
+            13. 결혼식장 이름 : 테스트웨딩
+
+            촬영 안내 : 원판 촬영까지, 담당자에게 도착 후 연락
+        """.trimIndent()
+
+        for (inputType in listOf(ScheduleParseInputType.SHARE_TEXT, ScheduleParseInputType.CONVERSATION)) {
+            // 기준 연도와 무관하게 원문에 적힌 2026년을 사용해야 한다.
+            val result = parser.parse(text, inputType, "2027-01-01", 60)
+
+            assertEquals("2026-11-28", result.date)
+            assertEquals("17:00", result.time)
+            assertEquals("2026-11-28T08:00:00Z", result.startAt)
+            assertEquals("테스트가·테스트나 본식 촬영", result.title)
+            assertEquals("테스트웨딩", result.destination?.name)
+            assertEquals("서울 성북구 예시로 47 3층, 4층 테스트웨딩", result.destination?.address)
+            assertEquals(text, result.notes)
+            assertFalse(result.titleDerivedFromTimeOrPlace)
+            assertTrue(result.warnings.isEmpty(), result.warnings.toString())
+        }
+    }
+
+    @Test
+    fun `two digit year dates do not produce overlapping month day candidates`() {
+        for (separator in listOf(".", "/", "-")) {
+            val result = parser.parse(
+                "일시: 11${separator}12${separator}01 오후 5시\n장소: 테스트웨딩",
+                ScheduleParseInputType.IMAGE_OCR,
+                "2026-11-26",
+                60,
+            )
+
+            assertEquals("2011-12-01", result.date)
+            assertFalse(result.warnings.any { "서로 다른 날짜" in it || "연도가 없어" in it })
+        }
+    }
+
+    @Test
+    fun `shared memo preserves source formatting before natural language normalization`() {
+        val text = "내일 오후 세 시 강남역 미팅\r\n\r\n안내:  추가  자료 챙기기\r\n연락처: 010 0000 0001"
+        val result = parser.parse(text, ScheduleParseInputType.SHARE_TEXT, "2026-11-26", 60)
+
+        assertEquals(text, result.notes)
+        assertEquals("2026-11-27", result.date)
+        assertEquals("15:00", result.time)
+    }
+
+    @Test
     fun `parses reservation text when year and date are on separate lines`() {
         val text = """
             ⭐️메인촬영⭐️

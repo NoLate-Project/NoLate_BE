@@ -1,0 +1,91 @@
+{
+  "classification": "ACTUAL_FIXED_DEPARTURE_TIMETABLE_VS_NAVER_DISPLAY",
+  "sourceRun": "/private/tmp/nolate-eta-real-e2e.9c_c8gwb",
+  "originalRunResult": "PARTIAL",
+  "originalRunFailureKind": "ValueError",
+  "caseCount": 1,
+  "providerFailures": [],
+  "workerEvaluatedAt": "2026-11-26T12:39:07.960733Z",
+  "workerSource": "TIMETABLE_PROVIDER",
+  "workerStale": true,
+  "requestedDepartureAt": "2026-11-26T13:00:00Z",
+  "protectedDepartureAt": "2026-11-26T13:00:00Z",
+  "finalTimetableArrivalAt": "2026-11-26T14:10:13Z",
+  "boardingAlightingByTrain": [
+    [
+      "K4707",
+      "2026-11-26T13:04:30Z",
+      "2026-11-26T13:52:30Z"
+    ],
+    [
+      "2488",
+      "2026-11-26T14:01:30Z",
+      "2026-11-26T14:09:00Z"
+    ]
+  ],
+  "appWalkSeconds": [
+    137,
+    157,
+    73
+  ],
+  "appTransferReadyAt": "2026-11-26T13:56:07Z",
+  "naverObservedAt": "2026-11-26T12:38:07.866000+00:00",
+  "naverDisplayedDepartureKst": "22:10",
+  "naverDisplayedFirstBoardingKst": "22:10",
+  "naverDisplayedTransferBoardingKst": "23:01",
+  "naverDisplayedArrivalKst": "23:09",
+  "naverDisplayedTransferWalkMinutes": 2,
+  "observationGapSeconds": 60.095,
+  "appMinusNaverPublishedArrivalSeconds": 73,
+  "exclusionReasons": [
+    "MAP_DISPLAYED_DEPARTURE_DIFFERS",
+    "WALK_BOUNDARIES_UNCONFIRMED",
+    "TIMETABLE_ONLY_APP_PLAN"
+  ],
+  "physicalPositionHttpRequests": 0,
+  "installedAppEtaVerified": false,
+  "endpointRestored": true,
+  "observedFailureReproducedOffline": "Observation exceeds isolated journey horizon",
+  "sameCaptureAfterHarnessChange": {
+    "eligiblePositionSlots": 16,
+    "httpRequests": 0,
+    "latestPositionReadAt": "2026-11-26T14:12:15Z"
+  },
+  "workerComponentSeconds": {
+    "accessWalk": 137,
+    "firstBoardingWaitAfterModeledAccess": 133,
+    "firstRide": 2880,
+    "transferWalk": 157,
+    "transferWaitAfterModeledWalk": 383,
+    "secondRide": 450,
+    "egressWalk": 73
+  },
+  "mapPublishedComponents": {
+    "firstRideDisplayedMinutes": 48,
+    "transferWalkDisplayedMinutes": 2,
+    "secondRideDisplayedMinutes": 7,
+    "doorWalkAndStationArrivalClocksSeparatelyPublished": false
+  },
+  "repeatFirstEvaluation": {
+    "root": "/private/tmp/nolate-eta-real-e2e.i555d4y_",
+    "workerEvaluatedAt": "2026-11-26T12:50:07.547404Z",
+    "requestedDepartureAt": "2026-11-26T13:00:00Z",
+    "protectedDepartureAt": "2026-11-26T13:00:00Z",
+    "storedTimetableArrivalAt": "2026-11-26T14:10:13Z",
+    "source": "TIMETABLE_PROVIDER",
+    "stale": true,
+    "providerFailures": [],
+    "naverRefreshedSnapshotAt": "2026-11-26T12:46:18.044+00:00",
+    "observationGapSeconds": 229.503,
+    "naverSnapshot": "NoLate_FE/output/playwright/eta-20261126-public/naver-2200-refreshed-details.yml",
+    "strictComparisonCount": 0,
+    "uiStatusAtFirstObservation": "DIAGNOSTIC_PASSED_NOT_ACCEPTED_ETA",
+    "publicUiRecommendedDepartureAt": "2026-11-26T13:00:00Z",
+    "sourceFilesUnchangedAtDiagnostic": 10,
+    "sourceFilesFingerprinted": 10,
+    "positionChecksUntilExhausted": 16,
+    "firstPositionSlot": "2026-11-26T13:02:30Z",
+    "nextPlannedWorkerEvaluation": "2026-11-26T13:47:30Z",
+    "terminalRunResult": null
+  }
+}
