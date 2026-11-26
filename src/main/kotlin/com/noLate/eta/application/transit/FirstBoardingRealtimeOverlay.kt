@@ -594,8 +594,10 @@ class FirstBoardingRealtimeOverlay(
             !sourceUpdated.isAfter(evaluatedAt.plusSeconds(ALLOWED_PROVIDER_CLOCK_SKEW_SECONDS))
 
     private fun TransitArrivalDto.toCandidate(evaluatedAt: Instant): ArrivalCandidateEvaluation {
-        // 출발한 열차의 잔존 countdown이나 이전 관측으로 승차 가능성을 되살리지 않는다.
-        if (kind == "SUBWAY" && arrivalStatus == TransitArrivalStatus.DEPARTED) {
+        // 종료된 도착 예보의 잔존 countdown으로 미래 승차 후보를 만들지 않는다.
+        if (arrivalStatus == TransitArrivalStatus.DEPARTED ||
+            (kind == "BUS" && arrivalStatus == TransitArrivalStatus.ARRIVED)
+        ) {
             return ArrivalCandidateEvaluation()
         }
         // A freshly received HTTP response is not proof that the upstream vehicle observation is

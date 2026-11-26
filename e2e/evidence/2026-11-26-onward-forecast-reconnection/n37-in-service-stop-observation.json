@@ -1,0 +1,84 @@
+{
+  "route": "N37",
+  "routeId": "100100585",
+  "httpBudget": 12,
+  "positionFrames": [
+    {
+      "receivedAt": "2026-11-27T00:23:36.521020+09:00",
+      "verifiedSameVehicle": true,
+      "order": 75,
+      "sourceAt": "2026-11-27T00:23:24+09:00",
+      "distanceFromStopMeters": 171.6,
+      "stopFlag": "0"
+    },
+    {
+      "receivedAt": "2026-11-27T00:23:52.555843+09:00",
+      "verifiedSameVehicle": true,
+      "order": 75,
+      "sourceAt": "2026-11-27T00:23:45+09:00",
+      "distanceFromStopMeters": 157.4,
+      "stopFlag": "0"
+    },
+    {
+      "receivedAt": "2026-11-27T00:24:08.595159+09:00",
+      "verifiedSameVehicle": true,
+      "order": 75,
+      "sourceAt": "2026-11-27T00:23:45+09:00",
+      "distanceFromStopMeters": 157.4,
+      "stopFlag": "0"
+    },
+    {
+      "receivedAt": "2026-11-27T00:24:24.633284+09:00",
+      "verifiedSameVehicle": true,
+      "order": 75,
+      "sourceAt": "2026-11-27T00:24:03+09:00",
+      "distanceFromStopMeters": 156.9,
+      "stopFlag": "0"
+    },
+    {
+      "receivedAt": "2026-11-27T00:24:40.681064+09:00",
+      "verifiedSameVehicle": true,
+      "order": 76,
+      "sourceAt": "2026-11-27T00:24:30+09:00",
+      "distanceFromStopMeters": 0.1,
+      "stopFlag": "1"
+    }
+  ],
+  "sourcePositions": {
+    "rows": 5,
+    "exactStationAndOrder": 4,
+    "receivedAt": "2026-11-27T00:23:36.085446+09:00"
+  },
+  "eligibleForecasts": 3,
+  "target": {
+    "stop": "서대문역사거리.농협중앙회",
+    "order": 76,
+    "initialOrder": 75,
+    "forecastSourceAt": "2026-11-27T00:23:20+09:00",
+    "forecastReceivedAt": "2026-11-27T00:23:36.479274+09:00",
+    "forecastAt": "2026-11-27T00:24:43+09:00",
+    "countdownSeconds": 83,
+    "message": "곧 도착",
+    "arrivalFlag": "0"
+  },
+  "arrivalInterval": {
+    "before": "2026-11-27T00:24:03+09:00",
+    "atOrAfter": "2026-11-27T00:24:30+09:00",
+    "providerStopEventMinusForecastSeconds": [
+      -40.0,
+      -13.0
+    ]
+  },
+  "result": "SAME_VEHICLE_POSITION_INTERVAL",
+  "httpCalls": 8,
+  "classification": "ACTUAL_SAME_VEHICLE_FORECAST_AND_PUBLIC_POSITION_INTERVAL",
+  "actualBusCount": 1,
+  "physicalPassengerArrivalVerified": false,
+  "appE2EForThisObservation": false,
+  "catalogSectionDiagnostic": {
+    "httpCalls": 2,
+    "positionRows": 5,
+    "sectionIdMatchedCatalogSection": 0,
+    "sequenceAndReportedStationMatchedCatalogOccurrence": 5
+  }
+}

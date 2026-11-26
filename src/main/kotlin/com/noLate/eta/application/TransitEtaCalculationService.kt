@@ -29,6 +29,8 @@ import com.noLate.eta.domain.TransitLegTimetable
 import com.noLate.eta.infrastructure.routejson.SelectedTransitRouteDecoder
 import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.EffectiveBusRidePrediction
+import com.noLate.schedule.application.PlannedSeoulBusJourney
+import com.noLate.schedule.application.PlannedSeoulBusRide
 import com.noLate.schedule.application.EffectiveTransitRideTiming
 import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
@@ -425,6 +427,10 @@ class TransitEtaCalculationService(
                 transferObservedAt = null,
                 routeProvenance = provenance,
                 effectiveTransitRoute = route.copy(segments = segments),
+                seoulBusJourney = if (rides.all { it.service != null }) PlannedSeoulBusJourney(
+                    route.identity, route.departureAt,
+                    rides.map { PlannedSeoulBusRide(it.rideIndex, requireNotNull(it.service)) },
+                ) else null,
             ),
             latestObservedVehicleDepartureAt = boarding.minus(
                 Duration.between(observation.departureAt, observation.readyAt),
@@ -759,6 +765,7 @@ class TransitEtaCalculationService(
                 ?: journey.legs.firstOrNull { it.isRide }?.waitingMinutes,
             effectiveTransitRoute = projected.projection.effectiveTransitRoute,
             firstBoardingObservation = projected.projection.overlayResolution.firstBoardingObservation,
+            seoulBusJourney = projected.projection.seoulBusJourney,
         )
     }
 
@@ -1314,4 +1321,5 @@ private data class TransitCandidateProjection(
     val transferObservedAt: Instant?,
     val routeProvenance: TransitRouteProvenance,
     val effectiveTransitRoute: EffectiveTransitRoute,
+    val seoulBusJourney: PlannedSeoulBusJourney? = null,
 )

@@ -461,8 +461,10 @@ class SeoulTransitArrivalClientTest {
                       <rtNm>402</rtNm>
                       <stNm>서울역버스환승센터</stNm>
                       <adirection>후암약수터</adirection>
+                      <staOrd>44</staOrd>
+                      <sectOrd1>44</sectOrd1>
                       <arrmsg1>곧 도착</arrmsg1>
-                      <traTime1>0</traTime1>
+                      <traTime1>90</traTime1>
                       <isArrive1>1</isArrive1>
                       <isLast1>1</isLast1>
                       <busType1>1</busType1>
@@ -481,11 +483,88 @@ class SeoulTransitArrivalClientTest {
         assertEquals(true, arrivals.single().lowFloor)
         assertEquals(true, arrivals.single().lastTrain)
         assertEquals("ARRIVED", arrivals.single().arrivalStatus.name)
+        assertEquals("도착", arrivals.single().arrivalMessage)
+        assertEquals(null, arrivals.single().expectedAt)
+        assertEquals(null, arrivals.single().waitSeconds)
         assertEquals(null, arrivals.single().sourceUpdatedAt)
         assertEquals(
             TransitArrivalFreshnessEvidence.LOCAL_RECEIPT_TIMESTAMP_ONLY,
             arrivals.single().freshnessEvidence,
         )
+    }
+
+    @Test
+    fun `상류 정류소에 도착한 버스는 계속 예보하고 조회 정류소를 지난 버스는 예보를 종료한다`() {
+        val arrivals = createClient().parseBusArrivals(
+            response = """
+                <ServiceResult><msgBody><itemList>
+                  <rtNm>402</rtNm><staOrd>44</staOrd><mkTm>2026-08-01 17:00:00.0</mkTm>
+                  <sectOrd1>43</sectOrd1><isArrive1>1</isArrive1><arrmsg1>2분 30초 후 도착</arrmsg1>
+                  <sectOrd2>45</sectOrd2><isArrive2>0</isArrive2><traTime2>90</traTime2>
+                </itemList></msgBody></ServiceResult>
+            """.trimIndent(),
+            routeName = "402",
+            limit = 2,
+        )
+
+        assertEquals(listOf("IN_TRANSIT", "DEPARTED"), arrivals.map { it.arrivalStatus.name })
+        assertEquals(listOf(150, null), arrivals.map { it.waitSeconds })
+        assertEquals(listOf("2026-08-01T08:02:30Z", null), arrivals.map { it.expectedAt })
+    }
+
+    @Test
+    fun `정류소 순번과 예정 초가 없는 임박 응답에 도착시각을 만들지 않는다`() {
+        val arrival = createClient().parseBusArrivals(
+            response = """
+                <ServiceResult><msgBody><itemList>
+                  <rtNm>402</rtNm><mkTm>2026-08-01 17:00:00.0</mkTm>
+                  <isArrive1>1</isArrive1><traTime1>0</traTime1><arrmsg1>곧 도착</arrmsg1>
+                </itemList></msgBody></ServiceResult>
+            """.trimIndent(),
+            routeName = "402",
+            limit = 1,
+        ).single()
+
+        assertEquals("APPROACHING", arrival.arrivalStatus.name)
+        assertEquals(null, arrival.waitSeconds)
+        assertEquals(null, arrival.expectedAt)
+    }
+
+    @Test
+    fun `출발대기인 차량은 서울시 응답에 양수 여행시간이 있어도 도착시각을 제공하지 않는다`() {
+        val arrival = createClient().parseBusArrivals(
+            response = """
+                <ServiceResult><msgBody><itemList>
+                  <rtNm>N37</rtNm><staOrd>3</staOrd><mkTm>2026-11-27 00:17:30.0</mkTm>
+                  <sectOrd1>2</sectOrd1><isArrive1>2</isArrive1><traTime1>104</traTime1><arrmsg1>출발대기</arrmsg1>
+                </itemList></msgBody></ServiceResult>
+            """.trimIndent(),
+            routeName = "N37",
+            limit = 1,
+        ).single()
+
+        assertEquals("UNKNOWN", arrival.arrivalStatus.name)
+        assertEquals("출발대기", arrival.arrivalMessage)
+        assertEquals(null, arrival.waitSeconds)
+        assertEquals(null, arrival.expectedAt)
+    }
+
+    @Test
+    fun `임박 안내와 공급자가 제공한 도착예정 시각을 함께 보존한다`() {
+        val arrival = createClient().parseBusArrivals(
+            response = """
+                <ServiceResult><msgBody><itemList>
+                  <rtNm>N37</rtNm><staOrd>76</staOrd><mkTm>2026-11-27 00:23:20.0</mkTm>
+                  <isArrive1>0</isArrive1><traTime1>83</traTime1><arrmsg1>곧 도착</arrmsg1>
+                </itemList></msgBody></ServiceResult>
+            """.trimIndent(),
+            routeName = "N37",
+            limit = 1,
+        ).single()
+
+        assertEquals("APPROACHING", arrival.arrivalStatus.name)
+        assertEquals(83, arrival.waitSeconds)
+        assertEquals("2026-11-26T15:24:43Z", arrival.expectedAt)
     }
 
     @Test

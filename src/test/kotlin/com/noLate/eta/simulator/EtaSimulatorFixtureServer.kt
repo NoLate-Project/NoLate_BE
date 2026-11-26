@@ -136,6 +136,43 @@ object EtaSimulatorFixtureServer {
             System.`in`.bufferedReader().useLines { lines ->
                 for (command in lines) {
                     if (command == "stop") break
+                    if (command == "prepare-bus-arrival-replay") {
+                        check(port == 5523 && schedules.count() == 0L && jobs.count() == 0L)
+                        val target = Instant.now().truncatedTo(ChronoUnit.SECONDS).plusSeconds(1800)
+                        val title = "ETA E2E bus arrival replay"
+                        jdbc.update("""INSERT INTO schedules (id,member_id,title,start_at,end_at,has_end_time,
+                            all_day,route_setup_required,schedule_type,deleted)
+                            VALUES (363,296,?,?,?,false,false,false,'NORMAL',false)""",
+                            title, target, target.plusSeconds(1800))
+                        val schedule = requireNotNull(schedules.findScheduleDetail(363, 296))
+                        val category = context.getBean(com.noLate.schedule.infrastructure.ScheduleCategoryRepository::class.java)
+                            .saveAndFlush(ScheduleCategory(memberId = 296, title = "격리 ETA", color = "#2F80FF"))
+                        schedule.updateCategorySnapshot(requireNotNull(category.id).toString(), category.title, category.color)
+                        val from = "서대문역사거리.농협중앙회"
+                        val to = "정류장 도착 검증"
+                        val leg = mapOf("kind" to "BUS", "mode" to "BUS", "label" to "N37", "lineName" to "N37",
+                            "durationMinutes" to 12, "startName" to from, "endName" to to,
+                            "startCoord" to mapOf("lat" to 37.566, "lng" to 126.967),
+                            "endCoord" to mapOf("lat" to 37.574, "lng" to 126.961),
+                            "startArsID" to "01001", "startStationCityCode" to "1000",
+                            "startStationProviderCode" to "4",
+                            "passStops" to listOf(mapOf("name" to from, "code" to "1000:100000001"),
+                                mapOf("name" to to, "code" to "ARS:99999")))
+                        val routeJson = mapper.writeValueAsString(mapOf("id" to "bus-replay",
+                            "mode" to "TRANSIT", "provider" to "odsay", "source" to "api", "minutes" to 12,
+                            "travelMinutes" to 12, "transitLegs" to listOf(leg)))
+                        schedule.updateRoute(travelMinutes = 12, departAt = target.minusSeconds(720), departedAt = null,
+                            travelMode = ScheduleTravelMode.TRANSIT, locationName = to, originName = from,
+                            originAddress = null, originLat = 37.566, originLng = 126.967,
+                            destinationName = to, destinationAddress = null, destinationLat = 37.574,
+                            destinationLng = 126.961, routeJson = routeJson,
+                            notificationEnabled = false, notificationLeadMinutes = null, notificationIntervalMinutes = null)
+                        schedules.saveAndFlush(schedule)
+                        fixture.phase = "bus-arrival-replay"
+                        mapper.writeValue(output.resolve("bus-arrival-replay.json").toFile(),
+                            mapOf("title" to title, "targetArrivalAt" to target, "scheduleId" to 363))
+                        continue
+                    }
                     if (command == "prepare-navigation-map") {
                         // Layout E2E only: one real product schedule in private H2, no
                         // provider call, native session or production database write.
@@ -975,6 +1012,23 @@ class FixtureConfiguration {
         }
     }
     @Bean @Primary fun fixtureSeoulArrivalClient(state: FixtureState): SeoulTransitArrivalClient = mock {
+        on { getBusArrivals(anyOrNull(), anyOrNull(), anyOrNull(), any()) } doAnswer { call ->
+            val arsId = call.getArgument<String?>(0)
+            val route = call.getArgument<String?>(2)
+            if (state.phase != "bus-arrival-replay" || arsId != "01001" || route != "N37") return@doAnswer emptyList<TransitArrivalDto>()
+            // Two captured field combinations, replayed together at a synthetic stop occurrence and clock.
+            val providerClock = java.time.format.DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
+                .withZone(ZoneId.of("Asia/Seoul")).format(Instant.now())
+            val xml = """<ServiceResult><msgBody><itemList>
+                <rtNm>N37</rtNm><stNm>서대문역사거리.농협중앙회</stNm>
+                <mkTm>$providerClock</mkTm><staOrd>76</staOrd>
+                <sectOrd1>75</sectOrd1><isArrive1>2</isArrive1><traTime1>104</traTime1><arrmsg1>출발대기</arrmsg1>
+                <sectOrd2>75</sectOrd2><isArrive2>0</isArrive2><traTime2>83</traTime2><arrmsg2>곧 도착</arrmsg2>
+                </itemList></msgBody></ServiceResult>"""
+            SeoulTransitArrivalClient("", "", "", "http://127.0.0.1", "http://127.0.0.1").use { parser ->
+                parser.parseBusArrivals(xml, route, call.getArgument(3)).map { it.copy(arsId = arsId) }
+            }.also { println("ETA_N37_REPLAY_STATION_LOOKUP") }
+        }
         on { getSubwayArrivals(any(), anyOrNull(), anyOrNull(), anyOrNull(), any()) } doAnswer {
             val station = it.getArgument<String>(0)
             if (state.phase in setOf("reported-boarding-state", "reported-boarding-alighting")) {

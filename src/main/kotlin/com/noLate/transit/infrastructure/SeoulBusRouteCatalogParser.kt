@@ -2,6 +2,7 @@ package com.noLate.transit.infrastructure
 
 import com.noLate.transit.domain.SeoulBusRoutePathPoint
 import com.noLate.transit.domain.SeoulBusRouteStop
+import com.noLate.transit.domain.SeoulBusRideService
 import org.w3c.dom.Element
 import org.xml.sax.SAXException
 import org.xml.sax.SAXParseException
@@ -52,26 +53,40 @@ internal object SeoulBusRouteCatalogParser {
         val board = path.first()
         val alight = path.last()
         val rows = rows(bytes, 999)
-        fun stopRow(stop: SeoulBusRouteStop) = rows.singleOrNull {
-            it.field("busRouteId") == stop.routeId && it.field("staOrd").toIntOrNull() == stop.sequence
-        }?.takeIf { it.field("stId") == stop.stationId && it.field("arsId") == stop.arsId }
-        val boardRow = stopRow(board) ?: return unavailable(SeoulBusPairingFailure.STOP_ROW_UNVERIFIED)
-        val alightRow = stopRow(alight) ?: return unavailable(SeoulBusPairingFailure.STOP_ROW_UNVERIFIED)
+        val boardRow = rows.stopRow(board) ?: return unavailable(SeoulBusPairingFailure.STOP_ROW_UNVERIFIED)
+        val alightRow = rows.stopRow(alight) ?: return unavailable(SeoulBusPairingFailure.STOP_ROW_UNVERIFIED)
         val updated = boardRow.sourceTime()
         if (updated == null || updated != alightRow.sourceTime() || updated > receivedAt) {
             return unavailable(SeoulBusPairingFailure.SOURCE_TIME_UNVERIFIED)
         }
-        val boarding = boardRow.countdowns()
-        val alighting = alightRow.countdowns()
+        val boarding = boardRow.countdowns(board.sequence)
+        val alighting = alightRow.countdowns(alight.sequence)
         if (boarding.isEmpty() || alighting.isEmpty()) return unavailable(SeoulBusPairingFailure.NO_VALID_PREDICTIONS)
         if (boarding.keys.none(alighting::containsKey)) return unavailable(SeoulBusPairingFailure.NO_COMMON_VEHICLE)
         return boarding.mapNotNull { (vehicle, boardWait) ->
             val alightWait = alighting[vehicle]?.takeIf { it > boardWait } ?: return@mapNotNull null
-            SeoulBusPairedArrival(updated.plusSeconds(boardWait), updated.plusSeconds(alightWait), updated, receivedAt)
+            SeoulBusPairedArrival(updated.plusSeconds(boardWait), updated.plusSeconds(alightWait), updated, receivedAt,
+                SeoulBusRideService.fromVehicle(board, alight, vehicle))
         }.sortedBy(SeoulBusPairedArrival::boardingAt).ifEmpty {
             unavailable(SeoulBusPairingFailure.INVALID_TIME_ORDER)
         }
     }
+
+    internal fun alightingForecast(
+        bytes: ByteArray, stop: SeoulBusRouteStop, service: SeoulBusRideService, receivedAt: Instant,
+    ): List<SeoulBusAlightingForecast> {
+        if (stop.routeId != service.routeId || stop.direction != service.direction ||
+            !service.alighting.matches(stop)) return emptyList()
+        val row = rows(bytes, 999).stopRow(stop) ?: return emptyList()
+        val updated = row.sourceTime()?.takeUnless { it > receivedAt } ?: return emptyList()
+        val seconds = row.countdowns(stop.sequence).entries.singleOrNull { service.matchesVehicle(it.key) }?.value
+            ?: return emptyList()
+        return listOf(SeoulBusAlightingForecast(updated.plusSeconds(seconds), updated, receivedAt))
+    }
+
+    private fun List<CatalogRow>.stopRow(stop: SeoulBusRouteStop): CatalogRow? = singleOrNull {
+        it.field("busRouteId") == stop.routeId && it.field("staOrd").toIntOrNull() == stop.sequence
+    }?.takeIf { it.field("stId") == stop.stationId && it.field("arsId") == stop.arsId }
 
     internal fun isForwardBusPath(path: List<SeoulBusRouteStop>): Boolean {
         if (path.size < 2) return false
@@ -91,12 +106,16 @@ internal object SeoulBusRouteCatalogParser {
                 .getOrNull()?.atZone(seoul)?.toInstant()
         }
 
-    private fun CatalogRow.countdowns(): Map<String, Long> {
+    private fun CatalogRow.countdowns(requestedOrder: Int): Map<String, Long> {
         val vehicles = mutableSetOf<String>()
         val result = mutableMapOf<String, Long>()
         for (slot in 1..2) {
             val vehicle = field("vehId$slot", optional = true).takeIf(id::matches) ?: continue
             if (!vehicles.add(vehicle)) return emptyMap()
+            if (isSeoulBusAwaitingDeparture(field("arrmsg$slot", optional = true))) continue
+            val reportedOrder = field("sectOrd$slot", optional = true).toIntOrNull()
+            val arrivalCode = field("isArrive$slot", optional = true)
+            if (seoulBusRequestedStopStatus(requestedOrder, reportedOrder, arrivalCode) != null) continue
             val seconds = field("traTime$slot", optional = true).toLongOrNull()?.takeIf { it in 0..9999 } ?: continue
             result[vehicle] = seconds
         }
@@ -220,6 +239,11 @@ internal object SeoulBusRouteCatalogParser {
 
 internal data class SeoulBusPairedArrival(
     val boardingAt: Instant, val alightingAt: Instant, val sourceUpdatedAt: Instant, val receivedAt: Instant,
+    val service: SeoulBusRideService? = null,
+)
+
+internal data class SeoulBusAlightingForecast(
+    val alightingAt: Instant, val sourceUpdatedAt: Instant, val receivedAt: Instant,
 )
 
 internal enum class SeoulBusPairingFailure {

@@ -42,6 +42,15 @@ class SeoulBusRouteCatalogTest {
         assertEquals(2, predictions.size)
         assertEquals(Instant.parse("2026-11-16T00:25:02Z"), predictions[1].boardingAt)
         assertEquals(Instant.parse("2026-11-16T00:27:18Z"), predictions[1].alightingAt)
+        val reachedBoardingStop = first.replace("<traTime1>5", "<sectOrd1>44</sectOrd1><isArrive1>1</isArrive1><traTime1>5")
+        val waitingUpstreamAtBothStops = second.replace("<traTime1>455", "<sectOrd1>43</sectOrd1><isArrive1>1</isArrive1><traTime1>455")
+        assertEquals(predictions.drop(1), SeoulBusRouteCatalogParser.pairedArrivals(
+            xml(reachedBoardingStop + waitingUpstreamAtBothStops), path, received,
+        ))
+        val pastAlightingStop = second.replace("<traTime1>455", "<sectOrd1>47</sectOrd1><isArrive1>0</isArrive1><traTime1>455")
+        assertEquals(predictions.take(1), paired(pastAlightingStop))
+        val awaitingDeparture = second.replace("<traTime1>455", "<arrmsg1>출발대기</arrmsg1><traTime1>455")
+        assertEquals(predictions.take(1), paired(awaitingDeparture))
         assertTrue(paired(second.replace("09:19:43", "09:19:44")).isEmpty())
         assertTrue(paired(second.replace("02008", "02009")).isEmpty())
         assertTrue(paired(second.replace("101000091", "101000092")).isEmpty())

@@ -96,6 +96,7 @@ class SchedulePushJobWorker(
     @Value("\${eta.transit.boarding-buffer-seconds:60}") private val boardingBufferSeconds: Long = 60,
     private val timetableTransferEvaluator: com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator =
         com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator(),
+    private val plannedSeoulBusRouteRefresher: com.noLate.eta.application.transit.PlannedSeoulBusRouteRefresher? = null,
 ) {
     init {
         require(arrivalSourceMaxAgeSeconds in 1..900)
@@ -335,9 +336,18 @@ class SchedulePushJobWorker(
             }
             val effectiveRouteSnapshot = baseEffectiveRouteSnapshot?.let { snapshot ->
                 val plan = snapshot.inProgressPlannedRoute
+                val busJourney = snapshot.plannedSeoulBusJourney
                 val currentMatched = snapshot.plannedJourneyArrivalPrediction(now, arrivalSourceMaxAgeSeconds)
                     ?.basis == PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
-                if (plan == null) snapshot else if (plannedTransitRouteRefresher != null) {
+                if (plan == null) snapshot else if (busJourney != null) {
+                    val baseline = snapshot.lastUpdatedPlannedRoute?.takeIf { busJourney.matches(it) } ?: plan
+                    val refreshed = plannedSeoulBusRouteRefresher?.refresh(baseline, busJourney, now)
+                    if (refreshed == null) snapshot else snapshot.copy(
+                        plannedSeoulBusJourney = refreshed.journey,
+                        plannedRouteUpdate = refreshed.update,
+                        lastUpdatedPlannedRoute = refreshed.update.route ?: snapshot.lastUpdatedPlannedRoute,
+                    )
+                } else if (plannedTransitRouteRefresher != null) {
                     val baseline = snapshot.lastUpdatedPlannedRoute?.takeIf { it.identity == plan.identity } ?: plan
                     val update = plannedTransitRouteRefresher.refresh(baseline, now, departurePlan = plan,
                         previousUpdate = snapshot.plannedRouteUpdate)

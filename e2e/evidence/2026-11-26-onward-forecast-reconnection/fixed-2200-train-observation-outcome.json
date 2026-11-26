@@ -1,0 +1,38 @@
+{
+  "classification": "ACTUAL_SUPPLIER_POSITION_BEFORE_BOARDING_ONLY",
+  "serviceDate": "2026-11-26",
+  "journey": "노원 4호선 → 사당 2호선 → 신림",
+  "isolatedRunResult": "PARTIAL",
+  "initialEvaluation": {
+    "evaluatedAt": "2026-11-26T21:50:07.547404+09:00",
+    "source": "TIMETABLE_PROVIDER",
+    "diagnostic": "TRANSIT_TRAIN_NOT_YET_OBSERVED",
+    "departureAt": "2026-11-26T22:00:00+09:00",
+    "arrivalAt": "2026-11-26T23:10:13+09:00",
+    "installedAppDiagnosticPassed": true
+  },
+  "firstPositionRead": {
+    "line": "LINE_4",
+    "trainNumber": "4707",
+    "terminal": "오이도",
+    "reportedStation": "상계",
+    "reportedState": "ENTERING",
+    "sourceUpdatedAt": "2026-11-26T22:01:33+09:00",
+    "receivedAt": "2026-11-26T22:02:33.949517+09:00",
+    "scheduledDepartureFromNowon": "2026-11-26T22:04:30+09:00"
+  },
+  "secondPositionReadFailure": "EtaSoftDeadlineExceededException",
+  "physicalPositionRequests": 2,
+  "positionResponsesWithObservations": 1,
+  "workerEvaluations": 1,
+  "trainArrivalOrDepartureEventsWithObservationBounds": 0,
+  "strictNaverComparisonSamples": 0,
+  "passengerBoardingOrPhysicalArrivalVerified": false,
+  "simulatorEndpointRestorationVerifiedInOriginalRun": false,
+  "simulatorEndpointRestorationFollowup": {
+    "result": "PINNED_XCUITEST_DISPATCH_PASSED",
+    "endpointPort": 8085,
+    "appBundleLoadVerified": false
+  },
+  "evidenceRetention": "Sanitized summary from the completed report and offline audit read before the host reboot. Original local temporary files were absent after reboot."
+}

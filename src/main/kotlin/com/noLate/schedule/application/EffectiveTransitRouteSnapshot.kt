@@ -42,6 +42,10 @@ data class EffectiveTransitRouteSnapshot(
     val lastUpdatedPlannedRoute: EffectiveTransitRoute? = null,
     /** 실시간 미관측이어도 완전한 시간표로 검증한 계획. 정상 ETA로 승격하지 않는다. */
     val lastTimetablePlannedRoute: EffectiveTransitRoute? = null,
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val lastAcceptedSeoulBusJourney: PlannedSeoulBusJourney? = null,
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val plannedSeoulBusJourney: PlannedSeoulBusJourney? = null,
     val effectiveTransitRoute: EffectiveTransitRoute? = null,
     /** 현재 평가 관측만 저장한다. 이전 정상 관측은 degraded 회차로 승계하지 않는다. */
     val firstBoardingObservation: TransitFirstBoardingObservation? = null,
@@ -147,6 +151,11 @@ data class EffectiveTransitRouteSnapshot(
                 },
                 inProgressPlannedRoute = inProgressPlannedRoute,
                 lastTimetablePlannedRoute = verifiedTimetablePlan ?: previous?.lastTimetablePlannedRoute,
+                lastAcceptedSeoulBusJourney = if (accepted) {
+                    trafficResult.seoulBusJourney?.takeIf { it.matches(route) }
+                } else previous?.lastAcceptedSeoulBusJourney,
+                plannedSeoulBusJourney = (previous?.plannedSeoulBusJourney ?: previous?.lastAcceptedSeoulBusJourney)
+                    ?.takeIf { it.matches(inProgressPlannedRoute) },
                 lastUpdatedPlannedRoute = previous?.plannedRouteUpdate?.route ?: previous?.lastUpdatedPlannedRoute,
                 // 같은 원본을 재조회해 새 관측이 없어도 출처 시각을 보존한다. 읽을 때 신선도를
                 // 다시 판단하므로 캐시를 새 실시간값으로 꾸미지 않으며, 확인된 모순도 지우지 않는다.
@@ -175,13 +184,20 @@ data class EffectiveTransitRouteSnapshot(
     fun plannedJourneyArrivalPrediction(readAt: Instant, maxAgeSeconds: Long): PlannedJourneyArrivalPrediction? {
         val plan = plannedRouteAt(readAt) ?: return null
         if (plannedJourneyTimingFailureReason() != null) return null
-        val updated = plannedRouteUpdate?.takeIf { it.routeIdentity == plan.identity && it.route != null &&
-            it.sourceUpdatedAt in readAt.minusSeconds(maxAgeSeconds)..readAt.plusSeconds(5) }
+        val updated = plannedRouteUpdate?.takeIf {
+            val busRefresh = it.route?.segments?.any { segment -> segment.busRidePrediction?.alightingObservationSourceUpdatedAt != null } == true
+            val sourceMaxAge = if (busRefresh) minOf(maxAgeSeconds,
+                com.noLate.transit.domain.SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS) else maxAgeSeconds
+            it.routeIdentity == plan.identity && it.route != null &&
+                it.sourceUpdatedAt in readAt.minusSeconds(sourceMaxAge)..readAt.plusSeconds(5)
+        }
         if (updated != null) {
             val route = requireNotNull(updated.route)
             if (route.arrivalAt <= readAt) return null
             return PlannedJourneyArrivalPrediction(route.arrivalAt, readAt, plan.identity,
-                if (route.segments.any { it.rideTiming?.observedService != null }) PlannedJourneyArrivalBasis.OBSERVED_SERVICE_CONNECTION
+                if (route.segments.any { it.busRidePrediction?.alightingObservationSourceUpdatedAt != null }) {
+                    PlannedJourneyArrivalBasis.MATCHED_BUS_REALTIME
+                } else if (route.segments.any { it.rideTiming?.observedService != null }) PlannedJourneyArrivalBasis.OBSERVED_SERVICE_CONNECTION
                 else if (updated.onlyLastRideObserved) PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
                 else PlannedJourneyArrivalBasis.MATCHED_RIDE_AND_ONWARD_TIMETABLE,
                 effectiveTransitRoute = route, sourceUpdatedAt = updated.sourceUpdatedAt)
@@ -265,8 +281,14 @@ private fun EffectiveTransitRoute.withAcceptedBoardingSource(observation: Transi
 /** 만료된 관측을 실시간으로 표시하지 않고, 마지막으로 연결한 열차와 계획 시각만 보존한다. */
 private fun EffectiveTransitRoute.asPlannedBaseline(): EffectiveTransitRoute = copy(segments = segments.map { segment ->
     val timing = segment.rideTiming
-    if (timing == null || timing.basis == EffectiveTransitRideTimingBasis.TIMETABLE) segment else segment.copy(
-        rideTiming = timing.asPlannedBaseline())
+    val bus = segment.busRidePrediction
+    when {
+        timing != null && timing.basis != EffectiveTransitRideTimingBasis.TIMETABLE ->
+            segment.copy(rideTiming = timing.asPlannedBaseline())
+        bus?.alightingObservationSourceUpdatedAt != null ->
+            segment.copy(busRidePrediction = bus.copy(alightingObservationSourceUpdatedAt = null))
+        else -> segment
+    }
 })
 
 data class PlannedJourneyArrivalObservation(

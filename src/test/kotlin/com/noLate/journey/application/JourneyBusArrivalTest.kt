@@ -52,6 +52,19 @@ class JourneyBusArrivalTest {
         val result = match(listOf(arrival().copy(direction = "wrong"), arrival().copy(waitSeconds = 240, expectedAt = now.plusSeconds(240).toString()), arrival()))
         assertThat(result.observation!!.remainingWaitSeconds).isEqualTo(120)
     }
+    @Test fun `bus at or past the stop is not shown as an incoming vehicle even with a future countdown`() {
+        val arrived = arrival().copy(arrivalStatus = TransitArrivalStatus.ARRIVED)
+        val departed = arrival().copy(arrivalStatus = TransitArrivalStatus.DEPARTED)
+        val next = arrival().copy(vehicleId = "999998", waitSeconds = 240, expectedAt = now.plusSeconds(240).toString())
+        val result = match(listOf(arrived, departed, next))
+        assertThat(result.incomingVehicleId).isEqualTo("999998")
+        assertThat(result.observation!!.remainingWaitSeconds).isEqualTo(240)
+        val noIncoming = match(listOf(arrived, departed))
+        val observation = requireNotNull(noIncoming.observation)
+        assertThat(noIncoming.incomingVehicleId).isNull()
+        assertThat(observation.remainingWaitSeconds).isNull()
+        assertThat(observation.qualityReasons).contains(JourneyTransitObservationReason.BUS_ALREADY_AT_OR_PAST_STOP)
+    }
     @Test fun `invalid zero vehicle ID is not exposed`() { assertThat(match(listOf(arrival().copy(vehicleId = "0"))).incomingVehicleId).isNull() }
     @Test fun `query rejects namespace coercion IDs padding labels and unsupported legs`() {
         listOf(query.copy(namespace = "TMAP"), query.copy(arsId = "99-999"), query.copy(arsId = "00000"),

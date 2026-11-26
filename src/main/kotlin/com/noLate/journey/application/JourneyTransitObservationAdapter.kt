@@ -3,6 +3,7 @@ package com.noLate.journey.application
 import com.noLate.journey.domain.*
 import com.noLate.transit.domain.TransitArrivalDto
 import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
+import com.noLate.transit.domain.TransitArrivalStatus
 import java.time.Duration
 import java.time.Instant
 
@@ -32,6 +33,11 @@ class JourneyTransitObservationAdapter(private val policy: JourneyTransitObserva
         }
         if (!supported) reject(JourneyTransitObservationReason.UNSUPPORTED_PROVIDER_OR_KIND, JourneyTransitObservationQuality.UNAVAILABLE)
         if (!arrival.realtime) reject(JourneyTransitObservationReason.NOT_REALTIME, JourneyTransitObservationQuality.UNAVAILABLE)
+        if (kind == JourneyTransitKind.BUS &&
+            (arrival.arrivalStatus == TransitArrivalStatus.ARRIVED || arrival.arrivalStatus == TransitArrivalStatus.DEPARTED)
+        ) {
+            reject(JourneyTransitObservationReason.BUS_ALREADY_AT_OR_PAST_STOP, JourneyTransitObservationQuality.UNAVAILABLE)
+        }
         fun parse(value: String?, missing: JourneyTransitObservationReason, invalid: JourneyTransitObservationReason): Instant? {
             if (value.isNullOrBlank()) {
                 reject(missing, JourneyTransitObservationQuality.UNVERIFIED)

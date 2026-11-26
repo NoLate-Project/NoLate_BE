@@ -4,6 +4,7 @@ import com.noLate.eta.domain.TransitFirstBoardingObservation
 import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitJourneyLeg
 import com.noLate.eta.domain.TransitLegMode
+import com.noLate.transit.domain.SeoulBusRideService
 import com.noLate.transit.infrastructure.SeoulBusPairedArrival
 import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
 import org.slf4j.LoggerFactory
@@ -172,7 +173,7 @@ class SeoulBusEta(
                 )
                 SeoulSingleBusProjection(index, candidate.alightingAt, candidate.receivedAt, observation, arrival,
                     totalMinutes, minutes(accessAt, candidate.boardingAt), minutes(accessAt, candidate.alightingAt),
-                    accessSeconds, egressSeconds)
+                    accessSeconds, egressSeconds, candidate.service)
             }
         }
     }
@@ -209,6 +210,7 @@ internal data class SeoulSingleBusProjection(
     val rideWithWaitMinutes: Int,
     val accessSeconds: Long,
     val egressSeconds: Long,
+    val service: SeoulBusRideService?,
 )
 
 internal data class SeoulBusTransferProjection(

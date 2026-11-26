@@ -6,6 +6,7 @@ import com.noLate.global.error.ErrorCode
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.transit.application.TransitArrivalService
 import com.noLate.transit.domain.TransitArrivalDto
+import com.noLate.transit.domain.TransitCityCodeNamespace
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -52,6 +53,8 @@ class TransitArrivalController(
         @RequestParam(required = false) nodeId: String?,
         @RequestParam(required = false) stationName: String?,
         @RequestParam(required = false, defaultValue = "2") limit: Int,
+        @RequestParam(defaultValue = "TAGO") cityCodeNamespace: TransitCityCodeNamespace,
+        @RequestParam(required = false) providerCode: String?,
     ): ApiResponse<List<TransitArrivalDto>> {
         requireMemberId(principal)
         return ApiResponse.success(
@@ -62,6 +65,8 @@ class TransitArrivalController(
                 nodeId = nodeId,
                 stationName = stationName,
                 limit = limit,
+                cityCodeNamespace = cityCodeNamespace,
+                providerCode = providerCode,
             )
         )
     }

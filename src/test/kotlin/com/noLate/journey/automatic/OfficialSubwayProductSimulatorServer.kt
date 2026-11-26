@@ -97,7 +97,11 @@ object OfficialSubwayProductSimulatorServer {
                 route.path("transitServiceState").asText() == "unknown")
             val legs = route.path("transitLegs")
             val rides = legs.filter { it.path("kind").asText() == "SUBWAY" }
-            val expected = if (transfer) listOf("서울역" to "충무로", "충무로" to "경복궁") else listOf("강남" to "선릉")
+            val expected = when {
+                transfer -> listOf("서울역" to "충무로", "충무로" to "경복궁")
+                java.lang.Boolean.getBoolean("nolate.journey.bongcheon-first-walk") -> listOf("봉천" to "강남")
+                else -> listOf("강남" to "선릉")
+            }
             require(legs.size() == 2 * expected.size + 1 && legs.withIndex().all { (i, leg) ->
                 leg.path("kind").asText() == if (i % 2 == 0) "WALK" else "SUBWAY"
             })

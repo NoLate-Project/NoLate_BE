@@ -19,6 +19,7 @@ enum class TrafficSource {
 enum class PlannedJourneyArrivalBasis {
     LAST_ACCEPTED_PLAN,
     MATCHED_TRAIN_REALTIME,
+    MATCHED_BUS_REALTIME,
     /** 구간 관측으로 환승을 재판정했으며 관측되지 않은 후속 편은 시간표 기준이다. */
     MATCHED_RIDE_AND_ONWARD_TIMETABLE,
     /** 양 끝 역이 식별한 실제 차량을 선택했다. 원래 시간표 편의 별칭이나 탑승 확인이 아니다. */

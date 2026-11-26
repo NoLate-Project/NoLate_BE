@@ -225,8 +225,14 @@ data class EffectiveBusRidePrediction(
     val boardingAt: Instant,
     val alightingAt: Instant,
     val sourceUpdatedAt: Instant,
+    /** After departure, a direct same-vehicle alighting forecast has a different source time. */
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val alightingObservationSourceUpdatedAt: Instant? = null,
 ) {
-    init { require(sourceUpdatedAt <= boardingAt && boardingAt < alightingAt) }
+    init {
+        require(sourceUpdatedAt <= boardingAt && boardingAt < alightingAt)
+        require(alightingObservationSourceUpdatedAt == null || alightingObservationSourceUpdatedAt in boardingAt..alightingAt)
+    }
 }
 
 data class EffectiveTransitRouteSegment(
@@ -309,6 +315,8 @@ data class TrafficResult(
     val firstBoardingObservation: TransitFirstBoardingObservation? = null,
     /** 현재 실패 진단과 분리해 같은 요청에서 확인한 미래 시간표 계획을 보존한다. */
     val futureTimetablePlanEvidence: TransitTimetablePlanEvidence? = null,
+    @get:com.fasterxml.jackson.annotation.JsonIgnore
+    val seoulBusJourney: PlannedSeoulBusJourney? = null,
 ) {
     /**
      * 추천 출발 판단에 정상 provider 결과로 채택할 수 있는지 나타낸다.

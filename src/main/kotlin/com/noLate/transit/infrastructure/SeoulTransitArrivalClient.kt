@@ -209,6 +209,14 @@ class SeoulTransitArrivalClient(
         }
     }
 
+    internal fun getBusAlightingForecast(
+        stop: com.noLate.transit.domain.SeoulBusRouteStop,
+        service: com.noLate.transit.domain.SeoulBusRideService,
+    ): SeoulBusAlightingForecast? =
+        busCatalogRequest(service.routeId, "/arrive/getArrInfoByRouteAll", TransitWireOperation.ARRIVAL) {
+            SeoulBusRouteCatalogParser.alightingForecast(it, stop, service, clock.instant())
+        }.singleOrNull()
+
     private fun <T> busCatalogRequest(routeId: String, path: String, operation: TransitWireOperation,
         parse: (ByteArray) -> List<T>): List<T> {
         require(routeId.matches(Regex("[1-9][0-9]{8}"))) { "Invalid Seoul route identifier" }
@@ -571,89 +579,51 @@ class SeoulTransitArrivalClient(
     }
 
     private fun Element.toBusArrivals(limit: Int): List<TransitArrivalDto> {
-        val routeName = text("rtNm")
-        val stationName = text("stNm")
-        val direction = text("adirection")
-        val observedAt = Instant.now()
+        val observedAt = clock.instant()
         // getStationByUid의 mkTm은 서울시 공식 명세상 공급자 "제공시각"이다.
         // HTTP 수신시각과 구분해 원천 freshness 및 도착예정 절대시각의 기준으로 사용한다.
         val sourceUpdatedAt = parseSeoulTimestamp(text("mkTm"))
 
-        return listOf(
-            busArrivalFromSlot(
-                routeName = routeName,
-                stationName = stationName,
-                direction = direction,
-                destinationName = text("stationNm1"),
-                message = text("arrmsg1"),
-                waitSeconds = parsePositiveInt(text("traTime1")),
-                arrivalCode = text("isArrive1"),
-                lastBusCode = text("isLast1"),
-                busTypeCode = text("busType1"),
-                observedAt = observedAt,
-                sourceUpdatedAt = sourceUpdatedAt,
-                providerRouteId = text("busRouteId"),
-                vehicleId = text("vehId1"),
-            ),
-            busArrivalFromSlot(
-                routeName = routeName,
-                stationName = stationName,
-                direction = direction,
-                destinationName = text("stationNm2"),
-                message = text("arrmsg2"),
-                waitSeconds = parsePositiveInt(text("traTime2")),
-                arrivalCode = text("isArrive2"),
-                lastBusCode = text("isLast2"),
-                busTypeCode = text("busType2"),
-                observedAt = observedAt,
-                sourceUpdatedAt = sourceUpdatedAt,
-                providerRouteId = text("busRouteId"),
-                vehicleId = text("vehId2"),
-            ),
-        )
-            .filterNotNull()
+        return (1..2).mapNotNull { slot -> busArrivalFromSlot(slot, observedAt, sourceUpdatedAt) }
             .take(limit)
     }
 
-    private fun busArrivalFromSlot(
-        routeName: String?,
-        stationName: String?,
-        direction: String?,
-        destinationName: String?,
-        message: String?,
-        waitSeconds: Int?,
-        arrivalCode: String?,
-        lastBusCode: String?,
-        busTypeCode: String?,
+    private fun Element.busArrivalFromSlot(
+        slot: Int,
         observedAt: Instant,
         sourceUpdatedAt: String?,
-        providerRouteId: String?,
-        vehicleId: String?,
     ): TransitArrivalDto? {
-        if (message.isNullOrBlank() && waitSeconds == null) return null
-        val resolvedWaitSeconds = waitSeconds ?: parseWaitSeconds(message)
-        val expectedBase = sourceUpdatedAt
-            ?.let { runCatching { Instant.parse(it) }.getOrNull() }
-            ?: observedAt
-        val arrivalStatus = if (arrivalCode == "1") {
-            TransitArrivalStatus.ARRIVED
-        } else {
-            estimatedTransitArrivalStatus(resolvedWaitSeconds, null, message)
+        val routeName = text("rtNm")
+        val busTypeCode = text("busType$slot")
+        val message = text("arrmsg$slot")
+        val awaitingDeparture = isSeoulBusAwaitingDeparture(message)
+        val stopStatus = if (awaitingDeparture) null else seoulBusRequestedStopStatus(
+            requestedOrder = text("staOrd")?.toIntOrNull(),
+            reportedOrder = text("sectOrd$slot")?.toIntOrNull(),
+            arrivalCode = text("isArrive$slot"),
+        )
+        val waitSeconds = if (stopStatus == null && !awaitingDeparture) {
+            parsePositiveInt(text("traTime$slot"))?.takeIf { it > 0 } ?: parseBusWaitSeconds(message)
+        } else null
+        if (message == null && waitSeconds == null && stopStatus == null) return null
+        val expectedBase = sourceUpdatedAt?.let(Instant::parse) ?: observedAt
+        val arrivalStatus = stopStatus ?: when {
+            message?.let { it.contains("곧") || it.contains("진입") } == true -> TransitArrivalStatus.APPROACHING
+            else -> estimatedTransitArrivalStatus(waitSeconds, null, null)
         }
-        val vehicleType = seoulBusVehicleType(busTypeCode)
         return TransitArrivalDto(
             provider = "seoul-bus",
             kind = "BUS",
             lineName = routeName,
             routeName = routeName,
-            stationName = stationName,
-            direction = direction,
-            destinationName = destinationName,
-            arrivalMessage = message,
-            waitSeconds = resolvedWaitSeconds,
-            waitMinutes = resolvedWaitSeconds?.toWaitMinutes(),
-            expectedAt = resolvedWaitSeconds?.let { expectedBase.plusSeconds(it.toLong()).toString() },
-            lastTrain = lastBusCode == "1",
+            stationName = text("stNm"),
+            direction = text("adirection"),
+            destinationName = text("stationNm$slot"),
+            arrivalMessage = stopStatus?.displayLabel ?: message?.takeUnless { it == "도착" || it == "출발" },
+            waitSeconds = waitSeconds,
+            waitMinutes = waitSeconds?.toWaitMinutes(),
+            expectedAt = waitSeconds?.let { expectedBase.plusSeconds(it.toLong()).toString() },
+            lastTrain = text("isLast$slot") == "1",
             realtime = true,
             arrivalStatus = arrivalStatus,
             observedAt = observedAt.toString(),
@@ -663,11 +633,18 @@ class SeoulTransitArrivalClient(
             } else {
                 TransitArrivalFreshnessEvidence.LOCAL_RECEIPT_TIMESTAMP_ONLY
             },
-            vehicleType = vehicleType,
+            vehicleType = seoulBusVehicleType(busTypeCode),
             lowFloor = busTypeCode == SEOUL_LOW_FLOOR_BUS_CODE,
-            providerRouteId = providerRouteId?.takeIf { it.matches(Regex("[1-9][0-9]{0,19}")) },
-            vehicleId = vehicleId?.takeIf { it.matches(Regex("[1-9][0-9]{0,19}")) },
+            providerRouteId = text("busRouteId")?.takeIf { it.matches(Regex("[1-9][0-9]{0,19}")) },
+            vehicleId = text("vehId$slot")?.takeIf { it.matches(Regex("[1-9][0-9]{0,19}")) },
         )
+    }
+
+    private fun parseBusWaitSeconds(message: String?): Int? {
+        val duration = message?.let(BUS_WAIT_PATTERN::find) ?: return null
+        val minutes = duration.groups[1]?.value?.toInt() ?: 0
+        val seconds = duration.groups[2]?.value?.toInt() ?: duration.groups[3]?.value?.toInt() ?: 0
+        return (minutes * 60 + seconds).takeIf { it > 0 }
     }
 
     private fun parseBusItems(xml: String): List<Element> {
@@ -839,6 +816,7 @@ class SeoulTransitArrivalClient(
         const val MAX_STATION_CACHE_ENTRIES = 500
         const val MAX_ARS_CANDIDATES = 8
         const val SEOUL_LOW_FLOOR_BUS_CODE = "1"
+        val BUS_WAIT_PATTERN = Regex("(?<![0-9])(?:([0-9]{1,3})\\s*분\\s*(?:([0-9]{1,2})\\s*초)?|([0-9]{1,4})\\s*초)(?=\\s*(?:후|도착|\\[|$))")
         const val SEOUL_BUS_PROVIDER_ID = "seoul_bus"
         const val SEOUL_SUBWAY_PROVIDER_ID = "seoul_subway"
         val SEOUL_BUS_SUCCESS_CODES = setOf("0", "00", "INFO-000")
@@ -860,6 +838,24 @@ class SeoulTransitArrivalClient(
         }
     }
 }
+
+// isArrive describes the vehicle's last reported stop. Bind it to the queried route occurrence.
+internal fun seoulBusRequestedStopStatus(
+    requestedOrder: Int?,
+    reportedOrder: Int?,
+    arrivalCode: String?,
+): TransitArrivalStatus? {
+    if (requestedOrder == null || requestedOrder <= 0 || reportedOrder == null || reportedOrder <= 0) return null
+    return when {
+        reportedOrder > requestedOrder -> TransitArrivalStatus.DEPARTED
+        reportedOrder == requestedOrder && arrivalCode == "1" -> TransitArrivalStatus.ARRIVED
+        else -> null
+    }
+}
+
+// Seoul can return a positive traTime while the vehicle is still waiting to start service.
+internal fun isSeoulBusAwaitingDeparture(message: String?): Boolean =
+    message?.filterNot(Char::isWhitespace) == "출발대기"
 
 internal fun seoulBusVehicleType(code: String?): String? = when (code?.trim()) {
     "0" -> "일반"

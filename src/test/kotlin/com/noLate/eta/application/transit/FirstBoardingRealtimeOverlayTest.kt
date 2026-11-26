@@ -765,6 +765,8 @@ class FirstBoardingRealtimeOverlayTest {
         )).thenReturn(listOf(
             matching.copy(providerRouteId = "100100058", expectedAt = evaluatedAt.plusSeconds(6 * 60).toString()),
             matching.copy(providerRouteId = null, expectedAt = evaluatedAt.plusSeconds(7 * 60).toString()),
+            matching.copy(arrivalStatus = TransitArrivalStatus.ARRIVED, expectedAt = evaluatedAt.plusSeconds(7 * 60).toString()),
+            matching.copy(arrivalStatus = TransitArrivalStatus.DEPARTED, expectedAt = evaluatedAt.plusSeconds(8 * 60).toString()),
             matching,
         ))
 

@@ -1,0 +1,29 @@
+{
+  "classification": "ACTUAL_SEOUL_BUS_FORECAST_FIELD_REPLAY",
+  "route": "N37",
+  "routeId": "100100585",
+  "stop": "문정법조단지.건영아파트",
+  "operation": "getArrInfoByRouteAll",
+  "receivedAt": "2026-11-27T00:17:38.078742+09:00",
+  "forecastFields": {
+    "mkTm": "2026-11-27 00:17:30.0",
+    "staOrd": "3",
+    "sectOrd": "2",
+    "isArrive": "2",
+    "traTime": "104",
+    "arrmsg": "출발대기"
+  },
+  "replay": {
+    "beforeGuardDerivedTimestamp": "2026-11-27T00:19:14+09:00",
+    "sameFieldFixtureBeforeGuard": "FAILED",
+    "sameFieldFixtureAfterGuard": "PASSED",
+    "expectedAtAfterGuard": null,
+    "remainingSecondsAfterGuard": null,
+    "displayMessageAfterGuard": "출발대기"
+  },
+  "httpCalls": 12,
+  "matchedPositionSamplesWithVerifiedIdentityAndFreshness": 0,
+  "actualArrivalIntervals": 0,
+  "physicalArrivalAccuracyVerified": false,
+  "notes": "Values are preserved, but the raw slot ordinal and vehicle ID were not retained here. The station parsing regression projects the fields into slot 1 of a test envelope. The route-wide parsing regression covers the same dispatch-waiting status. The only selected forecast was not for a confirmed in-service vehicle."
+}
