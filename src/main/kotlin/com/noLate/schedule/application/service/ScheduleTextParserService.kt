@@ -39,6 +39,10 @@ class ScheduleTextParserService(
     private val yearPattern = Regex("""(?:^|\D)((?:19|20)\d{2})\s*년?(?!\d)""")
     private val fullDatePattern =
         Regex("""(?:^|\D)((?:19|20)\d{2})\s*(?:년|[./-])\s*(\d{1,2})\s*(?:월|[./-])\s*(\d{1,2})\s*일?(?!\d)""")
+    // 예약 양식의 26.11.28은 월/일이 아니라 2026년 11월 28일이다.
+    // 숫자·구분자 경계를 제한해 긴 전화번호나 네 자리 연도의 뒷부분을 읽지 않는다.
+    private val twoDigitYearDatePattern =
+        Regex("""(?<![\d./-])(\d{2})\s*([./-])\s*(\d{1,2})\s*\2\s*(\d{1,2})(?!\d|[./-]\d)""")
     private val compactDatePattern = Regex("""(?:^|\D)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)""")
     private val koreanDatePattern = Regex("""(?:^|\D)(\d{1,2})\s*월\s*(\d{1,2})\s*일?(?!\d)""")
     private val shortDatePattern = Regex("""(?:^|\D)(\d{1,2})\s*[./-]\s*(\d{1,2})(?!\d)""")
@@ -49,7 +53,9 @@ class ScheduleTextParserService(
     private val koreanWordTimePattern =
         Regex("""(새벽|아침|오전|낮|점심|오후|저녁|밤)?\s*(?<![가-힣A-Za-z0-9])(열두|열한|열|아홉|여덟|일곱|여섯|다섯|네|넷|사|세|셋|삼|두|둘|이|한|하나|일|오|육|칠|팔|구)\s*시(?!간)(?:\s*(반|삼십|이십|십|사십|오십)\s*분?)?""")
     private val colonTimePattern =
-        Regex("""(?:^|[^\d])(오전|오후|저녁|밤|낮|새벽|아침)?\s*([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?!\d)""")
+        // 날짜와 붙은 `26.11.28오후5:00`에서도 오후를 소비하지 않고 시각에 묶는다.
+        // 숫자 경계는 시(hour) 바로 앞에서 검사해 25:00의 뒷자리만 읽는 것도 막는다.
+        Regex("""(오전|오후|저녁|밤|낮|새벽|아침)?\s*(?<!\d)([01]?\d|2[0-3])\s*:\s*([0-5]\d)(?!\d)""")
     private val explicitTimeRangePattern = Regex(
         """(오전|오후|저녁|밤|낮|새벽|아침)?\s*(\d{1,2})(?:\s*:\s*([0-5]\d)|\s*시(?:\s*(\d{1,2})\s*분)?)\s*(?:부터|[~〜～–—-])\s*(오전|오후|저녁|밤|낮|새벽|아침)?\s*(\d{1,2})(?:\s*:\s*([0-5]\d)|\s*시(?:\s*(\d{1,2})\s*분)?)(?:\s*까지)?""",
     )
@@ -364,14 +370,24 @@ class ScheduleTextParserService(
         } else {
             null
         }
-        val sourceTitle = explicitTitle ?: standaloneTitle ?: if (prefersVoiceCompanionTitle) {
+        val reservationTitle = if (preservesSourceNotes(inputType) && customerName != null && eventType != null) {
+            val spouse = cleanValue(extractLabeledValue(lines, listOf("배우자성함", "배우자명")))
+            val participants = listOfNotNull(customerName, spouse).distinct().joinToString("·")
+            val purpose = if (lines.any { "본식" in it || "결혼식장" in it }) "본식 촬영" else eventType
+            "$participants $purpose"
+        } else {
+            null
+        }
+        val sourceTitle = explicitTitle ?: standaloneTitle ?: reservationTitle ?: if (prefersVoiceCompanionTitle) {
             chooseVoiceTitle(lines, destination, inputType)
         } else {
             null
         }
         val purpose = if (sourceTitle == null) chooseSharedTextPurpose(lines, inputType) else null
         val title = sourceTitle ?: buildTitle(destination, selectedTime, purpose)
-        val notes = buildNotes(
+        // 공유·붙여넣기 메모는 추출한 몇 필드로 재구성하지 않는다. 연락처, 안내문,
+        // 빈 양식 항목을 포함한 원문을 보존하고 자연어 정규화도 메모에는 적용하지 않는다.
+        val notes = if (preservesSourceNotes(inputType)) text?.trim() else buildNotes(
             customerName = customerName,
             eventType = eventType,
             assignments = extractAssignments(normalized),
@@ -425,6 +441,9 @@ class ScheduleTextParserService(
         )
     }
 
+    internal fun preservesSourceNotes(inputType: ScheduleParseInputType): Boolean =
+        inputType == ScheduleParseInputType.SHARE_TEXT || inputType == ScheduleParseInputType.CONVERSATION
+
     /**
      * 종료 시각은 `endAt`의 존재만으로 판단할 수 없다. 기본 지속 시간도 `endAt`을 만들기
      * 때문에, 반드시 원문에 범위/` 종료 시간` 표현이 있는지를 같이 검증한다.
@@ -438,7 +457,7 @@ class ScheduleTextParserService(
         startDateTime: LocalDateTime?,
         defaultDurationMinutes: Int,
     ): ResolvedScheduleEnd {
-        val explicitEndTime = startTime?.let { findExplicitEndTime(sourceText, it) }
+        val explicitEndTime = startTime?.let { findExplicitEndTime(normalizeWrittenMeridiem(sourceText), it) }
         val endAt = startDateTime?.let { start ->
             if (explicitEndTime == null) {
                 start.plusMinutes(defaultDurationMinutes.toLong())
@@ -548,6 +567,7 @@ class ScheduleTextParserService(
             ?.replace(Regex("""[ \t]+"""), " ")
             ?.trim()
             .orEmpty()
+            .let(::normalizeWrittenMeridiem)
 
         val deviceNormalized = when (inputType) {
             ScheduleParseInputType.IMAGE_OCR -> common
@@ -567,6 +587,20 @@ class ScheduleTextParserService(
         } else {
             deviceNormalized
         }
+    }
+
+    /** 예약 안내의 AM/PM, 괄호 시간대를 규칙 파서의 공통 오전·오후 표기로 맞춘다. */
+    private fun normalizeWrittenMeridiem(value: String): String {
+        val clock = """\d{1,2}(?:\s*:\s*[0-5]\d|\s*시(?:\s*\d{1,2}\s*분)?)"""
+        val suffixNormalized = Regex("""(?i)(?<!\d)($clock)[ \t]*(?:\([ \t]*)?(오전|오후|AM|PM)(?:[ \t]*\))?(?![A-Za-z])""")
+            .replace(value) { match ->
+                val period = if (match.groupValues[2].uppercase() in setOf("PM", "오후")) "오후" else "오전"
+                "$period ${match.groupValues[1]}"
+            }
+        return Regex("""(?i)(?<![A-Za-z])(?:\([ \t]*)?(오전|오후|AM|PM)(?:[ \t]*\))?[ \t]*(?=$clock)""")
+            .replace(suffixNormalized) { match ->
+                if (match.groupValues[1].uppercase() in setOf("PM", "오후")) "오후 " else "오전 "
+            }
     }
 
     /**
@@ -817,6 +851,12 @@ class ScheduleTextParserService(
                 weekdaysInText.joinToString(", ") { "${it}요일" }
         }
 
+        val dates = collectDateCandidates(lines)
+            .filter { it.score > -4 && toLocalDate(it.year ?: 2000, it.month, it.day) != null }
+        if (dates.map { it.month to it.day }.distinct().size > 1 || dates.mapNotNull { it.year }.distinct().size > 1) {
+            warnings += "서로 다른 날짜가 포함되어 확인이 필요합니다."
+        }
+
         val timesInText = collectOcrTimeValues(lines)
         if (timesInText.size > 1 && !isSingleExplicitEndPair(lines, timesInText)) {
             warnings += "서로 다른 시간이 포함되어 확인이 필요합니다: " +
@@ -1026,6 +1066,20 @@ class ScheduleTextParserService(
         buildList {
             lines.forEachIndexed { lineIndex, line ->
                 val score = contextScore(line, dateContext, dateNegativeContext)
+                val datedRanges = (fullDatePattern.findAll(line) + twoDigitYearDatePattern.findAll(line))
+                    .map { it.range }.toList()
+
+                twoDigitYearDatePattern.findAll(line).forEach { match ->
+                    add(
+                        DateCandidate(
+                            year = 2000 + match.groupValues[1].toInt(),
+                            month = match.groupValues[3].toInt(),
+                            day = match.groupValues[4].toInt(),
+                            lineIndex = lineIndex,
+                            score = score + 6,
+                        ),
+                    )
+                }
 
                 fullDatePattern.findAll(line).forEach { match ->
                     add(
@@ -1061,6 +1115,8 @@ class ScheduleTextParserService(
                     )
                 }
                 shortDatePattern.findAll(line).forEach { match ->
+                    // 11.12.01에서 11.12를 별도의 월/일로 다시 뽑지 않는다.
+                    if (datedRanges.any { match.range.first <= it.last && match.range.last >= it.first }) return@forEach
                     add(
                         DateCandidate(
                             year = null,
@@ -1434,6 +1490,7 @@ class ScheduleTextParserService(
             koreanTimePattern.containsMatchIn(line) ||
             colonTimePattern.containsMatchIn(line) ||
             fullDatePattern.containsMatchIn(line) ||
+            twoDigitYearDatePattern.containsMatchIn(line) ||
             compactDatePattern.containsMatchIn(line) ||
             koreanDatePattern.containsMatchIn(line) ||
             shortDatePattern.containsMatchIn(line) ||
@@ -1474,6 +1531,7 @@ class ScheduleTextParserService(
     private fun routeContextPatterns(): List<Regex> =
         listOf(
             fullDatePattern,
+            twoDigitYearDatePattern,
             compactDatePattern,
             koreanDatePattern,
             shortDatePattern,
@@ -1732,6 +1790,7 @@ class ScheduleTextParserService(
         line
             .replace(Regex("""NoLate\s+(?:손글씨|이미지)\s+OCR\s+QA\s*#?\d*"""), " ")
             .replace(fullDatePattern, " ")
+            .replace(twoDigitYearDatePattern, " ")
             .replace(compactDatePattern, " ")
             .replace(koreanDatePattern, " ")
             .replace(shortDatePattern, " ")
@@ -1981,6 +2040,9 @@ class ScheduleTextParserService(
         if (date == null) return
         val writtenWeekday = extractLabeledValue(lines, listOf("요일"))
             ?.let { Regex("""([일월화수목금토])요일?""").find(it)?.groupValues?.get(1) }
+            ?: lines.asSequence().mapNotNull { weekdayTokenPattern.find(it)?.value }
+                .mapNotNull { Regex("""([일월화수목금토])(?:요일|욜)""").find(it)?.groupValues?.get(1) }
+                .firstOrNull()
             ?: return
         val actualWeekday = weekdays[date.dayOfWeek.value % 7]
         if (writtenWeekday != actualWeekday) {
