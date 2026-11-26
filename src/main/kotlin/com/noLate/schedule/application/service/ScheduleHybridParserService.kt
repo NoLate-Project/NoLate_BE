@@ -122,7 +122,7 @@ class ScheduleHybridParserService(
                 normalizeAiLocationRoles(it, normalizedText),
                 normalizedText,
             )
-            merge(ruleResult, contextualAiResult, normalizedText, defaultDurationMinutes ?: 60)
+            merge(ruleResult, contextualAiResult, normalizedText, inputType, defaultDurationMinutes ?: 60)
         } ?: ruleResult
         val aiFieldApplied = outcome.result != null && hasAiContribution(ruleResult, merged)
         val aiApplied = transcriptResolution.applied || aiFieldApplied
@@ -541,6 +541,7 @@ class ScheduleHybridParserService(
         rule: ScheduleParseDto,
         ai: ScheduleAiParseResult,
         sourceText: String,
+        inputType: ScheduleParseInputType,
         durationMinutes: Int,
     ): ScheduleParseDto {
         val confidentAiDate = ai.date.takeConfident(ai.dateConfidence)?.takeIf(::isValidDate)
@@ -584,7 +585,7 @@ class ScheduleHybridParserService(
             else -> rule.destination
         }
         val summary = ai.summary.takeConfident(ai.summaryConfidence)
-        val notes = listOfNotNull(
+        val notes = if (ruleParser.preservesSourceNotes(inputType)) rule.notes else listOfNotNull(
             rule.notes?.takeIf { it.isNotBlank() },
             summary?.let { "일정 내용: $it" },
         ).distinct().joinToString("\n").takeIf { it.isNotBlank() }
