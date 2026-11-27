@@ -1,0 +1,55 @@
+{
+  "classification": "RECORDED_PROVIDER_FORECASTS_REPLAYED_WITHOUT_FURTHER_SOURCE_UPDATES",
+  "cases": [
+    {
+      "mode": "SUBWAY",
+      "station": "사당",
+      "trainNumber": "4075",
+      "providerEvidence": "archived-station-arrival-freshness.json",
+      "sourceAt": "2026-11-20T11:39:35+09:00",
+      "previousForecastAt": "2026-11-20T11:48:05+09:00",
+      "sourceDisplayExpiryAt": "2026-11-20T11:41:35+09:00",
+      "previousAdditionalDisplaySecondsIfUnchanged": 390
+    },
+    {
+      "mode": "BUS",
+      "route": "N37",
+      "station": "서대문역사거리.농협중앙회",
+      "providerEvidence": "../2026-11-26-onward-forecast-reconnection/n37-in-service-stop-observation.json",
+      "sourceAt": "2026-11-27T00:23:20+09:00",
+      "previousForecastAt": "2026-11-27T00:24:43+09:00",
+      "sourceDisplayExpiryAt": "2026-11-27T00:24:05+09:00",
+      "previousAdditionalDisplaySecondsIfUnchanged": 38
+    }
+  ],
+  "archivedTrainAudit": {
+    "scope": "Real isolated runs archived under e2e/evidence/2026-11-19-ride-arrival-recalculation, deduplicated by station, line, direction, train, source and forecast time",
+    "distinctPublishedForecasts": 31,
+    "forecastClocksBeyondFreshness": 23,
+    "medianAdditionalDisplaySecondsAmongThose23": 180,
+    "maxAdditionalDisplaySecondsAmongThose23": 630,
+    "actualUserExposureMeasured": false
+  },
+  "regressions": {
+    "identicalForecastInputFailsBeforeAndPassesAfterInServerAndApp": true,
+    "backendPassed": 3156,
+    "backendSkipped": 6,
+    "frontendPassed": 89
+  },
+  "subwayApiAndInstalledAppReplay": {
+    "result": "PASSED",
+    "database": "H2_MEMORY_ONLY",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "providerForecastClocksShiftedWithIntervalsPreserved": true,
+    "apiBeforeExpiryTrainNumbers": ["4579", "4075"],
+    "installedAppRemovedBothForecastsWithoutPolling": true,
+    "localStationRequestsBeforePostExpiryRead": 2,
+    "apiAfterExpiryTrainNumbers": [],
+    "endpointRestored": true,
+    "ownedPortsReleased": true,
+    "firstAttempt": "The disposable API session was superseded by app login, so HTTP verification did not run. The retry separated the API and app sessions."
+  },
+  "physicalTransitHttpCalls": 0,
+  "wholeJourneyPhysicalAccuracyVerified": false,
+  "newSameConditionsNaverComparison": false
+}

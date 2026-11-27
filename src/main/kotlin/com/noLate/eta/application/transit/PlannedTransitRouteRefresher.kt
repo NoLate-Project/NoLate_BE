@@ -33,6 +33,10 @@ class PlannedTransitRouteRefresher(
         val freshWindow = evaluatedAt.minusSeconds(120)..evaluatedAt.plusSeconds(5)
         val originalTrains = originalTransferTrains(plan, departurePlan, segments, rides, evaluatedAt)
         val conflict = previousUpdate?.takeIf { it.routeIdentity == plan.identity }
+        val lastRide = segments[rides.last()]
+        val storedFinalReport = conflict?.finalTrainAlightingReport()
+        if (!endsAtTransfer && storedFinalReport != null &&
+            storedFinalReport.sourceUpdatedAt == lastRide.rideTiming?.reportedAlightingAt) return null
         val transferRecheck = conflict?.transferBoardingRecheck
         val recheckIndex = when {
             conflict?.requiresFirstBoardingRecheck == true -> rides.first()
@@ -45,17 +49,16 @@ class PlannedTransitRouteRefresher(
             else -> null
         }
         val readings = guard.observePlannedTransfers(plan, evaluatedAt, originalTrains, recheckBoardingIndex = recheckIndex,
-            reportedBoardings = conflict?.reportedBoardings.orEmpty(), endsAtTransfer = endsAtTransfer)
-        val recordableRides = if (endsAtTransfer) rides else rides.dropLast(1)
-        val alightingRecords = (conflict?.reportedAlightings.orEmpty() + readings.reportedAlightings)
-            .filter { record -> recordableRides.any { record.matches(plan, segments[it], evaluatedAt) } }
+            reportedBoardings = conflict?.reportedBoardings.orEmpty())
+        val allAlightingRecords = (conflict?.reportedAlightings.orEmpty() + readings.reportedAlightings)
+            .filter { record -> rides.any { record.matches(plan, segments[it], evaluatedAt) } }
             .groupBy { it.segmentSequence }.mapValues { (_, records) -> records.minBy { it.sourceUpdatedAt } }
-        // Only the connecting mode can publish an ETA after the final train of this prefix has arrived.
-        val finalReport = alightingRecords[segments[rides.last()].sequence]
+        val finalReport = allAlightingRecords[lastRide.sequence]
         if (endsAtTransfer && finalReport != null && recheckIndex == null) {
             return PlannedTransitRouteUpdate(plan.identity, finalReport.sourceUpdatedAt,
-                reportedBoardings = readings.reportedBoardings, reportedAlightings = alightingRecords.values.sortedBy { it.segmentSequence })
+                reportedBoardings = readings.reportedBoardings, reportedAlightings = allAlightingRecords.values.sortedBy { it.segmentSequence })
         }
+        val alightingRecords = if (endsAtTransfer) allAlightingRecords else allAlightingRecords - lastRide.sequence
         // 기록만 생긴 평가가 정상 ETA나 새 출발 알람으로 승격되지 않도록 계산 결과와 분리한다.
         fun calculate(): PlannedTransitRouteUpdate? {
             val observations = readings.current.filter {
@@ -272,7 +275,7 @@ class PlannedTransitRouteRefresher(
                     index to TransitConnectionRideTimes(timing.predictedBoardingAt, timing.predictedArrivalAt)
                 }.toMap()
                 val reconnected = timetableEnricher.reconnectAfterObservedRide(
-                    journey, current, arrival, maxTravelMinutes, observedOnwardTimes)
+                    journey, current, arrival, evaluatedAt, maxTravelMinutes, observedOnwardTimes)
                 if (reconnected === journey) return failed(PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE)
                 for (index in rides.filter { it > current }) {
                     val table = requireNotNull(reconnected.legs[index].timetable)
@@ -337,7 +340,15 @@ class PlannedTransitRouteRefresher(
                     !timings.getValue(rides.last()).basis.keepsTimetableAlightingAfterEarlyBoarding)
         }
         val calculated = calculate()
-        val reportedAlightings = alightingRecords.values.sortedBy { it.segmentSequence }
+        val reportedAlightings = allAlightingRecords.values.sortedBy { it.segmentSequence }
+        // Resolve any newly observed upstream conflict before applying the final station report.
+        val finalRoute = calculated?.route ?: plan.takeIf { calculated == null && conflict?.failure == null }
+        if (!endsAtTransfer && finalReport != null && finalRoute != null && recheckIndex == null) {
+            finalReport.applyToFinalRide(finalRoute, evaluatedAt, maxTravelMinutes)?.let { revised ->
+                return PlannedTransitRouteUpdate(plan.identity, finalReport.sourceUpdatedAt, route = revised,
+                    reportedBoardings = readings.reportedBoardings, reportedAlightings = reportedAlightings)
+            }
+        }
         if (calculated != null) return calculated.copy(reportedBoardings = readings.reportedBoardings,
             reportedAlightings = reportedAlightings)
         if (readings.reportedBoardings == conflict?.reportedBoardings.orEmpty() &&

@@ -46,7 +46,8 @@ class SeoulTransitArrivalClientTest {
             val client = SeoulTransitArrivalClient("", "fixture-key", "",
                 "http://127.0.0.1:${server.address.port}", "http://127.0.0.1:${server.address.port}",
                 wireMetrics = metrics)
-            val service = TransitArrivalService(client, mock<TagoTransitArrivalClient>())
+            val testClock = java.time.Clock.fixed(Instant.parse("2026-10-08T08:00:15Z"), java.time.ZoneOffset.UTC)
+            val service = TransitArrivalService(client, mock<TagoTransitArrivalClient>(), clock = testClock)
             assertTrue(service.getSubwayArrivals("노원역", "4호선", null, "DOWN", 10).isEmpty())
             assertEquals(1, calls.get(), "Application error is not a normal empty-station alias retry")
             val failure = metrics.failureDiagnostics().single()

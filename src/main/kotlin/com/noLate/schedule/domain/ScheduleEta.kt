@@ -22,6 +22,8 @@ enum class PlannedJourneyArrivalBasis {
     MATCHED_BUS_REALTIME,
     /** 마지막 버스의 하차 정류장 도착 보고에 남은 계획 도보를 더한 시각이다. */
     FINAL_BUS_ALIGHTING_REPORTED,
+    /** 마지막 열차의 하차역 도착 보고에 남은 계획 도보를 더한 시각이다. */
+    FINAL_TRAIN_ALIGHTING_REPORTED,
     /** 열차의 관측으로 환승 여유를 대조하고, 탈 수 있는 버스의 승하차 예보를 반영했다. */
     MATCHED_TRAIN_AND_BUS_REALTIME,
     /** 구간 관측으로 환승을 재판정했으며 관측되지 않은 후속 편은 시간표 기준이다. */

@@ -270,16 +270,17 @@ class ScheduleDepartureEtaService(
         val plan = snapshot?.plannedRouteAt(readAt) ?: snapshot?.acceptedRoute()?.takeIf {
             it.departureAt <= readAt && it.arrivalAt > readAt
         }
-        // 전체 ETA가 만료되면 차량 예보는 내리고, 기록된 마지막 버스의 과거 정류장 도착은 보존한다.
+        // 전체 ETA가 만료돼도 마지막 차량의 확인된 하차역·정류장 도착은 보존한다.
         val baseline = snapshot?.copy(accepted = false, inProgressPlannedRoute = plan,
             effectiveTransitRoute = null, plannedArrivalObservation = null,
             lastUpdatedPlannedRoute = snapshot.plannedRouteUpdate?.route ?: snapshot.lastUpdatedPlannedRoute,
-            plannedRouteUpdate = snapshot.plannedRouteUpdate?.takeIf { it.failure != null || it.finalBusAlightingReport() != null })
+            plannedRouteUpdate = snapshot.plannedRouteUpdate?.takeIf { it.failure != null || it.hasFinalAlightingReport() })
         val plannedPrediction = baseline?.plannedJourneyArrivalPrediction(readAt, arrivalSourceMaxAgeSeconds)
         val hasActivePlan = baseline?.hasActivePlannedRouteAt(readAt, plannedPrediction?.predictedArrivalAt) == true
-        val finalBusReported = plannedPrediction?.basis == PlannedJourneyArrivalBasis.FINAL_BUS_ALIGHTING_REPORTED
+        val finalRideReported = plannedPrediction?.basis == PlannedJourneyArrivalBasis.FINAL_BUS_ALIGHTING_REPORTED ||
+            plannedPrediction?.basis == PlannedJourneyArrivalBasis.FINAL_TRAIN_ALIGHTING_REPORTED
         return fallback.copy(
-            recommendedDepartureAt = if (finalBusReported) job.lastRecommendedDepartureAt else protectedDeparture,
+            recommendedDepartureAt = if (finalRideReported) job.lastRecommendedDepartureAt else protectedDeparture,
             source = fallback.source.takeUnless { hasActivePlan },
             travelMinutes = fallback.travelMinutes.takeUnless { hasActivePlan },
             confidence = ScheduleEtaConfidence.LOW,

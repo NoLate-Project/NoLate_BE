@@ -207,6 +207,20 @@ data class EffectiveTransitRouteSnapshot(
         val plan = plannedRouteAt(readAt) ?: return null
         if (plannedJourneyTimingFailureReason() != null) return null
         val update = plannedRouteUpdate
+        val finalTrainReport = update?.finalTrainAlightingReport()
+        if (finalTrainReport != null) {
+            val route = requireNotNull(update.route)
+            val lastRide = route.segments.first { it.sequence == finalTrainReport.segmentSequence }
+            val remainingWalkSeconds = route.segments.filter { it.sequence > lastRide.sequence }
+                .sumOf { it.durationSeconds ?: it.durationMinutes * 60L }
+            if (route.identity != plan.identity || route.provider != plan.provider || route.departureAt != plan.departureAt ||
+                !finalTrainReport.matches(route, lastRide, readAt) || route.arrivalAt <= readAt ||
+                route.arrivalAt != finalTrainReport.sourceUpdatedAt.plusSeconds(remainingWalkSeconds)) return null
+            if (route.segments.any { it.kind == EffectiveTransitRouteSegmentKind.BUS } &&
+                busJourneyFor(route) == null) return null
+            return PlannedJourneyArrivalPrediction(route.arrivalAt, readAt, plan.identity,
+                PlannedJourneyArrivalBasis.FINAL_TRAIN_ALIGHTING_REPORTED, route.asPlannedBaseline(), finalTrainReport.sourceUpdatedAt)
+        }
         val finalReport = update?.finalBusAlightingReport()
         if (finalReport != null) {
             val route = requireNotNull(update.route)

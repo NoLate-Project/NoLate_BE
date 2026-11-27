@@ -1,0 +1,43 @@
+{
+  "serviceDate": "2026-11-27",
+  "classification": "FINAL_TRAIN_STOP_REPORT_WORKER_API_INSTALLED_APP_REPLAY",
+  "sameControlledInput": {
+    "route": "RAIL_ONLY",
+    "previousAlightingForecastSecondsFromReference": 1481,
+    "reportedAlightingSecondsFromReference": 1505,
+    "egressSeconds": 171,
+    "before": "The selected train's terminal station status produced no route update.",
+    "after": "The stored provisional journey uses the new same-train station status and original egress.",
+    "signedDifferenceFromSavedDestinationSeconds": 24
+  },
+  "workerApiAndInstalledApp": {
+    "result": "PASSED",
+    "route": "BUS_TO_RAIL",
+    "database": "H2_MEMORY_ONLY",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "selectedTrain": "2012",
+    "recommendedDepartureAt": "2026-11-27T13:28:44Z",
+    "priorForecastDestinationAt": "2026-11-27T13:40:44Z",
+    "reportedFinalStationAt": "2026-11-27T13:37:31Z",
+    "updatedProvisionalDestinationAt": "2026-11-27T13:40:31Z",
+    "egressSeconds": 180,
+    "transferWalkingSeconds": 30,
+    "signedDifferenceFromSavedDestinationSeconds": -13,
+    "unchangedDepartureRecommendation": true,
+    "publicStatusAndInstalledAppClocksMatch": true,
+    "originSearchCalls": 0,
+    "physicalTransitHttpCalls": 0,
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true
+  },
+  "actualArchivedProviderInputs": {
+    "files": 9,
+    "comparableEvaluations": 13,
+    "identicalBeforeAndAfter": 13,
+    "recordedFinalStationReads": 5,
+    "qualifyingFinalStationReports": 0,
+    "additionalHttpCalls": 0
+  },
+  "sameConditionNaverComparisonVerified": false,
+  "physicalTripAccuracyVerified": false
+}

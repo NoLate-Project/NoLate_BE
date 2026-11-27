@@ -345,6 +345,7 @@ class TransitJourneyTimetableEnricher(
         journey: TransitJourney,
         rideIndex: Int,
         observedArrivalAt: Instant,
+        evaluatedAt: Instant,
         maxTravelMinutes: Int,
         observedOnwardTimes: Map<Int, TransitConnectionRideTimes> = emptyMap(),
     ): TransitJourney {
@@ -357,7 +358,8 @@ class TransitJourneyTimetableEnricher(
             }) return journey
         val shift = Duration.between(anchor.arrivalAt, observedArrivalAt)
         return reconnectWithTimetable(journey, anchor.provider, shift, maxTravelMinutes,
-            anchorRideIndex = rideIndex, observedOnwardTimes = observedOnwardTimes) ?: journey
+            anchorRideIndex = rideIndex, observedOnwardTimes = observedOnwardTimes,
+            replacementBoardingFloor = evaluatedAt) ?: journey
     }
 
     private fun reconnectWithTimetable(
@@ -367,6 +369,7 @@ class TransitJourneyTimetableEnricher(
         maxTravelMinutes: Int,
         anchorRideIndex: Int = journey.legs.indexOfFirst { it.isRide },
         observedOnwardTimes: Map<Int, TransitConnectionRideTimes> = emptyMap(),
+        replacementBoardingFloor: Instant? = null,
         accept: (TransitJourney) -> Boolean = { true },
     ): TransitJourney? {
         if (providerId == SEOUL_DATED_TIMETABLE_PROVIDER_ID) {
@@ -374,7 +377,8 @@ class TransitJourneyTimetableEnricher(
             return runCatching {
                 // 출발 후 Worker 호출에도 남은 모든 환승이 공유하는 조회 예산을 둔다.
                 calculationDeadline.within {
-                    reconnectWith(journey, firstShift, maxTravelMinutes, anchorRideIndex, observedOnwardTimes) { query, leg ->
+                    reconnectWith(journey, firstShift, maxTravelMinutes, anchorRideIndex, observedOnwardTimes,
+                        replacementBoardingFloor) { query, leg ->
                         listOfNotNull(dated.findRide(query, leg.orderedStopNames))
                     }
                 }
@@ -382,7 +386,8 @@ class TransitJourneyTimetableEnricher(
         }
         return providers.firstNotNullOfOrNull { provider ->
             runCatching {
-                reconnectWith(journey, firstShift, maxTravelMinutes, anchorRideIndex, observedOnwardTimes) { query, _ -> provider.findRides(query) }
+                reconnectWith(journey, firstShift, maxTravelMinutes, anchorRideIndex, observedOnwardTimes,
+                    replacementBoardingFloor) { query, _ -> provider.findRides(query) }
             }.getOrNull()?.takeIf(accept)
         }
     }
@@ -393,6 +398,7 @@ class TransitJourneyTimetableEnricher(
         maxTravelMinutes: Int,
         anchorRideIndex: Int,
         observedOnwardTimes: Map<Int, TransitConnectionRideTimes>,
+        replacementBoardingFloor: Instant?,
         findRides: (TransitTimetableQuery, TransitJourneyLeg) -> List<TransitLegTimetable>,
     ): TransitJourney? {
         val anchor = requireNotNull(journey.legs[anchorRideIndex].timetable)
@@ -414,10 +420,12 @@ class TransitJourneyTimetableEnricher(
                     cursor = observed.arrivalAt
                     return@mapIndexed leg
                 }
+                // 지난 하차 보고를 재사용해도 새 시간표 편은 평가 시점에 아직 출발할 수 있어야 한다.
+                val notBefore = replacementBoardingFloor?.let { maxOf(it, readyAt) } ?: readyAt
                 val query = TransitTimetableQuery(
                     original.line, leg.from?.name ?: return null, leg.to?.name ?: return null,
                     leg.nextStopName, original.serviceClass,
-                    readyAt, original.directionCode,
+                    notBefore, original.directionCode,
                     // 지연으로 자정을 넘어도 검증한 원래 열차의 운행일을 유지한다.
                     serviceDate = original.serviceDate,
                 )

@@ -49,6 +49,11 @@ internal data class PlannedTransferObservations(
     val reportedAlightings: List<ReportedSubwayAlightingEvidence> = emptyList(),
 )
 
+internal data class LastSubwayRideEvidence(
+    val forecast: PlannedJourneyArrivalObservation? = null,
+    val report: ReportedSubwayAlightingEvidence? = null,
+)
+
 /** 별칭 대조가 아니라, 양 끝 역이 같은 실제 차량에 제공한 두 개의 예보다. */
 internal data class ObservedSubwayRideCandidate(
     val service: ObservedTransitSubwayService,
@@ -81,8 +86,7 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
     internal fun observePlannedTransfers(route: EffectiveTransitRoute, evaluatedAt: Instant,
                                          originalTrains: Map<Int, EffectiveTransitRideTiming>,
                                          recheckBoardingIndex: Int? = null,
-                                         reportedBoardings: List<ReportedSubwayBoardingEvidence> = emptyList(),
-                                         endsAtTransfer: Boolean = false): PlannedTransferObservations {
+                                         reportedBoardings: List<ReportedSubwayBoardingEvidence> = emptyList()): PlannedTransferObservations {
         if (evaluatedAt < route.departureAt) return PlannedTransferObservations()
         val segments = route.segments.sortedBy { it.sequence }
         val firstRide = segments.indexOfFirst { it.kind != EffectiveTransitRouteSegmentKind.WALK }
@@ -93,7 +97,6 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
         val originalBoardings = mutableMapOf<Int, TransitRideRealtimeObservation>()
         val serviceCandidates = mutableMapOf<Int, List<ObservedSubwayRideCandidate>>()
         val serviceLookups = mutableListOf<Pair<Int, () -> Unit>>()
-        val lastRide = segments.indexOfLast { it.rideTiming != null }
         val reportedAlightings = mutableListOf<ReportedSubwayAlightingEvidence>()
         val records = reportedBoardings.filter { record -> segments.any { record.matches(route, it, evaluatedAt) } }.toMutableList()
         fun recordBoarding(segment: EffectiveTransitRouteSegment, rows: List<TransitArrivalDto>) {
@@ -158,7 +161,7 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
                 ?.trim()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
             val rows = read(station, table) ?: return@mapNotNull null
             if (point == TransitRideObservationPoint.BOARDING) recordBoarding(segment, rows)
-            if (point == TransitRideObservationPoint.ALIGHTING && (index != lastRide || endsAtTransfer)) {
+            if (point == TransitRideObservationPoint.ALIGHTING) {
                 reportedAlightingState(route, segment, station, evaluatedAt, rows)?.let {
                     reportedAlightings += it
                     // This is a past station status, not another forecast for this ride.
@@ -318,7 +321,11 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
     /** 출발지 재검색과 분리한다. 마지막 열차 1편만 관측하며, 탑승 여부는 추정하지 않는다. */
     @JvmOverloads
     fun observeLastPlannedRide(route: EffectiveTransitRoute, evaluatedAt: Instant,
-                               allowAlightingRecovery: Boolean = false): PlannedJourneyArrivalObservation? {
+                               allowAlightingRecovery: Boolean = false): PlannedJourneyArrivalObservation? =
+        readLastPlannedRide(route, evaluatedAt, allowAlightingRecovery, includeReport = false)?.forecast
+
+    internal fun readLastPlannedRide(route: EffectiveTransitRoute, evaluatedAt: Instant,
+                                     allowAlightingRecovery: Boolean, includeReport: Boolean = true): LastSubwayRideEvidence? {
         if (evaluatedAt.isBefore(route.departureAt)) return null
         val rides = route.segments.sortedBy { it.sequence }
             .filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
@@ -329,7 +336,7 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
         val timing = last.rideTiming ?: return null
         // 실제 선택 편은 양 끝 예보와 함께 전체 경로 갱신에서 처리한다. 비교 시간표의
         // 운행시간을 다른 차량에 적용하는 구형 마지막 구간 보정은 사용하지 않는다.
-        if (timing.observedService != null) return null
+        if (timing.observedService != null && !includeReport) return null
         val table = timing.timetable
         if (!table.isObservableServiceDay(route.departureAt, evaluatedAt)) return null
         val singleRide = rides.size == 1
@@ -357,8 +364,14 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
         }
         val (stationName, scheduledAt, priorAt) = point
         val rows = stationRows(stationName, table)
-        val (observedAt, sourceAt) = observedArrivalAt(stationName, table, evaluatedAt, rows) ?: return null
         val atBoardingStop = stationName == boardingStation
+        if (includeReport && !atBoardingStop && pastBoarding) {
+            reportedAlightingState(route, last, stationName, evaluatedAt, rows)?.let {
+                return LastSubwayRideEvidence(report = it)
+            }
+        }
+        if (timing.observedService != null) return null
+        val (observedAt, sourceAt) = observedArrivalAt(stationName, table, evaluatedAt, rows) ?: return null
         val previousSource = if (atBoardingStop) timing.boardingSourceAt() else timing.alightingSourceAt()
         if (previousSource != null && sourceAt <= previousSource) return null
         if (allowAlightingRecovery && !atBoardingStop && observedAt <= evaluatedAt) return null
@@ -374,7 +387,7 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
         }
         val predictedArrivalAt = route.arrivalAt.plus(Duration.between(priorAt, observedAt))
         if (!predictedArrivalAt.isAfter(evaluatedAt)) return null
-        return PlannedJourneyArrivalObservation(route.identity, predictedArrivalAt, sourceAt)
+        return LastSubwayRideEvidence(forecast = PlannedJourneyArrivalObservation(route.identity, predictedArrivalAt, sourceAt))
     }
 
     fun observeTransferChanges(journey: TransitJourney, evaluatedAt: Instant): List<TransitRideRealtimeObservation> {

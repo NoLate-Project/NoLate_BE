@@ -100,7 +100,7 @@ class PlannedSeoulBusRouteRefresher(
         if (!journey.matches(route) || at < route.departureAt) return null
         return try {
             val last = route.segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }.maxBy { it.sequence }
-            if (last.busRidePrediction?.reportedAlightingAt != null) return null
+            if (last.busRidePrediction?.reportedAlightingAt != null || last.rideTiming?.reportedAlightingAt != null) return null
             if (at >= route.arrivalAt) {
                 val deadline = journey.finalArrivalObservationDeadline(route) ?: return null
                 if (pendingTransferFailure || at >= deadline) return null
@@ -381,8 +381,14 @@ class PlannedSeoulBusRouteRefresher(
         val last = segments.getOrNull(index)?.takeIf { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY } ?: return null
         val timing = requireNotNull(last.rideTiming)
         // Reuse the direct-ride check to take only this train's alighting forecast after its planned boarding.
-        val observation = railRealtime?.observeLastPlannedRide(route.copy(segments = listOf(last)), at,
+        val evidence = railRealtime?.readLastPlannedRide(route.copy(segments = listOf(last)), at,
             allowAlightingRecovery = true) ?: return null
+        evidence.report?.let { report ->
+            val revised = report.applyToFinalRide(route, at, maxTravelMinutes) ?: return null
+            return Refresh(PlannedTransitRouteUpdate(route.identity, report.sourceUpdatedAt, route = revised,
+                reportedAlightings = listOf(report)), journey)
+        }
+        val observation = evidence.forecast ?: return null
         val previousArrival = last.transferTiming?.physicalReadyAt ?: return null
         val latestAlighting = observation.predictedArrivalAt.minusSeconds(walkingSeconds(segments.drop(index + 1)))
         if (observation.routeIdentity != route.identity || latestAlighting <= maxOf(at, timing.predictedBoardingAt) ||

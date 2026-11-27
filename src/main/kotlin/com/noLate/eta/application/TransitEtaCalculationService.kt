@@ -835,7 +835,7 @@ class TransitEtaCalculationService(
         if (observations.none { it.legIndex == previousIndex }) return null
         val arrival = evaluation.observedRideTimings[previousIndex]?.arrivalAt ?: return null
         val reconnected = timetableEnricher.reconnectAfterObservedRide(
-            journey, previousIndex, arrival, request.maxTravelMinutes,
+            journey, previousIndex, arrival, request.evaluatedAt, request.maxTravelMinutes,
         ).takeUnless { it === journey } ?: return null
         val retained = observations.filter { reconnected.keepsObservedService(journey, it) }
         val checked = transferFeasibilityEvaluator.evaluateWithObservedTransfers(

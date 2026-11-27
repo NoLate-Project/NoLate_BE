@@ -41,16 +41,21 @@ class TransitArrivalService(
     }.getOrDefault(emptyList())
 
     private fun TransitArrivalDto.isCurrentArrivalAtStop(readAt: Instant): Boolean {
-        if (arrivalStatus != TransitArrivalStatus.ARRIVED) return true
         val maxAgeSeconds = when (provider) {
             "seoul-openapi" -> 120L
             "seoul-bus" -> SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS
             else -> return true
         }
-        // A newly delivered response can still describe a vehicle that stopped minutes ago.
-        if (freshnessEvidence != TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP) return false
-        val postedAt = sourceUpdatedAt?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return false
-        return postedAt in readAt.minusSeconds(maxAgeSeconds)..readAt.plusSeconds(5)
+        if (arrivalStatus == TransitArrivalStatus.DEPARTED) return false
+        fun parse(value: String?): Instant? = value?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        val postedAt = if (freshnessEvidence == TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP) {
+            parse(sourceUpdatedAt) ?: return false
+        } else null
+        if (arrivalStatus == TransitArrivalStatus.ARRIVED && postedAt == null) return false
+        // A new HTTP receipt must not refresh the age of a previously published countdown.
+        val evidenceAt = postedAt ?: parse(observedAt)
+        if (evidenceAt != null && evidenceAt !in readAt.minusSeconds(maxAgeSeconds)..readAt.plusSeconds(5)) return false
+        return arrivalStatus == TransitArrivalStatus.ARRIVED || parse(expectedAt)?.let { it >= readAt } != false
     }
 
     private data class StationTrainKey(val provider: String, val line: String, val station: String, val direction: String, val train: String)

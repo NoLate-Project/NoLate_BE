@@ -27,6 +27,43 @@ class PlannedTransitRouteRefresherTest {
     private fun at(seconds: Long) = epoch.plusSeconds(seconds)
 
     @Test
+    fun `마지막 열차의 하차역 도착 보고와 남은 도보로 목적지 시각을 갱신한다`() {
+        val baseline = plan()
+        val original = baseline.copy(segments = baseline.segments.map {
+            if (it.sequence == 3) it.copy(orderedStopNames = listOf("사당", "낙성대", "서울대입구", "봉천", "신림")) else it
+        })
+        val arrived = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", stationName = "신림",
+            direction = "하행", destinationName = "성수", subwayLineId = "1002", trainNumber = "2012",
+            express = false, realtime = true, expectedAt = at(1505).toString(), waitSeconds = 0,
+            sourceUpdatedAt = at(1505).toString(), observedAt = at(1510).toString(),
+            arrivalStatus = TransitArrivalStatus.ARRIVED,
+            freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP)
+        val arrivals = mock<TransitArrivalService>()
+        val engine = PlannedTransitRouteRefresher(TransitTransferRealtimeGuard(arrivals),
+            TransitJourneyTimetableEnricher(listOf(timetable)), TransitTransferFeasibilityEvaluator())
+        whenever(arrivals.getSubwayArrivalsForEta("신림", "2호선", null, "DOWN", 10))
+            .thenReturn(listOf(arrived.copy(trainNumber = "2080")), listOf(arrived), emptyList())
+
+        assertNull(engine.refresh(original, at(1510)))
+        val update = requireNotNull(engine.refresh(original, at(1510)))
+        val corrected = requireNotNull(update.route)
+        val snapshot = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = original,
+            lastUpdatedPlannedRoute = corrected, plannedRouteUpdate = update)
+
+        assertEquals(original.departureAt, corrected.departureAt)
+        assertEquals(at(1505), corrected.segments[3].rideTiming?.reportedAlightingAt)
+        assertNull(corrected.segments[3].rideTiming?.observationSourceUpdatedAt)
+        assertEquals(at(1676), corrected.arrivalAt)
+        val afterForecastTtl = requireNotNull(snapshot.plannedJourneyArrivalPrediction(at(1650), 120))
+        assertEquals("FINAL_TRAIN_ALIGHTING_REPORTED", afterForecastTtl.basis.name)
+        assertEquals(at(1676), afterForecastTtl.predictedArrivalAt)
+        assertNull(snapshot.plannedJourneyArrivalPrediction(at(1676), 120))
+        clearInvocations(arrivals)
+        assertNull(engine.refresh(corrected, at(1590), departurePlan = original, previousUpdate = update))
+        verifyNoInteractions(arrivals, timetable)
+    }
+
+    @Test
     fun `게시된 승차역 상태 뒤 직접 하차 예보가 오면 첫 지연을 중복 합산하지 않는다`() {
         val mapper = jacksonObjectMapper().findAndRegisterModules()
         fun input(path: String) = requireNotNull(javaClass.getResourceAsStream(path)).use(mapper::readTree)
@@ -314,6 +351,57 @@ class PlannedTransitRouteRefresherTest {
         assertEquals(17L, route.segments[3].transferTiming?.remainingSlackSeconds)
         assertEquals(at(1218), restored.sourceUpdatedAt)
         verifyNoInteractions(timetable)
+    }
+
+    @Test
+    fun `지난 하차 보고로 놓친 환승을 다시 연결할 때 이미 떠난 대체 열차는 건너뛴다`() {
+        val base = plan()
+        val originalTable = requireNotNull(base.segments[3].rideTiming).timetable
+        val third = originalTable.copy(line = SeoulSubwayLine.LINE_7, trainNumber = "7012",
+            fromStationCode = "D7", toStationCode = "N7", terminalName = "석남", boardingAt = at(2390), arrivalAt = at(2760))
+        val original = base.copy(arrivalAt = at(2760), totalMinutes = 46, segments = base.segments.map { segment ->
+            when (segment.sequence) {
+                1 -> segment.copy(orderedStopNames = listOf("노원", "창동", "사당"))
+                3 -> segment.copy(toName = "대림")
+                else -> segment
+            }
+        } + EffectiveTransitRouteSegment(5, EffectiveTransitRouteSegmentKind.SUBWAY, 7, lineName = "7호선",
+            fromName = "대림", toName = "남구로", rideTiming = EffectiveTransitRideTiming(third, third.boardingAt,
+                third.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE)))
+        val departed = originalTable.copy(trainNumber = "2014", boardingAt = at(1450), arrivalAt = at(1931))
+        val upcoming = originalTable.copy(trainNumber = "2016", boardingAt = at(1600), arrivalAt = at(2081))
+        val arrivals = mock<TransitArrivalService>()
+        val reported = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", stationName = "사당",
+            direction = "하행", destinationName = "오이도", subwayLineId = "1004", trainNumber = "4012",
+            express = false, expectedAt = at(1100).toString(), waitSeconds = 0, sourceUpdatedAt = at(1100).toString(),
+            observedAt = at(1120).toString(), arrivalStatus = TransitArrivalStatus.ARRIVED,
+            freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP)
+        val laterAlightingForecast = reported.copy(stationName = "대림", subwayLineId = "1002",
+            destinationName = "성수", trainNumber = "2012", expectedAt = at(1700).toString(), waitSeconds = 202,
+            sourceUpdatedAt = at(1498).toString(), observedAt = at(1500).toString(), arrivalStatus = TransitArrivalStatus.IN_TRANSIT)
+        val thirdBoardingForecast = laterAlightingForecast.copy(subwayLineId = "1007", destinationName = "석남",
+            trainNumber = "7012", expectedAt = at(2410).toString(), waitSeconds = 912)
+        whenever(arrivals.getSubwayArrivalsForEta("사당", "4호선", null, "DOWN", 10)).thenReturn(listOf(reported), emptyList())
+        whenever(arrivals.getSubwayArrivalsForEta("대림", "2호선", null, "DOWN", 10)).thenReturn(emptyList(), listOf(laterAlightingForecast))
+        whenever(arrivals.getSubwayArrivalsForEta("대림", "7호선", null, "DOWN", 10)).thenReturn(listOf(thirdBoardingForecast))
+        whenever(timetable.findRides(argThat { line == SeoulSubwayLine.LINE_2 })).thenReturn(listOf(departed, upcoming))
+        whenever(timetable.findRides(argThat { line == SeoulSubwayLine.LINE_7 })).thenReturn(listOf(third))
+        val engine = PlannedTransitRouteRefresher(TransitTransferRealtimeGuard(arrivals),
+            TransitJourneyTimetableEnricher(listOf(timetable)), TransitTransferFeasibilityEvaluator())
+
+        val stored = requireNotNull(engine.refresh(original, at(1120)))
+        val route = requireNotNull(engine.refresh(original, at(1500), previousUpdate = stored)?.route)
+
+        assertEquals("2016", route.segments[3].rideTiming?.timetable?.trainNumber)
+        assertEquals(at(1600), route.segments[3].rideTiming?.predictedBoardingAt)
+        assertEquals(at(2410), route.segments[5].rideTiming?.predictedBoardingAt)
+        assertEquals(at(2780), route.arrivalAt)
+        assertEquals(original.departureAt, route.departureAt)
+        assertEquals(243L, route.segments[3].transferTiming?.walkingSeconds)
+        assertEquals(60L, route.segments[3].transferTiming?.requiredMarginSeconds)
+        verify(timetable).findRides(argThat {
+            line == SeoulSubwayLine.LINE_2 && notBefore == at(1500) && serviceDate == originalTable.serviceDate
+        })
     }
 
     @Test

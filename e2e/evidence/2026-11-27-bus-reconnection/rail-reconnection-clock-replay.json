@@ -1,0 +1,45 @@
+{
+  "serviceDate": "2026-11-27",
+  "classification": "MISSED_RAIL_CONNECTION_REPLACEMENT_CLOCK_REPLAY",
+  "sameControlledInput": {
+    "firstAlightingReportSecondsFromReference": 1100,
+    "transferWalkSeconds": 243,
+    "requiredBoardingMarginSeconds": 60,
+    "physicalReadySecondsFromReference": 1343,
+    "readyWithMarginSecondsFromReference": 1403,
+    "evaluationSecondsFromReference": 1500,
+    "before": {"selectedTrain": "2014", "selectedBoardingSecondsFromReference": 1450},
+    "after": {"selectedTrain": "2016", "selectedBoardingSecondsFromReference": 1600},
+    "secondTransferTrain": "7012",
+    "secondTransferBoardingForecastSecondsFromReference": 2410,
+    "destinationEstimateSecondsFromReference": 2780
+  },
+  "archivedProviderReplay": {
+    "inputs": 9,
+    "comparableFrames": 13,
+    "framesWithIdenticalResults": 13,
+    "recordedTimetableQueries": 6,
+    "queriesBeforeTheirEvaluationClock": 0,
+    "additionalHttpCalls": 0
+  },
+  "workerApiAndInstalledAppReplay": {
+    "result": "PASSED",
+    "environment": "isolated H2 and designated iOS simulator",
+    "evaluatedAt": "2026-11-27T14:04:50Z",
+    "departedAlternativeAt": "2026-11-27T14:04:00Z",
+    "selectedTrain": "2016",
+    "selectedBoardingAt": "2026-11-27T14:06:30Z",
+    "transferWalkSeconds": 243,
+    "transferWaitSeconds": 257,
+    "arrivalBasis": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+    "predictedArrivalAt": "2026-11-27T14:26:10Z",
+    "displayedArrivalAsiaSeoul": "23:26",
+    "recommendedDepartureAtUnchanged": "2026-11-27T13:40:29Z",
+    "physicalTransitHttpCalls": 0,
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true
+  },
+  "regressions": {"backendPassed": 3157, "backendSkipped": 6},
+  "newSameConditionsNaverComparison": false,
+  "physicalPassengerArrivalVerified": false
+}

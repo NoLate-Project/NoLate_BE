@@ -224,8 +224,8 @@ class PlannedSeoulBusRouteRefresherTest {
         val guard = mock<TransitTransferRealtimeGuard>()
         val mixed = PlannedSeoulBusRouteRefresher(provider, evaluator, 60, 120, 1440, railRealtime = guard)
         val at = time(610)
-        whenever(guard.observeLastPlannedRide(planned.copy(segments = listOf(train)), at, allowAlightingRecovery = true))
-            .thenReturn(PlannedJourneyArrivalObservation(planned.identity, time(760), time(605)))
+        whenever(guard.readLastPlannedRide(planned.copy(segments = listOf(train)), at, allowAlightingRecovery = true))
+            .thenReturn(LastSubwayRideEvidence(forecast = PlannedJourneyArrivalObservation(planned.identity, time(760), time(605))))
         val update = requireNotNull(mixed.refresh(planned, binding, at)).update
         val fresh = requireNotNull(EffectiveTransitRouteSnapshot(inProgressPlannedRoute = planned,
             plannedSeoulBusJourney = binding, plannedRouteUpdate = update).plannedJourneyArrivalPrediction(time(615), 120))
@@ -234,6 +234,41 @@ class PlannedSeoulBusRouteRefresherTest {
         assertEquals("2012", fresh.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.timetable?.trainNumber)
         assertEquals(time(380), fresh.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.predictedBoardingAt)
         assertEquals(train.transferTiming, fresh.effectiveTransitRoute?.segments?.get(3)?.transferTiming)
+        verifyNoInteractions(provider)
+    }
+
+    @Test fun `keeps the original bus transfer and uses the final train's reported arrival plus egress`() {
+        val table = TransitLegTimetable("seoul-timetable", SeoulSubwayLine.LINE_2, LocalDate.of(2026, 11, 27),
+            "2012", "DOWN", TransitServiceClass.LOCAL, "0226", "0230", "성수", time(380), time(540), time(-5))
+        val train = EffectiveTransitRouteSegment(3, SUBWAY, 5, lineName = "2호선", fromName = "사당", toName = "신림",
+            transferTiming = route.segments[3].transferTiming, rideTiming = EffectiveTransitRideTiming(
+                table, table.boardingAt, table.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE),
+            orderedStopNames = listOf("사당", "낙성대", "서울대입구", "봉천", "신림"))
+        val planned = route.copy(segments = route.segments.map { if (it.sequence == train.sequence) train else it })
+        val binding = journey.copy(rides = listOf(journey.rides.first()))
+        val arrivals = mock<TransitArrivalService>()
+        val mixed = PlannedSeoulBusRouteRefresher(provider, evaluator, 60, 120, 1440,
+            railRealtime = TransitTransferRealtimeGuard(arrivals))
+        val reported = TransitArrivalDto("seoul-openapi", "SUBWAY", stationName = "신림", direction = "하행",
+            destinationName = "성수", express = false, subwayLineId = "1002", trainNumber = "2012", waitSeconds = 0,
+            expectedAt = time(606).toString(), sourceUpdatedAt = time(606).toString(), observedAt = time(610).toString(),
+            freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP, arrivalStatus = TransitArrivalStatus.ARRIVED)
+        whenever(arrivals.getSubwayArrivalsForEta("신림", "2호선", null, "DOWN", 10)).thenReturn(listOf(reported))
+
+        assertNull(mixed.refresh(planned, binding, time(610), pendingTransferFailure = true))
+        val update = requireNotNull(mixed.refresh(planned, binding, time(610))).update
+        val revised = requireNotNull(update.route)
+        val snapshot = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = planned,
+            plannedSeoulBusJourney = binding, plannedRouteUpdate = update, lastUpdatedPlannedRoute = revised)
+        val public = requireNotNull(snapshot.plannedJourneyArrivalPrediction(time(615), 120))
+        assertEquals(PlannedJourneyArrivalBasis.FINAL_TRAIN_ALIGHTING_REPORTED, public.basis)
+        assertEquals(time(666), public.predictedArrivalAt)
+        assertEquals(start, revised.departureAt)
+        assertEquals(train.transferTiming, revised.segments[3].transferTiming)
+        assertEquals(time(606), revised.segments[3].rideTiming?.reportedAlightingAt)
+        assertEquals(time(666), PlannedTransitRefreshCadencePolicy.nextRefreshAt(time(615), snapshot))
+        assertNull(mixed.refresh(revised, binding, time(615), previousUpdate = update))
+        verify(arrivals).getSubwayArrivalsForEta("신림", "2호선", null, "DOWN", 10)
         verifyNoInteractions(provider)
     }
 
@@ -270,8 +305,8 @@ class PlannedSeoulBusRouteRefresherTest {
         assertEquals(PlannedJourneyArrivalBasis.MATCHED_BUS_REALTIME,
             afterBusSnapshot.plannedJourneyArrivalPrediction(time(170), 120)?.basis)
 
-        whenever(guard.observeLastPlannedRide(changedRoute.copy(segments = listOf(changedRoute.segments[3])), time(600), true))
-            .thenReturn(PlannedJourneyArrivalObservation(route.identity, time(850), time(598)))
+        whenever(guard.readLastPlannedRide(changedRoute.copy(segments = listOf(changedRoute.segments[3])), time(600), true))
+            .thenReturn(LastSubwayRideEvidence(forecast = PlannedJourneyArrivalObservation(route.identity, time(850), time(598))))
         assertNull(mixedRefresher.refresh(changedRoute, binding, time(600), pendingTransferFailure = true))
         val afterTrain = requireNotNull(mixedRefresher.refresh(changedRoute, binding, time(600)))
         val followed = afterBusSnapshot.copy(plannedRouteUpdate = afterTrain.update)
@@ -284,8 +319,8 @@ class PlannedSeoulBusRouteRefresherTest {
 
         val delayed = requireNotNull(afterTrain.update.route)
         val recoveredAt = time(826).plusMillis(750)
-        whenever(guard.observeLastPlannedRide(delayed.copy(segments = listOf(delayed.segments[3])), time(660), true))
-            .thenReturn(PlannedJourneyArrivalObservation(route.identity, recoveredAt, time(659)))
+        whenever(guard.readLastPlannedRide(delayed.copy(segments = listOf(delayed.segments[3])), time(660), true))
+            .thenReturn(LastSubwayRideEvidence(forecast = PlannedJourneyArrivalObservation(route.identity, recoveredAt, time(659))))
         val recovered = requireNotNull(mixedRefresher.refresh(delayed, binding, time(660)))
         val recoveredRoute = requireNotNull(recovered.update.route)
         assertEquals(recoveredAt, recoveredRoute.arrivalAt)

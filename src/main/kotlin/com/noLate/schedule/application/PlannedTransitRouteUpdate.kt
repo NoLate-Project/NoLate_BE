@@ -58,4 +58,14 @@ data class PlannedTransitRouteUpdate(
         return report.takeIf { finalRide.kind == EffectiveTransitRouteSegmentKind.BUS && finalRide.sequence == report.sequence &&
             finalRide.busRidePrediction?.reportedAlightingAt == report.reportedAt && sourceUpdatedAt == report.reportedAt }
     }
+
+    internal fun finalTrainAlightingReport(): ReportedSubwayAlightingEvidence? {
+        val finalRide = route?.segments?.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
+            ?.maxByOrNull { it.sequence } ?: return null
+        val reportedAt = finalRide.rideTiming?.reportedAlightingAt ?: return null
+        return reportedAlightings.singleOrNull { finalRide.kind == EffectiveTransitRouteSegmentKind.SUBWAY &&
+            it.segmentSequence == finalRide.sequence && it.sourceUpdatedAt == reportedAt && sourceUpdatedAt == reportedAt }
+    }
+
+    internal fun hasFinalAlightingReport(): Boolean = finalBusAlightingReport() != null || finalTrainAlightingReport() != null
 }

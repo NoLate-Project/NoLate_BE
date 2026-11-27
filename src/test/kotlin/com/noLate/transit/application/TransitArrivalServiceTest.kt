@@ -40,15 +40,18 @@ class TransitArrivalServiceTest {
 
     @Test
     fun `역 안내는 동일 열차의 최신 관측만 남기고 시각이 같은 다른 열차는 보존한다`() {
+        val now = Clock.fixed(Instant.parse("2026-11-15T03:07:10Z"), ZoneOffset.UTC)
+        val board = TransitArrivalService(seoulClient, tagoClient, clock = now)
         val first = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", direction = "하행",
             subwayLineId = "1004", subwayStationId = "1004000411", trainNumber = "4012",
-            expectedAt = "2026-11-15T03:10:00Z", sourceUpdatedAt = "2026-11-15T03:06:00Z")
+            expectedAt = "2026-11-15T03:10:00Z", sourceUpdatedAt = "2026-11-15T03:06:00Z",
+            freshnessEvidence = PROVIDER_SOURCE_TIMESTAMP)
         val newer = first.copy(sourceUpdatedAt = "2026-11-15T03:07:00Z")
         val other = first.copy(trainNumber = "4013")
         whenever(seoulClient.getSubwayArrivals(eq("노원"), eq("4호선"), anyOrNull(), eq("DOWN"), any()))
             .thenReturn(listOf(first, newer, other))
 
-        assertEquals(listOf(newer, other), service.getSubwayArrivals("노원", "4호선", null, "DOWN", 2))
+        assertEquals(listOf(newer, other), board.getSubwayArrivals("노원", "4호선", null, "DOWN", 2))
     }
 
     @Test
@@ -86,6 +89,37 @@ class TransitArrivalServiceTest {
             board.getBusArrivals("01234", "N37", "1000", null, null, 1, TransitCityCodeNamespace.ODSAY_CID, stationBoard = true))
         assertEquals(listOf(older),
             board.getBusArrivals("01234", "N37", "1000", null, null, 1, TransitCityCodeNamespace.ODSAY_CID))
+    }
+
+    @Test
+    fun `사당역 4075편의 같은 예보는 게시 두 분 뒤 화면용 목록에서 만료된다`() {
+        val source = Instant.parse("2026-11-20T02:39:35Z")
+        val train = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", direction = "하행",
+            stationName = "사당", subwayLineId = "1004", trainNumber = "4075", destinationName = "사당",
+            sourceUpdatedAt = source.toString(), observedAt = "2026-11-20T02:40:03.449480Z",
+            expectedAt = "2026-11-20T02:48:05Z", arrivalStatus = TransitArrivalStatus.IN_TRANSIT,
+            freshnessEvidence = PROVIDER_SOURCE_TIMESTAMP)
+        val fresh = Instant.parse("2026-11-20T02:41:35Z")
+        whenever(seoulClient.getSubwayArrivals("사당", "4호선", null, "DOWN", 10)).thenReturn(listOf(train))
+        fun serviceAt(at: Instant) = TransitArrivalService(seoulClient, tagoClient, clock = Clock.fixed(at, ZoneOffset.UTC))
+
+        assertEquals(listOf(train), serviceAt(fresh).getSubwayArrivals("사당", "4호선", null, "DOWN", 2))
+        assertTrue(serviceAt(fresh.plusMillis(1)).getSubwayArrivals("사당", "4호선", null, "DOWN", 2).isEmpty())
+        assertEquals(listOf(train), serviceAt(fresh.plusMillis(1)).getSubwayArrivalsForEta("사당", "4호선", null, "DOWN", 10))
+    }
+
+    @Test
+    fun `서울 버스의 같은 도착 예보를 다시 받아도 공급자 게시시각 기준으로 만료된다`() {
+        val source = Instant.parse("2026-11-26T15:23:20Z")
+        val bus = TransitArrivalDto(provider = "seoul-bus", kind = "BUS", routeName = "N37", arsId = "01234",
+            sourceUpdatedAt = source.toString(), observedAt = source.plusSeconds(50).toString(), expectedAt = source.plusSeconds(83).toString(),
+            arrivalStatus = TransitArrivalStatus.IN_TRANSIT, freshnessEvidence = PROVIDER_SOURCE_TIMESTAMP)
+        val newBus = bus.copy(sourceUpdatedAt = source.plusSeconds(50).toString(), expectedAt = source.plusSeconds(113).toString())
+        val board = TransitArrivalService(seoulClient, tagoClient, clock = Clock.fixed(source.plusSeconds(51), ZoneOffset.UTC))
+        whenever(seoulClient.getBusArrivals("01234", null, "N37", 10)).thenReturn(listOf(bus, newBus))
+
+        assertEquals(listOf(newBus), board.getBusArrivals("01234", "N37", "1000", null, null, 1,
+            TransitCityCodeNamespace.ODSAY_CID, stationBoard = true))
     }
 
     @Test

@@ -19,6 +19,9 @@ import org.springframework.web.bind.support.WebDataBinderFactory
 import org.springframework.web.context.request.NativeWebRequest
 import org.springframework.web.method.support.HandlerMethodArgumentResolver
 import org.springframework.web.method.support.ModelAndViewContainer
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 
 class TransitStationBoardHttpTest {
     @Test
@@ -30,7 +33,7 @@ class TransitStationBoardHttpTest {
             sourceUpdatedAt = "2026-11-20T02:34:03Z",
             freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP)
         whenever(seoul.getBusArrivals("01001", "승차 정류장", "N37", 10)).thenReturn(listOf(expired, arrival))
-        val mvc = stationBoard(seoul, tago)
+        val mvc = stationBoard(seoul, tago, Instant.parse("2026-11-20T02:40:03Z"))
         mvc.get("/api/transit-arrivals/bus") {
             param("arsId", "01001")
             param("routeName", "N37")
@@ -58,13 +61,14 @@ class TransitStationBoardHttpTest {
         val seoul = mock<SeoulTransitArrivalClient>()
         val early = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", direction = "하행",
             subwayLineId = "1004", subwayStationId = "1004000411", trainNumber = "4012",
-            expectedAt = "2026-11-15T03:10:00Z", sourceUpdatedAt = "2026-11-15T03:06:00Z")
+            expectedAt = "2026-11-15T03:10:00Z", sourceUpdatedAt = "2026-11-15T03:06:00Z",
+            freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP)
         val opposite = early.copy(direction = "상행", trainNumber = "4099")
         whenever(seoul.getSubwayArrivals("노원", "4호선", null, "DOWN", 10)).thenReturn(
             listOf(early, opposite, early.copy(sourceUpdatedAt = "2026-11-15T03:07:00Z"), early.copy(trainNumber = "4013")),
         )
         whenever(seoul.getSubwayArrivals("사당", "4호선", null, "DOWN", 10)).thenReturn(listOf(opposite))
-        val mvc = stationBoard(seoul, mock())
+        val mvc = stationBoard(seoul, mock(), Instant.parse("2026-11-15T03:07:10Z"))
 
         mvc.get("/api/transit-arrivals/subway") {
             param("stationName", "노원")
@@ -90,8 +94,9 @@ class TransitStationBoardHttpTest {
         }
     }
 
-    private fun stationBoard(seoul: SeoulTransitArrivalClient, tago: TagoTransitArrivalClient) =
-        MockMvcBuilders.standaloneSetup(TransitArrivalController(TransitArrivalService(seoul, tago)))
+    private fun stationBoard(seoul: SeoulTransitArrivalClient, tago: TagoTransitArrivalClient, now: Instant) =
+        MockMvcBuilders.standaloneSetup(TransitArrivalController(TransitArrivalService(seoul, tago,
+            clock = Clock.fixed(now, ZoneOffset.UTC))))
             .setCustomArgumentResolvers(object : HandlerMethodArgumentResolver {
                 override fun supportsParameter(parameter: MethodParameter) = parameter.parameterType == MemberPrincipal::class.java
                 override fun resolveArgument(parameter: MethodParameter, container: ModelAndViewContainer?,
