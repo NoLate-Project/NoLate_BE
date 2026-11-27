@@ -258,6 +258,39 @@ class TransitTransferRealtimeGuardTest {
     }
 
     @Test
+    fun `새 하차 예보로 같은 열차의 남은 지연만 줄이고 시간표보다 앞당기지 않는다`() {
+        val plan = plannedRoute(transferBoardingAt = evaluatedAt.minusSeconds(60))
+        val last = plan.segments.last()
+        val timetable = requireNotNull(last.rideTiming).timetable
+        val delayedAt = timetable.arrivalAt.plusSeconds(45)
+        val egressSeconds = 300L
+        val previousSource = evaluatedAt.minusSeconds(30)
+        val route = plan.copy(arrivalAt = delayedAt.plusSeconds(egressSeconds), segments = listOf(last.copy(
+            rideTiming = requireNotNull(last.rideTiming).copy(predictedArrivalAt = delayedAt,
+                basis = EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME,
+                observationSourceUpdatedAt = previousSource))))
+        val recoveredAt = timetable.arrivalAt.plusSeconds(17).plusMillis(250)
+        val forecast = liveArrival().copy(stationName = "신림역", expectedAt = recoveredAt.toString(),
+            sourceUpdatedAt = evaluatedAt.minusSeconds(1).toString(), arrivalStatus = TransitArrivalStatus.IN_TRANSIT)
+        whenever(arrivals.getSubwayArrivalsForEta(eq("신림"), eq("2호선"), anyOrNull(), eq("UP"), eq(10))).thenReturn(
+            listOf(forecast), listOf(forecast), listOf(forecast.copy(expectedAt = timetable.arrivalAt.minusSeconds(1).toString())),
+            listOf(forecast.copy(trainNumber = "2482")), listOf(forecast.copy(sourceUpdatedAt = previousSource.toString())),
+            listOf(forecast.copy(arrivalStatus = TransitArrivalStatus.UNKNOWN)),
+            listOf(forecast, forecast.copy(direction = "하행")),
+            listOf(forecast.copy(waitSeconds = 1)),
+            listOf(forecast.copy(expectedAt = delayedAt.toString())),
+        )
+
+        assertEquals(null, guard.observeLastPlannedRide(route, evaluatedAt))
+        val recovered = guard.observeLastPlannedRide(route, evaluatedAt, allowAlightingRecovery = true)
+        assertEquals(recoveredAt.plusSeconds(egressSeconds), recovered?.predictedArrivalAt)
+        assertEquals(evaluatedAt.minusSeconds(1), recovered?.sourceUpdatedAt)
+        repeat(6) { assertEquals(null, guard.observeLastPlannedRide(route, evaluatedAt, allowAlightingRecovery = true)) }
+        assertEquals(route.arrivalAt, guard.observeLastPlannedRide(route, evaluatedAt, allowAlightingRecovery = true)?.predictedArrivalAt)
+        verify(arrivals, times(9)).getSubwayArrivalsForEta(eq("신림"), eq("2호선"), anyOrNull(), eq("UP"), eq(10))
+    }
+
+    @Test
     fun `원래 시간표가 지나도 보정 시각까지 같은 열차의 신선한 하차 관측을 계속 확인한다`() {
         val baseline = plannedRoute(transferBoardingAt = evaluatedAt.minusSeconds(20 * 60))
         val segment = baseline.segments.last()

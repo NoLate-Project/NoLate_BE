@@ -1,0 +1,85 @@
+{
+  "date": "2026-11-27",
+  "classification": "HISTORICAL_ALIGHTING_TRANSFER_WORKER_API_INSTALLED_APP_REPLAY",
+  "result": "PASSED",
+  "controlledFixture": {
+    "database": "H2_MEMORY_ONLY",
+    "worker": {
+      "recommendedDepartureAt": "2026-11-27T10:31:22Z",
+      "evaluatedAt": "2026-11-27T10:51:03Z",
+      "originalScheduledBoardingAt": "2026-11-27T10:47:23Z",
+      "recoveredBoardingAt": "2026-11-27T10:53:33Z",
+      "replacedRouteArrivalAt": "2026-11-27T11:06:35Z",
+      "predictedArrivalAt": "2026-11-27T11:04:25Z",
+      "trainNumber": "2012",
+      "historyCount": 3,
+      "physicalTransitHttpCalls": 0,
+      "reportedAlightingAt": "2026-11-27T10:48:13Z",
+      "reportedAlightingCapturedAt": "2026-11-27T10:48:43Z",
+      "freshOutgoingSourceAt": "2026-11-27T10:51:01Z"
+    },
+    "firstDepartureRecommendationPreserved": true,
+    "pastStationReportNotCountedAsFreshForecast": true,
+    "arrivalImprovementSeconds": 130,
+    "publicStatusAndInstalledApp": {
+      "source": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+      "totalMinutes": 34,
+      "historyCount": 3,
+      "trainNumber": "2012",
+      "uiArrivalClock": "20:04",
+      "transferWalkSeconds": 243,
+      "transferWaitSeconds": 77
+    },
+    "historicalStationLabel": "하차역 도착 보고",
+    "installedAppPassed": true,
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "appEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "physicalTransitHttpCalls": 0
+  },
+  "recordedActualInputs": {
+    "additionalHttpCalls": 0,
+    "verifiedFrames": 8,
+    "beforeAndAfter": [
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/evaluation-3.json",
+        "sourceSha256": "d791b4a4acd76599d4e97dc67487359d3016b96b420265dd0ee12cf3130e75ae",
+        "replayedFrames": 2,
+        "sameReplayResult": true,
+        "historicalAlightingUpdates": 0
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-morning/evaluation-3.json",
+        "sourceSha256": "8ab5006c85d4febb65cb7fd0a0bd5f6f7ba0cca17e90a055690d81e4f790018f",
+        "replayedFrames": 2,
+        "sameReplayResult": true,
+        "historicalAlightingUpdates": 0
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/completed-1620/evaluation-3.json",
+        "sourceSha256": "174a854fa33444f8117f437d2fdd795508a90d1bd6611b6c6f4976d5fafb4c4c",
+        "replayedFrames": 2,
+        "sameReplayResult": true,
+        "historicalAlightingUpdates": 0
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/independent-future-timetable-plan/real-final-audit/evaluation-3.json",
+        "sourceSha256": "513537e304415fa99fe4421b0baf10544313f86f632ffbd057ab2b06c7b01d84",
+        "replayedFrames": 2,
+        "sameReplayResult": true,
+        "historicalAlightingUpdates": 0
+      }
+    ]
+  },
+  "regressionTests": {
+    "backend": 34,
+    "frontend": 87,
+    "frontendTypecheck": "PASSED"
+  },
+  "realWorldAccuracy": {
+    "qualifyingCrossEvaluationSample": 0,
+    "newNaverComparison": false,
+    "providerStationStatusIsPhysicalPassengerArrival": false
+  },
+  "testArtifactRoot": "/private/tmp/nolate-eta-mock-e2e.rail-historical-alight.phXsWh"
+}

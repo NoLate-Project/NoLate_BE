@@ -221,11 +221,13 @@ class TransitJourneyTimetableEnricher(
 
     internal fun connectAfterBus(journey: TransitJourney, evaluatedAt: Instant, maxTravelMinutes: Int,
                                  requiredMarginSeconds: Long, preserveRailScope: Boolean = false,
-                                 reads: BusTransferTimetableReads? = null): TransitJourney? {
-        if (journey.departureAt.nano != 0 || journey.departureAt < evaluatedAt ||
+                                 reads: BusTransferTimetableReads? = null,
+                                 reportedBusAlighting: Boolean = false): TransitJourney? {
+        if ((!reportedBusAlighting && (journey.departureAt.nano != 0 || journey.departureAt < evaluatedAt)) ||
             journey.rideLegs.isEmpty() || journey.rideLegs.any { it.mode != TransitLegMode.SUBWAY }) return null
         return connectTimetables(journey, evaluatedAt, maxTravelMinutes, null,
-            busTransferMarginSeconds(requiredMarginSeconds), preserveRailScope, reads)
+            busTransferMarginSeconds(requiredMarginSeconds), preserveRailScope, reads,
+            firstBoardingFloor = evaluatedAt.takeIf { reportedBusAlighting })
     }
 
     internal fun busTransferMarginSeconds(requiredMarginSeconds: Long): Long =
@@ -234,7 +236,8 @@ class TransitJourneyTimetableEnricher(
     private fun connectTimetables(journey: TransitJourney, evaluatedAt: Instant, maxTravelMinutes: Int,
                                   firstBoardingResolver: ((TransitLegTimetable) -> TransitFirstBoardingObservation?)?,
                                   firstMarginSeconds: Long, preserveRailScope: Boolean = false,
-                                  busTransferReads: BusTransferTimetableReads? = null): TransitJourney? {
+                                  busTransferReads: BusTransferTimetableReads? = null,
+                                  firstBoardingFloor: Instant? = null): TransitJourney? {
         fun checkedRides(leg: TransitJourneyLeg, query: TransitTimetableQuery,
                          search: () -> List<TransitLegTimetable>): List<TransitLegTimetable> {
             if (!preserveRailScope) return search()
@@ -252,7 +255,7 @@ class TransitJourneyTimetableEnricher(
             return try {
                 // The dated endpoint returns one forward connection. Resolve its exact train before applying realtime.
                 enrichWith(journey, evaluatedAt, maxTravelMinutes, firstBoardingResolver = null,
-                    firstMarginSeconds = firstMarginSeconds) { query, leg ->
+                    firstMarginSeconds = firstMarginSeconds, firstBoardingFloor = firstBoardingFloor) { query, leg ->
                     checkedRides(leg, query) {
                         val fetch = { listOfNotNull(dated.findRide(query, leg.orderedStopNames)) }
                         busTransferReads?.read(dated, query, leg.orderedStopNames, fetch) ?: fetch()
@@ -267,7 +270,8 @@ class TransitJourneyTimetableEnricher(
         // 공급자를 혼합해 부분 성공을 조립하지 않는다. 한 공급자가 전체 여정을 증명해야 한다.
         return providers.firstNotNullOfOrNull { provider ->
             runCatching {
-                enrichWith(journey, evaluatedAt, maxTravelMinutes, firstBoardingResolver, firstMarginSeconds) { query, leg ->
+                enrichWith(journey, evaluatedAt, maxTravelMinutes, firstBoardingResolver, firstMarginSeconds,
+                    firstBoardingFloor = firstBoardingFloor) { query, leg ->
                     checkedRides(leg, query) {
                         val fetch = { provider.findRides(query) }
                         busTransferReads?.read(provider, query, fetch = fetch) ?: fetch()
@@ -446,6 +450,7 @@ class TransitJourneyTimetableEnricher(
         maxTravelMinutes: Int,
         firstBoardingResolver: ((TransitLegTimetable) -> TransitFirstBoardingObservation?)?,
         firstMarginSeconds: Long = boardingBufferSeconds,
+        firstBoardingFloor: Instant? = null,
         findRides: (TransitTimetableQuery, TransitJourneyLeg) -> List<TransitLegTimetable>,
     ): TransitJourney? {
         var cursor = journey.departureAt
@@ -461,7 +466,8 @@ class TransitJourneyTimetableEnricher(
                 val canonical = line.seoulSubwayLine ?: return null
                 val isFirstRide = journeyServiceDate == null
                 val margin = if (isFirstRide) firstMarginSeconds else maxOf(transferBufferSeconds, transferMarginSeconds)
-                val notBefore = cursor.plusSeconds(margin)
+                val readyAt = cursor.plusSeconds(margin)
+                val notBefore = if (isFirstRide && firstBoardingFloor != null) maxOf(readyAt, firstBoardingFloor) else readyAt
                 val serviceDate = SeoulSubwayServiceDay.dateAt(notBefore)
                 // 한 번 연결한 운행일은 후속 환승에도 유지한다.
                 if (!isFirstRide && serviceDate != journeyServiceDate) return null

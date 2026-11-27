@@ -1145,7 +1145,7 @@ class TransitEtaCalculationServiceTest {
         val original = mapper.treeToValue(json, EffectiveTransitRoute::class.java)
         val now = evaluatedAt.plusSeconds(18 * 60)
         val guard = mock<TransitTransferRealtimeGuard>()
-        whenever(guard.observePlannedTransfers(any(), eq(now), any(), anyOrNull(), any())).thenReturn(PlannedTransferObservations(current = listOf(
+        whenever(guard.observePlannedTransfers(any(), eq(now), any(), anyOrNull(), any(), eq(false))).thenReturn(PlannedTransferObservations(current = listOf(
             TransitRideRealtimeObservation(1, TransitRideObservationPoint.ALIGHTING, evaluatedAt.plusSeconds(25 * 60), now))))
         val nextTable = requireNotNull(journey.legs[3].timetable).copy(trainNumber = "2482",
             boardingAt = evaluatedAt.plusSeconds(35 * 60), arrivalAt = evaluatedAt.plusSeconds(45 * 60))

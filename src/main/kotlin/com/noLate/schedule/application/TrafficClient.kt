@@ -233,10 +233,13 @@ data class EffectiveBusRidePrediction(
     /** After departure, a direct same-vehicle alighting forecast has a different source time. */
     @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     val alightingObservationSourceUpdatedAt: Instant? = null,
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val reportedAlightingAt: Instant? = null,
 ) {
     init {
         require(sourceUpdatedAt <= boardingAt && boardingAt < alightingAt)
         require(alightingObservationSourceUpdatedAt == null || alightingObservationSourceUpdatedAt in boardingAt..alightingAt)
+        require(reportedAlightingAt == null || reportedAlightingAt == alightingAt && alightingObservationSourceUpdatedAt == null)
     }
 }
 

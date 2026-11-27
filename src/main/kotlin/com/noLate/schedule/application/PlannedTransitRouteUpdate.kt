@@ -34,6 +34,8 @@ data class PlannedTransitRouteUpdate(
     /** 지난 하차역 상태와 이후의 환승 예보가 서로 다른 평가에 도착할 수 있다. */
     @get:JsonInclude(JsonInclude.Include.NON_EMPTY)
     val reportedAlightings: List<ReportedSubwayAlightingEvidence> = emptyList(),
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
+    val reportedBusAlighting: ReportedBusAlightingEvidence? = null,
 ) {
     init {
         require((route != null) != (failure != null) ||
@@ -43,6 +45,7 @@ data class PlannedTransitRouteUpdate(
         require(reportedBoardings.map { it.segmentSequence to it.service }.distinct().size == reportedBoardings.size)
         require(reportedAlightings.size <= 32 && reportedAlightings.all { it.routeIdentity == routeIdentity })
         require(reportedAlightings.map { it.segmentSequence }.distinct().size == reportedAlightings.size)
+        require(reportedBusAlighting == null || reportedBusAlighting.routeIdentity == routeIdentity)
         require(!requiresFirstBoardingRecheck || failure == PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED)
         require(transferBoardingRecheck == null || (!requiresFirstBoardingRecheck && failure == PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED))
         require(!railToBusConnectionObserved || route != null && !onlyLastRideObserved)

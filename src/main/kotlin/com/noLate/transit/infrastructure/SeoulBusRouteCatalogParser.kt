@@ -3,6 +3,7 @@ package com.noLate.transit.infrastructure
 import com.noLate.transit.domain.SeoulBusRoutePathPoint
 import com.noLate.transit.domain.SeoulBusRouteStop
 import com.noLate.transit.domain.SeoulBusRideService
+import com.noLate.transit.domain.TransitArrivalStatus
 import org.w3c.dom.Element
 import org.xml.sax.SAXException
 import org.xml.sax.SAXParseException
@@ -79,6 +80,16 @@ internal object SeoulBusRouteCatalogParser {
             !service.alighting.matches(stop)) return emptyList()
         val row = rows(bytes, 999).stopRow(stop) ?: return emptyList()
         val updated = row.sourceTime()?.takeUnless { it > receivedAt } ?: return emptyList()
+        val selectedSlot = (1..2).singleOrNull { service.matchesVehicle(row.field("vehId$it", optional = true)) }
+            ?: return emptyList()
+        val reportedOrder = row.field("sectOrd$selectedSlot", optional = true).toIntOrNull()
+        val arrivalCode = row.field("isArrive$selectedSlot", optional = true)
+        val countdown = row.field("traTime$selectedSlot", optional = true)
+        if (seoulBusRequestedStopStatus(stop.sequence, reportedOrder, arrivalCode) ==
+            TransitArrivalStatus.ARRIVED && (countdown.isEmpty() || countdown.toLongOrNull() == 0L) &&
+            !isSeoulBusAwaitingDeparture(row.field("arrmsg$selectedSlot", optional = true))) {
+            return listOf(SeoulBusAlightingForecast(updated, updated, receivedAt, reportedAtStop = true))
+        }
         val seconds = row.countdowns(stop.sequence).entries.singleOrNull { service.matchesVehicle(it.key) }?.value
             ?: return emptyList()
         return listOf(SeoulBusAlightingForecast(updated.plusSeconds(seconds), updated, receivedAt))
@@ -243,7 +254,7 @@ internal data class SeoulBusPairedArrival(
 )
 
 internal data class SeoulBusAlightingForecast(
-    val alightingAt: Instant, val sourceUpdatedAt: Instant, val receivedAt: Instant,
+    val alightingAt: Instant, val sourceUpdatedAt: Instant, val receivedAt: Instant, val reportedAtStop: Boolean = false,
 )
 
 internal enum class SeoulBusPairingFailure {

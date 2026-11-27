@@ -20,6 +20,7 @@ class PlannedTransitRouteRefresher(
     fun refresh(
         plan: EffectiveTransitRoute, evaluatedAt: Instant, departurePlan: EffectiveTransitRoute = plan,
         previousUpdate: PlannedTransitRouteUpdate? = null,
+        endsAtTransfer: Boolean = false,
     ): PlannedTransitRouteUpdate? {
         if (evaluatedAt < plan.departureAt) return null
         val segments = plan.segments.sortedBy { it.sequence }
@@ -42,15 +43,22 @@ class PlannedTransitRouteRefresher(
             else -> null
         }
         val readings = guard.observePlannedTransfers(plan, evaluatedAt, originalTrains, recheckBoardingIndex = recheckIndex,
-            reportedBoardings = conflict?.reportedBoardings.orEmpty())
+            reportedBoardings = conflict?.reportedBoardings.orEmpty(), endsAtTransfer = endsAtTransfer)
+        val recordableRides = if (endsAtTransfer) rides else rides.dropLast(1)
         val alightingRecords = (conflict?.reportedAlightings.orEmpty() + readings.reportedAlightings)
-            .filter { record -> rides.dropLast(1).any { record.matches(plan, segments[it], evaluatedAt) } }
+            .filter { record -> recordableRides.any { record.matches(plan, segments[it], evaluatedAt) } }
             .groupBy { it.segmentSequence }.mapValues { (_, records) -> records.minBy { it.sourceUpdatedAt } }
+        // Only the connecting mode can publish an ETA after the final train of this prefix has arrived.
+        val finalReport = alightingRecords[segments[rides.last()].sequence]
+        if (endsAtTransfer && finalReport != null && recheckIndex == null) {
+            return PlannedTransitRouteUpdate(plan.identity, finalReport.sourceUpdatedAt,
+                reportedBoardings = readings.reportedBoardings, reportedAlightings = alightingRecords.values.sortedBy { it.segmentSequence })
+        }
         // 기록만 생긴 평가가 정상 ETA나 새 출발 알람으로 승격되지 않도록 계산 결과와 분리한다.
         fun calculate(): PlannedTransitRouteUpdate? {
             val observations = readings.current.filter {
                 it.legIndex in rides && it.sourceUpdatedAt in freshWindow &&
-                    segments[it.legIndex].sequence !in alightingRecords &&
+                    (it.legIndex == recheckIndex || segments[it.legIndex].sequence !in alightingRecords) &&
                     !(it.point == TransitRideObservationPoint.BOARDING && segments[it.legIndex].rideTiming?.observedService != null) &&
                     (it.expectedAt > evaluatedAt.minusSeconds(5) ||
                         it.reportedBoardingArrival && it.expectedAt <= evaluatedAt &&
@@ -95,7 +103,7 @@ class PlannedTransitRouteRefresher(
             val timings = rides.associateWith { index ->
                 val segment = segments[index]
                 val baseline = requireNotNull(segment.rideTiming).asPlannedBaseline()
-                val reportedAt = alightingRecords[segment.sequence]?.sourceUpdatedAt
+                val reportedAt = alightingRecords[segment.sequence]?.sourceUpdatedAt.takeUnless { index == recheckIndex }
                 baseline.copy(predictedArrivalAt = reportedAt ?: baseline.predictedArrivalAt, reportedAlightingAt = reportedAt)
             }.toMutableMap()
             val applied = linkedMapOf<Int, TransitRideRealtimeObservation>()

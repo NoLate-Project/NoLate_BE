@@ -1,0 +1,153 @@
+{
+  "date": "2026-11-27",
+  "classification": "SAME_FINAL_TRAIN_DELAY_RECOVERY_WORKER_API_INSTALLED_APP_REPLAY",
+  "result": "PASSED",
+  "controlledProviderReplay": {
+    "database": "H2_MEMORY_ONLY",
+    "delay": {
+      "recommendedDepartureAt": "2026-11-27T11:27:47Z",
+      "predictedArrivalAt": "2026-11-27T11:43:32Z",
+      "expectedRailAlightingAt": "2026-11-27T11:42:32Z",
+      "sourceUpdatedAt": "2026-11-27T11:36:46Z",
+      "totalMinutes": 16,
+      "historyCount": 1,
+      "physicalTransitHttpCalls": 0,
+      "basis": "MATCHED_TRAIN_REALTIME",
+      "evaluatedAt": "2026-11-27T11:36:47Z",
+      "busReportedAt": "2026-11-27T11:33:07Z"
+    },
+    "recovered": {
+      "recommendedDepartureAt": "2026-11-27T11:27:47Z",
+      "predictedArrivalAt": "2026-11-27T11:42:17.250Z",
+      "expectedRailAlightingAt": "2026-11-27T11:41:17.250Z",
+      "sourceUpdatedAt": "2026-11-27T11:37:47Z",
+      "totalMinutes": 15,
+      "historyCount": 2,
+      "physicalTransitHttpCalls": 0,
+      "basis": "MATCHED_TRAIN_REALTIME",
+      "evaluatedAt": "2026-11-27T11:37:48Z",
+      "busReportedAt": "2026-11-27T11:33:07Z"
+    },
+    "savedDueAt": "2026-11-27T11:37:47Z",
+    "trainNumber": "2014",
+    "recoverySeconds": 74.75,
+    "transferWalkSeconds": 30,
+    "transferWaitSeconds": 140,
+    "egressWalkSeconds": 60,
+    "recommendedDepartureAtPreserved": true,
+    "directTimingStillAtOrAfterTimetableArrival": true,
+    "firstAndSecondInstalledAppObservations": "PASSED",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "httpCalls": 0,
+    "appEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "testArtifactRoot": "/private/tmp/nolate-eta-mock-e2e.final-train-recovery-display.L8kPNd"
+  },
+  "identicalApiResponsePresentation": {
+    "responseSha256": "660aeb50cf4a0d312e0e424e0721ccc2ab775253a3a100ec934533df6da6ae41",
+    "arrival": "2026-11-27T11:37:37.250Z",
+    "beforeLegLabel": "2호선 · 사당→신림 · 환승 대기 약 2분 20초 · 약 8분 · 2014열차 · 하차역 실시간 · 승차 계획 유지 · 20:31:17 승차 계획 → 20:36:37 하차 예측",
+    "afterLegLabel": "2호선 · 사당→신림 · 환승 대기 약 2분 20초 · 승차역부터 하차역까지 약 5분 20초 · 2014열차 · 하차역 실시간 · 승차 계획 유지 · 20:31:17 승차 계획 → 20:36:37 하차 예측",
+    "testArtifactRootBefore": "/private/tmp/nolate-eta-mock-e2e.final-train-recovery.6fVHY4",
+    "testArtifactRootAfter": "/private/tmp/nolate-eta-mock-e2e.final-train-recovery-display.L8kPNd"
+  },
+  "archivedOriginalProviderReplays": {
+    "captureCount": 5,
+    "observationCount": 9,
+    "newBusToTrainShorteningSamples": 0,
+    "additionalHttpCalls": 0,
+    "captures": [
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/evaluation-3.json",
+        "sourceSha256": "d791b4a4acd76599d4e97dc67487359d3016b96b420265dd0ee12cf3130e75ae",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-morning/evaluation-3.json",
+        "sourceSha256": "8ab5006c85d4febb65cb7fd0a0bd5f6f7ba0cca17e90a055690d81e4f790018f",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/completed-1620/evaluation-3.json",
+        "sourceSha256": "174a854fa33444f8117f437d2fdd795508a90d1bd6611b6c6f4976d5fafb4c4c",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/independent-future-timetable-plan/real-final-audit/evaluation-3.json",
+        "sourceSha256": "513537e304415fa99fe4421b0baf10544313f86f632ffbd057ab2b06c7b01d84",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/evaluation-2.json",
+        "sourceSha256": "ae3234d94236ec995a6baf248fe5ef03867ab3b98358ffd74a255b230de32014",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true,
+            "reason": null
+          }
+        ]
+      }
+    ]
+  },
+  "regressionTests": {
+    "backend": 381,
+    "frontend": 102,
+    "frontendTypecheck": "PASSED"
+  },
+  "actualTripAccuracyVerified": false,
+  "newSameConditionNaverComparisons": 0
+}

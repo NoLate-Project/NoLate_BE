@@ -1,0 +1,153 @@
+{
+  "date": "2026-11-27",
+  "classification": "HISTORICAL_SUBWAY_REPORT_TO_FRESH_BUS_FORECAST",
+  "controlledMissedBus": {
+    "result": "PASSED",
+    "worker": {
+      "recommendedDepartureAt": "2026-11-27T10:54:09Z",
+      "predictedArrivalAt": "2026-11-27T11:07:39Z",
+      "totalMinutes": 14,
+      "historyCount": 3,
+      "physicalTransitHttpCalls": 0,
+      "basis": "MATCHED_TRAIN_AND_BUS_REALTIME",
+      "missFailure": "TRANSFER_RECONNECTION_UNAVAILABLE",
+      "missedBusBoardingAt": "2026-11-27T11:00:29Z",
+      "recheckedAt": "2026-11-27T11:02:09Z",
+      "railAlightingAt": "2026-11-27T10:59:29Z",
+      "railAlightingCapturedAt": "2026-11-27T10:59:59Z",
+      "selectedBusBoardingAt": "2026-11-27T11:02:19Z",
+      "busForecastSourceAt": "2026-11-27T11:02:06Z"
+    },
+    "apiAndApp": {
+      "source": "MATCHED_TRAIN_AND_BUS_REALTIME",
+      "totalMinutes": 14,
+      "historyCount": 3,
+      "missFailure": "TRANSFER_RECONNECTION_UNAVAILABLE",
+      "missedBusBoardingAt": "2026-11-27T11:00:29Z",
+      "recheckedAt": "2026-11-27T11:02:09Z",
+      "selectedBusBoardingAt": "2026-11-27T11:02:19Z",
+      "trainNumber": "4703",
+      "transferWalkSeconds": 30
+    },
+    "historicalReportAgeAtRecheckSeconds": 160,
+    "acceptedBusForecastAgeAtRecheckSeconds": 3,
+    "transferWaitSeconds": 140,
+    "requiredTransferMarginSeconds": 60,
+    "publicProviderCalls": 0,
+    "installedApp": {
+      "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+      "result": "PASSED",
+      "originalEndpointRestored": true
+    },
+    "ownedPortsReleased": true,
+    "testArtifactRoot": "/private/tmp/nolate-eta-mock-e2e.historical-rail-bus.v8AS6l"
+  },
+  "recordedActualInputs": {
+    "scope": "Rail-only route refresh regression. No input included the new subway-to-bus event pairing.",
+    "additionalHttpCalls": 0,
+    "captures": [
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/evaluation-3.json",
+        "sourceSha256": "d791b4a4acd76599d4e97dc67487359d3016b96b420265dd0ee12cf3130e75ae",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-morning/evaluation-3.json",
+        "sourceSha256": "8ab5006c85d4febb65cb7fd0a0bd5f6f7ba0cca17e90a055690d81e4f790018f",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/completed-1620/evaluation-3.json",
+        "sourceSha256": "174a854fa33444f8117f437d2fdd795508a90d1bd6611b6c6f4976d5fafb4c4c",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/independent-future-timetable-plan/real-final-audit/evaluation-3.json",
+        "sourceSha256": "513537e304415fa99fe4421b0baf10544313f86f632ffbd057ab2b06c7b01d84",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameReplay": true
+          }
+        ]
+      }
+    ]
+  },
+  "regressionTests": {
+    "backend": 379,
+    "frontend": 87,
+    "frontendTypecheck": "PASSED"
+  },
+  "accuracyQualification": {
+    "observedSubwayToBusMatchesInNaturalOperation": 0,
+    "newMatchedNaverComparison": false,
+    "passengerArrivalVerified": false
+  },
+  "deferredFixtureFirstAttempt": {
+    "pendingAppAndStatus": "PASSED",
+    "reconnectionAttempt": "NO_WORKER_EVALUATION_BEFORE_STORED_DUE",
+    "storedNextCheckAt": "2026-11-27T11:08:15Z",
+    "publishedDestinationWhileWaiting": false,
+    "ownedPortsReleased": true,
+    "appEndpointRestored": true,
+    "testArtifactRoot": "/private/tmp/nolate-eta-mock-e2e.historical-deferred-bus.yqjGAU"
+  },
+  "controlledDeferredBus": {
+    "publishedWhileWaiting": {
+      "destinationArrival": null,
+      "lastMode": "WALK",
+      "railReportedAt": "2026-11-27T11:08:39Z"
+    },
+    "storedNextCheckAt": "2026-11-27T11:09:59Z",
+    "nextEvaluatedAt": "2026-11-27T11:10:00Z",
+    "recommendedDepartureAt": "2026-11-27T10:08:59Z",
+    "destinationArrivalAfterBusForecast": "2026-11-27T11:15:55Z",
+    "nextBusBoardingAt": "2026-11-27T11:10:55Z",
+    "nextBusForecastSourceAt": "2026-11-27T11:09:59Z",
+    "nativeWaitingResult": "PASSED",
+    "nativeUpdatedArrivalResult": "PASSED",
+    "physicalTransitHttpCalls": 0,
+    "appEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "testArtifactRoot": "/private/tmp/nolate-eta-mock-e2e.historical-deferred-bus-due.U2PzIg"
+  }
+}

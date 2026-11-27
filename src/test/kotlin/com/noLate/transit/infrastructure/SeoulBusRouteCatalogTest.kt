@@ -68,6 +68,25 @@ class SeoulBusRouteCatalogTest {
         assertEquals(listOf(SeoulBusPairingFailure.NO_COMMON_VEHICLE, SeoulBusPairingFailure.SOURCE_TIME_UNVERIFIED), failures)
     }
 
+    @Test fun `reports the same bus at the exact alighting stop separately from a future forecast`() {
+        val (board, alight) = SeoulBusRouteCatalogParser.stops(xml(stop() +
+            stop(45, "101000008").replace("02007", "02008")), route)
+        val service = com.noLate.transit.domain.SeoulBusRideService.fromVehicle(board, alight, "101000091")
+        val publishedAt = Instant.parse("2026-11-16T00:19:43Z")
+        val received = publishedAt.plusSeconds(5)
+        val row = """<itemList><busRouteId>$route</busRouteId><staOrd>45</staOrd><stId>101000008</stId>
+            <arsId>02008</arsId><mkTm>2026-11-16 09:19:43</mkTm><vehId1>101000091</vehId1>
+            <sectOrd1>45</sectOrd1><isArrive1>1</isArrive1><traTime1>0</traTime1></itemList>"""
+        fun read(payload: String) = SeoulBusRouteCatalogParser.alightingForecast(xml(payload), alight, service, received)
+        assertEquals(SeoulBusAlightingForecast(publishedAt, publishedAt, received, reportedAtStop = true), read(row).single())
+        assertTrue(read(row.replace("101000091", "101000099")).isEmpty())
+        assertTrue(read(row.replace("<sectOrd1>45", "<sectOrd1>46")).isEmpty())
+        assertTrue(read(row.replace("02008", "02009")).isEmpty())
+        assertTrue(read(row.replace("<traTime1>0", "<traTime1>20")).isEmpty())
+        assertTrue(read(row + row).isEmpty())
+        assertFalse(read(row.replace("<sectOrd1>45", "<sectOrd1>44")).single().reportedAtStop)
+    }
+
     @Test fun `official stop occurrences preserve namespace section and WGS84 only`() {
         val result = SeoulBusRouteCatalogParser.stops(xml(stop() + stop(45)), route)
         assertEquals(listOf(44, 45), result.map { it.sequence })

@@ -19,6 +19,7 @@ import com.noLate.transit.domain.TransitArrivalDto
 import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
 import com.noLate.transit.domain.TransitArrivalStatus
 import org.springframework.stereotype.Component
+import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.CancellationException
 
@@ -80,7 +81,8 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
     internal fun observePlannedTransfers(route: EffectiveTransitRoute, evaluatedAt: Instant,
                                          originalTrains: Map<Int, EffectiveTransitRideTiming>,
                                          recheckBoardingIndex: Int? = null,
-                                         reportedBoardings: List<ReportedSubwayBoardingEvidence> = emptyList()): PlannedTransferObservations {
+                                         reportedBoardings: List<ReportedSubwayBoardingEvidence> = emptyList(),
+                                         endsAtTransfer: Boolean = false): PlannedTransferObservations {
         if (evaluatedAt < route.departureAt) return PlannedTransferObservations()
         val segments = route.segments.sortedBy { it.sequence }
         val firstRide = segments.indexOfFirst { it.kind != EffectiveTransitRouteSegmentKind.WALK }
@@ -156,7 +158,7 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
                 ?.trim()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
             val rows = read(station, table) ?: return@mapNotNull null
             if (point == TransitRideObservationPoint.BOARDING) recordBoarding(segment, rows)
-            if (point == TransitRideObservationPoint.ALIGHTING && index != lastRide) {
+            if (point == TransitRideObservationPoint.ALIGHTING && (index != lastRide || endsAtTransfer)) {
                 reportedAlightingState(route, segment, station, evaluatedAt, rows)?.let {
                     reportedAlightings += it
                     // This is a past station status, not another forecast for this ride.
@@ -314,7 +316,9 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
     }
 
     /** 출발지 재검색과 분리한다. 마지막 열차 1편만 관측하며, 탑승 여부는 추정하지 않는다. */
-    fun observeLastPlannedRide(route: EffectiveTransitRoute, evaluatedAt: Instant): PlannedJourneyArrivalObservation? {
+    @JvmOverloads
+    fun observeLastPlannedRide(route: EffectiveTransitRoute, evaluatedAt: Instant,
+                               allowAlightingRecovery: Boolean = false): PlannedJourneyArrivalObservation? {
         if (evaluatedAt.isBefore(route.departureAt)) return null
         val rides = route.segments.sortedBy { it.sequence }
             .filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
@@ -352,13 +356,23 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
             Triple(alightingStation, table.arrivalAt, timing.predictedArrivalAt)
         }
         val (stationName, scheduledAt, priorAt) = point
-        val (observedAt, sourceAt) = observedArrivalAt(stationName, table, evaluatedAt) ?: return null
-        val previousSource = if (stationName == boardingStation) timing.boardingSourceAt() else timing.alightingSourceAt()
+        val rows = stationRows(stationName, table)
+        val (observedAt, sourceAt) = observedArrivalAt(stationName, table, evaluatedAt, rows) ?: return null
+        val atBoardingStop = stationName == boardingStation
+        val previousSource = if (atBoardingStop) timing.boardingSourceAt() else timing.alightingSourceAt()
         if (previousSource != null && sourceAt <= previousSource) return null
-        // 앞선 편에 비해 더 늦은 동일 열차만 보수적으로 반영한다. 조기 도착으로
-        // 환승이 어려워질 수 있는 관측은 탑승 확인 없이 도착시각 단축에 쓰지 않는다.
-        if (!observedAt.isAfter(maxOf(priorAt, scheduledAt))) return null
-        val predictedArrivalAt = route.arrivalAt.plusSeconds(java.time.Duration.between(priorAt, observedAt).seconds)
+        if (allowAlightingRecovery && !atBoardingStop && observedAt <= evaluatedAt) return null
+        if (observedAt <= maxOf(priorAt, scheduledAt)) {
+            // Once the final train's delay was observed at its alighting station, a newer pending
+            // forecast can reduce that delay. The schedule and all boarding constraints still apply.
+            if (!allowAlightingRecovery || !singleRide || !pastBoarding || atBoardingStop || previousSource == null ||
+                timing.basis != EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME || observedAt < scheduledAt) return null
+            val exact = endpointForecasts(stationName, table, evaluatedAt, rows)
+                .filterKeys { it == table.trainNumber || it == table.realtimeTrainNumber }.values.distinct().singleOrNull()
+            if (exact?.expectedAt != observedAt || exact.sourceAt != sourceAt ||
+                observedArrivalAt(stationName, table, evaluatedAt, rows, requirePendingStatus = true) != (observedAt to sourceAt)) return null
+        }
+        val predictedArrivalAt = route.arrivalAt.plus(Duration.between(priorAt, observedAt))
         if (!predictedArrivalAt.isAfter(evaluatedAt)) return null
         return PlannedJourneyArrivalObservation(route.identity, predictedArrivalAt, sourceAt)
     }
