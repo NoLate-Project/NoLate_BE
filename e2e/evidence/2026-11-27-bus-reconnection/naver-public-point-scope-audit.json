@@ -1,0 +1,36 @@
+{
+  "classification": "ARCHIVED_PUBLIC_NAVER_DISPLAY_AND_INPUT_SCOPE_AUDIT",
+  "seedInputs": {
+    "workerFile": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/evaluation-1.json",
+    "appStatusFile": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/ui-status-1.json",
+    "mapDetailFile": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/naver-1050-detail.txt",
+    "mapDetailSha256": "f490bc373714566c6f9f1964f85155807083d6564fb83789211c87355c14efe4"
+  },
+  "publicMapAddressPoints": "MATCHED_PUBLIC_NUMERIC_POINTS",
+  "selectedRailDetailVerified": true,
+  "departureInput": {
+    "naverQueryAt": "2026-11-20T10:50:00+09:00",
+    "naverSuggestedDoorDepartureAt": "2026-11-20T10:51:00+09:00",
+    "naverDetailObservedAt": "2026-11-20T10:50:05.999228+09:00",
+    "originalOdsayRequestedDepartureAt": "2026-11-20T11:00:00+09:00",
+    "appCalculatedDepartureAt": "2026-11-20T10:50:00+09:00"
+  },
+  "walking": {
+    "appSeconds": {"access": 137, "transfer": 157, "egress": 73},
+    "naverDisplayedMinutes": {"access": null, "transfer": 2, "egress": null}
+  },
+  "appMinusNaverVisibleBoardingSeconds": [360, 360],
+  "appMinusNaverVisibleArrivalSeconds": 463,
+  "appPredictionBasis": "TIMETABLE_PROVIDER",
+  "appMatchesWorkerTimetablePreview": true,
+  "exclusions": [
+    "ORIGINAL_ROUTE_QUERY_DEPARTURE_DIFFERS",
+    "DISPLAYED_DOOR_DEPARTURE_DIFFERS",
+    "PUBLIC_DETAIL_CAPTURE_AFTER_REQUESTED_DEPARTURE",
+    "DOOR_OR_TRANSFER_WALKING_NOT_FULLY_DISPLAYED",
+    "RIDE_BOARDING_CLOCKS_DIFFER",
+    "APP_TIMETABLE_ONLY"
+  ],
+  "strictlyComparableRealizedTrips": 0,
+  "newPhysicalTransitHttpCalls": 0
+}

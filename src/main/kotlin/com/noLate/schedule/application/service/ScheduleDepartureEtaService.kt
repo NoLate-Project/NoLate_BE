@@ -25,6 +25,7 @@ import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
+import com.noLate.transit.domain.SeoulBusVehicleFreshness
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -328,9 +329,15 @@ class ScheduleDepartureEtaService(
             ?.plannedJourneyArrivalPrediction(readAt, arrivalSourceMaxAgeSeconds)
         val inProgressPlan = currentSnapshot?.hasActivePlannedRouteAt(readAt, plannedPrediction?.predictedArrivalAt) == true
         val currentObservation = currentSnapshot?.firstBoardingObservation
+        val busSourceMaxAge = SeoulBusVehicleFreshness.limit(arrivalSourceMaxAgeSeconds)
+        val firstRide = currentSnapshot?.effectiveTransitRoute?.segments
+            ?.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }?.minByOrNull { it.sequence }
+        val firstBoardingSourceMaxAge = if (currentObservation?.provider == "seoul-bus" || firstRide?.busRidePrediction != null) {
+            busSourceMaxAge
+        } else arrivalSourceMaxAgeSeconds
         val freshObservation = currentObservation
-            ?.takeIf { it.isFreshAt(readAt, arrivalSourceMaxAgeSeconds) }
-        // Job 스냅샷의 5분 grace는 차량 관측의 120초 유효기간을 연장하지 않는다.
+            ?.takeIf { it.isFreshAt(readAt, firstBoardingSourceMaxAge) }
+        // Job 스냅샷의 5분 grace는 차량별 관측 유효기간을 연장하지 않는다.
         // 관측만 숨기고 전체 여정을 정상으로 남기면 앱이 만료된 보정을 계속 안내한다.
         // 조회 시점의 파생 진단만 변경하며 저장된 이력·보호된 알람 시각은 수정하지 않는다.
         val expiredTransferObservation = effectiveRouteSnapshot?.effectiveTransitRoute?.segments
@@ -342,7 +349,7 @@ class ScheduleDepartureEtaService(
                     EffectiveTransitRideTimingBasis.FIRST_RIDE_BOARDING_AND_ALIGHTING_REALTIME,
                 )
                 val expiredBus = segment.busRidePrediction?.sourceUpdatedAt?.let {
-                    it.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds)) || it.isAfter(readAt.plusSeconds(5))
+                    it.isBefore(readAt.minusSeconds(busSourceMaxAge)) || it.isAfter(readAt.plusSeconds(5))
                 } == true
                 expiredBus || hasRealtimeRideObservation && (timing?.observationSourceUpdatedAt?.let {
                     it.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds)) || it.isAfter(readAt.plusSeconds(5))
@@ -360,8 +367,8 @@ class ScheduleDepartureEtaService(
             ) && freshObservation == null))
         val observationFailure = if (expiredRealtimeJourney) {
             if (expiredTransferObservation || currentObservation != null && (
-                currentObservation.sourceUpdatedAt.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds)) ||
-                    currentObservation.evaluatedAt.isBefore(readAt.minusSeconds(arrivalSourceMaxAgeSeconds))
+                currentObservation.sourceUpdatedAt.isBefore(readAt.minusSeconds(firstBoardingSourceMaxAge)) ||
+                    currentObservation.evaluatedAt.isBefore(readAt.minusSeconds(firstBoardingSourceMaxAge))
                 )) TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_STALE
             else TrafficFailureReasons.TRANSIT_ARRIVAL_UNAVAILABLE
         } else null

@@ -240,8 +240,7 @@ data class EffectiveTransitRouteSnapshot(
             val busRefresh = it.railToBusConnectionObserved || !it.onlyLastRideObserved && it.route?.segments?.any {
                 segment -> segment.busRidePrediction?.alightingObservationSourceUpdatedAt != null
             } == true
-            val sourceMaxAge = if (busRefresh) minOf(maxAgeSeconds,
-                com.noLate.transit.domain.SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS) else maxAgeSeconds
+            val sourceMaxAge = if (busRefresh) com.noLate.transit.domain.SeoulBusVehicleFreshness.limit(maxAgeSeconds) else maxAgeSeconds
             it.routeIdentity == plan.identity && it.route != null &&
                 (it.reportedBusAlighting == null || it.onlyLastRideObserved) &&
                 it.sourceUpdatedAt in readAt.minusSeconds(sourceMaxAge)..readAt.plusSeconds(5)

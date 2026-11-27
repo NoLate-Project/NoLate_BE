@@ -42,6 +42,7 @@ import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
 import org.mockito.kotlin.*
 import java.time.Instant
@@ -106,6 +107,27 @@ class PlannedSeoulBusRouteRefresherTest {
         currentBus(lastStationId = beyond.stationId, catalog = first + beyond)
         assertNull(refresher.refresh(route, journey, time(150)))
         verify(provider, never()).getBusAlightingForecast(any(), any())
+    }
+
+    @ParameterizedTest
+    @CsvSource("45,true", "46,false")
+    fun `a new vehicle position cannot renew the publication time of its alighting forecast`(age: Long, fresh: Boolean) {
+        val checkedAt = time(460)
+        whenever(provider.getBusRouteDiagnosticStops(oldSecondVehicle.routeId)).thenReturn(second)
+        whenever(provider.getBusVehicleObservations(SeoulBusVehicleQuery(
+            oldSecondVehicle.routeId, second.first().sequence, second.last().sequence,
+        ))).thenReturn(SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE, listOf(
+            SeoulBusVehicleObservation("101000092", oldSecondVehicle.routeId, "103000001", 501, 300,
+                false, second[1].stationId, time(458), checkedAt, time(503)),
+        )))
+        val posted = checkedAt.minusSeconds(age)
+        whenever(provider.getBusAlightingForecast(second.last(), oldSecondVehicle))
+            .thenReturn(SeoulBusAlightingForecast(time(700), posted, checkedAt))
+
+        val refreshed = refresher.refresh(route, journey, checkedAt)
+
+        assertEquals(time(760).takeIf { fresh }, refreshed?.update?.route?.arrivalAt)
+        assertEquals(posted.takeIf { fresh }, refreshed?.update?.sourceUpdatedAt)
     }
 
     @Test fun `a unique upstream stop confirms the same bus even with a different road section ordinal`() {

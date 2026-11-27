@@ -133,6 +133,13 @@ class AcceptedTrainObservationTest(unittest.TestCase):
         self.assertEqual(orders['LINE_4'], ['상계', '노원', '창동', '사당', '남태령'])
         self.assertEqual(orders['LINE_2'], ['방배', '사당', '낙성대', '서울대입구', '봉천', '신림', '신대방'])
 
+        seed['legs'][0].update(orderedStopNames=['동작', '총신대입구(이수)', '사당'])
+        seed['legs'][0]['from'].update(name='동작', providerStopId='431')
+        selected['transitLegs'][0].update(startName='동작', startID='431')
+        windows[0]['station'] = '동작'
+        self.assertEqual(odsay_station_orders(seed, selected, windows)['LINE_4'],
+                         ['이촌', '동작', '총신대입구', '사당', '남태령'])
+
         selected['transitLegs'][1]['startID'] = '433'
         with self.assertRaises(AssertionError):
             odsay_station_orders(seed, selected, windows)

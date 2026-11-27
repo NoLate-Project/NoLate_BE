@@ -722,6 +722,43 @@ class ScheduleDepartureEtaServiceTest {
 
     @ParameterizedTest
     @CsvSource("45,true", "46,false")
+    fun `출발 전 버스 도착 예보가 만료되면 상태 API에서 실시간 도착을 내린다`(age: Long, fresh: Boolean) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val checkedAt = queryAt.minusSeconds(20)
+        val departure = queryAt.plusSeconds(30)
+        val boarding = departure.plusSeconds(90)
+        val arrival = departure.plusSeconds(300)
+        val posted = queryAt.minusSeconds(age)
+        val route = EffectiveTransitRoute("odsay", "b".repeat(64), departure, arrival, 5,
+            listOf(EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.BUS, 5,
+                busRidePrediction = EffectiveBusRidePrediction(boarding, arrival, posted))))
+        // Older paired results identified the endpoint as seoul-openapi. The route still identifies a bus.
+        val observation = com.noLate.eta.domain.TransitFirstBoardingObservation("seoul-openapi", "승차", "N37",
+            departure, departure.plusSeconds(60), boarding, posted, checkedAt)
+        val snapshot = EffectiveTransitRouteSnapshot(evaluationCheckCount = job.checkCount,
+            evaluationNotificationGeneration = job.notificationGeneration, accepted = true,
+            transitTimingBasis = TransitTimingBasis.SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME,
+            effectiveTransitRoute = route, firstBoardingObservation = observation)
+        finish(job, 5, TrafficSource.LIVE_PROVIDER, checkedAt, liveFetchedAt = checkedAt, snapshotSchedule = schedule,
+            recommendedDepartureAt = departure, predictedArrivalAt = arrival,
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot))
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val status = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(!fresh, status.stale)
+        assertEquals(route.takeIf { fresh }, status.effectiveTransitRoute)
+        assertEquals(observation.takeIf { fresh }, status.firstBoardingObservation)
+        assertEquals(arrival.takeIf { fresh }, status.predictedArrivalAt)
+        assertEquals(TrafficFailureReasons.TRANSIT_ARRIVAL_SOURCE_STALE.takeUnless { fresh }, status.failureReason)
+        assertEquals(departure, status.recommendedDepartureAt)
+        assertEquals(arrival, job.lastPredictedArrivalAt)
+    }
+
+    @ParameterizedTest
+    @CsvSource("45,true", "46,false")
     fun `같은 버스 도착 예보의 상태 API는 원본 만료 후에도 계획 시각을 유지한다`(sourceAgeSeconds: Long, fresh: Boolean) {
         val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
         val job = job(schedule)

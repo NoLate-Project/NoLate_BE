@@ -16,6 +16,7 @@ CORRIDOR_BOUNDARIES = {
     'LINE_4': ('상계', '노원', '사당', '남태령'),
     'LINE_2': ('방배', '사당', '신림', '신대방'),
 }
+SHORT_LINE_4_BOUNDARIES = ('이촌', '동작', '사당', '남태령')
 
 
 def station_orders(saved_journey, windows):
@@ -58,7 +59,8 @@ def corridor_station_orders(stops_by_line, windows):
         assert len(order) >= 2 and len(order) == len(set(order))
         planned_stops = [station(window['station']) for window in windows if window['line'] == line]
         assert planned_stops == [order[0], order[-1]]
-        previous, boarding, alighting, following = CORRIDOR_BOUNDARIES[line]
+        previous, boarding, alighting, following = (
+            SHORT_LINE_4_BOUNDARIES if line == 'LINE_4' and planned_stops == ['동작', '사당'] else CORRIDOR_BOUNDARIES[line])
         assert planned_stops == [boarding, alighting]
         orders[line] = [previous, *order, following]
     return orders

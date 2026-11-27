@@ -15,6 +15,7 @@ import com.noLate.global.observability.recordSafely
 import com.noLate.schedule.application.EtaTravelTimePolicy
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.transit.application.TransitArrivalService
+import com.noLate.transit.domain.SeoulBusVehicleFreshness
 import com.noLate.transit.domain.TransitArrivalDto
 import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
 import com.noLate.transit.domain.TransitArrivalStatus
@@ -589,8 +590,8 @@ class FirstBoardingRealtimeOverlay(
             parseInstant(expectedAt)?.isBefore(evaluatedAt.minusSeconds(ALLOWED_PROVIDER_CLOCK_SKEW_SECONDS)) == true
     }
 
-    private fun isFreshSource(sourceUpdated: Instant, evaluatedAt: Instant): Boolean =
-        !sourceUpdated.isBefore(evaluatedAt.minusSeconds(arrivalSourceMaxAgeSeconds)) &&
+    private fun isFreshSource(sourceUpdated: Instant, evaluatedAt: Instant, maxAge: Long = arrivalSourceMaxAgeSeconds): Boolean =
+        !sourceUpdated.isBefore(evaluatedAt.minusSeconds(maxAge)) &&
             !sourceUpdated.isAfter(evaluatedAt.plusSeconds(ALLOWED_PROVIDER_CLOCK_SKEW_SECONDS))
 
     private fun TransitArrivalDto.toCandidate(evaluatedAt: Instant): ArrivalCandidateEvaluation {
@@ -607,7 +608,9 @@ class FirstBoardingRealtimeOverlay(
         }
         val sourceUpdated = parseInstant(sourceUpdatedAt)
             ?: return ArrivalCandidateEvaluation(rejectedUnverifiedSource = true)
-        if (!isFreshSource(sourceUpdated, evaluatedAt)) {
+        val maxAge = if (provider == "seoul-bus") SeoulBusVehicleFreshness.limit(arrivalSourceMaxAgeSeconds)
+            else arrivalSourceMaxAgeSeconds
+        if (!isFreshSource(sourceUpdated, evaluatedAt, maxAge)) {
             return ArrivalCandidateEvaluation(rejectedStale = true)
         }
         val expected = parseInstant(expectedAt)

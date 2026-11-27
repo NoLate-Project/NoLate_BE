@@ -6,6 +6,7 @@ import com.noLate.eta.domain.TransitJourneyLeg
 import com.noLate.eta.domain.TransitLegMode
 import com.noLate.transit.domain.SeoulBusConnectionStops
 import com.noLate.transit.domain.SeoulBusRideService
+import com.noLate.transit.domain.SeoulBusVehicleFreshness
 import com.noLate.transit.infrastructure.SeoulBusPairedArrival
 import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
 import org.slf4j.LoggerFactory
@@ -22,6 +23,8 @@ class SeoulBusEta(
     @Value("\${eta.transit.boarding-buffer-seconds:60}") private val boardingBufferSeconds: Long,
     @Value("\${eta.transit.arrival-source-max-age-seconds:120}") private val sourceMaxAgeSeconds: Long,
 ) {
+    private val busSourceMaxAgeSeconds = SeoulBusVehicleFreshness.limit(sourceMaxAgeSeconds)
+
     internal fun evaluation(): Evaluation = Evaluation()
 
     internal fun isOutsideConnectionHorizon(boardingReadyAt: Instant, evaluatedAt: Instant): Boolean =
@@ -94,7 +97,7 @@ class SeoulBusEta(
             val readyDuration = Duration.between(firstObservation.departureAt, firstObservation.readyAt)
             if (firstBoardingAt < receivedAt.plus(readyDuration) ||
                 listOf(firstObservation, second.observation).any {
-                    it.sourceUpdatedAt < receivedAt.minusSeconds(sourceMaxAgeSeconds)
+                    it.sourceUpdatedAt < receivedAt.minusSeconds(busSourceMaxAgeSeconds)
                 }) return null
             val totalMinutes = minutes(firstObservation.departureAt, second.destinationAt)
                 .takeIf { it in 1..maxTravelMinutes } ?: return null
@@ -127,7 +130,7 @@ class SeoulBusEta(
         }
 
         fun canStillBoard(bus: SeoulSingleBusProjection, at: Instant): Boolean =
-            canStillBoard(bus.observation, maxOf(at, bus.receivedAt))
+            bus.observation.isFreshAt(maxOf(at, bus.receivedAt), busSourceMaxAgeSeconds)
 
         fun canStillBoard(observation: TransitFirstBoardingObservation, at: Instant): Boolean =
             observation.isFreshAt(at, sourceMaxAgeSeconds)
@@ -176,7 +179,7 @@ class SeoulBusEta(
             if (queried != key) return emptyList()
             val current = arrivals.filter { candidate ->
                 val now = maxOf(evaluatedAt, candidate.receivedAt)
-                candidate.sourceUpdatedAt >= now.minusSeconds(sourceMaxAgeSeconds)
+                candidate.sourceUpdatedAt >= now.minusSeconds(busSourceMaxAgeSeconds)
             }
             val (withinHorizon, outsideHorizon) = current.partition { it.boardingAt <= horizon }
             val (boardable, beforeReady) = withinHorizon.partition { candidate ->
@@ -193,7 +196,7 @@ class SeoulBusEta(
                 val totalMinutes = minutes(departure, arrival).takeIf { it in 1..maxTravelMinutes }
                     ?: return@mapNotNull null
                 val observation = TransitFirstBoardingObservation(
-                    provider = "seoul-openapi",
+                    provider = "seoul-bus",
                     stationName = stationName,
                     lineName = lineName,
                     departureAt = departure,

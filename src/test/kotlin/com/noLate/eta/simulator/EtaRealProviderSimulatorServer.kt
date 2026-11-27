@@ -138,7 +138,28 @@ object EtaRealProviderSimulatorServer {
         val output = Path.of(args[0]).toRealPath()
         require(output.toString().startsWith("/private/tmp/nolate-eta-real-e2e."))
         val publicNowonSillim = args[1] == "--public-nowon-sillim"
-        val copied = if (publicNowonSillim) {
+        val publicMapPoints = args[1] == "--public-map-points"
+        val publicInput = publicNowonSillim || publicMapPoints
+        val publicPointRequest = if (publicMapPoints) {
+            require(!automaticDelivery && comparisonDepartureAt != null && comparisonTargetAt != null)
+            jacksonObjectMapper().readTree(output.resolve("public-map-point-request.json").toFile()).also { request ->
+                require(Instant.parse(request.path("departureAt").asText()) == comparisonDepartureAt)
+                if (mixedOrder == null) require(request.path("firstBoardingStation").asText() in setOf("노원", "동작"))
+                val observedAt = Instant.parse(request.path("observedAt").asText())
+                val now = Instant.now()
+                require(observedAt in now.minusSeconds(300)..now && now < comparisonDepartureAt)
+            }
+        } else null
+        val publicOrigin = publicPointRequest?.get("firstBoardingStation")?.asText()
+        fun publicPoint(name: String): Pair<Double, Double> {
+            val point = requireNotNull(publicPointRequest).path("coordinates").path(name)
+            require(point.path("lat").isNumber && point.path("lng").isNumber)
+            val lat = point.path("lat").asDouble()
+            val lng = point.path("lng").asDouble()
+            require(lat in -90.0..90.0 && lng in -180.0..180.0)
+            return lat to lng
+        }
+        val copied = if (publicInput) {
             require(journeyProviderId == "odsay" && port == 5523 && !shortFirstRide && datedTimetableTarget == null)
             if (!automaticDelivery) {
                 val departure = requireNotNull(comparisonDepartureAt).atZone(ZoneId.of("Asia/Seoul"))
@@ -166,6 +187,7 @@ object EtaRealProviderSimulatorServer {
         } else null
         // Seoul Metro's published line-4 station coordinates, scoped to the private timetable test.
         val (originLat, originLng) = when {
+            publicMapPoints -> publicPoint("origin")
             publicNowonSillim -> 37.65636195 to 127.06342739
             seolleungAccess -> 37.497958 to 127.027539
             adjacentRingTimetable -> 37.497952 to 127.027619
@@ -174,6 +196,7 @@ object EtaRealProviderSimulatorServer {
             else -> requireNotNull(personal).path("origin_lat").asDouble() to personal.path("origin_lng").asDouble()
         }
         val (destinationLat, destinationLng) = when {
+            publicMapPoints -> publicPoint("destination")
             publicNowonSillim -> 37.48426844 to 126.92977778
             seolleungAccess -> 37.504257 to 127.048174
             adjacentRingTimetable -> 37.500622 to 127.036456
@@ -185,6 +208,7 @@ object EtaRealProviderSimulatorServer {
             "origin" to mapOf("lat" to originLat, "lng" to originLng),
             "destination" to mapOf("lat" to destinationLat, "lng" to destinationLng),
         )
+        require(!publicMapPoints || originLat != destinationLat || originLng != destinationLng)
         val mapRouteRequest = output.resolve("public-mixed-route-request.json")
         val publicMixedRoute = if (Files.exists(mapRouteRequest)) {
             require(mixedOrder != null && comparisonDepartureAt != null && comparisonTargetAt != null)
@@ -194,6 +218,7 @@ object EtaRealProviderSimulatorServer {
             require(request.path("coordinates") == inputMapper.valueToTree<com.fasterxml.jackson.databind.JsonNode>(requestedCoordinates))
             inputMapper.treeToValue(request.path("route"), RealOdsaySelectedRouteFixture.PublicMixedRoute::class.java)
         } else null
+        require(!publicMapPoints || mixedOrder == null || publicMixedRoute != null)
         val settings = Properties().apply { Files.newBufferedReader(Path.of("env.local.properties")).use(::load) }
         val app = SpringApplication(NoLateApplication::class.java, RealProviderIsolationConfiguration::class.java)
         app.setAdditionalProfiles("test")
@@ -273,7 +298,7 @@ object EtaRealProviderSimulatorServer {
             val mapper = context.getBean(ObjectMapper::class.java)
             // Verify calendar evidence BEFORE consuming a route call. Missing/stale production
             // cache may be refreshed only in this already-verified memory-only database.
-            if (!publicNowonSillim) {
+            if (!publicInput) {
                 copyPublicCalendar(settings, context.getBean(CalendarDayCacheRepository::class.java),
                     context.getBean(PublicHolidayRepository::class.java))
             }
@@ -296,8 +321,12 @@ object EtaRealProviderSimulatorServer {
                     originLat, originLng, destinationLat, destinationLng, departure, 180))
                 try {
                     RealOdsaySelectedRouteFixture.select(candidates, direct = directEgress, overnight = overnightTimetable,
-                        adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess, shortFirstRide = shortFirstRide,
-                        mixedBusFirst = mixedOrder?.let { it == "bus-rail" }, publicMixedRoute = publicMixedRoute)
+                        adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess,
+                        shortFirstRide = shortFirstRide || publicOrigin == "동작",
+                        mixedBusFirst = mixedOrder?.let { it == "bus-rail" }, publicMixedRoute = publicMixedRoute).also { selected ->
+                        if (publicMapPoints && mixedOrder == null) require(selected.rideLegs.map { it.line?.seoulSubwayLine } ==
+                            listOf(SeoulSubwayLine.LINE_4, SeoulSubwayLine.LINE_2))
+                    }
                 } catch (failure: IllegalArgumentException) {
                     if (publicMixedRoute != null) mapper.writeValue(output.resolve("public-mixed-route-seed-result.json").toFile(),
                         mapOf("result" to "NO_UNAMBIGUOUS_ODSAY_ROUTE"))
@@ -346,6 +375,7 @@ object EtaRealProviderSimulatorServer {
             val schedule = requireNotNull(schedules.findScheduleDetail(363, 296))
             schedule.updateCategorySnapshot(requireNotNull(category.id).toString(), category.title, category.color)
             val locationName = when {
+                publicMapPoints -> "공개 출발 지점 → 공개 도착 지점"
                 publicNowonSillim -> "노원역 → 신림역"
                 seolleungAccess -> "강남역 → 선릉역"
                 adjacentRingTimetable -> "강남역 → 역삼역"
@@ -354,6 +384,7 @@ object EtaRealProviderSimulatorServer {
                 else -> requireNotNull(route).path("location_name").asText()
             }
             val destinationName = when {
+                publicMapPoints -> "공개 도착 지점"
                 publicNowonSillim -> "신림역"
                 seolleungAccess -> "선릉역"
                 adjacentRingTimetable -> "역삼역"
@@ -362,6 +393,7 @@ object EtaRealProviderSimulatorServer {
                 else -> requireNotNull(route).path("destination_name").asText()
             }
             val originName = when {
+                publicMapPoints -> "공개 출발 지점"
                 publicNowonSillim -> "노원역"
                 adjacentRingTimetable || seolleungAccess -> "강남역"
                 overnightTimetable -> "사당역"
@@ -376,8 +408,9 @@ object EtaRealProviderSimulatorServer {
                 savedDeparture.minusSeconds(90 * 60), 10))
             }
             mapper.writeValue(output.resolve("prepared.json").toFile(), mapOf("targetArrivalAt" to target,
-                "memberId" to 296, "scheduleId" to 363, "copiedFromScheduleId" to if (publicNowonSillim) null else 367,
+                "memberId" to 296, "scheduleId" to 363, "copiedFromScheduleId" to if (publicInput) null else 367,
                 "publicStationFixture" to publicNowonSillim,
+                "publicMapPointSeedMatched" to (publicMapPoints && seed != null),
                 // Stage 5 isolates provider quality. Stage 6 separately exercises real OS alarms.
                 "alertMode" to if (automaticDelivery) "ALARM" else "STANDARD", "nativeAlarmDeliveryTest" to automaticDelivery,
                 "automaticScheduling" to automaticDelivery,

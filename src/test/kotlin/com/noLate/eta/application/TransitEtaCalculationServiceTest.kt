@@ -83,14 +83,18 @@ class TransitEtaCalculationServiceTest {
     private val clock = Clock.fixed(evaluatedAt, ZoneOffset.UTC)
     private val arrivalService = mock<TransitArrivalService>()
 
-    @Test
-    fun `서울 단일 버스는 같은 차량의 승하차 예측과 도보로 출발 및 도착을 보정한다`() {
+    @ParameterizedTest
+    @CsvSource("11,true", "45,true", "46,false")
+    fun `서울 단일 버스는 신선한 같은 차량의 승하차 예측과 도보로 출발 및 도착을 보정한다`(
+        sourceAgeSeconds: Long,
+        fresh: Boolean,
+    ) {
         val bus = mock<SeoulTransitArrivalClient>()
         val routeId = "100100057"
         val board = SeoulBusRouteStop(routeId, 71, "122000184", "02005", "승차", "방면", null, 37.0, 127.0)
         val alight = board.copy(sequence = 72, stationId = "122000185", arsId = "22009", name = "하차")
         whenever(bus.getBusRouteDiagnosticStops(routeId)).thenReturn(listOf(board, alight))
-        val source = evaluatedAt.minusSeconds(11)
+        val source = evaluatedAt.minusSeconds(sourceAgeSeconds)
         val boardAt = evaluatedAt.plusSeconds(368)
         val alightAt = boardAt.plusSeconds(136)
         whenever(bus.getPairedBusArrivals(listOf(board, alight))).thenReturn(listOf(
@@ -107,7 +111,14 @@ class TransitEtaCalculationServiceTest {
         val result = service(listOf(RecordingProvider("odsay", listOf(enriched))),
             busEta = SeoulBusEta(bus, 60, 120)).calculate(request())
 
-        assertTrue(result.accepted)
+        verify(bus).getPairedBusArrivals(listOf(board, alight))
+        assertEquals(fresh, result.accepted)
+        if (!fresh) {
+            assertEquals(TrafficSource.SELECTED_ROUTE, result.source)
+            assertNull(result.predictedArrivalAt)
+            assertNull(result.firstBoardingObservation)
+            return
+        }
         assertEquals(TrafficSource.LIVE_PROVIDER, result.source)
         assertEquals(TransitTimingBasis.SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME, result.transitTimingBasis)
         assertEquals(evaluatedAt, result.recommendedDepartureAt)
@@ -118,7 +129,6 @@ class TransitEtaCalculationServiceTest {
         assertEquals(boardAt, segments[1].busRidePrediction?.boardingAt)
         assertEquals(alightAt, segments[1].busRidePrediction?.alightingAt)
         assertEquals(source, result.firstBoardingObservation?.sourceUpdatedAt)
-        verify(bus).getPairedBusArrivals(listOf(board, alight))
     }
 
     @ParameterizedTest

@@ -1,0 +1,99 @@
+{
+  "classification": "SEOUL_BUS_FORECAST_AGE_POLICY_REPLAY",
+  "archivedN37Source": {
+    "evidence": "e2e/evidence/2026-11-26-onward-forecast-reconnection/n37-in-service-stop-observation.json",
+    "evidenceSha256": "7e598e54409834be3c75985136d5f38571ca890e212a347bbf34cfda19057b55",
+    "route": "N37",
+    "stop": "서대문역사거리.농협중앙회",
+    "independentVehicles": 1,
+    "forecastPublishedAt": "2026-11-27T00:23:20+09:00",
+    "forecastReceivedAt": "2026-11-27T00:23:36.479274+09:00",
+    "forecastArrivalAt": "2026-11-27T00:24:43+09:00",
+    "newSourceExpiryAt": "2026-11-27T00:24:05+09:00",
+    "providerStopArrivalInterval": [
+      "2026-11-27T00:24:03+09:00",
+      "2026-11-27T00:24:30+09:00"
+    ],
+    "providerStopArrivalIntervalMinusForecastSeconds": [
+      -40,
+      -13
+    ],
+    "lastAtStopPositionReceivedAt": "2026-11-27T00:24:40.681064+09:00",
+    "oldForecastRemainingSecondsAtLatestAtStopSource": 13,
+    "oldForecastRemainingSecondsAtLatestAtStopReceipt": 2.319,
+    "unrefreshedSameForecastAgePolicy": [
+      {
+        "secondsSincePublication": 0,
+        "oldAllowed": true,
+        "newAllowed": true,
+        "forecastStillInFuture": true
+      },
+      {
+        "secondsSincePublication": 45,
+        "oldAllowed": true,
+        "newAllowed": true,
+        "forecastStillInFuture": true
+      },
+      {
+        "secondsSincePublication": 46,
+        "oldAllowed": true,
+        "newAllowed": false,
+        "forecastStillInFuture": true
+      },
+      {
+        "secondsSincePublication": 70,
+        "oldAllowed": true,
+        "newAllowed": false,
+        "forecastStillInFuture": true
+      }
+    ],
+    "testsIncomingForecastAgeOnly": true,
+    "newProviderHttpCalls": 0
+  },
+  "controlledBeforeAfter": {
+    "sourceExactly45SecondsAcceptedBeforeAndAfter": true,
+    "oldAt46Seconds": {
+      "predepartureAccepted": true,
+      "postdepartureRecalculatedWithFreshPosition": true,
+      "publicStatusStale": false
+    },
+    "newAt46Seconds": {
+      "predepartureAccepted": false,
+      "postdepartureRecalculatedWithFreshPosition": false,
+      "publicStatusStale": true,
+      "supersedesSavedDepartureReminder": false
+    },
+    "backendFailedCasesBeforeFix": 3,
+    "backendPassed": 3163,
+    "backendSkipped": 6,
+    "frontendTargetedPassed": 95,
+    "frontendTypecheckPassed": true,
+    "pythonVerificationPassed": 338
+  },
+  "newSameConditionsNaverComparison": false,
+  "physicalPassengerArrivalVerified": false,
+  "installedAppAndPublicStatusReplay": {
+    "result": "PASSED",
+    "backend": "isolated H2",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "runEvidence": "/private/tmp/nolate-eta-mock-e2e.bus-age-ui.jfuzi53b/report.json",
+    "physicalTransitHttpCalls": 0,
+    "productFilesMatchedInFixtureBuild": {
+      "backend": 6,
+      "frontend": 2
+    },
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "sourcePublishedAt": "2026-11-27T14:26:28.151968Z",
+    "departureAtUnchanged": "2026-11-27T14:29:28.151968Z",
+    "initialArrivalAt": "2026-11-27T14:34:28.151968Z",
+    "expiredArrivalAt": null,
+    "staleAfterWindow": true,
+    "appReadsBeforeExpiry": 1,
+    "clientExpiredWithoutStaleServerResponse": true,
+    "eventualSuccessAfterTestHarnessCorrections": [
+      "RESTORE_PRIVATE_METRO_DEPENDENCY_WATCH_FOLDER",
+      "VERIFY_COMPACT_UI_DURATION_LABEL"
+    ]
+  }
+}

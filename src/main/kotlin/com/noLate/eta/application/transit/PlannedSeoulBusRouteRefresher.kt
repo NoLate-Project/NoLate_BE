@@ -46,6 +46,8 @@ class PlannedSeoulBusRouteRefresher(
     private val railRouteRefresher: PlannedTransitRouteRefresher? = null,
     private val busEta: SeoulBusEta? = null,
 ) {
+    private val busSourceMaxAgeSeconds = SeoulBusVehicleFreshness.limit(sourceMaxAgeSeconds)
+
     internal data class Refresh(val update: PlannedTransitRouteUpdate, val journey: PlannedSeoulBusJourney)
     internal data class DeferredRefresh(val pending: DeferredSeoulBusTransfer, val connected: Refresh? = null)
 
@@ -171,7 +173,7 @@ class PlannedSeoulBusRouteRefresher(
             next.transferTiming?.requiredMarginSeconds ?: 0L)
         val nextService = journey.rides[index + 1].service
         val nextPair = findConnection(nextService, readyAt.plusSeconds(margin), current.prediction.alightingAt,
-            current.sourceAt, maxOf(at, current.receivedAt))
+            current.sourceAt, maxOf(at, current.receivedAt), precedingSourceMaxAgeSeconds = busSourceMaxAgeSeconds)
         if (nextPair == null) {
             return if (requireNotNull(next.busRidePrediction).boardingAt < readyAt.plusSeconds(margin)) {
                 Refresh(PlannedTransitRouteUpdate(route.identity, current.sourceAt,
@@ -433,22 +435,22 @@ class PlannedSeoulBusRouteRefresher(
         if (!approaching && !atAlightingStop) return null
         val forecast = client.getBusAlightingForecast(path.last(), service) ?: return null
         val checkedAt = maxOf(at, position.receivedAt, forecast.receivedAt)
-        if (position.validUntil <= checkedAt || forecast.sourceUpdatedAt < checkedAt.minusSeconds(sourceMaxAgeSeconds) ||
+        if (position.validUntil <= checkedAt || forecast.sourceUpdatedAt < checkedAt.minusSeconds(busSourceMaxAgeSeconds) ||
             forecast.sourceUpdatedAt < plan.boardingAt ||
             forecast.sourceUpdatedAt <= (plan.alightingObservationSourceUpdatedAt ?: plan.sourceUpdatedAt) ||
             forecast.sourceUpdatedAt > forecast.receivedAt) return null
         if (forecast.reportedAtStop) {
             // The stop-scoped row supplies its occurrence; the location feed's road-section ordinal is independent.
-            if (!atAlightingStop || forecast.alightingAt != forecast.sourceUpdatedAt || forecast.sourceUpdatedAt <= plan.boardingAt ||
-                forecast.sourceUpdatedAt < checkedAt.minusSeconds(SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS)) return null
+            if (!atAlightingStop || forecast.alightingAt != forecast.sourceUpdatedAt || forecast.sourceUpdatedAt <= plan.boardingAt) return null
             return MatchedAlighting(plan.copy(alightingAt = forecast.alightingAt,
                 alightingObservationSourceUpdatedAt = null, reportedAlightingAt = forecast.sourceUpdatedAt),
                 forecast.sourceUpdatedAt, checkedAt, position.validUntil)
         }
         if (!approaching || forecast.alightingAt <= checkedAt) return null
+        val sourceAt = minOf(position.sourceUpdatedAt, forecast.sourceUpdatedAt)
         return MatchedAlighting(plan.copy(alightingAt = forecast.alightingAt,
             alightingObservationSourceUpdatedAt = forecast.sourceUpdatedAt),
-            minOf(position.sourceUpdatedAt, forecast.sourceUpdatedAt), checkedAt, position.validUntil)
+            sourceAt, checkedAt, minOf(position.validUntil, sourceAt.plusSeconds(busSourceMaxAgeSeconds)))
     }
 
     private data class Connection(
@@ -458,26 +460,27 @@ class PlannedSeoulBusRouteRefresher(
     private fun findConnection(
         service: SeoulBusRideService, readyAt: Instant, precedingAlightingAt: Instant,
         precedingSourceAt: Instant?, checkedAfter: Instant,
+        precedingSourceMaxAgeSeconds: Long = sourceMaxAgeSeconds,
     ): Connection? {
         val path = path(service) ?: return null
-        return chooseConnection(client.getPairedBusArrivals(path), readyAt, precedingAlightingAt, precedingSourceAt, checkedAfter)
+        return chooseConnection(client.getPairedBusArrivals(path), readyAt, precedingAlightingAt, precedingSourceAt,
+            checkedAfter, precedingSourceMaxAgeSeconds)
     }
 
     private fun chooseConnection(
         arrivals: List<SeoulBusPairedArrival>, readyAt: Instant, precedingAlightingAt: Instant,
         precedingSourceAt: Instant?, checkedAfter: Instant,
+        precedingSourceMaxAgeSeconds: Long = sourceMaxAgeSeconds,
     ): Connection? {
         val paired = arrivals.filter { candidate ->
             val checkedAt = maxOf(checkedAfter, candidate.receivedAt)
-            val oldest = checkedAt.minusSeconds(sourceMaxAgeSeconds)
             val precedingTimingSupported = if (precedingSourceAt != null) {
-                precedingSourceAt in oldest..checkedAt && precedingAlightingAt > checkedAt
+                precedingSourceAt in checkedAt.minusSeconds(precedingSourceMaxAgeSeconds)..checkedAt && precedingAlightingAt > checkedAt
             } else {
-                precedingAlightingAt <= checkedAfter &&
-                    candidate.sourceUpdatedAt >= checkedAt.minusSeconds(SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS)
+                precedingAlightingAt <= checkedAfter
             }
             candidate.service != null && candidate.boardingAt >= maxOf(readyAt, checkedAt) &&
-                candidate.sourceUpdatedAt in oldest..candidate.receivedAt && precedingTimingSupported
+                candidate.sourceUpdatedAt in checkedAt.minusSeconds(busSourceMaxAgeSeconds)..candidate.receivedAt && precedingTimingSupported
         }.minByOrNull { it.alightingAt } ?: return null
         return Connection(EffectiveBusRidePrediction(paired.boardingAt, paired.alightingAt, paired.sourceUpdatedAt),
             requireNotNull(paired.service), paired.sourceUpdatedAt)
