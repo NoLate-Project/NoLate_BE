@@ -1,0 +1,40 @@
+{
+  "classification": "MISSED_BUS_RECOVERY_WORKER_API_INSTALLED_APP_REPLAY",
+  "input": "CONTROLLED_PROVIDER_RESPONSES",
+  "beforeRegressionResult": "NO_UPDATE_AFTER_PREVIOUS_BUS_BOARDING",
+  "after": {
+    "firstEvaluationFailure": "TRANSFER_RECONNECTION_UNAVAILABLE",
+    "firstEvaluationPublishedDestinationAt": false,
+    "secondEvaluationSecondsAfterPreviousBoarding": 5,
+    "excludedBusWasSecondsTooEarly": 1,
+    "transferWalkSeconds": 30,
+    "boardingMarginSeconds": 60,
+    "transferWaitSeconds": 62,
+    "arrivalSecondsAfterDeparture": 810,
+    "workerAndStatusApi": {
+      "recommendedDepartureAt": "2026-11-27T10:05:56Z",
+      "predictedArrivalAt": "2026-11-27T10:19:26Z",
+      "totalMinutes": 14,
+      "historyCount": 2,
+      "physicalTransitHttpCalls": 0,
+      "basis": "MATCHED_TRAIN_AND_BUS_REALTIME",
+      "missFailure": "TRANSFER_RECONNECTION_UNAVAILABLE",
+      "missedBusBoardingAt": "2026-11-27T10:12:16Z",
+      "recheckedAt": "2026-11-27T10:12:21Z",
+      "railAlightingAt": "2026-11-27T10:13:11Z",
+      "selectedBusBoardingAt": "2026-11-27T10:14:43Z"
+    }
+  },
+  "verification": {
+    "backendRegressionsPassed": 277,
+    "xcuitestResult": "PASSED",
+    "simulator": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "uiMatchesApiArrivalMinute": "19:19",
+    "uiExpectedJourneyMinutes": 14,
+    "uiMatchesTransferComponents": true,
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "strictNaverAccuracySamples": 0,
+    "actualPassengerArrivalVerified": false
+  }
+}

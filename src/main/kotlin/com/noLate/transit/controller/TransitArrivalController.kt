@@ -67,6 +67,7 @@ class TransitArrivalController(
                 limit = limit,
                 cityCodeNamespace = cityCodeNamespace,
                 providerCode = providerCode,
+                stationBoard = true,
             )
         )
     }

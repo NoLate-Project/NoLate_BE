@@ -31,12 +31,18 @@ data class PlannedTransitRouteUpdate(
     /** 앞 열차 관측과 후속 버스의 승하차 예보를 함께 대조한 계획이다. */
     @get:JsonInclude(JsonInclude.Include.NON_DEFAULT)
     val railToBusConnectionObserved: Boolean = false,
+    /** 지난 하차역 상태와 이후의 환승 예보가 서로 다른 평가에 도착할 수 있다. */
+    @get:JsonInclude(JsonInclude.Include.NON_EMPTY)
+    val reportedAlightings: List<ReportedSubwayAlightingEvidence> = emptyList(),
 ) {
     init {
-        require((route != null) != (failure != null) || route == null && failure == null && reportedBoardings.isNotEmpty())
+        require((route != null) != (failure != null) ||
+            route == null && failure == null && (reportedBoardings.isNotEmpty() || reportedAlightings.isNotEmpty()))
         require(route == null || route.identity == routeIdentity)
         require(reportedBoardings.size <= 32 && reportedBoardings.all { it.routeIdentity == routeIdentity })
         require(reportedBoardings.map { it.segmentSequence to it.service }.distinct().size == reportedBoardings.size)
+        require(reportedAlightings.size <= 32 && reportedAlightings.all { it.routeIdentity == routeIdentity })
+        require(reportedAlightings.map { it.segmentSequence }.distinct().size == reportedAlightings.size)
         require(!requiresFirstBoardingRecheck || failure == PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED)
         require(transferBoardingRecheck == null || (!requiresFirstBoardingRecheck && failure == PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED))
         require(!railToBusConnectionObserved || route != null && !onlyLastRideObserved)

@@ -174,7 +174,10 @@ class PlannedSeoulBusRouteRefresher(
         val bus = segments[busIndex]
         val busTiming = requireNotNull(bus.busRidePrediction)
         val egress = segments.drop(busIndex + 1)
-        if (at >= busTiming.boardingAt) {
+        val retryMissedBus = pendingTransferFailure && previousUpdate?.routeIdentity == route.identity &&
+            previousUpdate.failure == PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE
+        // 기존 버스를 놓쳤다면 그 승차시각 이후에도 열차 하차와 다음 버스의 예보를 대조한다.
+        if (at >= busTiming.boardingAt && !retryMissedBus) {
             if (pendingTransferFailure) return null
             val observed = observeAlighting(busTiming, binding.service, at) ?: return null
             val ready = requireNotNull(bus.transferTiming).physicalReadyAt

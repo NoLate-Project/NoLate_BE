@@ -1,0 +1,135 @@
+{
+  "classification": "LATE_ORIGINAL_RAIL_TRANSFER_RECOVERY",
+  "recordedOperatingContext": {
+    "serviceDate": "2026-11-20",
+    "station": "사당",
+    "line": "2호선",
+    "trainNumber": "2200",
+    "scheduledDepartureAt": "2026-11-20T02:51:00Z",
+    "providerReportedDepartureInterval": [
+      "2026-11-20T02:55:33+00:00",
+      "2026-11-20T02:58:00+00:00"
+    ],
+    "providerReportedDepartureMinusScheduleSeconds": [
+      273,
+      420
+    ],
+    "archivedForecastReadAt": "2026-11-20T02:40:03.462269Z",
+    "originalTrainPresentInArchivedBoardingForecast": false,
+    "observationEvidence": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/final-paired-position-audit.json",
+    "forecastEvidence": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/evaluation-3.json"
+  },
+  "recordedProviderReplay": {
+    "cases": [
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/evaluation-3.json",
+        "sourceSha256": "d791b4a4acd76599d4e97dc67487359d3016b96b420265dd0ee12cf3130e75ae",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameUpdate": true
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameUpdate": true
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-morning/evaluation-3.json",
+        "sourceSha256": "8ab5006c85d4febb65cb7fd0a0bd5f6f7ba0cca17e90a055690d81e4f790018f",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameUpdate": true
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameUpdate": true
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/completed-1620/evaluation-3.json",
+        "sourceSha256": "174a854fa33444f8117f437d2fdd795508a90d1bd6611b6c6f4976d5fafb4c4c",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameUpdate": true
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameUpdate": true
+          }
+        ]
+      },
+      {
+        "capture": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/observed-service-connection/independent-future-timetable-plan/real-final-audit/evaluation-3.json",
+        "sourceSha256": "513537e304415fa99fe4421b0baf10544313f86f632ffbd057ab2b06c7b01d84",
+        "frames": [
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameUpdate": true
+          },
+          {
+            "before": "REPLAYED",
+            "after": "REPLAYED",
+            "sameUpdate": true
+          }
+        ]
+      }
+    ],
+    "comparableEvaluations": 8,
+    "changedUpdates": 0,
+    "newHttpCalls": 0
+  },
+  "controlledReplay": {
+    "previousPolicyWithSameTestInput": {
+      "trainNumber": "2014"
+    },
+    "updatedPolicy": {
+      "recommendedDepartureAt": "2026-11-27T10:20:01Z",
+      "evaluatedAt": "2026-11-27T10:36:32Z",
+      "originalScheduledBoardingAt": "2026-11-27T10:36:02Z",
+      "recoveredBoardingAt": "2026-11-27T10:42:12Z",
+      "replacedRouteArrivalAt": "2026-11-27T10:55:14Z",
+      "predictedArrivalAt": "2026-11-27T10:53:04Z",
+      "trainNumber": "2012",
+      "historyCount": 2,
+      "physicalTransitHttpCalls": 0
+    },
+    "stationTimingBasis": "PLANNED_RIDE_BOARDING_REALTIME",
+    "transferWalkSeconds": 243,
+    "requiredTransferMarginSeconds": 60,
+    "remainingTransferSlackSeconds": 17,
+    "destinationPredictionMovesEarlierSeconds": 130,
+    "departureNoticeUnchanged": true
+  },
+  "verification": {
+    "backendRegressionTests": 313,
+    "frontendDisplayRegressionTests": 57,
+    "installedAppResult": "PASSED",
+    "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+    "apiMatchesApp": {
+      "source": "MATCHED_RIDE_AND_ONWARD_TIMETABLE",
+      "totalMinutes": 34,
+      "historyCount": 2,
+      "trainNumber": "2012",
+      "uiArrivalClock": "19:53",
+      "transferWalkSeconds": 243,
+      "transferWaitSeconds": 77
+    },
+    "physicalTransitHttpCalls": 0,
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "sameConditionsNaverAccuracySamples": 0,
+    "physicalEndToEndTravelAccuracyVerified": false
+  }
+}

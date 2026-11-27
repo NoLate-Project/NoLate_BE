@@ -223,6 +223,94 @@ class PlannedTransitRouteRefresherTest {
         verifyNoInteractions(timetable)
     }
 
+    @ParameterizedTest
+    @CsvSource(
+        "1370,IN_TRANSIT,1025,2012",
+        "1352,IN_TRANSIT,1025,2014",
+        "1370,ARRIVED,1025,2014",
+        "1370,UNKNOWN,1025,2014",
+        "1370,IN_TRANSIT,909,2014",
+    )
+    fun `예정 승차시각이 지난 원래 환승편도 신선한 미래 예보로 탈 수 있을 때만 복구한다`(
+        arrival: Long, status: TransitArrivalStatus, source: Long, expectedTrain: String,
+    ) {
+        val original = plan()
+        val second = requireNotNull(original.segments[3].rideTiming).timetable
+        val alternate = second.copy(trainNumber = "2014", boardingAt = at(1500), arrivalAt = at(1981))
+        val active = original.copy(arrivalAt = at(2152), totalMinutes = 36, segments = original.segments.map {
+            if (it.sequence == 3) it.copy(rideTiming = EffectiveTransitRideTiming(alternate, alternate.boardingAt,
+                alternate.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE)) else it
+        })
+        val evaluatedAt = at(1030)
+        val arrivals = mock<TransitArrivalService>()
+        val inbound = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", stationName = "사당",
+            direction = "하행", destinationName = "오이도", subwayLineId = "1004", trainNumber = "4012",
+            express = false, expectedAt = at(1050).toString(), sourceUpdatedAt = at(1025).toString(),
+            arrivalStatus = TransitArrivalStatus.IN_TRANSIT,
+            freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP)
+        val transfer = inbound.copy(subwayLineId = "1002", destinationName = "성수", trainNumber = "2012",
+            expectedAt = at(arrival).toString(), sourceUpdatedAt = at(source).toString(), arrivalStatus = status)
+        whenever(arrivals.getSubwayArrivalsForEta("사당", "4호선", null, "DOWN", 10)).thenReturn(listOf(inbound))
+        whenever(arrivals.getSubwayArrivalsForEta("사당", "2호선", null, "DOWN", 10)).thenReturn(listOf(transfer))
+        val engine = PlannedTransitRouteRefresher(TransitTransferRealtimeGuard(arrivals),
+            TransitJourneyTimetableEnricher(listOf(timetable)), TransitTransferFeasibilityEvaluator())
+
+        val update = requireNotNull(engine.refresh(active, evaluatedAt, departurePlan = original))
+        val route = requireNotNull(update.route)
+        val expectedBoarding = if (expectedTrain == "2012") at(1370) else at(1500)
+        assertEquals(expectedTrain, route.segments[3].rideTiming?.timetable?.trainNumber)
+        assertEquals(expectedBoarding, route.segments[3].rideTiming?.predictedBoardingAt)
+        assertEquals(if (expectedTrain == "2012") at(2022) else at(2152), route.arrivalAt)
+        assertEquals(original.departureAt, route.departureAt)
+        val timing = requireNotNull(route.segments[3].transferTiming)
+        assertEquals(243L, timing.walkingSeconds)
+        assertEquals(60L, timing.requiredMarginSeconds)
+        assertEquals(17L.takeIf { expectedTrain == "2012" } ?: 147L, timing.remainingSlackSeconds)
+        verify(arrivals).getSubwayArrivalsForEta("사당", "2호선", null, "DOWN", 10)
+        verifyNoInteractions(timetable)
+    }
+
+    @Test
+    fun `이미 지난 앞 열차의 하차 관측으로 다음 회차의 환승 예보를 다시 검증한다`() {
+        val original = plan().let { route -> route.copy(segments = route.segments.map { segment ->
+            if (segment.sequence == 1) segment.copy(orderedStopNames = listOf("노원", "창동", "사당")) else segment
+        }) }
+        val originalConnection = requireNotNull(original.segments[3].rideTiming).timetable
+        val replacement = originalConnection.copy(trainNumber = "2014", boardingAt = at(1500), arrivalAt = at(1981))
+        val planned = original.copy(arrivalAt = at(2152), totalMinutes = 36, segments = original.segments.map {
+            if (it.sequence == 3) it.copy(rideTiming = EffectiveTransitRideTiming(replacement, replacement.boardingAt,
+                replacement.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE)) else it
+        })
+        val reported = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", stationName = "사당",
+            direction = "하행", destinationName = "오이도", subwayLineId = "1004", trainNumber = "4012",
+            express = false, expectedAt = at(1050).toString(), waitSeconds = 0, sourceUpdatedAt = at(1050).toString(),
+            observedAt = at(1080).toString(), arrivalStatus = TransitArrivalStatus.ARRIVED,
+            freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP)
+        val upcoming = reported.copy(subwayLineId = "1002", destinationName = "성수", trainNumber = "2012",
+            expectedAt = at(1370).toString(), waitSeconds = 152, sourceUpdatedAt = at(1218).toString(),
+            observedAt = at(1220).toString(), arrivalStatus = TransitArrivalStatus.IN_TRANSIT)
+        val arrivals = mock<TransitArrivalService>()
+        val engine = PlannedTransitRouteRefresher(TransitTransferRealtimeGuard(arrivals),
+            TransitJourneyTimetableEnricher(listOf(timetable)), TransitTransferFeasibilityEvaluator())
+        whenever(arrivals.getSubwayArrivalsForEta("사당", "4호선", null, "DOWN", 10))
+            .thenReturn(listOf(reported.copy(trainNumber = "OTHER")), listOf(reported), emptyList())
+        whenever(arrivals.getSubwayArrivalsForEta("사당", "2호선", null, "DOWN", 10))
+            .thenReturn(emptyList(), emptyList(), listOf(upcoming))
+
+        assertNull(engine.refresh(planned, at(1080), departurePlan = original))
+        val saved = requireNotNull(engine.refresh(planned, at(1080), departurePlan = original))
+        assertNull(saved.route)
+        val restored = requireNotNull(engine.refresh(planned, at(1220), departurePlan = original, previousUpdate = saved))
+        val route = requireNotNull(restored.route)
+        assertEquals(original.departureAt, route.departureAt)
+        assertEquals(at(1050), route.segments[1].rideTiming?.predictedArrivalAt)
+        assertEquals("2012", route.segments[3].rideTiming?.timetable?.trainNumber)
+        assertEquals(at(2022), route.arrivalAt)
+        assertEquals(17L, route.segments[3].transferTiming?.remainingSlackSeconds)
+        assertEquals(at(1218), restored.sourceUpdatedAt)
+        verifyNoInteractions(timetable)
+    }
+
     @Test
     fun `같은 환승편이 지연에서 조기 도착으로 바뀌면 승차 대기와 하차 근거를 다시 계산한다`() {
         val base = plan()

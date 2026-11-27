@@ -4,6 +4,8 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.global.security.MemberPrincipal
 import com.noLate.transit.controller.TransitArrivalController
 import com.noLate.transit.domain.TransitArrivalDto
+import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
+import com.noLate.transit.domain.TransitArrivalStatus
 import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
 import com.noLate.transit.infrastructure.TagoTransitArrivalClient
 import org.junit.jupiter.api.Test
@@ -24,7 +26,10 @@ class TransitStationBoardHttpTest {
         val seoul = mock<SeoulTransitArrivalClient>()
         val tago = mock<TagoTransitArrivalClient>()
         val arrival = TransitArrivalDto(provider = "seoul-bus", kind = "BUS", routeName = "N37", arsId = "01001")
-        whenever(seoul.getBusArrivals("01001", "승차 정류장", "N37", 2)).thenReturn(listOf(arrival))
+        val expired = arrival.copy(arrivalStatus = TransitArrivalStatus.ARRIVED,
+            sourceUpdatedAt = "2026-11-20T02:34:03Z",
+            freshnessEvidence = TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP)
+        whenever(seoul.getBusArrivals("01001", "승차 정류장", "N37", 10)).thenReturn(listOf(expired, arrival))
         val mvc = stationBoard(seoul, tago)
         mvc.get("/api/transit-arrivals/bus") {
             param("arsId", "01001")
@@ -34,6 +39,7 @@ class TransitStationBoardHttpTest {
             param("cityCodeNamespace", "ODSAY_CID")
         }.andExpect {
             status { isOk() }
+            jsonPath("$.data.length()") { value(1) }
             jsonPath("$.data[0].provider") { value("seoul-bus") }
         }
         mvc.get("/api/transit-arrivals/bus") {

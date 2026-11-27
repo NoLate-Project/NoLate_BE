@@ -11,6 +11,7 @@ import com.noLate.schedule.application.PlannedJourneyArrivalObservation
 import com.noLate.schedule.application.ObservedTransitSubwayService
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
 import com.noLate.schedule.application.ReportedSubwayBoardingEvidence
+import com.noLate.schedule.application.ReportedSubwayAlightingEvidence
 import com.noLate.eta.domain.TransitLegMode
 import com.noLate.eta.domain.TransitServiceClass
 import com.noLate.transit.application.TransitArrivalService
@@ -44,6 +45,7 @@ internal data class PlannedTransferObservations(
     val serviceCandidates: Map<Int, List<ObservedSubwayRideCandidate>> = emptyMap(),
     val additionalEndpointReads: Int = 0,
     val reportedBoardings: List<ReportedSubwayBoardingEvidence> = emptyList(),
+    val reportedAlightings: List<ReportedSubwayAlightingEvidence> = emptyList(),
 )
 
 /** 별칭 대조가 아니라, 양 끝 역이 같은 실제 차량에 제공한 두 개의 예보다. */
@@ -89,6 +91,8 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
         val originalBoardings = mutableMapOf<Int, TransitRideRealtimeObservation>()
         val serviceCandidates = mutableMapOf<Int, List<ObservedSubwayRideCandidate>>()
         val serviceLookups = mutableListOf<Pair<Int, () -> Unit>>()
+        val lastRide = segments.indexOfLast { it.rideTiming != null }
+        val reportedAlightings = mutableListOf<ReportedSubwayAlightingEvidence>()
         val records = reportedBoardings.filter { record -> segments.any { record.matches(route, it, evaluatedAt) } }.toMutableList()
         fun recordBoarding(segment: EffectiveTransitRouteSegment, rows: List<TransitArrivalDto>) {
             for (record in reportedBoardingStates(route, segment, evaluatedAt, rows)) {
@@ -152,11 +156,19 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
                 ?.trim()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
             val rows = read(station, table) ?: return@mapNotNull null
             if (point == TransitRideObservationPoint.BOARDING) recordBoarding(segment, rows)
+            if (point == TransitRideObservationPoint.ALIGHTING && index != lastRide) {
+                reportedAlightingState(route, segment, station, evaluatedAt, rows)?.let {
+                    reportedAlightings += it
+                    // This is a past station status, not another forecast for this ride.
+                    return@mapNotNull null
+                }
+            }
             if (point == TransitRideObservationPoint.ALIGHTING) addCandidates(index,
                 pairedReportedServices(route, segment, records, endpointForecasts(station, table, evaluatedAt, rows), evaluatedAt))
             // 한 승차역 응답에 있는 원래 편과 변경된 편을 각각 식별한다.
             if (point == TransitRideObservationPoint.BOARDING && original != null) {
-                val seen = observedArrivalAt(station, original.timetable, evaluatedAt, rows)
+                val seen = observedArrivalAt(station, original.timetable, evaluatedAt, rows,
+                    requirePendingStatus = original.timetable.boardingAt <= evaluatedAt)
                 val priorSource = original.boardingSourceAt()
                 // Without a station arrival timetable, a forecast before departure can also describe normal dwell.
                 if (seen != null && seen.first > evaluatedAt &&
@@ -227,7 +239,39 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
             if (aborted) break
             lookup()
         }
-        return PlannedTransferObservations(current, originalBoardings, serviceCandidates, additionalEndpointReads, records)
+        return PlannedTransferObservations(current, originalBoardings, serviceCandidates, additionalEndpointReads, records,
+            reportedAlightings)
+    }
+
+    private fun reportedAlightingState(route: EffectiveTransitRoute, segment: EffectiveTransitRouteSegment, station: String,
+                                       evaluatedAt: Instant, rows: List<TransitArrivalDto>): ReportedSubwayAlightingEvidence? {
+        if (!hasOrderedRide(segment)) return null
+        val timing = requireNotNull(segment.rideTiming)
+        val table = timing.timetable
+        val service = timing.observedService
+        val acceptedNumbers = service?.let { setOf(it.trainNumber) } ?: setOfNotNull(table.trainNumber, table.realtimeTrainNumber)
+        val scoped = rows.filter { row ->
+            row.provider == "seoul-openapi" && row.kind == "SUBWAY" && row.subwayLineId == table.line.realtimeId &&
+                normalize(row.stationName) == normalize(station) && row.trainNumber in acceptedNumbers
+        }
+        fun parse(value: String?): Instant? = value?.let { runCatching { Instant.parse(it) }.getOrNull() }
+        val postedAt = scoped.mapNotNull { parse(it.sourceUpdatedAt) }.maxOrNull() ?: return null
+        if (postedAt !in evaluatedAt.minusSeconds(120)..evaluatedAt || postedAt <= timing.predictedBoardingAt ||
+            timing.alightingSourceAt()?.let { postedAt < it } == true) return null
+        val latest = scoped.filter { parse(it.sourceUpdatedAt) == postedAt }
+        if (latest.any { row ->
+                !row.matchesEndpoint(station, table, evaluatedAt, service?.terminalName) ||
+                    row.arrivalStatus != TransitArrivalStatus.ARRIVED || row.waitSeconds != 0 || parse(row.expectedAt) != postedAt
+            }) return null
+        val received = latest.map { parse(it.observedAt) }.distinct().singleOrNull() ?: return null
+        if (received !in postedAt..minOf(postedAt.plusSeconds(120), evaluatedAt.plusSeconds(5))) return null
+        val number = latest.mapNotNull { it.trainNumber }.distinct().singleOrNull()
+            ?.takeIf { it.matches(Regex("[A-Z]?[0-9]{1,12}")) && it.any { digit -> digit in '1'..'9' } } ?: return null
+        val terminal = normalize(table.terminalName) ?: return null
+        val identified = service ?: ObservedTransitSubwayService("seoul-openapi", table.line, table.serviceDate,
+            number, table.directionCode, table.serviceClass, terminal, requireNotNull(segment.fromName).trim(), station)
+        return ReportedSubwayAlightingEvidence(route.identity, route.departureAt, segment.sequence, identified,
+            postedAt, evaluatedAt, received).takeIf { it.matches(route, segment, evaluatedAt) }
     }
 
     /** 미래 예보가 아닌 ARRIVED/대기0/예보=게시시각만 과거 상태로 기록한다. */
@@ -416,6 +460,7 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
         evaluatedAt: Instant,
         rows: List<TransitArrivalDto> = stationRows(stationName, table),
         service: ObservedTransitSubwayService? = null,
+        requirePendingStatus: Boolean = false,
     ): Pair<Instant, Instant>? {
         if (service != null) {
             if (!service.matchesReference(table)) return null
@@ -425,7 +470,13 @@ class TransitTransferRealtimeGuard(private val arrivals: TransitArrivalService) 
         val matches = rows.filter { it.matches(stationName, table, evaluatedAt, service) }
         val sourceAt = matches.maxOfOrNull { Instant.parse(it.sourceUpdatedAt) } ?: return null
         val latest = matches.filter { Instant.parse(it.sourceUpdatedAt) == sourceAt }
-        if (latest.any { it.arrivalStatus == TransitArrivalStatus.DEPARTED }) return null
+        if (latest.any { row ->
+                when (row.arrivalStatus) {
+                    TransitArrivalStatus.DEPARTED -> true
+                    TransitArrivalStatus.ARRIVED, TransitArrivalStatus.UNKNOWN -> requirePendingStatus
+                    else -> false
+                }
+            }) return null
         val expectedAt = latest.map { row ->
             row.expectedAt?.let { runCatching { Instant.parse(it) }.getOrNull() }
                 ?: row.waitSeconds?.takeIf { it >= 0 }?.let { sourceAt.plusSeconds(it.toLong()) }

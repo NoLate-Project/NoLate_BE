@@ -1,0 +1,87 @@
+{
+  "classification": "RECORDED_SEOUL_STATION_ARRIVAL_STATUS_REPLAY",
+  "archivedProviderReadAudit": {
+    "distinctReads": 22,
+    "readsMixingExpiredArrivedWithFreshFutureForecasts": 6,
+    "expiredRowsDeduplicatedByStationLineDirectionTrainAndProviderStamp": 13,
+    "oldestArrivedSourceAgeSeconds": 690.329
+  },
+  "sameProviderInput": {
+    "evidence": "e2e/evidence/2026-11-19-ride-arrival-recalculation/planned-route-refresh/real-20261120-delayed-boarding/evaluation-3.json",
+    "eventIndex": 1,
+    "requestedAt": "2026-11-20T02:40:03.449480Z",
+    "station": "사당",
+    "line": "4호선",
+    "rowsInOrder": [
+      {
+        "trainNumber": "4073",
+        "arrivalStatus": "ARRIVED",
+        "providerPostedAt": "2026-11-20T02:34:03Z",
+        "expectedAt": "2026-11-20T02:34:03Z",
+        "ageAtRequestSeconds": 360.449
+      },
+      {
+        "trainNumber": "4579",
+        "arrivalStatus": "PREVIOUS_STOP",
+        "providerPostedAt": "2026-11-20T02:39:35Z",
+        "expectedAt": "2026-11-20T02:41:35Z",
+        "ageAtRequestSeconds": 28.449
+      },
+      {
+        "trainNumber": "4071",
+        "arrivalStatus": "ARRIVED",
+        "providerPostedAt": "2026-11-20T02:34:03Z",
+        "expectedAt": "2026-11-20T02:34:03Z",
+        "ageAtRequestSeconds": 360.449
+      },
+      {
+        "trainNumber": "4075",
+        "arrivalStatus": "IN_TRANSIT",
+        "providerPostedAt": "2026-11-20T02:39:35Z",
+        "expectedAt": "2026-11-20T02:48:05Z",
+        "ageAtRequestSeconds": 28.449
+      }
+    ]
+  },
+  "backendBeforeAtLimitTwo": [
+    "4073",
+    "4579"
+  ],
+  "frontendBefore": {
+    "expiredArrivedLabelsVisible": 2
+  },
+  "verifiedAfter": {
+    "backendRegressionTests": 231,
+    "frontendRegressionTests": 60,
+    "typeCheckPassed": true,
+    "subwayArrivedStatusMaxAgeSeconds": 120,
+    "seoulBusArrivedStatusMaxAgeSeconds": 45,
+    "busCachedArrivedStatusExpiredWithoutAnHttpRefresh": true,
+    "api": {
+      "sourceTrainNumbers": [
+        "4579",
+        "4075"
+      ],
+      "statuses": [
+        "PREVIOUS_STOP",
+        "IN_TRANSIT"
+      ],
+      "oldArrivedRowsReturned": 0
+    },
+    "installedApp": {
+      "result": "PASSED",
+      "device": "9EFFB87E-1E6D-4C2B-A81C-2D38CCF6EC69",
+      "uiStationLabels": [
+        "오이도행 · 전역 이동",
+        "사당행 · 운행 중"
+      ],
+      "expiredArrivedLabelsVisible": 0
+    },
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "physicalTransitHttpCalls": 0,
+    "replayShiftedProviderClockPreservingOffsets": true
+  },
+  "physicalEndToEndAccuracyVerified": false,
+  "sameConditionsNaverComparisonVerified": false
+}

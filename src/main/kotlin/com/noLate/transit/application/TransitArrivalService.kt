@@ -1,11 +1,15 @@
 package com.noLate.transit.application
 
+import com.noLate.transit.domain.SeoulBusVehicleFreshness
 import com.noLate.transit.domain.TransitArrivalDto
+import com.noLate.transit.domain.TransitArrivalFreshnessEvidence
+import com.noLate.transit.domain.TransitArrivalStatus
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
 import com.noLate.transit.infrastructure.TagoTransitArrivalClient
 import com.noLate.transit.infrastructure.TransitProviderWireMetrics
 import org.springframework.stereotype.Service
+import java.time.Clock
 import java.time.Instant
 
 @Service
@@ -14,6 +18,7 @@ class TransitArrivalService(
     private val tagoTransitArrivalClient: TagoTransitArrivalClient,
     private val cityCodeResolver: TransitCityCodeResolver = TransitCityCodeResolver(),
     private val wireMetrics: TransitProviderWireMetrics? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     fun getSubwayArrivals(
         stationName: String,
@@ -31,8 +36,22 @@ class TransitArrivalService(
         // directional station board must not present those as matching trains.
         val rows = getSubwayArrivalsForEta(stationName, lineName, directionName, directionCode, 10)
             .filter { row -> tokens.isEmpty() || tokens.any { row.direction?.contains(it) == true } }
-        distinctStationTrainObservations(rows).take(limit.coerceIn(1, 10))
+        val readAt = clock.instant()
+        distinctStationTrainObservations(rows).filter { it.isCurrentArrivalAtStop(readAt) }.take(limit.coerceIn(1, 10))
     }.getOrDefault(emptyList())
+
+    private fun TransitArrivalDto.isCurrentArrivalAtStop(readAt: Instant): Boolean {
+        if (arrivalStatus != TransitArrivalStatus.ARRIVED) return true
+        val maxAgeSeconds = when (provider) {
+            "seoul-openapi" -> 120L
+            "seoul-bus" -> SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS
+            else -> return true
+        }
+        // A newly delivered response can still describe a vehicle that stopped minutes ago.
+        if (freshnessEvidence != TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP) return false
+        val postedAt = sourceUpdatedAt?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return false
+        return postedAt in readAt.minusSeconds(maxAgeSeconds)..readAt.plusSeconds(5)
+    }
 
     private data class StationTrainKey(val provider: String, val line: String, val station: String, val direction: String, val train: String)
 
@@ -90,6 +109,19 @@ class TransitArrivalService(
         limit: Int,
         cityCodeNamespace: TransitCityCodeNamespace = TransitCityCodeNamespace.TAGO,
         providerCode: String? = null,
+    ): List<TransitArrivalDto> =
+        getBusArrivals(arsId, routeName, cityCode, nodeId, stationName, limit, cityCodeNamespace, providerCode, stationBoard = false)
+
+    internal fun getBusArrivals(
+        arsId: String?,
+        routeName: String?,
+        cityCode: String?,
+        nodeId: String?,
+        stationName: String?,
+        limit: Int,
+        cityCodeNamespace: TransitCityCodeNamespace,
+        providerCode: String? = null,
+        stationBoard: Boolean,
     ): List<TransitArrivalDto> {
         val normalizedArsId = arsId?.filter { it.isDigit() }?.takeIf { it.isNotBlank() }
         val normalizedRouteName = routeName?.trim()?.takeIf { it.isNotBlank() }
@@ -111,11 +143,15 @@ class TransitArrivalService(
                 arsId = normalizedArsId,
                 routeName = normalizedRouteName,
                 stationName = normalizedStationName,
-                limit = normalizedLimit,
+                // The provider returns the station response once. Give the board room to drop expired slots
+                // before applying its display limit.
+                limit = if (stationBoard) 10 else normalizedLimit,
             )
             // TAGO의 현재 cityCode 12는 서울이 아니라 세종이다. 서울 조회 실패를 TAGO
             // 무도시 검색으로 넘기면 동명 정류장을 오염시키므로 서울 결과로 즉시 닫는다.
-            return seoulArrivals
+            if (!stationBoard) return seoulArrivals
+            val readAt = clock.instant()
+            return seoulArrivals.filter { it.isCurrentArrivalAtStop(readAt) }.take(normalizedLimit)
         }
 
         if (

@@ -43,10 +43,14 @@ class PlannedTransitRouteRefresher(
         }
         val readings = guard.observePlannedTransfers(plan, evaluatedAt, originalTrains, recheckBoardingIndex = recheckIndex,
             reportedBoardings = conflict?.reportedBoardings.orEmpty())
+        val alightingRecords = (conflict?.reportedAlightings.orEmpty() + readings.reportedAlightings)
+            .filter { record -> rides.dropLast(1).any { record.matches(plan, segments[it], evaluatedAt) } }
+            .groupBy { it.segmentSequence }.mapValues { (_, records) -> records.minBy { it.sourceUpdatedAt } }
         // 기록만 생긴 평가가 정상 ETA나 새 출발 알람으로 승격되지 않도록 계산 결과와 분리한다.
         fun calculate(): PlannedTransitRouteUpdate? {
             val observations = readings.current.filter {
                 it.legIndex in rides && it.sourceUpdatedAt in freshWindow &&
+                    segments[it.legIndex].sequence !in alightingRecords &&
                     !(it.point == TransitRideObservationPoint.BOARDING && segments[it.legIndex].rideTiming?.observedService != null) &&
                     (it.expectedAt > evaluatedAt.minusSeconds(5) ||
                         it.reportedBoardingArrival && it.expectedAt <= evaluatedAt &&
@@ -89,7 +93,10 @@ class PlannedTransitRouteRefresher(
                 )
             }
             val timings = rides.associateWith { index ->
-                requireNotNull(segments[index].rideTiming).asPlannedBaseline()
+                val segment = segments[index]
+                val baseline = requireNotNull(segment.rideTiming).asPlannedBaseline()
+                val reportedAt = alightingRecords[segment.sequence]?.sourceUpdatedAt
+                baseline.copy(predictedArrivalAt = reportedAt ?: baseline.predictedArrivalAt, reportedAlightingAt = reportedAt)
             }.toMutableMap()
             val applied = linkedMapOf<Int, TransitRideRealtimeObservation>()
             for (observation in observations) {
@@ -151,6 +158,7 @@ class PlannedTransitRouteRefresher(
             // 이미 지난 승차 계획은 보존하고, 아직 탈 다음 편만 원본 시간표로 다시 판단한다.
             val firstChangedRide = (applied.keys + candidates.filterValues { it.isNotEmpty() }.keys).minOrNull()
             for (index in rides.filter { it !in applied }) {
+                if (segments[index].sequence in alightingRecords) continue
                 val prior = requireNotNull(segments[index].rideTiming)
                 val reassessBoarding = firstChangedRide != null && index > firstChangedRide && prior.predictedBoardingAt > evaluatedAt
                 val liveSource = prior.observationSourceUpdatedAt?.takeIf { it in freshWindow }
@@ -183,7 +191,7 @@ class PlannedTransitRouteRefresher(
             var changedTrain = false
             // 모든 구간의 직접 예보를 먼저 반영한 후, 그 시각으로 준비 가능한 실제 편을 고른다.
             for ((ordinal, index) in rides.withIndex()) {
-                if (index in applied) continue
+                if (index in applied || segments[index].sequence in alightingRecords) continue
                 val prior = requireNotNull(segments[index].rideTiming)
                 val ready = if (ordinal == 0) plan.departureAt.plusSeconds(
                     walkingSeconds(segments, 0, index) + timetableEnricher.boardingBufferSeconds)
@@ -225,10 +233,11 @@ class PlannedTransitRouteRefresher(
                 val ready = arrival.plusSeconds(walkingSeconds(segments, current + 1, next) + evaluator.requiredTransferMarginSeconds)
                 val original = originalTrains[next]
                 val boarding = readings.originalBoardings[next]
-                // 앞 열차의 하차와 원래 환승편의 승차가 모두 신선하고 도보·여유까지 확보될 때만 복구한다.
-                if (original != null && boarding != null && inbound.alightingSourceAt()?.let { it in freshWindow } == true &&
-                    arrival > evaluatedAt) {
-                    restoredTransfer(original, boarding, timings.getValue(next), ready, freshWindow)?.let { restored ->
+                // A verified past station report can establish readiness. It contributes no freshness to the new ETA.
+                val inboundSupported = inbound.reportedAlightingAt != null ||
+                    arrival > evaluatedAt && inbound.alightingSourceAt()?.let { it in freshWindow } == true
+                if (original != null && boarding != null && inboundSupported) {
+                    restoredTransfer(original, boarding, timings.getValue(next), ready, evaluatedAt, freshWindow)?.let { restored ->
                         timings[next] = restored
                         applied[next] = boarding
                         changedTrain = true
@@ -318,13 +327,18 @@ class PlannedTransitRouteRefresher(
                     !timings.getValue(rides.last()).basis.keepsTimetableAlightingAfterEarlyBoarding)
         }
         val calculated = calculate()
-        if (calculated != null) return calculated.copy(reportedBoardings = readings.reportedBoardings)
-        if (readings.reportedBoardings == conflict?.reportedBoardings.orEmpty()) return null
-        if (conflict != null && (conflict.route != null || conflict.failure != null || readings.reportedBoardings.isNotEmpty()))
-            return conflict.copy(reportedBoardings = readings.reportedBoardings)
-        return readings.reportedBoardings.takeIf { it.isNotEmpty() }?.let { records ->
-            PlannedTransitRouteUpdate(plan.identity, records.maxOf { it.sourceUpdatedAt }, reportedBoardings = records)
+        val reportedAlightings = alightingRecords.values.sortedBy { it.segmentSequence }
+        if (calculated != null) return calculated.copy(reportedBoardings = readings.reportedBoardings,
+            reportedAlightings = reportedAlightings)
+        if (readings.reportedBoardings == conflict?.reportedBoardings.orEmpty() &&
+            reportedAlightings == conflict?.reportedAlightings.orEmpty()) return null
+        if (conflict != null && (conflict.route != null || conflict.failure != null)) {
+            return conflict.copy(reportedBoardings = readings.reportedBoardings, reportedAlightings = reportedAlightings)
         }
+        val recordedAt = (readings.reportedBoardings.map { it.sourceUpdatedAt } + reportedAlightings.map { it.sourceUpdatedAt })
+            .maxOrNull() ?: return null
+        return PlannedTransitRouteUpdate(plan.identity, recordedAt, reportedBoardings = readings.reportedBoardings,
+            reportedAlightings = reportedAlightings)
     }
 
     private fun earlyBoardingBasis(firstRide: Boolean) =
@@ -333,10 +347,14 @@ class PlannedTransitRouteRefresher(
 
     private fun restoredTransfer(original: EffectiveTransitRideTiming, boarding: TransitRideRealtimeObservation,
                                  current: EffectiveTransitRideTiming, readyAt: Instant,
-                                 freshWindow: ClosedRange<Instant>): EffectiveTransitRideTiming? {
+                                 evaluatedAt: Instant, freshWindow: ClosedRange<Instant>): EffectiveTransitRideTiming? {
         val table = original.timetable
+        // Once the scheduled departure has passed, the original train is eligible only with a fresh
+        // approaching forecast. Use its station arrival as the conservative boarding boundary.
+        val boardingBoundary = if (table.boardingAt <= evaluatedAt) boarding.expectedAt
+            else minOf(table.boardingAt, boarding.expectedAt)
         if (current.selectedTrainNumber() == table.trainNumber || boarding.expectedAt >= current.predictedBoardingAt ||
-            readyAt > minOf(table.boardingAt, boarding.expectedAt)) return null
+            readyAt > boardingBoundary) return null
         val direct = original.alightingSourceAt()?.takeIf { it in freshWindow }
         val arrival = when {
             direct != null -> original.predictedArrivalAt
@@ -375,7 +393,7 @@ class PlannedTransitRouteRefresher(
                 earlier.directionCode != active.directionCode || earlier.serviceClass != active.serviceClass ||
                 earlier.fromStationCode != active.fromStationCode || earlier.toStationCode != active.toStationCode ||
                 earlier.trainNumber == active.trainNumber || earlier.boardingAt >= active.boardingAt ||
-                earlier.boardingAt <= evaluatedAt || timing.predictedBoardingAt <= evaluatedAt) return@mapNotNull null
+                timing.predictedBoardingAt <= evaluatedAt) return@mapNotNull null
             index to originalTiming
         }.toMap()
     }

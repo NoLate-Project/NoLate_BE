@@ -208,6 +208,54 @@ class PlannedSeoulBusRouteRefresherTest {
         assertEquals(time(145), afterBus.update.route?.segments?.get(1)?.rideTiming?.observationSourceUpdatedAt)
     }
 
+    @Test fun `a missed bus is reconnected after its old boarding time using fresh train and bus forecasts`() {
+        val table = TransitLegTimetable("seoul-timetable", SeoulSubwayLine.LINE_4, LocalDate.of(2026, 11, 27), "4703", "DOWN",
+            TransitServiceClass.LOCAL, "0431", "0433", "오이도", time(90), time(240), time(-5))
+        val originalTiming = EffectiveTransitRideTiming(table, time(90), time(240), EffectiveTransitRideTimingBasis.TIMETABLE)
+        val train = EffectiveTransitRouteSegment(1, SUBWAY, 4, lineName = "4호선", fromName = "동작", toName = "사당",
+            rideTiming = originalTiming)
+        val plan = route.copy(segments = route.segments.map { if (it.sequence == 1) train else it })
+        val binding = journey.copy(rides = listOf(journey.rides.last()))
+        val previousMiss = PlannedTransitRouteUpdate(plan.identity, time(145),
+            failure = PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE)
+        val baseline = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan, plannedSeoulBusJourney = binding,
+            plannedRouteUpdate = previousMiss)
+        val rail = mock<PlannedTransitRouteRefresher>()
+        val mixed = PlannedSeoulBusRouteRefresher(provider, evaluator, 60, 120, 1440, railRouteRefresher = rail)
+
+        val evaluatedAt = time(385)
+        val prefix = plan.copy(segments = plan.segments.take(2), arrivalAt = time(240), totalMinutes = 4)
+        val observed = train.copy(rideTiming = originalTiming.copy(predictedArrivalAt = time(435),
+            basis = EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME, observationSourceUpdatedAt = time(381)))
+        whenever(rail.refresh(prefix, evaluatedAt, prefix, previousMiss)).thenReturn(
+            PlannedTransitRouteUpdate(plan.identity, time(381), onlyLastRideObserved = true,
+                route = prefix.copy(segments = listOf(plan.segments.first(), observed), arrivalAt = time(435), totalMinutes = 8)))
+        onwardBuses(listOf(
+            pair(time(524), time(720), oldSecondVehicle).copy(sourceUpdatedAt = time(382), receivedAt = time(386)),
+            pair(time(530), time(750), newSecondVehicle).copy(sourceUpdatedAt = time(382), receivedAt = time(386)),
+        ))
+
+        assertNull(baseline.plannedJourneyArrivalPrediction(evaluatedAt, 120))
+        val recovered = mixed.refresh(plan, binding, evaluatedAt, pendingTransferFailure = true, previousUpdate = previousMiss)
+        assertNotNull(recovered, "The old bus boarding boundary must not freeze a known missed transfer.")
+        val refreshed = requireNotNull(recovered)
+        val result = requireNotNull(refreshed.update.route)
+        assertEquals(start, result.departureAt)
+        assertEquals(time(810), result.arrivalAt)
+        assertEquals(time(435), result.segments[1].rideTiming?.predictedArrivalAt)
+        assertEquals(time(530), result.segments[3].busRidePrediction?.boardingAt)
+        val transfer = requireNotNull(result.segments[3].transferTiming)
+        assertEquals(30L, transfer.walkingSeconds)
+        assertEquals(60L, transfer.requiredMarginSeconds)
+        assertEquals(5L, transfer.remainingSlackSeconds)
+        assertEquals(newSecondVehicle, refreshed.journey.rides.single().service)
+        val public = baseline.copy(plannedSeoulBusJourney = refreshed.journey, plannedRouteUpdate = refreshed.update)
+            .plannedJourneyArrivalPrediction(time(390), 120)
+        assertEquals(PlannedJourneyArrivalBasis.MATCHED_TRAIN_AND_BUS_REALTIME, public?.basis)
+        assertEquals(time(810), public?.predictedArrivalAt)
+        verify(provider, never()).getBusVehicleObservations(any())
+    }
+
     @Test fun `worker snapshot retains correlation across departure without publishing it in the route DTO`() {
         val mapper: ObjectMapper = jacksonObjectMapper().findAndRegisterModules()
         val accepted = TrafficResult(10, TrafficSource.LIVE_PROVIDER, fetchedAt = time(-4), stale = false,

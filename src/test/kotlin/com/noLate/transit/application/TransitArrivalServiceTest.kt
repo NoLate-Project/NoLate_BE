@@ -1,6 +1,8 @@
 package com.noLate.transit.application
 
 import com.noLate.transit.domain.TransitArrivalDto
+import com.noLate.transit.domain.TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP
+import com.noLate.transit.domain.TransitArrivalStatus
 import com.noLate.transit.domain.TransitCityCodeNamespace
 import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
 import com.noLate.transit.infrastructure.TagoTransitArrivalClient
@@ -17,6 +19,9 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 
 class TransitArrivalServiceTest {
     private val seoulClient = mock<SeoulTransitArrivalClient>()
@@ -44,6 +49,43 @@ class TransitArrivalServiceTest {
             .thenReturn(listOf(first, newer, other))
 
         assertEquals(listOf(newer, other), service.getSubwayArrivals("노원", "4호선", null, "DOWN", 2))
+    }
+
+    @Test
+    fun `사당역 실응답에서 6분 전 도착을 제외한 뒤 후속 열차의 예보를 반환한다`() {
+        val time = Instant.parse("2026-11-20T02:40:03.449480Z")
+        val board = TransitArrivalService(seoulClient, tagoClient, clock = Clock.fixed(time, ZoneOffset.UTC))
+        val old = TransitArrivalDto(provider = "seoul-openapi", kind = "SUBWAY", direction = "하행",
+            stationName = "사당", subwayLineId = "1004", trainNumber = "4073", destinationName = "사당",
+            sourceUpdatedAt = "2026-11-20T02:34:03Z", expectedAt = "2026-11-20T02:34:03Z",
+            arrivalStatus = TransitArrivalStatus.ARRIVED, freshnessEvidence = PROVIDER_SOURCE_TIMESTAMP)
+        val approaching = old.copy(trainNumber = "4579", destinationName = "오이도",
+            sourceUpdatedAt = "2026-11-20T02:39:35Z", expectedAt = "2026-11-20T02:41:35Z",
+            arrivalStatus = TransitArrivalStatus.PREVIOUS_STOP)
+        val upcoming = approaching.copy(trainNumber = "4075", destinationName = "사당",
+            expectedAt = "2026-11-20T02:48:05Z", arrivalStatus = TransitArrivalStatus.IN_TRANSIT)
+        val captured = listOf(old, approaching, old.copy(trainNumber = "4071"), upcoming)
+        whenever(seoulClient.getSubwayArrivals("사당", "4호선", null, "DOWN", 10)).thenReturn(captured)
+
+        assertEquals(listOf(approaching, upcoming), board.getSubwayArrivals("사당", "4호선", null, "DOWN", 2))
+        assertEquals(captured, board.getSubwayArrivalsForEta("사당", "4호선", null, "DOWN", 10))
+    }
+
+    @Test
+    fun `서울 버스의 지난 도착이 결과 한 자리를 채우지 않고 신선한 도착은 유지한다`() {
+        val time = Instant.parse("2026-11-26T15:24:31Z")
+        val board = TransitArrivalService(seoulClient, tagoClient, clock = Clock.fixed(time, ZoneOffset.UTC))
+        val arrived = TransitArrivalDto(provider = "seoul-bus", kind = "BUS", routeName = "N37",
+            arsId = "01234", arrivalStatus = TransitArrivalStatus.ARRIVED, freshnessEvidence = PROVIDER_SOURCE_TIMESTAMP,
+            sourceUpdatedAt = time.minusSeconds(45).toString(), observedAt = time.toString())
+        val older = arrived.copy(sourceUpdatedAt = time.minusSeconds(46).toString())
+        whenever(seoulClient.getBusArrivals(eq("01234"), anyOrNull(), eq("N37"), any()))
+            .thenAnswer { invocation -> listOf(older, arrived).take(invocation.getArgument(3)) }
+
+        assertEquals(listOf(arrived),
+            board.getBusArrivals("01234", "N37", "1000", null, null, 1, TransitCityCodeNamespace.ODSAY_CID, stationBoard = true))
+        assertEquals(listOf(older),
+            board.getBusArrivals("01234", "N37", "1000", null, null, 1, TransitCityCodeNamespace.ODSAY_CID))
     }
 
     @Test

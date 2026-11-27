@@ -114,6 +114,9 @@ data class EffectiveTransitRideTiming(
     val observedService: ObservedTransitSubwayService? = null,
     @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     val reportedBoarding: ReportedSubwayBoardingEvidence? = null,
+    /** 공급자 하차역 상태의 게시시각. 이 시각으로 사용자의 실제 하차를 확인할 수 없다. */
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val reportedAlightingAt: Instant? = null,
 ) {
     fun selectedTrainNumber(): String = observedService?.trainNumber ?: timetable.trainNumber
 
@@ -161,6 +164,8 @@ data class EffectiveTransitRideTiming(
             EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE,
             EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME))
         require(predictedArrivalAt.isAfter(predictedBoardingAt))
+        require(reportedAlightingAt == null || basis == EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE &&
+            reportedAlightingAt == predictedArrivalAt)
         observedService?.let {
             require(it.matchesReference(timetable))
             require(basis in setOf(EffectiveTransitRideTimingBasis.OBSERVED_SUBWAY_SERVICE_REALTIME,
