@@ -2,6 +2,8 @@ package com.noLate.schedule.application.service.policy
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.schedule.application.*
+import com.noLate.transit.domain.SeoulBusRideService
+import com.noLate.transit.domain.SeoulBusStopOccurrence
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
@@ -53,5 +55,26 @@ class PlannedTransitRefreshCadencePolicyTest {
         assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(now,state(otherDay)))
         val missing = route.copy(segments=route.segments.map { if(it.rideTiming!=null) it.copy(rideTiming=null) else it })
         assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(now,state(missing)))
+    }
+
+    @Test
+    fun `마지막 도착 예측을 지났어도 하차역 확인 창에서만 버스 조회 경계를 추가한다`() {
+        val service = SeoulBusRideService("100100101", "방면", SeoulBusStopOccurrence("101000000", "01000", 10),
+            SeoulBusStopOccurrence("101000002", "01002", 12), "a".repeat(64))
+        val alight = route.arrivalAt.minusSeconds(30)
+        val last = route.segments.last { it.rideTiming != null }
+        val planned = route.copy(provider = "odsay", segments = route.segments.map { leg ->
+            if (leg.sequence != last.sequence) leg else leg.copy(kind = EffectiveTransitRouteSegmentKind.BUS,
+                rideTiming = null, busRidePrediction = EffectiveBusRidePrediction(alight.minusSeconds(300), alight,
+                    alight.minusSeconds(360)))
+        })
+        val snapshot = state(planned).copy(plannedSeoulBusJourney = PlannedSeoulBusJourney(planned.identity,
+            planned.departureAt, listOf(PlannedSeoulBusRide(last.sequence, service))))
+        val now = planned.arrivalAt.plusSeconds(1)
+        assertEquals(now.plusSeconds(60), PlannedTransitRefreshCadencePolicy.nextRefreshAt(now, snapshot))
+        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(alight.plusSeconds(60), snapshot))
+        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(alight.plusSeconds(120), snapshot))
+        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(now, snapshot.copy(plannedRouteUpdate =
+            PlannedTransitRouteUpdate(planned.identity, now, failure = PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE))))
     }
 }

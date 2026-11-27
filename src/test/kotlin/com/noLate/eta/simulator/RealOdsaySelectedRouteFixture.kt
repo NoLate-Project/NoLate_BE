@@ -13,8 +13,28 @@ object RealOdsaySelectedRouteFixture {
         adjacentRing: Boolean = false,
         seolleungAccess: Boolean = false,
         shortFirstRide: Boolean = false,
+        mixedBusFirst: Boolean? = null,
     ): TransitJourney = requireNotNull(candidates.firstOrNull { journey ->
         val rides = journey.rideLegs
+        if (mixedBusFirst != null) {
+            val mixedOrder = if (mixedBusFirst) listOf(TransitLegMode.BUS, TransitLegMode.SUBWAY)
+                else listOf(TransitLegMode.SUBWAY, TransitLegMode.BUS)
+            return@firstOrNull journey.provider == "odsay" && rides.map { it.mode } == mixedOrder &&
+                journey.legs.map { it.mode } == listOf(TransitLegMode.WALK, mixedOrder[0], TransitLegMode.WALK,
+                    mixedOrder[1], TransitLegMode.WALK) && rides.all { leg ->
+                    val from = leg.from
+                    val to = leg.to
+                    val line = leg.line
+                    if (from?.providerStopId.isNullOrBlank() || to?.providerStopId.isNullOrBlank() ||
+                        from?.name.isNullOrBlank() || to?.name.isNullOrBlank() || line?.name.isNullOrBlank() ||
+                        line?.providerRouteId.isNullOrBlank()) return@all false
+                    if (leg.mode == TransitLegMode.BUS) {
+                        val fromId = from?.localStopId.orEmpty()
+                        val toId = to?.localStopId.orEmpty()
+                        fromId != toId && listOf(line?.localRouteId.orEmpty(), fromId, toId).all(seoulBusId::matches)
+                    } else line?.seoulSubwayLine != null
+                }
+        }
         journey.provider == "odsay" && rides.all { it.mode == TransitLegMode.SUBWAY } &&
             rides.map { it.from?.name to it.to?.name } == when {
                 seolleungAccess -> listOf("강남" to "선릉")
@@ -26,6 +46,8 @@ object RealOdsaySelectedRouteFixture {
             } && (!seolleungAccess || rides.single().orderedStopNames == listOf("강남", "역삼", "선릉"))
     }) { "Actual ODsay journey for the scoped stations required" }
 
+    private val seoulBusId = Regex("[1-9][0-9]{8}")
+
     fun encode(mapper: ObjectMapper, journey: TransitJourney): String {
         require(journey.provider == "odsay")
         val legs = journey.legs.map { leg -> mapOf(
@@ -36,6 +58,7 @@ object RealOdsaySelectedRouteFixture {
             "serviceClass" to leg.line?.serviceClass?.name,
             "startID" to leg.from?.providerStopId, "endID" to leg.to?.providerStopId,
             "startName" to leg.from?.name, "endName" to leg.to?.name,
+            "startArsID" to leg.from?.arsId, "endArsID" to leg.to?.arsId,
             "directionName" to leg.directionName, "directionCode" to leg.directionCode,
             "coordinates" to emptyList<Any>(),
         ) }

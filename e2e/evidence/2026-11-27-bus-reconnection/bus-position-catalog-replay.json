@@ -1,0 +1,38 @@
+{
+  "classification": "CONTROLLED_SAME_BUS_POSITION_REPLAY_NOT_OBSERVED_TRIP_ACCURACY",
+  "serviceDate": "2026-11-27",
+  "identicalInputRegression": {
+    "uniqueStationDifferentOrdinal": {"before": "REJECTED", "after": "ALIGHTING_FORECAST_ACCEPTED"},
+    "stationRepeatedOutsideRide": {"before": "ACCEPTED", "after": "AMBIGUOUS_POSITION_REJECTED"},
+    "differentVehicleAndStopBeyondAlightingRejected": true,
+    "diagnosticCatalogReadsForSameBus": 1
+  },
+  "workerAndInstalledApp": {
+    "result": "PASSED",
+    "database": "H2_MEMORY_ONLY",
+    "roadSectionOrdinal": 501,
+    "lastStopCatalogOrdinal": 11,
+    "planBeforeRefreshDestinationSecondsFromDeparture": 600,
+    "busAlightingForecastSecondsFromDeparture": 390,
+    "transferWalkSeconds": 30,
+    "transferWaitAfterWalkingSeconds": 80,
+    "reconnectedTimetableTrain": "2014",
+    "reconnectedBoardingSecondsFromDeparture": 500,
+    "predictedDestinationSecondsFromDeparture": 820,
+    "protectedDepartureUnchanged": true,
+    "publicStatusMatchedWorker": true,
+    "installedAppCasesPassed": 1,
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "physicalTransitHttpCalls": 0,
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.bus-position-private-metro.10u7hk41"
+  },
+  "firstAttempt": {
+    "result": "STOPPED_BEFORE_WORKER_EVALUATION",
+    "reason": "Metro served the Expo placeholder instead of the app; the next run used a private cache",
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.bus-position.uhrul59g"
+  },
+  "backendRegressionCasesPassed": 404,
+  "actualTripAccuracyVerified": false,
+  "sameConditionsNaverComparisonVerified": false
+}

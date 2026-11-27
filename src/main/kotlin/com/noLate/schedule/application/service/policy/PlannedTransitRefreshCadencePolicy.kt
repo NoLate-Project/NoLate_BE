@@ -23,14 +23,18 @@ object PlannedTransitRefreshCadencePolicy {
         val route = state.plannedRouteUpdate?.route?.takeIf(::matchesOriginal)
             ?: state.lastUpdatedPlannedRoute?.takeIf(::matchesOriginal) ?: original
         val rides = route.segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
-        val validBusPlan = state.plannedSeoulBusJourney?.matches(route) == true
-        if (validBusPlan && route.arrivalAt <= now) return null
+        val busJourney = state.plannedSeoulBusJourney?.takeIf { it.matches(route) }
+        if (busJourney != null && route.arrivalAt <= now) {
+            val unresolved = state.plannedRouteUpdate?.takeIf { it.routeIdentity == original.identity }?.failure != null
+            val deadline = busJourney.finalArrivalObservationDeadline(route) ?: return null
+            return now.plus(1, ChronoUnit.MINUTES).takeIf { !unresolved && it < deadline }
+        }
         val events = rides.flatMap { segment ->
             when (segment.kind) {
                 EffectiveTransitRouteSegmentKind.SUBWAY -> segment.rideTiming
                     ?.takeIf { it.timetable.isObservableServiceDay(original.departureAt, now) }
                     ?.let { listOf(it.predictedBoardingAt, it.predictedArrivalAt) } ?: return null
-                EffectiveTransitRouteSegmentKind.BUS -> segment.busRidePrediction?.takeIf { validBusPlan }
+                EffectiveTransitRouteSegmentKind.BUS -> segment.busRidePrediction?.takeIf { busJourney != null }
                     ?.let { listOf(it.boardingAt, it.alightingAt) } ?: return null
                 else -> return null
             }

@@ -97,13 +97,91 @@ class PlannedSeoulBusRouteRefresherTest {
         assertEquals(time(820), expired.predictedArrivalAt)
     }
 
-    @Test fun `same route with a different bus or a reused stop position cannot replace the saved estimate`() {
+    @Test fun `different vehicle or position beyond the alighting stop cannot replace the saved estimate`() {
         currentBus(vehicleId = "101000099")
         assertNull(refresher.refresh(route, journey, time(150)))
         verify(provider, never()).getBusAlightingForecast(any(), any())
-        currentBus(positionOrder = first.last().sequence)
+        val beyond = first.last().copy(sequence = first.last().sequence + 1, stationId = "101000009")
+        currentBus(lastStationId = beyond.stationId, catalog = first + beyond)
         assertNull(refresher.refresh(route, journey, time(150)))
         verify(provider, never()).getBusAlightingForecast(any(), any())
+    }
+
+    @Test fun `a unique upstream stop confirms the same bus even with a different road section ordinal`() {
+        currentBus(positionOrder = 501)
+        onwardBuses(listOf(pair(time(470), time(651), oldSecondVehicle), pair(time(480), time(760), newSecondVehicle)))
+        val refreshed = requireNotNull(refresher.refresh(route, journey, time(150)))
+        val updated = requireNotNull(refreshed.update.route)
+        assertEquals(start, updated.departureAt)
+        assertEquals(time(390), updated.segments[1].busRidePrediction?.alightingAt)
+        assertEquals(time(480), updated.segments[3].busRidePrediction?.boardingAt)
+        assertEquals(time(820), updated.arrivalAt)
+        verify(provider).getBusRouteDiagnosticStops(firstVehicle.routeId)
+        verify(provider).getBusAlightingForecast(first.last(), firstVehicle)
+    }
+
+    @Test fun `a repeated station on the same route cannot identify which occurrence this bus passed`() {
+        val repeated = first[1].copy(sequence = first.last().sequence + 1)
+        currentBus(catalog = first + repeated)
+        onwardBuses(listOf(pair(time(480), time(760), newSecondVehicle)))
+        assertNull(refresher.refresh(route, journey, time(150)))
+        verify(provider, never()).getBusAlightingForecast(any(), any())
+    }
+
+    @Test fun `a fresh last bus forecast can recover after the previous destination estimate passes`() {
+        val checkedAt = time(610)
+        whenever(provider.getBusRouteDiagnosticStops(oldSecondVehicle.routeId)).thenReturn(second)
+        whenever(provider.getBusVehicleObservations(SeoulBusVehicleQuery(
+            oldSecondVehicle.routeId, second.first().sequence, second.last().sequence,
+        ))).thenReturn(SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE, listOf(
+            SeoulBusVehicleObservation("101000092", oldSecondVehicle.routeId, "103000001", 501, 300,
+                false, second[1].stationId, time(605), time(608), time(650)),
+        )))
+        whenever(provider.getBusAlightingForecast(second.last(), oldSecondVehicle))
+            .thenReturn(SeoulBusAlightingForecast(time(700), time(607), time(612)))
+        val prior = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = route, plannedSeoulBusJourney = journey)
+        assertNull(prior.plannedJourneyArrivalPrediction(checkedAt, 120))
+        val recovered = requireNotNull(refresher.refresh(route, journey, checkedAt))
+        val forecast = requireNotNull(prior.copy(plannedRouteUpdate = recovered.update)
+            .plannedJourneyArrivalPrediction(time(615), 120))
+        assertEquals(journey, recovered.journey)
+        assertEquals(time(760), forecast.predictedArrivalAt)
+        assertEquals(PlannedJourneyArrivalBasis.MATCHED_BUS_REALTIME, forecast.basis)
+        assertEquals(start, forecast.effectiveTransitRoute?.departureAt)
+        assertEquals(route.segments[3].transferTiming, forecast.effectiveTransitRoute?.segments?.get(3)?.transferTiming)
+        assertEquals(time(607), forecast.effectiveTransitRoute?.segments?.get(3)?.busRidePrediction?.alightingObservationSourceUpdatedAt)
+        verify(provider, never()).getBusRouteDiagnosticStops(firstVehicle.routeId)
+        verify(provider, never()).getPairedBusArrivals(any())
+    }
+
+    @Test fun `an expired route with an unconfirmed transfer or outside the last stop window makes no new requests`() {
+        assertNull(refresher.refresh(route, journey, time(610), pendingTransferFailure = true))
+        assertNull(refresher.refresh(route, journey, time(660)))
+        verifyNoInteractions(provider)
+    }
+
+    @Test fun `a bus to rail journey can recover the already selected final train after its old estimate expires`() {
+        val table = TransitLegTimetable("seoul-timetable", SeoulSubwayLine.LINE_2, LocalDate.of(2026, 11, 27),
+            "2012", "UP", TransitServiceClass.LOCAL, "0226", "0230", "성수", time(380), time(540), time(-5))
+        val train = EffectiveTransitRouteSegment(3, SUBWAY, 5, lineName = "2호선", fromName = "사당", toName = "신림",
+            transferTiming = route.segments[3].transferTiming, rideTiming = EffectiveTransitRideTiming(
+                table, table.boardingAt, table.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE))
+        val planned = route.copy(segments = route.segments.map { if (it.sequence == train.sequence) train else it })
+        val binding = journey.copy(rides = listOf(journey.rides.first()))
+        val guard = mock<TransitTransferRealtimeGuard>()
+        val mixed = PlannedSeoulBusRouteRefresher(provider, evaluator, 60, 120, 1440, railRealtime = guard)
+        val at = time(610)
+        whenever(guard.observeLastPlannedRide(planned.copy(segments = listOf(train)), at, allowAlightingRecovery = true))
+            .thenReturn(PlannedJourneyArrivalObservation(planned.identity, time(760), time(605)))
+        val update = requireNotNull(mixed.refresh(planned, binding, at)).update
+        val fresh = requireNotNull(EffectiveTransitRouteSnapshot(inProgressPlannedRoute = planned,
+            plannedSeoulBusJourney = binding, plannedRouteUpdate = update).plannedJourneyArrivalPrediction(time(615), 120))
+        assertEquals(time(760), fresh.predictedArrivalAt)
+        assertEquals(PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME, fresh.basis)
+        assertEquals("2012", fresh.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.timetable?.trainNumber)
+        assertEquals(time(380), fresh.effectiveTransitRoute?.segments?.get(3)?.rideTiming?.predictedBoardingAt)
+        assertEquals(train.transferTiming, fresh.effectiveTransitRoute?.segments?.get(3)?.transferTiming)
+        verifyNoInteractions(provider)
     }
 
     @Test fun `same bus changes the planned train then a fresh observation of that train updates the final arrival`() {
@@ -429,13 +507,14 @@ class PlannedSeoulBusRouteRefresherTest {
         verify(provider, never()).getBusVehicleObservations(any())
     }
 
-    private fun currentBus(vehicleId: String = "101000091", positionOrder: Int = first[1].sequence) {
-        whenever(provider.getBusRouteDiagnosticStops(firstVehicle.routeId)).thenReturn(first)
+    private fun currentBus(vehicleId: String = "101000091", positionOrder: Int = first[1].sequence,
+                           lastStationId: String = first[1].stationId, catalog: List<SeoulBusRouteStop> = first) {
+        whenever(provider.getBusRouteDiagnosticStops(firstVehicle.routeId)).thenReturn(catalog)
         whenever(provider.getBusVehicleObservations(SeoulBusVehicleQuery(
             firstVehicle.routeId, first.first().sequence, first.last().sequence,
         ))).thenReturn(SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE, listOf(
             SeoulBusVehicleObservation(vehicleId, firstVehicle.routeId, "103000001", positionOrder, 300,
-                false, first[1].stationId, time(145), time(149), time(190)),
+                false, lastStationId, time(145), time(149), time(190)),
         )))
         whenever(provider.getBusAlightingForecast(first.last(), firstVehicle))
             .thenReturn(SeoulBusAlightingForecast(time(390), time(148), time(151)))

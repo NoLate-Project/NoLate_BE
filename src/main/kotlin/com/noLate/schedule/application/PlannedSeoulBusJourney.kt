@@ -24,6 +24,14 @@ data class PlannedSeoulBusJourney(
             (moving.first() == busSegments.first() || moving.last() == busSegments.first()) &&
             rail.all { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY && it.rideTiming != null })
     }
+
+    /** The extra lookup is for the last vehicle, so measure the window at its stop, before egress walking. */
+    internal fun finalArrivalObservationDeadline(plan: EffectiveTransitRoute): Instant? {
+        val lastRide = plan.segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }.maxByOrNull { it.sequence }
+        val alightingAt = lastRide?.busRidePrediction?.alightingAt ?: lastRide?.rideTiming?.predictedArrivalAt
+        // Keep the same two-minute lookback as the final rail station observation.
+        return alightingAt?.plusSeconds(120)
+    }
 }
 
 data class PlannedSeoulBusRide(val sequence: Int, val service: SeoulBusRideService) {

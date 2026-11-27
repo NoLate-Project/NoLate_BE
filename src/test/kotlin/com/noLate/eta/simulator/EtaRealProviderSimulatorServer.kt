@@ -92,11 +92,15 @@ object EtaRealProviderSimulatorServer {
         require(!omitStationTimetable || seolleungAccess)
         require(args.size in 2..6)
         val journeyProviderId = args.getOrNull(2) ?: "tmap"
+        val mixedOrder = System.getProperty("nolate.eta.real-isolated.mixed-order")
         val observeJourneyPositions = System.getProperty("nolate.eta.real-isolated.observe-positions") == "true"
         require(!observeJourneyPositions || (journeyProviderId == "odsay" && !automaticDelivery && port == 5523 &&
             !shortFirstRide && datedTimetableTarget == null))
         require(journeyProviderId in setOf("tmap", "odsay"))
         require(!shortFirstRide || port == 5523 && journeyProviderId == "odsay" && !automaticDelivery && datedTimetableTarget == null)
+        require(mixedOrder == null || (mixedOrder in setOf("bus-rail", "rail-bus") && port == 5523 &&
+            journeyProviderId == "odsay" && !automaticDelivery && !shortFirstRide && !observeJourneyPositions &&
+            datedTimetableTarget == null))
         // Test target selection only: a nearer future appointment lets the actual
         // observed first train enter scope without relaxing any acceptance rule.
         val targetLeadMinutes = args.getOrNull(3)?.toLong() ?: 75L
@@ -278,7 +282,8 @@ object EtaRealProviderSimulatorServer {
                 val candidates = journeyProvider.search(TransitJourneySearchRequest(
                     originLat, originLng, destinationLat, destinationLng, departure, 180))
                 RealOdsaySelectedRouteFixture.select(candidates, direct = directEgress, overnight = overnightTimetable,
-                    adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess, shortFirstRide = shortFirstRide)
+                    adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess, shortFirstRide = shortFirstRide,
+                    mixedBusFirst = mixedOrder?.let { it == "bus-rail" })
             } else null
             val selectedJson = seed?.let { RealOdsaySelectedRouteFixture.encode(mapper, it) } ?: copiedSelectedJson
             val selectedMinutes = seed?.totalMinutes ?: personal?.path("travel_minutes")?.asInt()
@@ -362,7 +367,7 @@ object EtaRealProviderSimulatorServer {
                 "alertMode" to if (automaticDelivery) "ALARM" else "STANDARD", "nativeAlarmDeliveryTest" to automaticDelivery,
                 "automaticScheduling" to automaticDelivery,
                 "scheduleCountBeforeUi" to schedules.count(), "jobCountBeforeUi" to jobs.count(),
-                "journeyProvider" to journeyProviderId, "seedTravelMinutes" to selectedMinutes,
+                "journeyProvider" to journeyProviderId, "seedTravelMinutes" to selectedMinutes, "mixedRouteOrder" to mixedOrder,
                 "comparisonRequestedDepartureAt" to comparisonDepartureAt,
                 "comparisonTargetArrivalAt" to comparisonTargetAt,
                 "requestedCoordinates" to requestedCoordinates,

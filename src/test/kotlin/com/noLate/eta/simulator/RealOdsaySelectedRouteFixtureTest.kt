@@ -59,4 +59,34 @@ class RealOdsaySelectedRouteFixtureTest {
         val decoded = requireNotNull(SelectedTransitRouteDecoder(mapper).decode(RealOdsaySelectedRouteFixture.encode(mapper, short)))
         assertEquals(setOf("PROVIDER:odsay:431"), decoded.rides.first().fromIds)
     }
+
+    @Test
+    fun `혼합 검증은 요청한 방향과 원본 서울 버스 식별자가 있는 여정만 선택한다`() {
+        val source = journey()
+        fun mixed(busSequence: Int) = source.copy(legs = source.legs.map { leg ->
+            when {
+                leg.sequence == busSequence -> leg.copy(mode = TransitLegMode.BUS,
+                    from = TransitStop(providerStopId = "1234", localStopId = "100000111", arsId = "01011", name = "첫 정류장"),
+                    to = TransitStop(providerStopId = "5678", localStopId = "100000222", arsId = "01012", name = "다음 정류장"),
+                    line = TransitLine(providerRouteId = "3211", localRouteId = "100100585", name = "N37"))
+                leg.mode == TransitLegMode.SUBWAY -> leg.copy(line = leg.line?.copy(seoulSubwayLine = SeoulSubwayLine.LINE_2))
+                else -> leg
+            }
+        })
+        val busFirst = mixed(1)
+        val busLast = mixed(3)
+        val noBusBinding = busFirst.copy(legs = busFirst.legs.map { leg ->
+            if (leg.mode == TransitLegMode.BUS) leg.copy(line = leg.line?.copy(localRouteId = null)) else leg
+        })
+        val candidates = listOf(source, noBusBinding, busLast, busFirst)
+        assertEquals(busFirst, RealOdsaySelectedRouteFixture.select(candidates, mixedBusFirst = true))
+        assertEquals(busLast, RealOdsaySelectedRouteFixture.select(candidates, mixedBusFirst = false))
+        assertThrows(IllegalArgumentException::class.java) {
+            RealOdsaySelectedRouteFixture.select(listOf(source, noBusBinding, busLast), mixedBusFirst = true)
+        }
+        val decoded = requireNotNull(SelectedTransitRouteDecoder(mapper)
+            .decode(RealOdsaySelectedRouteFixture.encode(mapper, busFirst)))
+        assertEquals("3211", decoded.rides.first().providerRouteId)
+        assertEquals(setOf("PROVIDER:odsay:1234", "ARS:01011"), decoded.rides.first().fromIds)
+    }
 }

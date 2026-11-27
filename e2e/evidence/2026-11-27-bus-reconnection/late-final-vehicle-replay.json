@@ -1,0 +1,43 @@
+{
+  "classification": "CONTROLLED_LATE_FINAL_VEHICLE_FORECAST_REPLAY",
+  "serviceDate": "2026-11-27",
+  "sameInputRegression": {
+    "before": {
+      "lastBusForecastAcceptedAfterOldEta": false,
+      "lateObservationCadenceScheduled": false
+    },
+    "after": {
+      "lastBusForecastAcceptedAfterOldEta": true,
+      "lateObservationCadenceScheduled": true,
+      "lastTrainForecastAcceptedAfterOldEtaOnBusRailPlan": true,
+      "unresolvedTransferAndExpiredObservationWindowDoNotTriggerRecovery": true
+    }
+  },
+  "workerAndInstalledApp": {
+    "result": "PASSED",
+    "database": "H2_MEMORY_ONLY",
+    "oldStopForecastSecondsFromDeparture": 540,
+    "oldDestinationForecastSecondsFromDeparture": 600,
+    "evaluationSecondsFromDeparture": 610,
+    "newStopForecastSecondsFromDeparture": 700,
+    "newDestinationForecastSecondsFromDeparture": 760,
+    "nextCheckSecondsFromDeparture": 670,
+    "transferWalkSeconds": 30,
+    "recommendedDepartureUnchanged": true,
+    "publicProvisionalArrivalMatchesWorker": true,
+    "publicNormalEtaRemainsAbsent": true,
+    "installedAppCasesPassed": 1,
+    "physicalTransitHttpCalls": 0,
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.late-final-bus-valid.q0576xay"
+  },
+  "firstAttempt": {
+    "result": "STOPPED_BEFORE_WORKER_EVALUATION",
+    "reason": "The fixture seeded its initial monitoring time after departure. The corrected fixture seeded monitoring before departure.",
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.late-final-bus.43sorzwq"
+  },
+  "backendRegressionCasesPassed": 417,
+  "actualTripAccuracyVerified": false,
+  "sameConditionsNaverComparisonVerified": false
+}
