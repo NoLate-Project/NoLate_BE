@@ -17,6 +17,7 @@ import com.noLate.eta.application.transit.TransitRideRealtimeObservation
 import com.noLate.eta.application.transit.TransitObservedRideTiming
 import com.noLate.eta.application.transit.SeoulBusEta
 import com.noLate.eta.application.transit.SeoulSingleBusProjection
+import com.noLate.eta.application.transit.BusTransferTimetableReads
 import com.noLate.eta.application.transit.TransitRealtimeOverlay
 import com.noLate.eta.domain.SelectedTransitRoute
 import com.noLate.eta.domain.TransitFirstBoardingObservation
@@ -176,6 +177,7 @@ class TransitEtaCalculationService(
         // 예산을 급격히 소모한다. 선택 경로의 첫 관측 가능 후보에만 이 보조 진단을 허용한다.
         var transferOnlyProbeUsed = false
         val busEvaluation = seoulBusEta?.evaluation()
+        val busTransferReads = BusTransferTimetableReads()
         val claimTransferOnlyProbe = {
             if (transferOnlyProbeUsed) false else {
                 transferOnlyProbeUsed = true
@@ -217,6 +219,7 @@ class TransitEtaCalculationService(
                         claimTransferOnlyProbe = claimTransferOnlyProbe,
                         matchedSelectedRoute = selected,
                         busEvaluation = busEvaluation,
+                        busTransferReads = busTransferReads,
                         checkFirstAlighting = checkFirstAlighting,
                     )
                 }.getOrNull()
@@ -351,6 +354,7 @@ class TransitEtaCalculationService(
         claimTransferOnlyProbe: () -> Boolean,
         matchedSelectedRoute: SelectedTransitRoute? = null,
         busEvaluation: SeoulBusEta.Evaluation? = null,
+        busTransferReads: BusTransferTimetableReads? = null,
         checkFirstAlighting: ((TransitJourney, Instant, TransitLegTimetable) -> TransitRideRealtimeObservation?)? = null,
     ): ProjectedTransitJourney<TransitCandidateProjection> {
         val withWalking = walkingTimeEnricher.enrich(journey)
@@ -364,7 +368,12 @@ class TransitEtaCalculationService(
             return projectBus(withWalking, listOf(it.first, it.second), it.receivedAt, it.travelMinutes,
                 routeProvenance, matchedSelectedRoute, it.requiredMarginSeconds)
         }
-        val observedFirstBus = busTransfer?.firstAvailable?.let {
+        val mixedFirstBus = busEvaluation?.firstBusBeforeSubway(withWalking, request.evaluatedAt, request.maxTravelMinutes)
+        if (busEvaluation != null && mixedFirstBus != null) {
+            projectBusAndSubway(withWalking, mixedFirstBus, busEvaluation, busTransferReads, request, routeProvenance, matchedSelectedRoute)
+                ?.let { return it }
+        }
+        val observedFirstBus = (busTransfer?.firstAvailable ?: mixedFirstBus)?.let {
             // Preserve the verified boarding independently. An unverified connection
             // cannot produce a new arrival estimate or reschedule the existing alert.
             TransitRealtimeOverlayResolution(
@@ -382,6 +391,30 @@ class TransitEtaCalculationService(
         )
     }
 
+    private fun projectBusAndSubway(
+        journey: TransitJourney,
+        first: SeoulSingleBusProjection,
+        busEvaluation: SeoulBusEta.Evaluation,
+        busTransferReads: BusTransferTimetableReads?,
+        request: TrafficRequest,
+        provenance: TransitRouteProvenance,
+        selected: SelectedTransitRoute?,
+    ): ProjectedTransitJourney<TransitCandidateProjection>? {
+        val suffix = journey.legs.drop(first.rideIndex + 1)
+        val transferWalk = suffix.takeWhile { it.mode == TransitLegMode.WALK }.sumOf { it.movementDurationSeconds }
+        if (transferWalk <= 0) return null
+        val requiredMargin = timetableEnricher.busTransferMarginSeconds(transferFeasibilityEvaluator.requiredTransferMarginSeconds)
+        val connected = timetableEnricher.connectAfterBus(journey.copy(departureAt = first.alightingAt, legs = suffix),
+            request.evaluatedAt, request.maxTravelMinutes, requiredMargin, reads = busTransferReads) ?: return null
+        val receivedAt = maxOf(first.receivedAt, connected.rideLegs.maxOf { requireNotNull(it.timetable).fetchedAt })
+        if (!busEvaluation.canStillBoard(first, receivedAt)) return null
+        val totalMinutes = ((Duration.between(journey.departureAt, connected.arrivalAt).seconds + 59) / 60).toInt()
+        if (totalMinutes !in 1..request.maxTravelMinutes) return null
+        val combined = journey.copy(arrivalAt = connected.arrivalAt, totalMinutes = totalMinutes,
+            legs = journey.legs.take(first.rideIndex + 1) + connected.legs)
+        return projectBus(combined, listOf(first), receivedAt, totalMinutes, provenance, selected, requiredMargin)
+    }
+
     private fun projectBus(
         journey: TransitJourney,
         rides: List<SeoulSingleBusProjection>,
@@ -395,10 +428,16 @@ class TransitEtaCalculationService(
         val last = rides.last()
         val observation = bus.observation
         val boarding = observation.expectedBoardingAt
-        val route = journey.toEffectiveTransitRoute(last.destinationAt, travelMinutes,
-            bus.waitingMinutes, null, matchedSelectedRoute = selected)
-        val timingBasis = if (rides.size == 1) TransitJourneyTimingBasis.SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME
-            else TransitJourneyTimingBasis.BUS_TRANSFER_BOARDING_AND_ALIGHTING_REALTIME
+        val mixed = journey.rideLegs.any { it.mode == TransitLegMode.SUBWAY }
+        val arrivalAt = if (mixed) journey.arrivalAt else last.destinationAt
+        val route = journey.toEffectiveTransitRoute(arrivalAt, travelMinutes,
+            bus.waitingMinutes, null, matchedSelectedRoute = selected,
+            mixedFirstBus = bus.takeIf { mixed }, mixedTransferMarginSeconds = busTransferMarginSeconds)
+        val timingBasis = when {
+            mixed -> TransitJourneyTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE
+            rides.size == 1 -> TransitJourneyTimingBasis.SAME_BUS_BOARDING_AND_ALIGHTING_REALTIME
+            else -> TransitJourneyTimingBasis.BUS_TRANSFER_BOARDING_AND_ALIGHTING_REALTIME
+        }
         val segments = route.segments.map { segment ->
             val ride = rides.firstOrNull { it.rideIndex == segment.sequence } ?: return@map segment
             val rideObservation = ride.observation
@@ -414,14 +453,14 @@ class TransitEtaCalculationService(
         }
         return ProjectedTransitJourney(
             journey = journey,
-            predictedArrivalAt = last.destinationAt,
+            predictedArrivalAt = arrivalAt,
             projection = TransitCandidateProjection(
                 overlayResolution = TransitRealtimeOverlayResolution(
-                    overlay = TransitRealtimeOverlay(travelMinutes, last.destinationAt,
+                    overlay = TransitRealtimeOverlay(travelMinutes, arrivalAt,
                         receivedAt, boarding, bus.waitingMinutes),
                     firstBoardingObservation = observation,
                 ),
-                transfer = TransitTransferEvaluation(TransitTransferStatus.FEASIBLE, last.destinationAt,
+                transfer = TransitTransferEvaluation(TransitTransferStatus.FEASIBLE, arrivalAt,
                     travelMinutes, timingBasis),
                 transferRealtimeDelayed = false,
                 transferObservedAt = null,
@@ -1046,10 +1085,12 @@ class TransitEtaCalculationService(
         firstBoardingSourceAt: Instant? = null,
         observedRideTimings: Map<Int, TransitObservedRideTiming> = emptyMap(),
         matchedSelectedRoute: SelectedTransitRoute?,
+        mixedFirstBus: SeoulSingleBusProjection? = null,
+        mixedTransferMarginSeconds: Long = 0,
     ): EffectiveTransitRoute {
         val firstRideIndex = legs.indexOfFirst(TransitJourneyLeg::isRide)
         val currentRideTimings = currentRideDisplayTimings(
-            firstBoardingAt, predictedArrivalAt, observedRideTimings,
+            firstBoardingAt, predictedArrivalAt, observedRideTimings, mixedFirstBus, mixedTransferMarginSeconds,
         )
         return EffectiveTransitRoute(
             provider = provider,
@@ -1134,8 +1175,9 @@ class TransitEtaCalculationService(
         firstBoardingAt: Instant?,
         predictedArrivalAt: Instant,
         observedRideTimings: Map<Int, TransitObservedRideTiming> = emptyMap(),
+        mixedFirstBus: SeoulSingleBusProjection? = null,
+        mixedTransferMarginSeconds: Long = 0,
     ): Map<Int, RideDisplayTiming> {
-        if (rideLegs.any { it.timetable == null }) return emptyMap()
         val firstRideIndex = legs.indexOfFirst(TransitJourneyLeg::isRide)
         val timings = mutableMapOf<Int, RideDisplayTiming>()
         var cursor = departureAt
@@ -1146,19 +1188,23 @@ class TransitEtaCalculationService(
                 cursor = cursor.plusSeconds(leg.movementDurationSeconds)
                 continue
             }
-            val timetable = requireNotNull(leg.timetable)
+            val bus = mixedFirstBus?.takeIf { it.rideIndex == index }
+            val timetable = leg.timetable
+            if (timetable == null && bus == null) return emptyMap()
             // 시간표의 역 출발과 실시간 역 도착은 서로 다른 사건이다. 정차 시간을 지연으로 더하지 않는다.
             val firstBoardingObservationAt = firstBoardingAt.takeIf { index == firstRideIndex }
-            val boardingAt = observedRideTimings[index]?.boardingAt
-                ?: firstBoardingObservationAt ?: timetable.boardingAt
-            val arrivalAt = observedRideTimings[index]?.arrivalAt
+            val boardingAt = bus?.observation?.expectedBoardingAt ?: observedRideTimings[index]?.boardingAt
+                ?: firstBoardingObservationAt ?: requireNotNull(timetable).boardingAt
+            val arrivalAt = bus?.alightingAt ?: observedRideTimings[index]?.arrivalAt
                 ?: if (firstBoardingObservationAt != null) {
-                    rideArrivalPredictor.predictFromObservedBoardingArrival(timetable, boardingAt).arrivalAt
-                } else timetable.arrivalAt
+                    rideArrivalPredictor.predictFromObservedBoardingArrival(requireNotNull(timetable), boardingAt).arrivalAt
+                } else requireNotNull(timetable).arrivalAt
             if (boardingAt < cursor || arrivalAt <= boardingAt) return emptyMap()
             fun minutesUntil(at: Instant) = ((Duration.between(cursor, at).seconds + 59) / 60).toInt()
             val transferTiming = previousRideArrivalAt?.let {
-                transferFeasibilityEvaluator.describeTransfer(it, Duration.between(it, cursor).seconds, boardingAt)
+                val timing = transferFeasibilityEvaluator.describeTransfer(it, Duration.between(it, cursor).seconds, boardingAt)
+                if (mixedFirstBus != null && timings.size == 1) timing.copy(confidenceMarginSeconds = mixedTransferMarginSeconds)
+                else timing
             }
             timings[index] = RideDisplayTiming(minutesUntil(arrivalAt), minutesUntil(boardingAt), transferTiming)
             cursor = arrivalAt

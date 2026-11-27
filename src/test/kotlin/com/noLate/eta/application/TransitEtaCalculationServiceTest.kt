@@ -182,6 +182,78 @@ class TransitEtaCalculationServiceTest {
         org.mockito.kotlin.verifyNoInteractions(arrivalService)
     }
 
+    @ParameterizedTest
+    @CsvSource("false,true,false", "true,true,false", "true,false,false", "true,true,true")
+    fun `버스 하차 예보가 늦어지면 이동 여유를 지켜 지하철을 다시 고른다`(
+        lateBus: Boolean, onwardAvailable: Boolean, selectedBusIsAlternative: Boolean,
+    ) {
+        val bus = mock<SeoulTransitArrivalClient>()
+        val stops = listOf(
+            SeoulBusRouteStop("100100057", 4, "122000184", "02005", "승차", "방면", null, 37.0, 127.0),
+            SeoulBusRouteStop("100100057", 5, "122000185", "22009", "하차", "방면", null, 37.0, 127.0),
+        )
+        val busAlightingAt = evaluatedAt.plusSeconds(if (lateBus) 495 else 480)
+        whenever(bus.getBusRouteDiagnosticStops("100100057")).thenReturn(stops)
+        whenever(bus.getPairedBusArrivals(stops)).thenReturn(listOf(
+            SeoulBusPairedArrival(evaluatedAt.plusSeconds(360), busAlightingAt, evaluatedAt.minusSeconds(11), evaluatedAt),
+        ))
+        val rail = mock<TransitTimetableProvider>()
+        fun train(number: String, boarding: Long, alighting: Long) = TransitLegTimetable(
+            "seoul-timetable", SeoulSubwayLine.LINE_2, LocalDate.of(2026, 7, 29), number, "UP", TransitServiceClass.LOCAL,
+            "0226", "0230", "성수", evaluatedAt.plusSeconds(boarding), evaluatedAt.plusSeconds(alighting), evaluatedAt,
+        )
+        val earlierTrain = train("2012", 660, 1110)
+        whenever(rail.findRides(any())).thenReturn(
+            if (onwardAvailable) listOf(earlierTrain, train("2014", 780, 1230)) else listOf(earlierTrain),
+        )
+        val selectedLine = TransitLine(providerRouteId = "bus-1", localRouteId = stops.first().routeId, name = "402")
+        val candidateLine = if (selectedBusIsAlternative) TransitLine(providerRouteId = "other-bus", name = "다른 버스") else selectedLine
+        val route = TransitJourney("odsay", evaluatedAt, evaluatedAt, evaluatedAt.plusSeconds(1800), 30, listOf(
+            TransitJourneyLeg(0, TransitLegMode.WALK, 4),
+            TransitJourneyLeg(1, TransitLegMode.BUS, 10,
+                from = TransitStop(providerStopId = "board", localStopId = stops.first().stationId, name = "승차"),
+                to = TransitStop(providerStopId = "alight", localStopId = stops.last().stationId, name = "하차"),
+                line = candidateLine, alternativeBusLines = if (selectedBusIsAlternative) listOf(selectedLine) else emptyList()),
+            TransitJourneyLeg(2, TransitLegMode.WALK, 2, durationSeconds = 120),
+            TransitJourneyLeg(3, TransitLegMode.SUBWAY, 10,
+                from = TransitStop(providerStopId = "sadang", name = "사당"),
+                to = TransitStop(providerStopId = "sillim", name = "신림"),
+                line = TransitLine(providerRouteId = "rail-2", name = "2호선", serviceClass = TransitServiceClass.LOCAL,
+                    seoulSubwayLine = SeoulSubwayLine.LINE_2), directionCode = "UP"),
+            TransitJourneyLeg(4, TransitLegMode.WALK, 2),
+        ), evaluatedAt)
+        val selected = """{"provider":"odsay","transitLegs":[
+            {"kind":"BUS","providerRouteId":"bus-1","startID":"board","endID":"alight"},
+            {"kind":"WALK","durationMinutes":2},
+            {"kind":"SUBWAY","providerRouteId":"rail-2","startID":"sadang","endID":"sillim",
+             "lineName":"2호선","serviceClass":"LOCAL","directionCode":"UP"}]}"""
+        val result = service(listOf(RecordingProvider("odsay", listOf(route))),
+            timetableProvider = rail, busEta = SeoulBusEta(bus, 60, 120)).calculate(request(selectedRouteJson = selected))
+
+        assertEquals(onwardAvailable, result.accepted)
+        if (onwardAvailable) {
+            assertEquals(TransitTimingBasis.FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE, result.transitTimingBasis)
+            assertEquals(evaluatedAt, result.recommendedDepartureAt)
+            assertEquals(evaluatedAt.plusSeconds(if (lateBus) 1350 else 1230), result.predictedArrivalAt)
+            val segments = requireNotNull(result.effectiveTransitRoute).segments
+            assertEquals(busAlightingAt, segments[1].busRidePrediction?.alightingAt)
+            assertEquals(if (lateBus) "2014" else "2012", segments[3].rideTiming?.timetable?.trainNumber)
+            assertEquals(EffectiveTransitRideTimingBasis.TIMETABLE, segments[3].rideTiming?.basis)
+            assertEquals(120L, segments[3].transferTiming?.walkingSeconds)
+            assertEquals(60L, segments[3].transferTiming?.requiredMarginSeconds)
+            assertEquals(if (lateBus) 105L else 0L, segments[3].transferTiming?.remainingSlackSeconds)
+        } else {
+            assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, result.failureReason)
+            assertNull(result.predictedArrivalAt)
+            assertEquals(evaluatedAt.plusSeconds(360), result.firstBoardingObservation?.expectedBoardingAt)
+        }
+        verify(bus).getPairedBusArrivals(stops)
+        verify(rail).findRides(org.mockito.kotlin.check { query ->
+            assertEquals(busAlightingAt.plusSeconds(180), query.notBefore)
+        })
+        org.mockito.kotlin.verifyNoInteractions(arrivalService)
+    }
+
     @Test
     fun `실제 maasRP 스키마를 매핑한 경로는 첫 차량 실시간 보정이 성공해도 신뢰 가능한 전체 ETA가 아니다`() {
         whenever(busArrivals()).thenReturn(

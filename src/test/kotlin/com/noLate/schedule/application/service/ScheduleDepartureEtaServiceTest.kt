@@ -3,17 +3,20 @@ package com.noLate.schedule.application.service
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.schedule.application.EffectiveBusRidePrediction
 import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
 import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
 import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
 import com.noLate.schedule.application.EffectiveTransitRideTiming
 import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
+import com.noLate.schedule.application.PlannedTransitRouteUpdate
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TransitRouteProvenance
 import com.noLate.schedule.application.TransitTimingBasis
 import com.noLate.schedule.application.savedOdsayTimetableFixture
+import com.noLate.schedule.domain.PlannedJourneyArrivalBasis
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleEtaConfidence
 import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
@@ -660,6 +663,46 @@ class ScheduleDepartureEtaServiceTest {
         assertEquals(queryAt.plus(30, ChronoUnit.MINUTES), job.nextCheckAt)
         assertEquals(TrafficSource.SAVED_FALLBACK, result.source)
         assertTrue(result.stale)
+    }
+
+    @ParameterizedTest
+    @CsvSource("45,true", "46,false")
+    fun `같은 버스 도착 예보의 상태 API는 원본 만료 후에도 계획 시각을 유지한다`(sourceAgeSeconds: Long, fresh: Boolean) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val departureAt = queryAt.minusSeconds(150)
+        val sourceAt = queryAt.minusSeconds(sourceAgeSeconds)
+        val initialAlighting = queryAt.plusSeconds(90)
+        val updatedAlighting = queryAt.plusSeconds(240)
+        val bus = EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.BUS, 4, lineName = "101",
+            fromName = "승차 정류장", toName = "하차 정류장", busRidePrediction = EffectiveBusRidePrediction(
+                departureAt.plusSeconds(90), initialAlighting, departureAt.minusSeconds(1)))
+        val walk = EffectiveTransitRouteSegment(1, EffectiveTransitRouteSegmentKind.WALK, 1, durationSeconds = 60)
+        val original = EffectiveTransitRoute("odsay", "b".repeat(64), departureAt, initialAlighting.plusSeconds(60), 5, listOf(bus, walk))
+        val revised = original.copy(arrivalAt = updatedAlighting.plusSeconds(60), totalMinutes = 8,
+            segments = listOf(bus.copy(durationMinutes = 7, busRidePrediction = bus.busRidePrediction!!.copy(
+                alightingAt = updatedAlighting, alightingObservationSourceUpdatedAt = sourceAt)), walk))
+        val snapshot = EffectiveTransitRouteSnapshot(evaluationCheckCount = job.checkCount,
+            evaluationNotificationGeneration = job.notificationGeneration, inProgressPlannedRoute = original,
+            plannedRouteUpdate = PlannedTransitRouteUpdate(original.identity, sourceAt, route = revised))
+        finish(job, 5, TrafficSource.SELECTED_ROUTE, queryAt.minusSeconds(1), snapshotSchedule = schedule,
+            failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY,
+            recommendedDepartureAt = departureAt, effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot))
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val response = service().getDepartureStatus(1L, 10L)
+
+        val provisional = requireNotNull(response.plannedJourneyArrivalPrediction)
+        assertEquals(departureAt, response.recommendedDepartureAt)
+        assertNull(response.predictedArrivalAt)
+        assertNull(response.effectiveTransitRoute)
+        assertEquals(revised.arrivalAt, provisional.predictedArrivalAt)
+        assertEquals(if (fresh) PlannedJourneyArrivalBasis.MATCHED_BUS_REALTIME else PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN,
+            provisional.basis)
+        assertEquals(sourceAt.takeIf { fresh }, provisional.sourceUpdatedAt)
+        assertEquals(sourceAt.takeIf { fresh }, provisional.effectiveTransitRoute
+            ?.segments?.first()?.busRidePrediction?.alightingObservationSourceUpdatedAt)
     }
 
     @Test

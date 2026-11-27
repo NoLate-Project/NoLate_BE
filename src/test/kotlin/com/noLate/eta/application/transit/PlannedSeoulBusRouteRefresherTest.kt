@@ -2,12 +2,20 @@ package com.noLate.eta.application.transit
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.noLate.eta.application.port.TransitTimetableProvider
+import com.noLate.eta.domain.SeoulSubwayLine
+import com.noLate.eta.domain.TransitLegTimetable
+import com.noLate.eta.domain.TransitServiceClass
 import com.noLate.schedule.application.EffectiveBusRidePrediction
 import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
 import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind.BUS
+import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind.SUBWAY
 import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind.WALK
 import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
+import com.noLate.schedule.application.EffectiveTransitRideTiming
+import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
+import com.noLate.schedule.application.PlannedJourneyArrivalObservation
 import com.noLate.schedule.application.PlannedSeoulBusJourney
 import com.noLate.schedule.application.PlannedSeoulBusRide
 import com.noLate.schedule.application.PlannedTransitTimingFailure
@@ -27,6 +35,7 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.*
 import java.time.Instant
+import java.time.LocalDate
 
 class PlannedSeoulBusRouteRefresherTest {
     private val start = Instant.parse("2026-11-27T00:00:00Z")
@@ -63,8 +72,8 @@ class PlannedSeoulBusRouteRefresherTest {
         assertEquals(14, result.totalMinutes)
         assertEquals(time(390), result.segments[1].busRidePrediction!!.alightingAt)
         assertEquals(time(480), result.segments[3].busRidePrediction!!.boardingAt)
-        assertEquals(30, result.segments[3].transferTiming!!.walkingSeconds)
-        assertEquals(60, result.segments[3].transferTiming!!.requiredMarginSeconds)
+        assertEquals(30L, result.segments[3].transferTiming!!.walkingSeconds)
+        assertEquals(60L, result.segments[3].transferTiming!!.requiredMarginSeconds)
         assertEquals(newSecondVehicle, refreshed.journey.rides[1].service)
         assertEquals(time(145), refreshed.update.sourceUpdatedAt)
 
@@ -88,6 +97,53 @@ class PlannedSeoulBusRouteRefresherTest {
         verify(provider, never()).getBusAlightingForecast(any(), any())
     }
 
+    @Test fun `same bus changes the planned train then a fresh observation of that train updates the final arrival`() {
+        fun train(number: String, board: Long, alight: Long, destinationCode: String = "0230") = TransitLegTimetable(
+            "seoul-timetable", SeoulSubwayLine.LINE_2, LocalDate.of(2026, 11, 27), number, "UP", TransitServiceClass.LOCAL,
+            "0226", destinationCode, "성수", time(board), time(alight), time(153),
+        )
+        val originalTrain = train("2012", 380, 540)
+        val originalRail = EffectiveTransitRouteSegment(3, SUBWAY, 5, lineName = "2호선", fromName = "사당", toName = "신림",
+            transferTiming = evaluator.describeTransfer(time(240), 30, time(380)),
+            rideTiming = EffectiveTransitRideTiming(originalTrain, originalTrain.boardingAt, originalTrain.arrivalAt,
+                EffectiveTransitRideTimingBasis.TIMETABLE))
+        val original = route.copy(segments = listOf(route.segments[0], route.segments[1], route.segments[2], originalRail, route.segments[4]))
+        val binding = journey.copy(rides = listOf(journey.rides.first()))
+        val rail = mock<TransitTimetableProvider>()
+        whenever(rail.findRides(any())).thenReturn(listOf(train("2013", 470, 640), train("2100", 480, 680, "0229"),
+            train("2014", 500, 760)))
+        val guard = mock<TransitTransferRealtimeGuard>()
+        val mixedRefresher = PlannedSeoulBusRouteRefresher(provider, evaluator, 60, 120, 1440,
+            TransitJourneyTimetableEnricher(listOf(rail)), guard)
+        currentBus()
+
+        val afterBus = requireNotNull(mixedRefresher.refresh(original, binding, time(150)))
+        val changedRoute = requireNotNull(afterBus.update.route)
+        assertEquals(start, changedRoute.departureAt)
+        assertEquals(time(820), changedRoute.arrivalAt)
+        assertEquals("2014", changedRoute.segments[3].rideTiming!!.timetable.trainNumber)
+        assertEquals(time(390), changedRoute.segments[3].transferTiming!!.previousArrivalAt)
+        assertEquals(20L, changedRoute.segments[3].transferTiming!!.remainingSlackSeconds)
+        verify(rail).findRides(check { assertEquals(time(480), it.notBefore) })
+        val afterBusSnapshot = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = original, plannedSeoulBusJourney = binding,
+            plannedRouteUpdate = afterBus.update)
+        assertEquals(PlannedJourneyArrivalBasis.MATCHED_BUS_REALTIME,
+            afterBusSnapshot.plannedJourneyArrivalPrediction(time(170), 120)?.basis)
+
+        whenever(guard.observeLastPlannedRide(changedRoute.copy(segments = listOf(changedRoute.segments[3])), time(600)))
+            .thenReturn(PlannedJourneyArrivalObservation(route.identity, time(850), time(598)))
+        assertNull(mixedRefresher.refresh(changedRoute, binding, time(600), pendingTransferFailure = true))
+        val afterTrain = requireNotNull(mixedRefresher.refresh(changedRoute, binding, time(600)))
+        val followed = afterBusSnapshot.copy(plannedRouteUpdate = afterTrain.update)
+        val public = requireNotNull(followed.plannedJourneyArrivalPrediction(time(650), 120))
+        assertEquals(PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME, public.basis)
+        assertEquals(time(850), public.predictedArrivalAt)
+        assertEquals(time(790), public.effectiveTransitRoute!!.segments[3].rideTiming!!.predictedArrivalAt)
+        assertNull(public.effectiveTransitRoute!!.segments[1].busRidePrediction!!.alightingObservationSourceUpdatedAt)
+        assertEquals(time(148), afterTrain.update.route!!.segments[1].busRidePrediction!!.alightingObservationSourceUpdatedAt)
+        verify(provider).getBusAlightingForecast(first.last(), firstVehicle)
+    }
+
     @Test fun `a known downstream miss does not publish a speculative final arrival`() {
         currentBus()
         onwardBuses(listOf(pair(time(470), time(651), oldSecondVehicle)))
@@ -99,7 +155,7 @@ class PlannedSeoulBusRouteRefresherTest {
 
     @Test fun `worker snapshot retains correlation across departure without publishing it in the route DTO`() {
         val mapper: ObjectMapper = jacksonObjectMapper().findAndRegisterModules()
-        val accepted = TrafficResult(10, TrafficSource.LIVE_PROVIDER, fetchedAt = time(-4),
+        val accepted = TrafficResult(10, TrafficSource.LIVE_PROVIDER, fetchedAt = time(-4), stale = false,
             effectiveTransitRoute = route, seoulBusJourney = journey)
         val previous = requireNotNull(EffectiveTransitRouteSnapshot.from(accepted, null, 1, evaluatedAt = time(-4)))
         val json = mapper.writeValueAsString(previous)

@@ -185,7 +185,9 @@ data class EffectiveTransitRouteSnapshot(
         val plan = plannedRouteAt(readAt) ?: return null
         if (plannedJourneyTimingFailureReason() != null) return null
         val updated = plannedRouteUpdate?.takeIf {
-            val busRefresh = it.route?.segments?.any { segment -> segment.busRidePrediction?.alightingObservationSourceUpdatedAt != null } == true
+            val busRefresh = !it.onlyLastRideObserved && it.route?.segments?.any {
+                segment -> segment.busRidePrediction?.alightingObservationSourceUpdatedAt != null
+            } == true
             val sourceMaxAge = if (busRefresh) minOf(maxAgeSeconds,
                 com.noLate.transit.domain.SeoulBusVehicleFreshness.MAX_SOURCE_AGE_SECONDS) else maxAgeSeconds
             it.routeIdentity == plan.identity && it.route != null &&
@@ -194,13 +196,19 @@ data class EffectiveTransitRouteSnapshot(
         if (updated != null) {
             val route = requireNotNull(updated.route)
             if (route.arrivalAt <= readAt) return null
+            val hasBusObservation = route.segments.any { it.busRidePrediction?.alightingObservationSourceUpdatedAt != null }
+            // Preserve the earlier bus observation in storage to prevent applying the same feed twice.
+            // Only the train observation remains current in the public result for the last rail segment.
+            val publicRoute = if (updated.onlyLastRideObserved && hasBusObservation) route.copy(segments =
+                route.segments.map { it.copy(busRidePrediction = it.busRidePrediction?.copy(alightingObservationSourceUpdatedAt = null)) })
+            else route
             return PlannedJourneyArrivalPrediction(route.arrivalAt, readAt, plan.identity,
-                if (route.segments.any { it.busRidePrediction?.alightingObservationSourceUpdatedAt != null }) {
+                if (hasBusObservation && !updated.onlyLastRideObserved) {
                     PlannedJourneyArrivalBasis.MATCHED_BUS_REALTIME
                 } else if (route.segments.any { it.rideTiming?.observedService != null }) PlannedJourneyArrivalBasis.OBSERVED_SERVICE_CONNECTION
                 else if (updated.onlyLastRideObserved) PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
                 else PlannedJourneyArrivalBasis.MATCHED_RIDE_AND_ONWARD_TIMETABLE,
-                effectiveTransitRoute = route, sourceUpdatedAt = updated.sourceUpdatedAt)
+                effectiveTransitRoute = publicRoute, sourceUpdatedAt = updated.sourceUpdatedAt)
         }
         val preservedPlan = latestPreservedPlan(plan)
         val candidate = effectiveTransitRoute

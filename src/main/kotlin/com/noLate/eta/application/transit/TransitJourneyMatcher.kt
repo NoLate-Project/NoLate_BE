@@ -48,8 +48,11 @@ class TransitJourneyMatcher {
     private fun TransitJourney.withSelectedOdsayBusLine(selected: SelectedTransitRoute): TransitJourney {
         if (!provider.equals("odsay", ignoreCase = true)) return this
         val rides = rideLegs
-        if (rides.size != selected.rides.size || rides.size !in 1..2 ||
-            rides.any { it.mode != TransitLegMode.BUS } || selected.rides.any { it.mode != TransitLegMode.BUS }) return this
+        val modes = rides.map { it.mode }
+        if (modes != selected.rides.map { it.mode } || modes.firstOrNull() != TransitLegMode.BUS) return this
+        val supported = modes.size in 1..2 && modes.all { it == TransitLegMode.BUS } ||
+            modes.size in 2..3 && modes.drop(1).all { it == TransitLegMode.SUBWAY }
+        if (!supported) return this
         val ride = rides.first()
         val id = selected.rides.first().providerRouteId?.normalizeIdentity() ?: return this
         if (ride.line?.providerRouteId?.normalizeIdentity() == id) return this

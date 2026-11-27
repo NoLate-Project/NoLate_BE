@@ -1,0 +1,60 @@
+{
+  "classification": "CONTROLLED_BUS_PROVIDER_REPLAY",
+  "physicalTransitHttpCalls": 0,
+  "beforeAndAfterFeedIdentical": true,
+  "scope": "two saved Seoul bus rides, with access, transfer and egress walks",
+  "secondsFromOriginalDeparture": {
+    "accessWalk": 30,
+    "firstBoarding": 90,
+    "plannedFirstAlighting": 240,
+    "observedBusForecastFirstAlighting": 390,
+    "transferWalk": 30,
+    "mandatoryTransferMargin": 60,
+    "tooEarlyTransferBoarding": 470,
+    "matchedReplacementBoarding": 480,
+    "matchedReplacementAlighting": 760,
+    "egressWalk": 60,
+    "originalArrival": 600,
+    "reconnectedArrival": 820
+  },
+  "applicationReplay": {
+    "publishedBaselineCommit": "a495e97da691e011c01acaf51705c4f4ca4b9744",
+    "before": {
+      "summaryFirstBoardingWaitDisplayed": false,
+      "summaryTransferWaitDisplayed": false,
+      "summaryRideDurationsIncludedWait": true,
+      "sameInputRegressionPassed": false
+    },
+    "after": {
+      "summaryAndTimelineFirstBoardingWaitSeconds": 60,
+      "summaryAndTimelineTransferWaitSeconds": 60,
+      "firstRideSeconds": 300,
+      "secondRideSeconds": 280,
+      "expiredRealtimeTraceShownAsLive": false,
+      "inconsistentTransferSecondsShown": false,
+      "sameInputRegressionPassed": true
+    }
+  },
+  "workerRegression": {
+    "scope": "single saved bus, exact vehicle and stop matched with a new alighting forecast",
+    "provisionalArrivalShiftSeconds": 150,
+    "originalPlanRetained": true,
+    "protectedDepartureUnchanged": true,
+    "alarmRescheduled": false
+  },
+  "departureStatusRegression": {
+    "sourceAgeSecondsWhileLive": 45,
+    "sourceAgeSecondsWhenPlanOnly": 46,
+    "latestProvisionalArrivalRetainedAfterExpiry": true,
+    "originalDepartureRetainedAfterExpiry": true
+  },
+  "verification": {
+    "backendTestsPassed": 354,
+    "frontendTestsPassed": 137,
+    "typescriptPassed": true,
+    "iosBundleExportPassed": true
+  },
+  "passengerBoardingVerified": false,
+  "physicalTripAccuracyVerified": false,
+  "matchedPublicMapComparisonCount": 0
+}

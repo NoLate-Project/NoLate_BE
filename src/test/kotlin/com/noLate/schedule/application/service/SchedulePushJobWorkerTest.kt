@@ -2,6 +2,7 @@ package com.noLate.schedule.application.service
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.eta.application.port.TransitTimetableProvider
+import com.noLate.eta.application.transit.PlannedSeoulBusRouteRefresher
 import com.noLate.eta.application.transit.PlannedTransitRouteRefresher
 import com.noLate.eta.application.transit.TransitJourneyTimetableEnricher
 import com.noLate.eta.application.transit.TransitTransferFeasibilityEvaluator
@@ -9,6 +10,14 @@ import com.noLate.eta.application.transit.TransitTransferRealtimeGuard
 import com.noLate.eta.domain.TransitLegTimetable
 import com.noLate.transit.application.TransitArrivalService
 import com.noLate.transit.domain.TransitArrivalDto
+import com.noLate.transit.domain.SeoulBusRideService
+import com.noLate.transit.domain.SeoulBusRouteStop
+import com.noLate.transit.domain.SeoulBusVehicleObservation
+import com.noLate.transit.domain.SeoulBusVehicleObservationBatch
+import com.noLate.transit.domain.SeoulBusVehicleObservationStatus
+import com.noLate.transit.domain.SeoulBusVehicleQuery
+import com.noLate.transit.infrastructure.SeoulBusAlightingForecast
+import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
 import com.noLate.global.observability.NoLateOperationalMetrics
 import com.noLate.notification.application.service.AppNotificationSnapshot
 import com.noLate.notification.application.useCase.NotificationUseCase
@@ -17,11 +26,14 @@ import com.noLate.notification.liveactivity.application.ScheduleLiveActivityEtaP
 import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
 import com.noLate.schedule.application.TrafficClient
+import com.noLate.schedule.application.EffectiveBusRidePrediction
 import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
 import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
 import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
 import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
+import com.noLate.schedule.application.PlannedSeoulBusJourney
+import com.noLate.schedule.application.PlannedSeoulBusRide
 import com.noLate.schedule.application.PlannedTransitTimingFailure
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TrafficRequest
@@ -35,6 +47,7 @@ import com.noLate.schedule.application.service.policy.TrafficChangePolicy
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleAlertMode
 import com.noLate.schedule.domain.ScheduleDepartureReminderStage
+import com.noLate.schedule.domain.PlannedJourneyArrivalBasis
 import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.SchedulePushJob
 import com.noLate.schedule.domain.SchedulePushJobStatus
@@ -67,6 +80,7 @@ import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.check
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
@@ -184,6 +198,60 @@ class SchedulePushJobWorkerTest {
             assertNull(connected.observationSourceUpdatedAt)
         }
         assertEquals(original.departureAt, job.lastRecommendedDepartureAt)
+        verifyNoInteractions(departureAlarmSyncService)
+    }
+
+    @Test
+    fun `출발 후 Worker는 동일 버스의 새 하차 예보를 잠정 도착에만 저장하고 출발 알람을 유지한다`() {
+        val departure = testNow.minusSeconds(150)
+        val boarding = departure.plusSeconds(90)
+        val oldAlighting = testNow.plusSeconds(90)
+        val newAlighting = testNow.plusSeconds(240)
+        val routeId = "100100101"
+        val stopPath = listOf("승차 정류장", "중간 정류장", "하차 정류장").mapIndexed { index, name ->
+            SeoulBusRouteStop(routeId, index + 10, "10100000$index", "0100$index", name, "방면", null, 37.5, 127.0)
+        }
+        val vehicleId = "101000091"
+        val service = SeoulBusRideService.fromVehicle(stopPath.first(), stopPath.last(), vehicleId)
+        val plan = EffectiveTransitRoute("odsay", "b".repeat(64), departure, oldAlighting.plusSeconds(60), 5, listOf(
+            EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.BUS, 4,
+                lineName = "101", fromName = stopPath.first().name, toName = stopPath.last().name,
+                busRidePrediction = EffectiveBusRidePrediction(boarding, oldAlighting, departure.minusSeconds(1))),
+            EffectiveTransitRouteSegment(1, EffectiveTransitRouteSegmentKind.WALK, 1, durationSeconds = 60),
+        ))
+        val journey = PlannedSeoulBusJourney(plan.identity, departure, listOf(PlannedSeoulBusRide(0, service)))
+        val prior = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan, plannedSeoulBusJourney = journey)
+        val schedule = schedule(testNow.plusSeconds(900), travelMode = ScheduleTravelMode.TRANSIT, alertMode = ScheduleAlertMode.ALARM)
+        val job = persistedJob(1L, 10L, schedule.startAt, departure, departure.minusSeconds(600), notificationIntervalMinutes)
+        job.startProcessing("previous-worker")
+        job.finishCheck(travelMinutes = 5, recommendedDepartureAt = departure, pushSent = true, notifiedDepartureAt = departure,
+            nextCheckAt = testNow, completeAfterCheck = false, etaRouteFingerprint = routeFingerprint(schedule),
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(prior), now = testNow.minusSeconds(60))
+        stubDueJobLookup(job, schedule)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(5, TrafficSource.SELECTED_ROUTE,
+            stale = true, failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY))
+        val arrivals = mock<SeoulTransitArrivalClient>()
+        whenever(arrivals.getBusRouteDiagnosticStops(routeId)).thenReturn(stopPath)
+        whenever(arrivals.getBusVehicleObservations(SeoulBusVehicleQuery(routeId, 10, 12)))
+            .thenReturn(SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE, listOf(
+                SeoulBusVehicleObservation(vehicleId, routeId, "103000001", 11, 300, false, stopPath[1].stationId,
+                    testNow.minusSeconds(4), testNow, testNow.plusSeconds(41)),
+            )))
+        whenever(arrivals.getBusAlightingForecast(stopPath.last(), service))
+            .thenReturn(SeoulBusAlightingForecast(newAlighting, testNow.minusSeconds(2), testNow))
+
+        worker(alarmSyncService = departureAlarmSyncService,
+            busRefresher = PlannedSeoulBusRouteRefresher(arrivals, TransitTransferFeasibilityEvaluator(), 60, 120, 1440))
+            .runDueJobs(testNow)
+
+        val stored = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
+        val provisional = requireNotNull(stored.plannedJourneyArrivalPrediction(testNow, 120))
+        assertEquals(oldAlighting.plusSeconds(60), stored.inProgressPlannedRoute?.arrivalAt)
+        assertEquals(newAlighting.plusSeconds(60), provisional.predictedArrivalAt)
+        assertEquals(PlannedJourneyArrivalBasis.MATCHED_BUS_REALTIME, provisional.basis)
+        assertEquals(newAlighting, provisional.effectiveTransitRoute?.segments?.first()?.busRidePrediction?.alightingAt)
+        assertFalse(stored.accepted)
+        assertEquals(departure, job.lastRecommendedDepartureAt)
         verifyNoInteractions(departureAlarmSyncService)
     }
 
@@ -3532,6 +3600,7 @@ class SchedulePushJobWorkerTest {
         liveActivityService: ScheduleLiveActivityService? = null,
         departureStatusSnapshotGraceMinutes: Long = 5L,
         refresher: PlannedTransitRouteRefresher? = null,
+        busRefresher: PlannedSeoulBusRouteRefresher? = null,
     ) = SchedulePushJobWorker(
         scheduleRepository = scheduleRepository,
         objectMapper = objectMapper,
@@ -3561,6 +3630,7 @@ class SchedulePushJobWorkerTest {
         scheduleLiveActivityService = liveActivityService,
         departureStatusSnapshotGraceMinutes = departureStatusSnapshotGraceMinutes,
         plannedTransitRouteRefresher = refresher,
+        plannedSeoulBusRouteRefresher = busRefresher,
     )
 
     private fun assertEtaProcessingExceptionCount(

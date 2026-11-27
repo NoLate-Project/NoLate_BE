@@ -1,0 +1,64 @@
+{
+  "classification": "CONTROLLED_BUS_TO_SUBWAY_PROVIDER_REPLAY",
+  "captureKind": "controlled provider responses",
+  "previousResult": {
+    "acceptedMixedPlans": 0,
+    "firstBoardingNotRetainedWithoutTrain": true,
+    "passingMixedRegressions": 0,
+    "attemptedMixedRegressions": 3
+  },
+  "after": {
+    "firstBusBaselineAlightingOffsetSeconds": 480,
+    "firstBusDelayedAlightingOffsetSeconds": 495,
+    "transferWalkSeconds": 120,
+    "transferMarginSeconds": 60,
+    "earliestTrainBoardingBeforeDelayOffsetSeconds": 660,
+    "earliestTrainBoardingAfterDelayOffsetSeconds": 675,
+    "selectedTrainBoardingBeforeDelayOffsetSeconds": 660,
+    "selectedTrainBoardingAfterDelayOffsetSeconds": 780,
+    "finalArrivalBeforeDelayOffsetSeconds": 1230,
+    "finalArrivalAfterDelayOffsetSeconds": 1350,
+    "timingBasis": "FIRST_BOARDING_REALTIME_FUTURE_TIMETABLE",
+    "sameRailQueryReadsWhenOnlyMissedTrainAvailable": 1,
+    "firstBoardingOnlyWhenConnectionUnavailable": true,
+    "arrivalWithheldWhenConnectionUnavailable": true
+  },
+  "postDeparture": {
+    "initialTrainNumber": "2012",
+    "reconnectedTrainNumber": "2014",
+    "busDirectAlightingForecastOffsetSeconds": 390,
+    "transferWalkSeconds": 30,
+    "transferWaitSeconds": 80,
+    "finalArrivalBeforeReconnectionOffsetSeconds": 600,
+    "finalArrivalAfterBusOffsetSeconds": 820,
+    "finalArrivalAfterMatchedTrainOffsetSeconds": 850,
+    "sameRouteDifferentStationCodeRejected": true,
+    "trainOnlyObservationCannotOverrideKnownMissedTransfer": true,
+    "originalDeparturePreserved": true
+  },
+  "verification": {
+    "backendTestsPassed": 351,
+    "frontendTestsPassed": 138,
+    "typeScriptPassed": true,
+    "installedAppReplay": {
+      "result": "PASSED",
+      "test": "NoLateEtaJourneyE2ETests.testVerifyIsolatedMixedTransfer",
+      "backendStorage": "isolated H2",
+      "historyCount": 1,
+      "source": "MATCHED_BUS_REALTIME",
+      "trainNumber": "2014",
+      "transferWalkSeconds": 30,
+      "transferWaitSeconds": 80,
+      "totalMinutes": 14,
+      "recommendedDepartureAt": "2026-11-27T09:06:18Z",
+      "predictedArrivalAt": "2026-11-27T09:19:58Z",
+      "originalDeparturePreserved": true,
+      "originalAppEndpointRestored": true,
+      "ownedPortsReleased": true,
+      "frontendScreenshot": "e2e/evidence/2026-11-27-mixed-bus-to-subway/ios-mixed-transfer.png"
+    },
+    "physicalTransitHttpCalls": 0,
+    "actualPassengerArrivalVerified": false,
+    "matchingNaverAccuracySampleCount": 0
+  }
+}

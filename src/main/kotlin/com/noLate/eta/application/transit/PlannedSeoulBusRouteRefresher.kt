@@ -4,10 +4,18 @@ import com.noLate.schedule.application.EffectiveBusRidePrediction
 import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
 import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
+import com.noLate.schedule.application.EffectiveTransitRideTiming
+import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
 import com.noLate.schedule.application.PlannedSeoulBusJourney
 import com.noLate.schedule.application.PlannedSeoulBusRide
 import com.noLate.schedule.application.PlannedTransitRouteUpdate
 import com.noLate.schedule.application.PlannedTransitTimingFailure
+import com.noLate.eta.domain.TransitJourney
+import com.noLate.eta.domain.TransitJourneyLeg
+import com.noLate.eta.domain.TransitLegMode
+import com.noLate.eta.domain.TransitLegTimingBasis
+import com.noLate.eta.domain.TransitLine
+import com.noLate.eta.domain.TransitStop
 import com.noLate.transit.domain.SeoulBusRideService
 import com.noLate.transit.domain.SeoulBusRouteStop
 import com.noLate.transit.domain.SeoulBusVehicleQuery
@@ -29,13 +37,16 @@ class PlannedSeoulBusRouteRefresher(
     @Value("\${eta.transit.boarding-buffer-seconds:60}") private val boardingBufferSeconds: Long,
     @Value("\${eta.transit.arrival-source-max-age-seconds:120}") private val sourceMaxAgeSeconds: Long,
     @Value("\${schedule.traffic.max-travel-minutes:1440}") private val maxTravelMinutes: Int,
+    private val timetableEnricher: TransitJourneyTimetableEnricher? = null,
+    private val railRealtime: TransitTransferRealtimeGuard? = null,
 ) {
     internal data class Refresh(val update: PlannedTransitRouteUpdate, val journey: PlannedSeoulBusJourney)
 
-    internal fun refresh(route: EffectiveTransitRoute, journey: PlannedSeoulBusJourney, at: Instant): Refresh? {
+    internal fun refresh(route: EffectiveTransitRoute, journey: PlannedSeoulBusJourney, at: Instant,
+                         pendingTransferFailure: Boolean = false): Refresh? {
         if (!journey.matches(route) || at < route.departureAt || at >= route.arrivalAt) return null
         return try {
-            refreshAcceptedPlan(route, journey, at)
+            refreshAcceptedPlan(route, journey, at, pendingTransferFailure)
         } catch (failure: Exception) {
             if (failure is CancellationException || failure is InterruptedException ||
                 Thread.currentThread().isInterrupted) throw failure
@@ -44,26 +55,31 @@ class PlannedSeoulBusRouteRefresher(
         }
     }
 
-    private fun refreshAcceptedPlan(route: EffectiveTransitRoute, journey: PlannedSeoulBusJourney, at: Instant): Refresh? {
+    private fun refreshAcceptedPlan(route: EffectiveTransitRoute, journey: PlannedSeoulBusJourney, at: Instant,
+                                    pendingTransferFailure: Boolean): Refresh? {
         val segments = route.segments.sortedBy { it.sequence }
         val rides = journey.rides.map { binding -> segments.single { it.sequence == binding.sequence } }
         val latest = rides.indices.firstNotNullOfOrNull { index ->
             observeAlighting(requireNotNull(rides[index].busRidePrediction), journey.rides[index].service, at)?.let {
                 index to it
             }
-        } ?: return null
+        } ?: return if (pendingTransferFailure) null else refreshLastSubway(route, journey, segments, at)
         val (index, current) = latest
         val active = rides[index]
         val activeIndex = segments.indexOf(active)
         val observed = active.copy(busRidePrediction = current.prediction,
             durationMinutes = minutes(accessEndsAt(route, segments, rides, index), current.prediction.alightingAt))
+        val suffix = segments.drop(activeIndex + 1)
+        if (suffix.any { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY }) {
+            return reconnectSubway(route, journey, segments.take(activeIndex) + observed, suffix, current, at)
+        }
         val next = rides.getOrNull(index + 1)
         if (next == null) {
             return updated(route, journey, segments.map {
                 if (it === active) observed else it.copy(
                     busRidePrediction = it.busRidePrediction?.copy(alightingObservationSourceUpdatedAt = null))
             },
-                current.prediction.alightingAt.plusSeconds(walkingSeconds(segments.drop(activeIndex + 1))), current.sourceAt)
+                current.prediction.alightingAt.plusSeconds(walkingSeconds(suffix)), current.sourceAt)
         }
 
         val walkingSeconds = walkingSeconds(segments.subList(activeIndex + 1, segments.indexOf(next)))
@@ -98,7 +114,84 @@ class PlannedSeoulBusRouteRefresher(
         }, arrivalAt, minOf(current.sourceAt, connectedSourceAt))
     }
 
-    private data class MatchedAlighting(val prediction: EffectiveBusRidePrediction, val sourceAt: Instant, val receivedAt: Instant)
+    private fun reconnectSubway(
+        route: EffectiveTransitRoute, journey: PlannedSeoulBusJourney, prefix: List<EffectiveTransitRouteSegment>,
+        suffix: List<EffectiveTransitRouteSegment>, bus: MatchedAlighting, at: Instant,
+    ): Refresh? {
+        val enricher = timetableEnricher ?: return null
+        val firstIndex = suffix.indexOfFirst { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY }
+        val first = suffix[firstIndex]
+        val transferWalk = walkingSeconds(suffix.take(firstIndex))
+        if (transferWalk <= 0) return null
+        val alightingAt = bus.prediction.alightingAt
+        val ready = alightingAt.plusSeconds(transferWalk)
+        val requiredMargin = enricher.busTransferMarginSeconds(maxOf(boardingBufferSeconds,
+            transferEvaluator.requiredTransferMarginSeconds, first.transferTiming?.requiredMarginSeconds ?: 0))
+        val firstTiming = requireNotNull(first.rideTiming)
+        if (firstTiming.predictedBoardingAt >= ready.plusSeconds(requiredMargin)) {
+            val transfer = transferEvaluator.describeTransfer(alightingAt, transferWalk, firstTiming.predictedBoardingAt)
+                .copy(confidenceMarginSeconds = requiredMargin)
+            val refreshed = suffix.mapIndexed { index, segment -> if (index != firstIndex) segment else segment.copy(
+                transferTiming = transfer, waitingMinutes = minutes(ready, firstTiming.predictedBoardingAt),
+                durationMinutes = minutes(ready, firstTiming.predictedArrivalAt)) }
+            return updated(route, journey, prefix + refreshed, route.arrivalAt, bus.sourceAt)
+        }
+
+        val legs = suffix.map { segment ->
+            val table = segment.rideTiming?.timetable
+            TransitJourneyLeg(segment.sequence, if (table == null) TransitLegMode.WALK else TransitLegMode.SUBWAY,
+                segment.durationMinutes, durationSeconds = segment.durationSeconds, walkingTiming = segment.walkingTiming,
+                walkingGeometry = segment.walkingGeometry,
+                from = table?.let { TransitStop(name = segment.fromName, providerStopId = it.fromStationCode) },
+                to = table?.let { TransitStop(name = segment.toName, providerStopId = it.toStationCode) },
+                line = table?.let { TransitLine(name = segment.lineName, serviceClass = it.serviceClass, seoulSubwayLine = it.line) },
+                directionCode = table?.directionCode, timingBasis = if (table == null) TransitLegTimingBasis.UNKNOWN else TransitLegTimingBasis.TIMETABLE,
+                scheduledDepartureAt = table?.boardingAt, scheduledArrivalAt = table?.arrivalAt, timetable = table,
+                orderedStopNames = segment.orderedStopNames, nextStopName = segment.orderedStopNames.getOrNull(1))
+        }
+        val continuation = TransitJourney(route.provider, route.departureAt, alightingAt, route.arrivalAt, route.totalMinutes,
+            legs, bus.sourceAt)
+        val connected = enricher.connectAfterBus(continuation, at, maxTravelMinutes, requiredMargin, preserveRailScope = true)
+            ?: return Refresh(PlannedTransitRouteUpdate(route.identity, bus.sourceAt,
+                failure = PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE), journey)
+        if (connected.rideLegs.any { requireNotNull(it.timetable).fetchedAt >= bus.validUntil }) return null
+        var priorArrival = alightingAt
+        val revised = suffix.zip(connected.legs).map { (segment, leg) ->
+            val table = leg.timetable ?: return@map segment
+            val walk = Duration.between(priorArrival, requireNotNull(leg.scheduledDepartureAt)).seconds
+            val timing = transferEvaluator.describeTransfer(priorArrival, walk, table.boardingAt)
+            priorArrival = table.arrivalAt
+            segment.copy(durationMinutes = leg.durationMinutes, waitingMinutes = leg.waitingMinutes,
+                directionName = null, rideTiming = EffectiveTransitRideTiming(table, table.boardingAt, table.arrivalAt,
+                    EffectiveTransitRideTimingBasis.TIMETABLE),
+                transferTiming = if (segment.sequence == first.sequence) timing.copy(confidenceMarginSeconds = requiredMargin) else timing)
+        }
+        return updated(route, journey, prefix + revised, connected.arrivalAt, bus.sourceAt)
+    }
+
+    private fun refreshLastSubway(route: EffectiveTransitRoute, journey: PlannedSeoulBusJourney,
+                                  segments: List<EffectiveTransitRouteSegment>, at: Instant): Refresh? {
+        val index = segments.indexOfLast { it.kind != EffectiveTransitRouteSegmentKind.WALK }
+        val last = segments.getOrNull(index)?.takeIf { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY } ?: return null
+        val timing = requireNotNull(last.rideTiming)
+        // Reuse the direct-ride check to take only this train's alighting forecast after its planned boarding.
+        val observation = railRealtime?.observeLastPlannedRide(route.copy(segments = listOf(last)), at) ?: return null
+        val previousArrival = last.transferTiming?.physicalReadyAt ?: return null
+        val latestAlighting = observation.predictedArrivalAt.minusSeconds(walkingSeconds(segments.drop(index + 1)))
+        if (observation.routeIdentity != route.identity || latestAlighting <= timing.predictedArrivalAt) return null
+        val refreshed = segments.mapIndexed { segmentIndex, segment ->
+            if (segmentIndex == index) segment.copy(durationMinutes = minutes(previousArrival, latestAlighting),
+                rideTiming = timing.copy(predictedArrivalAt = latestAlighting,
+                    basis = EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME,
+                    observationSourceUpdatedAt = observation.sourceUpdatedAt))
+            else segment
+        }
+        return updated(route, journey, refreshed, observation.predictedArrivalAt, observation.sourceUpdatedAt,
+            onlyLastRideObserved = true)
+    }
+
+    private data class MatchedAlighting(val prediction: EffectiveBusRidePrediction, val sourceAt: Instant,
+                                       val receivedAt: Instant, val validUntil: Instant)
 
     private fun observeAlighting(
         plan: EffectiveBusRidePrediction, service: SeoulBusRideService, at: Instant,
@@ -110,6 +203,7 @@ class PlannedSeoulBusRouteRefresher(
         ).observations.singleOrNull { service.matchesVehicle(it.vehicleId) } ?: return null
         if (position.routeId != service.routeId || position.sourceUpdatedAt < plan.boardingAt ||
             position.sourceUpdatedAt > position.receivedAt ||
+            position.validUntil <= maxOf(at, position.receivedAt) ||
             path.dropLast(1).none { it.stationId == position.lastStationId && it.sequence == position.roadSectionOrder }) return null
         val forecast = client.getBusAlightingForecast(path.last(), service) ?: return null
         val checkedAt = maxOf(at, position.receivedAt, forecast.receivedAt)
@@ -119,7 +213,7 @@ class PlannedSeoulBusRouteRefresher(
             forecast.sourceUpdatedAt > forecast.receivedAt || forecast.alightingAt <= checkedAt) return null
         return MatchedAlighting(plan.copy(alightingAt = forecast.alightingAt,
             alightingObservationSourceUpdatedAt = forecast.sourceUpdatedAt),
-            minOf(position.sourceUpdatedAt, forecast.sourceUpdatedAt), checkedAt)
+            minOf(position.sourceUpdatedAt, forecast.sourceUpdatedAt), checkedAt, position.validUntil)
     }
 
     private data class Connection(
@@ -154,11 +248,12 @@ class PlannedSeoulBusRouteRefresher(
 
     private fun updated(
         route: EffectiveTransitRoute, journey: PlannedSeoulBusJourney, segments: List<EffectiveTransitRouteSegment>,
-        arrivalAt: Instant, sourceAt: Instant,
+        arrivalAt: Instant, sourceAt: Instant, onlyLastRideObserved: Boolean = false,
     ): Refresh? {
         val remaining = minutes(route.departureAt, arrivalAt).takeIf { it in 1..maxTravelMinutes } ?: return null
         return Refresh(PlannedTransitRouteUpdate(route.identity, sourceAt,
-            route = route.copy(segments = segments, arrivalAt = arrivalAt, totalMinutes = remaining)), journey)
+            route = route.copy(segments = segments, arrivalAt = arrivalAt, totalMinutes = remaining),
+            onlyLastRideObserved = onlyLastRideObserved), journey)
     }
 
     private fun accessEndsAt(

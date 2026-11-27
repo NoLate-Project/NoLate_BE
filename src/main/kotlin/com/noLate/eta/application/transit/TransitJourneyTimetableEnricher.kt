@@ -26,6 +26,22 @@ data class TransitTimetableEntranceWalk(val seconds: Long, val distanceMeters: L
 
 internal data class TransitConnectionRideTimes(val boardingAt: Instant, val arrivalAt: Instant)
 
+/** One ETA evaluation can test several departure times against the same bus and rail query. */
+internal class BusTransferTimetableReads {
+    private data class Key(val provider: Any, val query: TransitTimetableQuery, val stops: List<String>)
+    private val rows = mutableMapOf<Key, List<TransitLegTimetable>>()
+
+    fun read(provider: Any, query: TransitTimetableQuery, stops: List<String> = emptyList(),
+             fetch: () -> List<TransitLegTimetable>): List<TransitLegTimetable> = rows.getOrPut(Key(provider, query, stops)) {
+        try {
+            fetch()
+        } catch (failure: Exception) {
+            if (failure is CancellationException || failure is InterruptedException || Thread.currentThread().isInterrupted) throw failure
+            emptyList()
+        }
+    }
+}
+
 internal fun TransitJourney.requiresDatedTimetableForAdjacentRingRide(): Boolean =
     provider == "odsay" && rideLegs.any { leg ->
         leg.line?.seoulSubwayLine == SeoulSubwayLine.LINE_2 && leg.directionCode == null &&
@@ -200,27 +216,65 @@ class TransitJourneyTimetableEnricher(
         if (journey.departureAt.nano != 0 || journey.departureAt.isBefore(evaluatedAt) ||
             journey.rideLegs.any { it.mode != TransitLegMode.SUBWAY } ||
             journey.rideLegs.all { it.timingBasis == TransitLegTimingBasis.TIMETABLE }) return journey
-        if (journey.requiresDatedTimetableForAdjacentRingRide()) {
-            val dated = datedTimetableProvider ?: return journey
+        return connectTimetables(journey, evaluatedAt, maxTravelMinutes, firstBoardingResolver, boardingBufferSeconds) ?: journey
+    }
+
+    internal fun connectAfterBus(journey: TransitJourney, evaluatedAt: Instant, maxTravelMinutes: Int,
+                                 requiredMarginSeconds: Long, preserveRailScope: Boolean = false,
+                                 reads: BusTransferTimetableReads? = null): TransitJourney? {
+        if (journey.departureAt.nano != 0 || journey.departureAt < evaluatedAt ||
+            journey.rideLegs.isEmpty() || journey.rideLegs.any { it.mode != TransitLegMode.SUBWAY }) return null
+        return connectTimetables(journey, evaluatedAt, maxTravelMinutes, null,
+            busTransferMarginSeconds(requiredMarginSeconds), preserveRailScope, reads)
+    }
+
+    internal fun busTransferMarginSeconds(requiredMarginSeconds: Long): Long =
+        maxOf(boardingBufferSeconds, transferBufferSeconds, transferMarginSeconds, requiredMarginSeconds)
+
+    private fun connectTimetables(journey: TransitJourney, evaluatedAt: Instant, maxTravelMinutes: Int,
+                                  firstBoardingResolver: ((TransitLegTimetable) -> TransitFirstBoardingObservation?)?,
+                                  firstMarginSeconds: Long, preserveRailScope: Boolean = false,
+                                  busTransferReads: BusTransferTimetableReads? = null): TransitJourney? {
+        fun checkedRides(leg: TransitJourneyLeg, query: TransitTimetableQuery,
+                         search: () -> List<TransitLegTimetable>): List<TransitLegTimetable> {
+            if (!preserveRailScope) return search()
+            val original = leg.timetable ?: return emptyList()
+            if (query.serviceDate != original.serviceDate) return emptyList()
+            return search().filter {
+                it.provider == original.provider && it.line == original.line &&
+                    it.fromStationCode == original.fromStationCode && it.toStationCode == original.toStationCode &&
+                    it.serviceClass == original.serviceClass && it.directionCode == original.directionCode
+            }
+        }
+        if (journey.requiresDatedTimetableForAdjacentRingRide() || preserveRailScope &&
+            journey.rideLegs.all { it.timetable?.provider == SEOUL_DATED_TIMETABLE_PROVIDER_ID }) {
+            val dated = datedTimetableProvider ?: return null
             return try {
                 // The dated endpoint returns one forward connection. Resolve its exact train before applying realtime.
-                enrichWith(journey, evaluatedAt, maxTravelMinutes, firstBoardingResolver = null) { query, leg ->
-                    listOfNotNull(dated.findRide(query, leg.orderedStopNames))
-                } ?: journey
+                enrichWith(journey, evaluatedAt, maxTravelMinutes, firstBoardingResolver = null,
+                    firstMarginSeconds = firstMarginSeconds) { query, leg ->
+                    checkedRides(leg, query) {
+                        val fetch = { listOfNotNull(dated.findRide(query, leg.orderedStopNames)) }
+                        busTransferReads?.read(dated, query, leg.orderedStopNames, fetch) ?: fetch()
+                    }
+                }
             } catch (failure: Exception) {
                 if (failure is CancellationException || failure is InterruptedException ||
                     Thread.currentThread().isInterrupted) throw failure
-                journey
+                null
             }
         }
         // 공급자를 혼합해 부분 성공을 조립하지 않는다. 한 공급자가 전체 여정을 증명해야 한다.
         return providers.firstNotNullOfOrNull { provider ->
             runCatching {
-                enrichWith(journey, evaluatedAt, maxTravelMinutes, firstBoardingResolver) { query, _ ->
-                    provider.findRides(query)
+                enrichWith(journey, evaluatedAt, maxTravelMinutes, firstBoardingResolver, firstMarginSeconds) { query, leg ->
+                    checkedRides(leg, query) {
+                        val fetch = { provider.findRides(query) }
+                        busTransferReads?.read(provider, query, fetch = fetch) ?: fetch()
+                    }
                 }
             }.getOrNull()
-        } ?: journey
+        }
     }
 
     /**
@@ -391,6 +445,7 @@ class TransitJourneyTimetableEnricher(
         evaluatedAt: Instant,
         maxTravelMinutes: Int,
         firstBoardingResolver: ((TransitLegTimetable) -> TransitFirstBoardingObservation?)?,
+        firstMarginSeconds: Long = boardingBufferSeconds,
         findRides: (TransitTimetableQuery, TransitJourneyLeg) -> List<TransitLegTimetable>,
     ): TransitJourney? {
         var cursor = journey.departureAt
@@ -405,7 +460,7 @@ class TransitJourneyTimetableEnricher(
                 val line = leg.line ?: return null
                 val canonical = line.seoulSubwayLine ?: return null
                 val isFirstRide = journeyServiceDate == null
-                val margin = if (isFirstRide) boardingBufferSeconds else maxOf(transferBufferSeconds, transferMarginSeconds)
+                val margin = if (isFirstRide) firstMarginSeconds else maxOf(transferBufferSeconds, transferMarginSeconds)
                 val notBefore = cursor.plusSeconds(margin)
                 val serviceDate = SeoulSubwayServiceDay.dateAt(notBefore)
                 // 한 번 연결한 운행일은 후속 환승에도 유지한다.

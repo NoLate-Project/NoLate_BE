@@ -104,6 +104,18 @@ class SeoulBusEta(
             else projections.lastOrNull { it.destinationAt <= latestArrivalAt }
         }
 
+        fun firstBusBeforeSubway(journey: TransitJourney, evaluatedAt: Instant,
+                                 maxTravelMinutes: Int): SeoulSingleBusProjection? {
+            val rides = journey.rideLegs
+            if (journey.provider != "odsay" || rides.size !in 2..3 || rides.first().mode != TransitLegMode.BUS ||
+                rides.drop(1).any { it.mode != TransitLegMode.SUBWAY }) return null
+            val prefix = journey.copy(legs = journey.legs.take(journey.legs.indexOf(rides.first()) + 1))
+            return projectRides(prefix, evaluatedAt, maxTravelMinutes).minByOrNull { it.alightingAt }
+        }
+
+        fun canStillBoard(bus: SeoulSingleBusProjection, at: Instant): Boolean =
+            bus.observation.isFreshAt(maxOf(at, bus.receivedAt), sourceMaxAgeSeconds)
+
         private fun projectRides(
             journey: TransitJourney,
             evaluatedAt: Instant,

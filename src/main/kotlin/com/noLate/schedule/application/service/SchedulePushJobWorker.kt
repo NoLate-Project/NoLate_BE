@@ -341,7 +341,8 @@ class SchedulePushJobWorker(
                     ?.basis == PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
                 if (plan == null) snapshot else if (busJourney != null) {
                     val baseline = snapshot.lastUpdatedPlannedRoute?.takeIf { busJourney.matches(it) } ?: plan
-                    val refreshed = plannedSeoulBusRouteRefresher?.refresh(baseline, busJourney, now)
+                    val refreshed = plannedSeoulBusRouteRefresher?.refresh(baseline, busJourney, now,
+                        pendingTransferFailure = snapshot.plannedRouteUpdate?.failure != null)
                     if (refreshed == null) snapshot else snapshot.copy(
                         plannedSeoulBusJourney = refreshed.journey,
                         plannedRouteUpdate = refreshed.update,
