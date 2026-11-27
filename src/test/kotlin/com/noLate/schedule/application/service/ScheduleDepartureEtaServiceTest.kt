@@ -12,6 +12,9 @@ import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
 import com.noLate.schedule.application.EffectiveTransitRideTiming
 import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
 import com.noLate.schedule.application.PlannedTransitRouteUpdate
+import com.noLate.schedule.application.PlannedSeoulBusJourney
+import com.noLate.schedule.application.PlannedSeoulBusRide
+import com.noLate.schedule.application.ReportedBusAlightingEvidence
 import com.noLate.schedule.application.TrafficClient
 import com.noLate.schedule.application.TrafficFailureReasons
 import com.noLate.schedule.application.TransitRouteProvenance
@@ -30,6 +33,8 @@ import com.noLate.schedule.domain.TrafficSource
 import com.noLate.schedule.infrastructure.SchedulePushJobRepository
 import com.noLate.schedule.infrastructure.ScheduleRepository
 import com.noLate.schedule.infrastructure.ScheduleTravelPlanRepository
+import com.noLate.transit.domain.SeoulBusRideService
+import com.noLate.transit.domain.SeoulBusStopOccurrence
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -154,8 +159,52 @@ class ScheduleDepartureEtaServiceTest {
         assertEquals(if (expired) TrafficSource.SAVED_FALLBACK else TrafficSource.TIMETABLE_PROVIDER, readAtLatestArrival.source)
     }
 
-    @Test
-    fun `출발한 계획 경로의 잠정 도착은 정상 ETA와 알림 출발시각으로 승격하지 않는다`() {
+    @ParameterizedTest
+    @CsvSource("false", "true")
+    fun `마지막 버스 도착 보고와 기존 출발 안내는 조회 만료 뒤에도 남은 도보까지 유지한다`(expired: Boolean) {
+        val checked = queryAt.minusSeconds(if (expired) 480 else 90)
+        val reportedAt = checked.minusSeconds(3)
+        val departure = queryAt.minusSeconds(1800)
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT, departureAt = departure.minusSeconds(60))
+        val job = job(schedule)
+        val expectedAt = reportedAt.plusSeconds(600)
+        val oldStop = reportedAt.plusSeconds(30)
+        val bus = EffectiveBusRidePrediction(departure.plusSeconds(90), oldStop, departure.minusSeconds(10))
+        val original = EffectiveTransitRoute("odsay", "f".repeat(64), departure, oldStop.plusSeconds(600), 42,
+            listOf(EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.BUS, 32, busRidePrediction = bus),
+                EffectiveTransitRouteSegment(1, EffectiveTransitRouteSegmentKind.WALK, 10, durationSeconds = 600)))
+        val service = SeoulBusRideService("100100101", "방면", SeoulBusStopOccurrence("101000001", "01001", 10),
+            SeoulBusStopOccurrence("101000002", "01002", 11), "a".repeat(64))
+        val binding = PlannedSeoulBusJourney(original.identity, departure, listOf(PlannedSeoulBusRide(0, service)))
+        val updated = original.copy(arrivalAt = expectedAt, segments = listOf(
+            original.segments.first().copy(busRidePrediction = bus.copy(alightingAt = reportedAt, reportedAlightingAt = reportedAt)),
+            original.segments.last(),
+        ))
+        val report = ReportedBusAlightingEvidence(original.identity, departure, 0, service, reportedAt, checked)
+        val snapshot = EffectiveTransitRouteSnapshot(evaluationCheckCount = job.checkCount,
+            evaluationNotificationGeneration = job.notificationGeneration, inProgressPlannedRoute = original,
+            plannedSeoulBusJourney = binding, lastUpdatedPlannedRoute = updated,
+            plannedRouteUpdate = PlannedTransitRouteUpdate(original.identity, reportedAt, route = updated, reportedBusAlighting = report))
+        finish(job, 42, TrafficSource.SELECTED_ROUTE, checked, snapshotSchedule = schedule,
+            failureReason = TrafficFailureReasons.TRANSIT_TRACKING_SAVED_ROUTE, recommendedDepartureAt = departure,
+            etaRefreshDueAt = checked.plusSeconds(60), effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot))
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val result = service().getDepartureStatus(1L, 10L)
+
+        assertEquals(PlannedJourneyArrivalBasis.FINAL_BUS_ALIGHTING_REPORTED, result.plannedJourneyArrivalPrediction?.basis)
+        assertEquals(expectedAt, result.plannedJourneyArrivalPrediction?.predictedArrivalAt)
+        assertEquals(reportedAt, result.plannedJourneyArrivalPrediction?.sourceUpdatedAt)
+        assertEquals(departure, result.recommendedDepartureAt)
+        assertNull(result.originReplanDiagnostic)
+        assertNull(result.predictedArrivalAt)
+        assertNull(result.source)
+    }
+
+    @ParameterizedTest
+    @CsvSource("true", "false")
+    fun `출발한 계획 경로의 잠정 도착은 정상 ETA와 알림 출발시각으로 승격하지 않는다`(originSearchPerformed: Boolean) {
         val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
         val job = job(schedule)
         val checkedAt = queryAt.minusSeconds(30)
@@ -172,8 +221,10 @@ class ScheduleDepartureEtaServiceTest {
             evaluationCheckCount = job.checkCount,
             evaluationNotificationGeneration = job.notificationGeneration,
             accepted = false, inProgressPlannedRoute = plan)
+        val reason = if (originSearchPerformed) TrafficFailureReasons.TRANSIT_TRANSFER_MISSED
+            else TrafficFailureReasons.TRANSIT_TRACKING_SAVED_ROUTE
         finish(job, 50, TrafficSource.SELECTED_ROUTE, checkedAt,
-            failureReason = TrafficFailureReasons.TRANSIT_TRANSFER_MISSED,
+            failureReason = reason,
             snapshotSchedule = schedule, recommendedDepartureAt = departureAt,
             effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot))
         stubVisible(schedule)
@@ -190,10 +241,13 @@ class ScheduleDepartureEtaServiceTest {
         assertNull(result.travelMinutes)
         assertNull(result.source)
         assertNull(result.failureReason)
-        assertEquals(50, result.originReplanDiagnostic?.travelMinutes)
-        assertEquals(TrafficSource.SELECTED_ROUTE, result.originReplanDiagnostic?.source)
-        assertEquals(TrafficFailureReasons.TRANSIT_TRANSFER_MISSED,
-            result.originReplanDiagnostic?.failureReason)
+        if (originSearchPerformed) {
+            assertEquals(50, result.originReplanDiagnostic?.travelMinutes)
+            assertEquals(TrafficSource.SELECTED_ROUTE, result.originReplanDiagnostic?.source)
+            assertEquals(reason, result.originReplanDiagnostic?.failureReason)
+        } else {
+            assertNull(result.originReplanDiagnostic)
+        }
         assertTrue(result.stale)
         assertEquals(departureAt, job.lastRecommendedDepartureAt)
         assertNull(job.lastPredictedArrivalAt)

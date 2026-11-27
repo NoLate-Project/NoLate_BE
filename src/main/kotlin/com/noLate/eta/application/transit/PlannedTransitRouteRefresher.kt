@@ -16,18 +16,20 @@ class PlannedTransitRouteRefresher(
     private val predictor: TransitRideArrivalPredictor = TransitRideArrivalPredictor(),
     @Value("\${schedule.traffic.max-travel-minutes:1440}") private val maxTravelMinutes: Int = 1440,
 ) {
+    internal fun supports(plan: EffectiveTransitRoute): Boolean {
+        val rides = plan.segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
+        return rides.isNotEmpty() && rides.all { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY && it.rideTiming != null }
+    }
+
     @JvmOverloads
     fun refresh(
         plan: EffectiveTransitRoute, evaluatedAt: Instant, departurePlan: EffectiveTransitRoute = plan,
         previousUpdate: PlannedTransitRouteUpdate? = null,
         endsAtTransfer: Boolean = false,
     ): PlannedTransitRouteUpdate? {
-        if (evaluatedAt < plan.departureAt) return null
+        if (evaluatedAt < plan.departureAt || !supports(plan)) return null
         val segments = plan.segments.sortedBy { it.sequence }
         val rides = segments.indices.filter { segments[it].kind != EffectiveTransitRouteSegmentKind.WALK }
-        if (rides.isEmpty() || rides.any {
-                segments[it].kind != EffectiveTransitRouteSegmentKind.SUBWAY || segments[it].rideTiming == null
-            }) return null
         val freshWindow = evaluatedAt.minusSeconds(120)..evaluatedAt.plusSeconds(5)
         val originalTrains = originalTransferTrains(plan, departurePlan, segments, rides, evaluatedAt)
         val conflict = previousUpdate?.takeIf { it.routeIdentity == plan.identity }

@@ -86,15 +86,10 @@ data class EffectiveTransitRouteSnapshot(
                 trafficResult.firstBoardingObservation != null || trafficResult.deferredSeoulBusTransfer != null
             val previousAcceptedIdentity = previous?.acceptedRouteIdentity()
             val previousAcceptedProvenance = previous?.acceptedRouteProvenance()
-            val previousAcceptedRoute = previous?.acceptedRoute()?.let { saved ->
-                if (previous.accepted) saved.withAcceptedBoardingSource(previous.firstBoardingObservation) else saved
-            }
+            val previousAcceptedRoute = previous?.acceptedRouteWithBoardingSource()
             val previousAcceptedWaitMinutes = previous?.acceptedFirstBoardingWaitMinutes()
             val previousAcceptedEtaSource = previous?.lastAcceptedEtaSource
-            val inProgressPlannedRoute = previous?.inProgressPlannedRoute
-                ?: (previousAcceptedRoute ?: previous?.lastTimetablePlannedRoute)?.takeIf { route ->
-                    evaluatedAt != null && !evaluatedAt.isBefore(route.departureAt)
-                }
+            val inProgressPlannedRoute = previous?.departurePlanForRefresh(evaluatedAt, previousAcceptedRoute)
             if (!hasTransitDetails && previousAcceptedIdentity == null && inProgressPlannedRoute == null &&
                 previous?.lastTimetablePlannedRoute == null && previous?.deferredSeoulBusTransfer == null) return null
 
@@ -167,8 +162,7 @@ data class EffectiveTransitRouteSnapshot(
                 lastAcceptedSeoulBusJourney = if (accepted) {
                     trafficResult.seoulBusJourney?.takeIf { it.matches(route) }
                 } else previous?.lastAcceptedSeoulBusJourney,
-                plannedSeoulBusJourney = (previous?.plannedSeoulBusJourney ?: previous?.lastAcceptedSeoulBusJourney)
-                    ?.takeIf { it.matches(inProgressPlannedRoute) },
+                plannedSeoulBusJourney = previous?.busJourneyFor(inProgressPlannedRoute),
                 deferredSeoulBusTransfer = deferredSeoulBusTransfer,
                 lastUpdatedPlannedRoute = previous?.plannedRouteUpdate?.route ?: previous?.lastUpdatedPlannedRoute,
                 // 같은 원본을 재조회해 새 관측이 없어도 출처 시각을 보존한다. 읽을 때 신선도를
@@ -191,6 +185,20 @@ data class EffectiveTransitRouteSnapshot(
     fun acceptedRoute(): EffectiveTransitRoute? =
         if (accepted) effectiveTransitRoute else lastAcceptedEffectiveTransitRoute
 
+    private fun acceptedRouteWithBoardingSource(): EffectiveTransitRoute? = acceptedRoute()?.let { route ->
+        if (accepted) route.withAcceptedBoardingSource(firstBoardingObservation) else route
+    }
+
+    internal fun departurePlanForRefresh(evaluatedAt: Instant?): EffectiveTransitRoute? =
+        departurePlanForRefresh(evaluatedAt, acceptedRoute())
+
+    private fun departurePlanForRefresh(evaluatedAt: Instant?, acceptedRoute: EffectiveTransitRoute?): EffectiveTransitRoute? =
+        inProgressPlannedRoute ?: (acceptedRoute ?: lastTimetablePlannedRoute)
+            ?.takeIf { evaluatedAt != null && evaluatedAt >= it.departureAt }
+
+    internal fun busJourneyFor(plan: EffectiveTransitRoute?): PlannedSeoulBusJourney? =
+        (plannedSeoulBusJourney ?: lastAcceptedSeoulBusJourney)?.takeIf { it.matches(plan) }
+
     fun acceptedFirstBoardingWaitMinutes(): Int? =
         if (accepted) firstBoardingWaitMinutes else lastAcceptedFirstBoardingWaitMinutes
 
@@ -198,6 +206,22 @@ data class EffectiveTransitRouteSnapshot(
     fun plannedJourneyArrivalPrediction(readAt: Instant, maxAgeSeconds: Long): PlannedJourneyArrivalPrediction? {
         val plan = plannedRouteAt(readAt) ?: return null
         if (plannedJourneyTimingFailureReason() != null) return null
+        val update = plannedRouteUpdate
+        val finalReport = update?.finalBusAlightingReport()
+        if (finalReport != null) {
+            val route = requireNotNull(update.route)
+            val binding = plannedSeoulBusJourney?.takeIf { it.matches(route) }?.rides?.lastOrNull() ?: return null
+            val lastRide = route.segments.first { it.sequence == finalReport.sequence }
+            val boardingAt = requireNotNull(lastRide.busRidePrediction).boardingAt
+            val remainingWalkSeconds = route.segments.filter { it.sequence > finalReport.sequence }
+                .sumOf { it.durationSeconds ?: it.durationMinutes * 60L }
+            if (route.identity != plan.identity || route.provider != plan.provider || route.departureAt != plan.departureAt ||
+                !finalReport.matches(route, binding, boardingAt, readAt) || route.arrivalAt <= readAt ||
+                route.arrivalAt != finalReport.reportedAt.plusSeconds(remainingWalkSeconds)) return null
+            // The stop report was fresh when recorded. Only the remaining planned walk is a prediction.
+            return PlannedJourneyArrivalPrediction(route.arrivalAt, readAt, plan.identity,
+                PlannedJourneyArrivalBasis.FINAL_BUS_ALIGHTING_REPORTED, route.asPlannedBaseline(), finalReport.reportedAt)
+        }
         val updated = plannedRouteUpdate?.takeIf {
             val busRefresh = it.railToBusConnectionObserved || !it.onlyLastRideObserved && it.route?.segments?.any {
                 segment -> segment.busRidePrediction?.alightingObservationSourceUpdatedAt != null

@@ -173,10 +173,12 @@ class SchedulePushJobWorkerTest {
             TransitJourneyTimetableEnricher(listOf(timetable)), TransitTransferFeasibilityEvaluator())
         val delayed = requireNotNull(refresher.refresh(original, firstRead))
         assertEquals(if (inboundRecovers) "2014" else "2012", delayed.route?.segments?.get(3)?.rideTiming?.timetable?.trainNumber)
-        val previous = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = original, plannedRouteUpdate = delayed)
         val schedule = schedule(lastRead.plusSeconds(3600), travelMode = ScheduleTravelMode.TRANSIT, alertMode = ScheduleAlertMode.ALARM)
         val job = persistedJob(1L, 10L, schedule.startAt, original.departureAt,
             original.departureAt.minusSeconds(600), notificationIntervalMinutes)
+        val previous = EffectiveTransitRouteSnapshot(evaluationCheckCount = job.checkCount,
+            evaluationNotificationGeneration = job.notificationGeneration,
+            inProgressPlannedRoute = original, plannedRouteUpdate = delayed)
         job.startProcessing("previous-worker")
         job.finishCheck(travelMinutes = original.totalMinutes, recommendedDepartureAt = original.departureAt,
             pushSent = false, notifiedDepartureAt = null, nextCheckAt = lastRead, completeAfterCheck = false,
@@ -184,8 +186,6 @@ class SchedulePushJobWorkerTest {
             now = firstRead)
         feed = if (inboundRecovers) rows.last() else listOf(transfer)
         stubDueJobLookup(job, schedule, lastRead)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(travelMinutes = original.totalMinutes,
-            source = TrafficSource.SELECTED_ROUTE, stale = true, failureReason = TrafficFailureReasons.TRANSIT_TRAIN_NOT_YET_OBSERVED))
         worker(clock = Clock.fixed(lastRead, ZoneOffset.UTC), refresher = refresher,
             alarmSyncService = departureAlarmSyncService).runDueJobs(lastRead)
 
@@ -200,14 +200,18 @@ class SchedulePushJobWorkerTest {
             assertNull(connected.observationSourceUpdatedAt)
         }
         assertEquals(original.departureAt, job.lastRecommendedDepartureAt)
+        verifyNoInteractions(trafficClient)
         verifyNoInteractions(departureAlarmSyncService)
     }
 
-    @Test
-    fun `출발 후 Worker는 동일 버스의 새 하차 예보를 잠정 도착에만 저장하고 출발 알람을 유지한다`() {
-        val departure = testNow.minusSeconds(150)
+    @ParameterizedTest
+    @CsvSource("-150,true,true", "120,true,false", "-150,false,false")
+    fun `동일 버스 추적은 출발한 현행 경로에서만 출발지 재검색을 생략한다`(
+        secondsUntilDeparture: Long, sameSelectedRoute: Boolean, trackSavedPlan: Boolean,
+    ) {
+        val departure = testNow.plusSeconds(secondsUntilDeparture)
         val boarding = departure.plusSeconds(90)
-        val oldAlighting = testNow.plusSeconds(90)
+        val oldAlighting = departure.plusSeconds(240)
         val newAlighting = testNow.plusSeconds(240)
         val routeId = "100100101"
         val stopPath = listOf("승차 정류장", "중간 정류장", "하차 정류장").mapIndexed { index, name ->
@@ -222,31 +226,47 @@ class SchedulePushJobWorkerTest {
             EffectiveTransitRouteSegment(1, EffectiveTransitRouteSegmentKind.WALK, 1, durationSeconds = 60),
         ))
         val journey = PlannedSeoulBusJourney(plan.identity, departure, listOf(PlannedSeoulBusRide(0, service)))
-        val prior = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan, plannedSeoulBusJourney = journey)
         val schedule = schedule(testNow.plusSeconds(900), travelMode = ScheduleTravelMode.TRANSIT, alertMode = ScheduleAlertMode.ALARM)
         val job = persistedJob(1L, 10L, schedule.startAt, departure, departure.minusSeconds(600), notificationIntervalMinutes)
+        val prior = EffectiveTransitRouteSnapshot(evaluationCheckCount = job.checkCount,
+            evaluationNotificationGeneration = job.notificationGeneration,
+            accepted = true, effectiveTransitRoute = plan, lastAcceptedSeoulBusJourney = journey)
         job.startProcessing("previous-worker")
         job.finishCheck(travelMinutes = 5, recommendedDepartureAt = departure, pushSent = true, notifiedDepartureAt = departure,
-            nextCheckAt = testNow, completeAfterCheck = false, etaRouteFingerprint = routeFingerprint(schedule),
+            nextCheckAt = testNow, completeAfterCheck = false,
+            etaRouteFingerprint = if (sameSelectedRoute) routeFingerprint(schedule) else "0".repeat(64),
             effectiveTransitRouteJson = objectMapper.writeValueAsString(prior), now = testNow.minusSeconds(60))
         stubDueJobLookup(job, schedule)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(5, TrafficSource.SELECTED_ROUTE,
+        if (!trackSavedPlan) whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(5, TrafficSource.SELECTED_ROUTE,
             stale = true, failureReason = TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY))
         val arrivals = mock<SeoulTransitArrivalClient>()
-        whenever(arrivals.getBusRouteDiagnosticStops(routeId)).thenReturn(stopPath)
-        whenever(arrivals.getBusVehicleObservations(SeoulBusVehicleQuery(routeId, 10, 12)))
-            .thenReturn(SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE, listOf(
-                SeoulBusVehicleObservation(vehicleId, routeId, "103000001", 11, 300, false, stopPath[1].stationId,
-                    testNow.minusSeconds(4), testNow, testNow.plusSeconds(41)),
-            )))
-        whenever(arrivals.getBusAlightingForecast(stopPath.last(), service))
-            .thenReturn(SeoulBusAlightingForecast(newAlighting, testNow.minusSeconds(2), testNow))
+        if (trackSavedPlan) {
+            whenever(arrivals.getBusRouteDiagnosticStops(routeId)).thenReturn(stopPath)
+            whenever(arrivals.getBusVehicleObservations(SeoulBusVehicleQuery(routeId, 10, 12)))
+                .thenReturn(SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE, listOf(
+                    SeoulBusVehicleObservation(vehicleId, routeId, "103000001", 11, 300, false, stopPath[1].stationId,
+                        testNow.minusSeconds(4), testNow, testNow.plusSeconds(41)),
+                )))
+            whenever(arrivals.getBusAlightingForecast(stopPath.last(), service))
+                .thenReturn(SeoulBusAlightingForecast(newAlighting, testNow.minusSeconds(2), testNow))
+        }
 
         worker(alarmSyncService = departureAlarmSyncService,
             busRefresher = PlannedSeoulBusRouteRefresher(arrivals, TransitTransferFeasibilityEvaluator(), 60, 120, 1440))
             .runDueJobs(testNow)
 
-        val stored = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
+        val snapshot = EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson)
+        if (!trackSavedPlan) {
+            verify(trafficClient).getTravelMinutes(any())
+            verifyNoInteractions(arrivals)
+            assertNull(snapshot?.inProgressPlannedRoute)
+            return
+        }
+        val stored = requireNotNull(snapshot)
+        verifyNoInteractions(trafficClient)
+        assertEquals(TrafficFailureReasons.TRANSIT_TRACKING_SAVED_ROUTE, job.lastEtaFailureReason)
+        assertNull(job.lastEtaProviderFetchedAt)
+        assertNull(job.lastPredictedArrivalAt)
         val provisional = requireNotNull(stored.plannedJourneyArrivalPrediction(testNow, 120))
         assertEquals(oldAlighting.plusSeconds(60), stored.inProgressPlannedRoute?.arrivalAt)
         assertEquals(newAlighting.plusSeconds(60), provisional.predictedArrivalAt)
@@ -285,7 +305,7 @@ class SchedulePushJobWorkerTest {
             schedule.startAt)
         val before = TrafficResult(70, TrafficSource.SELECTED_ROUTE, stale = true,
             failureReason = TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, deferredSeoulBusTransfer = pending)
-        val prior = requireNotNull(EffectiveTransitRouteSnapshot.from(before, null, 1,
+        val prior = requireNotNull(EffectiveTransitRouteSnapshot.from(before, null, 0,
             evaluatedAt = departure.minusSeconds(10), protectedDepartureAt = departure))
         assertEquals(pending, prior.deferredSeoulBusTransfer)
         assertNull(prior.plannedJourneyArrivalPrediction(at, 120))
@@ -296,10 +316,6 @@ class SchedulePushJobWorkerTest {
             nextCheckAt = at, completeAfterCheck = false, etaRouteFingerprint = routeFingerprint(schedule),
             effectiveTransitRouteJson = objectMapper.writeValueAsString(prior), now = at.minusSeconds(60))
         stubDueJobLookup(job, schedule, at)
-        val originReplan = rail.copy(identity = "c".repeat(64), departureAt = at)
-        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(35, TrafficSource.LIVE_PROVIDER,
-            fetchedAt = at, stale = false, effectiveTransitRoute = originReplan,
-            recommendedDepartureAt = at.plusSeconds(60), predictedArrivalAt = railAlight))
         val railArrivals = mock<TransitArrivalService>()
         val busArrivals = mock<SeoulTransitArrivalClient>()
         val reevaluatedRailAlight = railAlight.plusSeconds(15)
@@ -328,6 +344,7 @@ class SchedulePushJobWorkerTest {
         val stored = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
         assertEquals(departure, job.lastRecommendedDepartureAt)
         assertFalse(stored.accepted)
+        verifyNoInteractions(trafficClient)
         verifyNoInteractions(departureAlarmSyncService)
         if (connectionWindowOpen) {
             assertNull(stored.deferredSeoulBusTransfer)

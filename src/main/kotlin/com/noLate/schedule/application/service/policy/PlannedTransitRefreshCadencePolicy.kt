@@ -22,6 +22,10 @@ object PlannedTransitRefreshCadencePolicy {
             route.identity == original.identity && route.provider == original.provider && route.departureAt == original.departureAt
         val route = state.plannedRouteUpdate?.route?.takeIf(::matchesOriginal)
             ?: state.lastUpdatedPlannedRoute?.takeIf(::matchesOriginal) ?: original
+        if (state.plannedRouteUpdate?.takeIf { it.route === route }?.finalBusAlightingReport() != null) {
+            // Keep the remaining walk visible, then remove the provisional arrival at its boundary.
+            return minOf(route.arrivalAt, now.plus(1, ChronoUnit.MINUTES)).takeIf { it > now }
+        }
         val rides = route.segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
         val busJourney = state.plannedSeoulBusJourney?.takeIf { it.matches(route) }
         if (busJourney != null && route.arrivalAt <= now) {

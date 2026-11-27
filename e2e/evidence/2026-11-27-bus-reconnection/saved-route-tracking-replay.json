@@ -1,0 +1,56 @@
+{
+  "classification": "CONTROLLED_SAME_ROUTE_AND_VEHICLE_REPLAY",
+  "serviceDate": "2026-11-27",
+  "workerRegression": {
+    "before": "Origin route search was called before same-vehicle refresh.",
+    "after": "Supported, current plans skip the origin search once departed.",
+    "originSearchRetainedBeforeDepartureAndAfterRouteChange": true,
+    "sameBusAndSubwayForecastsAndDeferredBusConnectionTested": true
+  },
+  "workerAndInstalledApp": {
+    "result": "PASSED",
+    "database": "H2_MEMORY_ONLY",
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.saved-route-tracking.h8wa66rt",
+    "sameProviderInputBaseline": "late-final-vehicle-replay.json",
+    "originSearchCalls": 0,
+    "evaluationHistoryCount": 1,
+    "evaluationHistoryCode": "TRANSIT_TRACKING_SAVED_ROUTE",
+    "oldDestinationForecastSecondsFromDeparture": 600,
+    "evaluationSecondsFromDeparture": 610,
+    "newStopForecastSecondsFromDeparture": 700,
+    "newDestinationForecastSecondsFromDeparture": 760,
+    "nextCheckSecondsFromDeparture": 670,
+    "transferWalkSeconds": 30,
+    "transferWaitSeconds": 110,
+    "originSearchDiagnosticAbsent": true,
+    "publicProvisionalArrivalMatchesWorkerAndApp": true,
+    "recommendedDepartureUnchanged": true,
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true,
+    "physicalTransitHttpCalls": 0
+  },
+  "attemptsBeforePassing": [
+    {
+      "result": "STOPPED_BEFORE_WORKER_EVALUATION",
+      "reason": "The private Metro process could not resolve the linked dependency tree.",
+      "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.saved-route-tracking.fope2k1h"
+    },
+    {
+      "result": "WORKER_PASSED_UI_NOT_RUN",
+      "reason": "The private XCUITest method had not been copied to the standalone runner.",
+      "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.saved-route-tracking.v15c8zaw"
+    }
+  ],
+  "automatedRegression": {
+    "backendPassed": 3145,
+    "backendSkipped": 6,
+    "backendMySqlExcluded": true,
+    "frontendTargetedPassed": 115,
+    "frontendFullSuitePassed": 4194,
+    "frontendFullSuiteFailuresReproducedOnBaseline": 3,
+    "frontendHarnessPythonPassed": 325,
+    "frontendTypeCheckPassed": true
+  },
+  "actualTripAccuracyVerified": false,
+  "sameConditionsNaverComparisonVerified": false
+}

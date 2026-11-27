@@ -50,4 +50,12 @@ data class PlannedTransitRouteUpdate(
         require(transferBoardingRecheck == null || (!requiresFirstBoardingRecheck && failure == PlannedTransitTimingFailure.EARLY_BOARDING_UNCONFIRMED))
         require(!railToBusConnectionObserved || route != null && !onlyLastRideObserved)
     }
+
+    internal fun finalBusAlightingReport(): ReportedBusAlightingEvidence? {
+        val report = reportedBusAlighting ?: return null
+        val finalRide = route?.segments?.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
+            ?.maxByOrNull { it.sequence } ?: return null
+        return report.takeIf { finalRide.kind == EffectiveTransitRouteSegmentKind.BUS && finalRide.sequence == report.sequence &&
+            finalRide.busRidePrediction?.reportedAlightingAt == report.reportedAt && sourceUpdatedAt == report.reportedAt }
+    }
 }

@@ -22,6 +22,7 @@ import com.noLate.schedule.application.PlannedSeoulBusRide
 import com.noLate.schedule.application.PlannedTransitRouteUpdate
 import com.noLate.schedule.application.PlannedTransitTimingFailure
 import com.noLate.schedule.application.TrafficResult
+import com.noLate.schedule.application.service.policy.PlannedTransitRefreshCadencePolicy
 import com.noLate.schedule.domain.PlannedJourneyArrivalBasis
 import com.noLate.schedule.domain.TrafficSource
 import com.noLate.transit.application.TransitArrivalService
@@ -152,6 +153,58 @@ class PlannedSeoulBusRouteRefresherTest {
         assertEquals(time(607), forecast.effectiveTransitRoute?.segments?.get(3)?.busRidePrediction?.alightingObservationSourceUpdatedAt)
         verify(provider, never()).getBusRouteDiagnosticStops(firstVehicle.routeId)
         verify(provider, never()).getPairedBusArrivals(any())
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `a same bus stop report replaces the final forecast and keeps the remaining walking time`(withTrain: Boolean) {
+        val finalBus = if (withTrain) route.segments[3] else bus(1, second, time(380), time(540))
+        val segments = if (withTrain) {
+            val table = TransitLegTimetable("seoul-timetable", SeoulSubwayLine.LINE_2, LocalDate.of(2026, 11, 27),
+                "2012", "UP", TransitServiceClass.LOCAL, "0226", "0230", "성수", time(90), time(240), time(-5))
+            listOf(walk(0, 30), EffectiveTransitRouteSegment(1, SUBWAY, 4, lineName = "2호선", fromName = "사당", toName = "신림",
+                rideTiming = EffectiveTransitRideTiming(table, table.boardingAt, table.arrivalAt, EffectiveTransitRideTimingBasis.TIMETABLE)),
+                walk(2, 30), finalBus, walk(4, 120))
+        } else listOf(walk(0, 30), finalBus, walk(2, 120))
+        val plan = route.copy(arrivalAt = time(660), totalMinutes = 11, segments = segments)
+        val saved = journey.copy(rides = listOf(PlannedSeoulBusRide(finalBus.sequence, oldSecondVehicle)))
+        finalBusAtStop()
+        whenever(provider.getBusAlightingForecast(second.last(), oldSecondVehicle))
+            .thenReturn(SeoulBusAlightingForecast(time(527), time(527), time(532), reportedAtStop = true))
+
+        val refreshed = requireNotNull(refresher.refresh(plan, saved, time(531)))
+        val corrected = requireNotNull(refreshed.update.route)
+        assertEquals(time(647), corrected.arrivalAt)
+        assertEquals(start, corrected.departureAt)
+        assertEquals(time(527), refreshed.update.reportedBusAlighting?.reportedAt)
+        assertEquals(plan.segments.last(), corrected.segments.last())
+        val snapshot = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan, plannedRouteUpdate = refreshed.update,
+            plannedSeoulBusJourney = saved)
+        val prediction = requireNotNull(snapshot.plannedJourneyArrivalPrediction(time(610), 120))
+        assertEquals("FINAL_BUS_ALIGHTING_REPORTED", prediction.basis.name)
+        assertEquals(time(527), prediction.sourceUpdatedAt)
+        assertEquals(time(647), prediction.predictedArrivalAt)
+        assertEquals(time(647), PlannedTransitRefreshCadencePolicy.nextRefreshAt(time(610), snapshot))
+        assertNull(snapshot.plannedJourneyArrivalPrediction(time(647), 120))
+        assertNull(PlannedTransitRefreshCadencePolicy.nextRefreshAt(time(647), snapshot))
+        assertNull(refresher.refresh(corrected, saved, time(610), previousUpdate = refreshed.update))
+        verify(provider).getBusAlightingForecast(second.last(), oldSecondVehicle)
+    }
+
+    @Test fun `a repeated target stop cannot confirm that the bus arrived at the selected occurrence`() {
+        val repeated = second.last().copy(sequence = second.last().sequence + 1)
+        finalBusAtStop(catalog = second + repeated)
+        assertNull(refresher.refresh(route, journey, time(531)))
+        verify(provider, never()).getBusAlightingForecast(any(), any())
+    }
+
+    private fun finalBusAtStop(catalog: List<SeoulBusRouteStop> = second) {
+        whenever(provider.getBusRouteDiagnosticStops(oldSecondVehicle.routeId)).thenReturn(catalog)
+        whenever(provider.getBusVehicleObservations(SeoulBusVehicleQuery(oldSecondVehicle.routeId, 20, 22)))
+            .thenReturn(SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE, listOf(
+                SeoulBusVehicleObservation("101000092", oldSecondVehicle.routeId, "103000001", 501, 300,
+                    true, second.last().stationId, time(526), time(530), time(571)),
+            )))
     }
 
     @Test fun `an expired route with an unconfirmed transfer or outside the last stop window makes no new requests`() {

@@ -1,0 +1,56 @@
+{
+  "classification": "ARCHIVED_NAVER_PUBLIC_MIXED_CARD_WITHOUT_MATCHING_WORKER_ROUTE",
+  "providerApiCallsDuringReplay": 0,
+  "publicUiSnapshot": "/private/tmp/nolate-eta-validation-workspace.0WB8Yk/NoLate_FE/output/playwright/browser-snapshots/page-2026-11-27T08-30-33-959Z.yml",
+  "observedAt": "2026-11-27T17:30:33.959+09:00",
+  "requestedDepartureAt": "2026-11-27T17:40:00+09:00",
+  "displayedArrivalAt": "2026-11-27T19:09:00+09:00",
+  "uiMatchedRouteRides": [
+    {
+      "kind": "SUBWAY",
+      "line": "LINE_7",
+      "fromName": "노원",
+      "toName": "UNKNOWN",
+      "displayedBoardingAt": "2026-11-27T17:53:00+09:00",
+      "visibleTerminal": "온수행"
+    },
+    {
+      "kind": "BUS",
+      "line": "461",
+      "fromName": "대림초등학교",
+      "toName": "신림동별빛거리입구"
+    }
+  ],
+  "visibleComponents": {
+    "visibleTotalMinutes": 82,
+    "visibleRideMinutes": [
+      56,
+      9
+    ],
+    "visibleWalkingMinutes": {
+      "access": 5,
+      "transfers": [
+        4
+      ],
+      "egress": 3
+    },
+    "unallocatedDisplayedMinutes": 5
+  },
+  "workerAtSamePlanningWindow": {
+    "evidence": "/private/tmp/nolate-eta-real-e2e.yx20syz6/evaluation-1.json",
+    "source": "TIMETABLE_PROVIDER",
+    "rideModes": [
+      "SUBWAY",
+      "SUBWAY"
+    ]
+  },
+  "sameConditionComparableCount": 0,
+  "exclusionReasons": [
+    "WORKER_AND_NAVER_TOPOLOGY_DIFFER",
+    "WORKER_TIMETABLE_ONLY",
+    "MAP_RAIL_ALIGHTING_STATION_UNCONFIRMED",
+    "BUS_STOP_ARS_UNPUBLISHED",
+    "SAME_WALKING_BOUNDARIES_UNCONFIRMED"
+  ],
+  "actualTripAccuracyVerified": false
+}

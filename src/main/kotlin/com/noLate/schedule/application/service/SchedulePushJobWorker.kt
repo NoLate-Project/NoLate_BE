@@ -26,6 +26,7 @@ import com.noLate.schedule.application.TrafficResult
 import com.noLate.schedule.application.TransitTimingBasis
 import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
 import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
+import com.noLate.schedule.application.fallbackResult
 import com.noLate.schedule.application.sanitizeTrafficFailureReason
 import com.noLate.schedule.application.toRouteDisplaySegments
 import com.noLate.schedule.application.service.policy.DepartureReminderPolicy
@@ -302,9 +303,20 @@ class SchedulePushJobWorker(
                 targetArrivalAt = schedule.startAt,
                 maxTravelMinutes = maxTravelMinutes,
             )
+            val previousEffectiveRouteSnapshot = EffectiveTransitRouteSnapshot.parse(
+                objectMapper = objectMapper,
+                json = job.lastEffectiveTransitRouteJson,
+            ).takeIf { job.lastEtaRouteFingerprint == routeFingerprint }
+            val trackSavedPlan = request.travelMode == ScheduleTravelMode.TRANSIT &&
+                previousEffectiveRouteSnapshot?.let { snapshot ->
+                    snapshot.evaluationNotificationGeneration == job.notificationGeneration &&
+                        (snapshot.evaluationCheckCount == job.checkCount - 1 || snapshot.evaluationCheckCount == job.checkCount) &&
+                        canRefreshSavedTransitPlan(snapshot, now)
+                } == true
+            // 이미 출발한 경로는 저장한 차량 기준으로 갱신한다. 로컬 기록에는 공급자 취득시각이 없다.
             val evaluationId = UUID.randomUUID().toString()
-
-            val trafficResult = trafficClient.getTravelMinutes(request)
+            val trafficResult = if (trackSavedPlan) request.fallbackResult(TrafficFailureReasons.TRANSIT_TRACKING_SAVED_ROUTE)
+                else trafficClient.getTravelMinutes(request)
 
             scheduleEtaEvaluationHistory = trafficResult.toEvaluationHistory(
                 evaluationId = evaluationId,
@@ -315,10 +327,6 @@ class SchedulePushJobWorker(
                 memberId = job.memberId,
                 request = request,
             )
-            val previousEffectiveRouteSnapshot = EffectiveTransitRouteSnapshot.parse(
-                objectMapper = objectMapper,
-                json = job.lastEffectiveTransitRouteJson,
-            ).takeIf { job.lastEtaRouteFingerprint == routeFingerprint }
             val baseEffectiveRouteSnapshot = if (route.travelMode == ScheduleTravelMode.TRANSIT) {
                 EffectiveTransitRouteSnapshot.from(
                     trafficResult = trafficResult,
@@ -402,7 +410,7 @@ class SchedulePushJobWorker(
             val transferFailureTransition = transferFailureReason != null &&
                 transferFailureReason != previousTransferFailureReason
             val predictedArrivalAt = trafficResult.userVisiblePredictedArrivalAt(schedule.startAt).takeUnless { trackingDeferredTransfer }
-            operationalMetrics.recordSafely {
+            if (!trackSavedPlan) operationalMetrics.recordSafely {
                 recordEtaResolution(
                     source = trafficResult.source,
                     degraded = trafficResult.stale || trafficResult.failureReason != null,
@@ -1382,6 +1390,14 @@ class SchedulePushJobWorker(
         previousTravelMinutes
             ?.let { currentTravelMinutes - it }
             ?: 0
+
+    private fun canRefreshSavedTransitPlan(snapshot: EffectiveTransitRouteSnapshot, now: Instant): Boolean {
+        val plan = snapshot.departurePlanForRefresh(now)
+            ?: return plannedSeoulBusRouteRefresher != null && snapshot.isTrackingDeferredTransferAt(now)
+        if (now < plan.departureAt) return false
+        return if (snapshot.busJourneyFor(plan) != null) plannedSeoulBusRouteRefresher != null
+            else plannedTransitRouteRefresher?.supports(plan) == true
+    }
 
     private fun String?.isTransitTransferFailure(): Boolean =
         this == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED ||

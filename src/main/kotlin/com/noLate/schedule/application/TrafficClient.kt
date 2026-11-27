@@ -462,6 +462,8 @@ object TrafficFailureReasons {
         "TRANSIT_TRANSFER_REALTIME_DELAY: 선택한 환승 열차의 실시간 지연으로 시간표 도착시각을 사용할 수 없습니다."
     const val TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY =
         "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY: 경로 추정시각만 있어 전체 여정의 도착시각을 확정할 수 없습니다."
+    const val TRANSIT_TRACKING_SAVED_ROUTE =
+        "TRANSIT_TRACKING_SAVED_ROUTE: 출발한 계획의 차량과 환승을 갱신하는 회차입니다."
     const val UNSUPPORTED_TRAVEL_MODE =
         "UNSUPPORTED_TRAVEL_MODE: 선택한 이동 수단은 실시간 ETA 조회를 지원하지 않습니다."
     const val ROUTE_STALE =
@@ -518,6 +520,7 @@ fun sanitizeTrafficFailureReason(reason: String?): String? {
             TrafficFailureReasons.TRANSIT_TRANSFER_REALTIME_DELAY
         "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY" ->
             TrafficFailureReasons.TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY
+        "TRANSIT_TRACKING_SAVED_ROUTE" -> TrafficFailureReasons.TRANSIT_TRACKING_SAVED_ROUTE
         "UNSUPPORTED_TRAVEL_MODE" -> TrafficFailureReasons.UNSUPPORTED_TRAVEL_MODE
         "ROUTE_STALE" -> TrafficFailureReasons.ROUTE_STALE
         else -> TrafficFailureReasons.ETA_FALLBACK

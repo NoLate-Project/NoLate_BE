@@ -181,6 +181,19 @@ object EtaRealProviderSimulatorServer {
             directEgress -> 37.476563 to 126.981746
             else -> requireNotNull(route).path("destination_lat").asDouble() to route.path("destination_lng").asDouble()
         }
+        val requestedCoordinates = mapOf(
+            "origin" to mapOf("lat" to originLat, "lng" to originLng),
+            "destination" to mapOf("lat" to destinationLat, "lng" to destinationLng),
+        )
+        val mapRouteRequest = output.resolve("public-mixed-route-request.json")
+        val publicMixedRoute = if (Files.exists(mapRouteRequest)) {
+            require(mixedOrder != null && comparisonDepartureAt != null && comparisonTargetAt != null)
+            val inputMapper = jacksonObjectMapper()
+            val request = inputMapper.readTree(mapRouteRequest.toFile())
+            require(Instant.parse(request.path("departureAt").asText()) == comparisonDepartureAt)
+            require(request.path("coordinates") == inputMapper.valueToTree<com.fasterxml.jackson.databind.JsonNode>(requestedCoordinates))
+            inputMapper.treeToValue(request.path("route"), RealOdsaySelectedRouteFixture.PublicMixedRoute::class.java)
+        } else null
         val settings = Properties().apply { Files.newBufferedReader(Path.of("env.local.properties")).use(::load) }
         val app = SpringApplication(NoLateApplication::class.java, RealProviderIsolationConfiguration::class.java)
         app.setAdditionalProfiles("test")
@@ -281,16 +294,18 @@ object EtaRealProviderSimulatorServer {
                 require(departure > now) { "Comparison departure expired before ODsay route selection" }
                 val candidates = journeyProvider.search(TransitJourneySearchRequest(
                     originLat, originLng, destinationLat, destinationLng, departure, 180))
-                RealOdsaySelectedRouteFixture.select(candidates, direct = directEgress, overnight = overnightTimetable,
-                    adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess, shortFirstRide = shortFirstRide,
-                    mixedBusFirst = mixedOrder?.let { it == "bus-rail" })
+                try {
+                    RealOdsaySelectedRouteFixture.select(candidates, direct = directEgress, overnight = overnightTimetable,
+                        adjacentRing = adjacentRingTimetable, seolleungAccess = seolleungAccess, shortFirstRide = shortFirstRide,
+                        mixedBusFirst = mixedOrder?.let { it == "bus-rail" }, publicMixedRoute = publicMixedRoute)
+                } catch (failure: IllegalArgumentException) {
+                    if (publicMixedRoute != null) mapper.writeValue(output.resolve("public-mixed-route-seed-result.json").toFile(),
+                        mapOf("result" to "NO_UNAMBIGUOUS_ODSAY_ROUTE"))
+                    throw failure
+                }
             } else null
             val selectedJson = seed?.let { RealOdsaySelectedRouteFixture.encode(mapper, it) } ?: copiedSelectedJson
             val selectedMinutes = seed?.totalMinutes ?: personal?.path("travel_minutes")?.asInt()
-            val requestedCoordinates = mapOf(
-                "origin" to mapOf("lat" to originLat, "lng" to originLng),
-                "destination" to mapOf("lat" to destinationLat, "lng" to destinationLng),
-            )
             selectedJson?.let { mapper.writeValue(output.resolve("selected-route.json").toFile(), mapper.readTree(it)) }
             seed?.let { mapper.writeValue(output.resolve("odsay-seed-journey.json").toFile(), it) }
             context.getBean(RealProviderEvidenceState::class.java).output = output
@@ -368,6 +383,7 @@ object EtaRealProviderSimulatorServer {
                 "automaticScheduling" to automaticDelivery,
                 "scheduleCountBeforeUi" to schedules.count(), "jobCountBeforeUi" to jobs.count(),
                 "journeyProvider" to journeyProviderId, "seedTravelMinutes" to selectedMinutes, "mixedRouteOrder" to mixedOrder,
+                "publicMixedRouteSeedMatched" to (publicMixedRoute != null && seed != null),
                 "comparisonRequestedDepartureAt" to comparisonDepartureAt,
                 "comparisonTargetArrivalAt" to comparisonTargetAt,
                 "requestedCoordinates" to requestedCoordinates,
@@ -652,6 +668,11 @@ object EtaRealProviderSimulatorServer {
                     .find("nolate.eta.transit.provider.wire.duration").tags("provider", "seoul_subway", "operation", "arrival")
                     .timers()
                 val arrivalCallsBefore = arrivalTimers.sumOf { it.count() }
+                val beforeMixed = mixedOrder?.let {
+                    val prior = EffectiveTransitRouteSnapshot.parse(mapper, jobs.findAll().single().lastEffectiveTransitRouteJson)
+                    mapOf("route" to (prior?.lastUpdatedPlannedRoute ?: prior?.inProgressPlannedRoute ?: prior?.acceptedRoute()),
+                        "busJourney" to (prior?.plannedSeoulBusJourney ?: prior?.lastAcceptedSeoulBusJourney))
+                }
                 val processed = context.getBean(SchedulePushJobWorker::class.java)
                     .runDueJobForSchedule(296, 363, Instant.now())
                 val arrivalCallsAfter = arrivalTimers.sumOf { it.count() }
@@ -661,6 +682,11 @@ object EtaRealProviderSimulatorServer {
                 val snapshot = EffectiveTransitRouteSnapshot.parse(mapper, job.lastEffectiveTransitRouteJson)
                 val evidence = mapOf("classification" to "REAL_PROVIDER_ISOLATED_WORKER",
                     "journeyProvider" to journeyProviderId,
+                    "mixedRouteOrder" to mixedOrder,
+                    "mixedPlanBeforeEvaluation" to beforeMixed,
+                    "mixedPredictionAtEvaluation" to mixedOrder?.let {
+                        job.lastCheckedAt?.let { checkedAt -> snapshot?.plannedJourneyArrivalPrediction(checkedAt, 120) }
+                    },
                     "subwayArrivalCallsBeforeWorker" to arrivalCallsBefore,
                     "subwayArrivalCallsAfterWorker" to arrivalCallsAfter,
                     "plannedRefreshReplay" to plannedRefreshTrace?.let { trace -> mapOf(

@@ -14,6 +14,7 @@ import com.noLate.schedule.application.sanitizeTrafficFailureReason
 import com.noLate.schedule.domain.Schedule
 import com.noLate.schedule.domain.ScheduleDepartureEtaStatusDto
 import com.noLate.schedule.domain.OriginReplanDiagnostic
+import com.noLate.schedule.domain.PlannedJourneyArrivalBasis
 import com.noLate.schedule.domain.ScheduleEtaRouteFingerprint
 import com.noLate.schedule.domain.ScheduleEtaConfidence
 import com.noLate.schedule.domain.SchedulePushJob
@@ -269,15 +270,16 @@ class ScheduleDepartureEtaService(
         val plan = snapshot?.plannedRouteAt(readAt) ?: snapshot?.acceptedRoute()?.takeIf {
             it.departureAt <= readAt && it.arrivalAt > readAt
         }
-        // 전체 ETA가 만료된 응답에서는 개별 관측도 다시 실시간으로 승격하지 않는다.
+        // 전체 ETA가 만료되면 차량 예보는 내리고, 기록된 마지막 버스의 과거 정류장 도착은 보존한다.
         val baseline = snapshot?.copy(accepted = false, inProgressPlannedRoute = plan,
             effectiveTransitRoute = null, plannedArrivalObservation = null,
             lastUpdatedPlannedRoute = snapshot.plannedRouteUpdate?.route ?: snapshot.lastUpdatedPlannedRoute,
-            plannedRouteUpdate = snapshot.plannedRouteUpdate?.takeIf { it.failure != null })
+            plannedRouteUpdate = snapshot.plannedRouteUpdate?.takeIf { it.failure != null || it.finalBusAlightingReport() != null })
         val plannedPrediction = baseline?.plannedJourneyArrivalPrediction(readAt, arrivalSourceMaxAgeSeconds)
         val hasActivePlan = baseline?.hasActivePlannedRouteAt(readAt, plannedPrediction?.predictedArrivalAt) == true
+        val finalBusReported = plannedPrediction?.basis == PlannedJourneyArrivalBasis.FINAL_BUS_ALIGHTING_REPORTED
         return fallback.copy(
-            recommendedDepartureAt = protectedDeparture,
+            recommendedDepartureAt = if (finalBusReported) job.lastRecommendedDepartureAt else protectedDeparture,
             source = fallback.source.takeUnless { hasActivePlan },
             travelMinutes = fallback.travelMinutes.takeUnless { hasActivePlan },
             confidence = ScheduleEtaConfidence.LOW,
@@ -285,7 +287,8 @@ class ScheduleDepartureEtaService(
             plannedJourneyArrivalPrediction = plannedPrediction.takeIf { hasActivePlan },
             plannedJourneyTimingFailureReason = baseline?.takeIf { hasActivePlan }?.plannedJourneyTimingFailureReason(readAt),
             pendingTransferRailPlan = baseline?.takeIf { hasActivePlan }?.pendingTransferRailPlan(readAt),
-            originReplanDiagnostic = if (hasActivePlan) OriginReplanDiagnostic(requireNotNull(job.lastTravelMinutes),
+            originReplanDiagnostic = if (hasActivePlan && job.lastEtaFailureReason != TrafficFailureReasons.TRANSIT_TRACKING_SAVED_ROUTE)
+                OriginReplanDiagnostic(requireNotNull(job.lastTravelMinutes),
                 requireNotNull(job.lastEtaSource), true, EtaStatusFailureReasons.ETA_SNAPSHOT_EXPIRED,
                 job.lastEtaProviderFetchedAt) else null,
             savedRouteEstimatedDepartureAt = fallback.recommendedDepartureAt,
@@ -394,8 +397,7 @@ class ScheduleDepartureEtaService(
             }
         return ScheduleDepartureEtaStatusDto(
             scheduleId = scheduleId,
-            // 출발 후에는 최신 TrafficResult가 '원래 출발지에서 지금 다시 출발'하는 가상 경로다.
-            // 진행 중인 저장 여정의 이동시간/출처/실패로 섞지 않고 별도 진단에만 노출한다.
+            // 저장한 차량 추적과 출발지에서 다시 계산한 여정을 정상 출발 ETA로 노출하지 않는다.
             travelMinutes = travelMinutes.takeUnless { inProgressPlan },
             recommendedDepartureAt = job.lastRecommendedDepartureAt
                 ?: schedule.startAt.minus(travelMinutes.toLong(), ChronoUnit.MINUTES),
@@ -413,7 +415,7 @@ class ScheduleDepartureEtaService(
                 confidence(source, effectiveRouteSnapshot?.transitTimingBasis)
             },
             failureReason = sanitizeTrafficFailureReason(observationFailure ?: job.lastEtaFailureReason)
-                .takeUnless { inProgressPlan },
+                .takeUnless { inProgressPlan || it == TrafficFailureReasons.TRANSIT_TRACKING_SAVED_ROUTE },
             lastTrafficChangeMinutes = job.lastTrafficChangeMinutes.takeUnless { inProgressPlan },
             lastChangedAt = job.lastChangedAt.takeUnless { inProgressPlan },
             nextCheckAt = job.activeNextCheckAt(),
@@ -441,7 +443,7 @@ class ScheduleDepartureEtaService(
             plannedJourneyArrivalPrediction = plannedPrediction.takeIf { inProgressPlan },
             plannedJourneyTimingFailureReason = currentSnapshot?.takeIf { inProgressPlan }?.plannedJourneyTimingFailureReason(readAt),
             pendingTransferRailPlan = currentSnapshot?.takeIf { inProgressPlan }?.pendingTransferRailPlan(readAt),
-            originReplanDiagnostic = if (inProgressPlan) {
+            originReplanDiagnostic = if (inProgressPlan && job.lastEtaFailureReason != TrafficFailureReasons.TRANSIT_TRACKING_SAVED_ROUTE) {
                 OriginReplanDiagnostic(
                     travelMinutes = travelMinutes,
                     source = source,

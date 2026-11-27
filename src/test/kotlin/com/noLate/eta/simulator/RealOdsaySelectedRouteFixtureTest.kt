@@ -60,10 +60,9 @@ class RealOdsaySelectedRouteFixtureTest {
         assertEquals(setOf("PROVIDER:odsay:431"), decoded.rides.first().fromIds)
     }
 
-    @Test
-    fun `혼합 검증은 요청한 방향과 원본 서울 버스 식별자가 있는 여정만 선택한다`() {
+    private fun mixed(busSequence: Int): TransitJourney {
         val source = journey()
-        fun mixed(busSequence: Int) = source.copy(legs = source.legs.map { leg ->
+        return source.copy(legs = source.legs.map { leg ->
             when {
                 leg.sequence == busSequence -> leg.copy(mode = TransitLegMode.BUS,
                     from = TransitStop(providerStopId = "1234", localStopId = "100000111", arsId = "01011", name = "첫 정류장"),
@@ -73,6 +72,11 @@ class RealOdsaySelectedRouteFixtureTest {
                 else -> leg
             }
         })
+    }
+
+    @Test
+    fun `혼합 검증은 요청한 방향과 원본 서울 버스 식별자가 있는 여정만 선택한다`() {
+        val source = journey()
         val busFirst = mixed(1)
         val busLast = mixed(3)
         val noBusBinding = busFirst.copy(legs = busFirst.legs.map { leg ->
@@ -88,5 +92,43 @@ class RealOdsaySelectedRouteFixtureTest {
             .decode(RealOdsaySelectedRouteFixture.encode(mapper, busFirst)))
         assertEquals("3211", decoded.rides.first().providerRouteId)
         assertEquals(setOf("PROVIDER:odsay:1234", "ARS:01011"), decoded.rides.first().fromIds)
+    }
+
+    @Test
+    fun `공개 지도 비교는 첫 후보가 아닌 같은 노선의 승하차 지점을 고른다`() {
+        val route = mixed(3)
+        val other = route.copy(legs = route.legs.map { leg ->
+            if (leg.mode == TransitLegMode.SUBWAY) leg.copy(to = leg.to?.copy(name = "다른 역")) else leg
+        })
+        val target = RealOdsaySelectedRouteFixture.PublicMixedRoute(SeoulSubwayLine.LINE_2, "노원", "사당",
+            "N37", "첫 정류장", "다음 정류장", "01011", "01012")
+        assertEquals(other, RealOdsaySelectedRouteFixture.select(listOf(other, route), mixedBusFirst = false))
+        assertEquals(route, RealOdsaySelectedRouteFixture.select(listOf(other, route), mixedBusFirst = false, publicMixedRoute = target))
+        assertThrows(IllegalArgumentException::class.java) {
+            RealOdsaySelectedRouteFixture.select(listOf(other), mixedBusFirst = false, publicMixedRoute = target)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RealOdsaySelectedRouteFixture.select(listOf(route), mixedBusFirst = false, publicMixedRoute = target.copy(busFromArs = "01015"))
+        }
+    }
+
+    @Test
+    fun `같은 이름으로 두 운행 경로가 맞으면 첫 편으로 추정하지 않는다`() {
+        val route = mixed(3)
+        val variant = route.copy(legs = route.legs.map { leg ->
+            if (leg.mode == TransitLegMode.BUS) leg.copy(line = leg.line?.copy(localRouteId = "100100586"),
+                from = leg.from?.copy(arsId = "01-015")) else leg
+        })
+        val target = RealOdsaySelectedRouteFixture.PublicMixedRoute(SeoulSubwayLine.LINE_2, "노원", "사당",
+            "N37", "첫 정류장", "다음 정류장")
+        assertThrows(IllegalArgumentException::class.java) {
+            RealOdsaySelectedRouteFixture.select(listOf(route, variant), mixedBusFirst = false, publicMixedRoute = target)
+        }
+        assertEquals(route, RealOdsaySelectedRouteFixture.select(listOf(route, variant), mixedBusFirst = false,
+            publicMixedRoute = target.copy(busFromArs = "01011")))
+        assertEquals(variant, RealOdsaySelectedRouteFixture.select(listOf(route, variant), mixedBusFirst = false,
+            publicMixedRoute = target.copy(busFromArs = "01015")))
+        assertEquals(route, RealOdsaySelectedRouteFixture.select(listOf(route, route.copy(totalMinutes = 67)),
+            mixedBusFirst = false, publicMixedRoute = target))
     }
 }

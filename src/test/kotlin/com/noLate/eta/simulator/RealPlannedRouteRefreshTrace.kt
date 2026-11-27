@@ -32,8 +32,12 @@ internal class RealPlannedRouteRefreshTrace(private val worker: SchedulePushJobW
         val proxy = ProxyFactory(original).apply {
             isProxyTargetClass = true
             addAdvice(MethodInterceptor { invocation ->
-                if (invocation.method.name != "refresh" || invocation.arguments.size != 4) return@MethodInterceptor invocation.proceed()
                 val args = invocation.arguments
+                // Kotlin calls the five-argument method even when endsAtTransfer defaults to false.
+                // This replay only models complete subway plans, so omit transfer-prefix refreshes.
+                if (invocation.method.name != "refresh" || args.size !in 4..5 || args.getOrNull(4) == true) {
+                    return@MethodInterceptor invocation.proceed()
+                }
                 val frame = Frame(args[1] as Instant, args[0] as EffectiveTransitRoute, args[2] as EffectiveTransitRoute,
                     args[3] as PlannedTransitRouteUpdate?)
                 current.set(frame)

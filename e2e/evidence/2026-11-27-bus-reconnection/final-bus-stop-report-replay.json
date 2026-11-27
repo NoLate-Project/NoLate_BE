@@ -1,0 +1,43 @@
+{
+  "classification": "CONTROLLED_LAST_BUS_STOP_REPORT_REPLAY",
+  "serviceDate": "2026-11-27",
+  "sameInputRegression": {
+    "beforeRetainedAnUnconfirmedFinalForecast": true,
+    "afterUsesMatchingPositionAndStationReport": true,
+    "duplicateRouteOccurrenceRejected": true,
+    "expiredStatusPreservesTheOriginalDepartureAndRemainingWalk": true
+  },
+  "workerApiAndInstalledApp": {
+    "result": "PASSED",
+    "database": "H2_MEMORY_ONLY",
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.final-bus-stop-report.5utmat6x",
+    "originalStopForecastSecondsFromDeparture": 540,
+    "confirmedStopReportSecondsFromDeparture": 527,
+    "previousDestinationForecastSecondsFromDeparture": 720,
+    "correctedDestinationForecastSecondsFromDeparture": 707,
+    "remainingWalkSeconds": 180,
+    "comparedArrivalShiftSeconds": -13,
+    "sameBusAtSavedStop": true,
+    "appAndPublicStatusMatchedWorker": true,
+    "publicNormalEtaAbsent": true,
+    "recommendedDepartureUnchanged": true,
+    "originSearchCalls": 0,
+    "physicalTransitHttpCalls": 0,
+    "originalAppEndpointRestored": true,
+    "ownedPortsReleased": true
+  },
+  "firstAttempt": {
+    "result": "WORKER_AND_API_PASSED_UI_ASSERTION_ADJUSTED",
+    "evidenceRoot": "/private/tmp/nolate-eta-mock-e2e.final-bus-stop-report.gyd86y8a",
+    "reason": "The accessibility assertion expected the unchanged rail leg to say previous plan. The public and installed app correctly showed timetable."
+  },
+  "relatedActualObservation": "../2026-11-26-onward-forecast-reconnection/n37-in-service-stop-observation.json",
+  "actualTripAccuracyVerified": false,
+  "sameConditionsNaverComparisonVerified": false,
+  "automatedRegression": {
+    "backendPassedWithMysqlExcluded": 3152,
+    "backendSkipped": 6,
+    "frontendTargetedPassed": 116,
+    "pythonHarnessPassed": 337
+  }
+}
