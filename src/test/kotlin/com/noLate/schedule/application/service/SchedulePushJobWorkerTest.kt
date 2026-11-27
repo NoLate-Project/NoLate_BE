@@ -26,12 +26,14 @@ import com.noLate.notification.liveactivity.application.ScheduleLiveActivityEtaP
 import com.noLate.notification.liveactivity.application.LiveActivityLifecyclePublisher
 import com.noLate.notification.liveactivity.application.ScheduleLiveActivityService
 import com.noLate.schedule.application.TrafficClient
+import com.noLate.schedule.application.DeferredSeoulBusTransfer
 import com.noLate.schedule.application.EffectiveBusRidePrediction
 import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
 import com.noLate.schedule.application.EffectiveTransitRouteSegmentKind
 import com.noLate.schedule.application.EffectiveTransitRouteSnapshot
 import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
+import com.noLate.schedule.application.EffectiveTransitRideTiming
 import com.noLate.schedule.application.PlannedSeoulBusJourney
 import com.noLate.schedule.application.PlannedSeoulBusRide
 import com.noLate.schedule.application.PlannedTransitTimingFailure
@@ -253,6 +255,95 @@ class SchedulePushJobWorkerTest {
         assertFalse(stored.accepted)
         assertEquals(departure, job.lastRecommendedDepartureAt)
         verifyNoInteractions(departureAlarmSyncService)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `버스 조회 범위를 벗어나 보류한 계획은 이후 열차 하차와 같은 노선 버스로 이어진다`(connectionWindowOpen: Boolean) {
+        val departure = testNow.minusSeconds(3000)
+        val railAlight = testNow.plusSeconds(480)
+        val at = if (connectionWindowOpen) testNow else testNow.minusSeconds(1800)
+        val routeId = "100100101"
+        val path = listOf(
+            SeoulBusRouteStop(routeId, 10, "101000001", "01001", "승차", "방면", null, 37.5, 127.0),
+            SeoulBusRouteStop(routeId, 11, "101000002", "01002", "하차", "방면", null, 37.5, 127.0),
+        )
+        val serviceDay = com.noLate.eta.domain.SeoulSubwayServiceDay.dateAt(departure)
+        val table = TransitLegTimetable("seoul-timetable", com.noLate.eta.domain.SeoulSubwayLine.LINE_4, serviceDay,
+            "4703", "DOWN", com.noLate.eta.domain.TransitServiceClass.LOCAL, "0431", "0433", "오이도",
+            departure.plusSeconds(120), railAlight, departure.minusSeconds(5))
+        val train = EffectiveTransitRouteSegment(1, EffectiveTransitRouteSegmentKind.SUBWAY, 58,
+            lineName = "4호선", fromName = "동작", toName = "사당", rideTiming = EffectiveTransitRideTiming(
+                table, table.boardingAt, railAlight, EffectiveTransitRideTimingBasis.TIMETABLE))
+        fun walk(sequence: Int, seconds: Long) = EffectiveTransitRouteSegment(sequence, EffectiveTransitRouteSegmentKind.WALK,
+            ((seconds + 59) / 60).toInt(), durationSeconds = seconds)
+        val rail = EffectiveTransitRoute("odsay", "b".repeat(64), departure, railAlight, 58, listOf(walk(0, 30), train))
+        val schedule = schedule(testNow.plusSeconds(1500), travelMode = ScheduleTravelMode.TRANSIT, alertMode = ScheduleAlertMode.ALARM)
+        val pending = DeferredSeoulBusTransfer(rail, listOf(walk(2, 30)), EffectiveTransitRouteSegment(3,
+            EffectiveTransitRouteSegmentKind.BUS, 5, lineName = "402", fromName = "승차", toName = "하차"), listOf(walk(4, 60)),
+            com.noLate.transit.domain.SeoulBusConnectionStops(routeId, path.first().stationId, path.last().stationId, "01001", "01002"),
+            schedule.startAt)
+        val before = TrafficResult(70, TrafficSource.SELECTED_ROUTE, stale = true,
+            failureReason = TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, deferredSeoulBusTransfer = pending)
+        val prior = requireNotNull(EffectiveTransitRouteSnapshot.from(before, null, 1,
+            evaluatedAt = departure.minusSeconds(10), protectedDepartureAt = departure))
+        assertEquals(pending, prior.deferredSeoulBusTransfer)
+        assertNull(prior.plannedJourneyArrivalPrediction(at, 120))
+
+        val job = persistedJob(1L, 10L, schedule.startAt, departure, departure.minusSeconds(600), notificationIntervalMinutes)
+        job.startProcessing("previous-worker")
+        job.finishCheck(travelMinutes = 70, recommendedDepartureAt = departure, pushSent = true, notifiedDepartureAt = departure,
+            nextCheckAt = at, completeAfterCheck = false, etaRouteFingerprint = routeFingerprint(schedule),
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(prior), now = at.minusSeconds(60))
+        stubDueJobLookup(job, schedule, at)
+        val originReplan = rail.copy(identity = "c".repeat(64), departureAt = at)
+        whenever(trafficClient.getTravelMinutes(any())).thenReturn(TrafficResult(35, TrafficSource.LIVE_PROVIDER,
+            fetchedAt = at, stale = false, effectiveTransitRoute = originReplan,
+            recommendedDepartureAt = at.plusSeconds(60), predictedArrivalAt = railAlight))
+        val railArrivals = mock<TransitArrivalService>()
+        val busArrivals = mock<SeoulTransitArrivalClient>()
+        val reevaluatedRailAlight = railAlight.plusSeconds(15)
+        val boarding = reevaluatedRailAlight.plusSeconds(90)
+        val alighting = boarding.plusSeconds(240)
+        if (connectionWindowOpen) {
+            whenever(railArrivals.getSubwayArrivalsForEta(eq("사당"), eq("4호선"), anyOrNull(), eq("DOWN"), eq(10)))
+                .thenReturn(listOf(TransitArrivalDto("seoul-openapi", "SUBWAY", stationName = "사당", direction = "하행",
+                    destinationName = "오이도", express = false, subwayLineId = "1004", trainNumber = "4703",
+                    expectedAt = reevaluatedRailAlight.toString(), sourceUpdatedAt = at.minusSeconds(2).toString(),
+                    freshnessEvidence = com.noLate.transit.domain.TransitArrivalFreshnessEvidence.PROVIDER_SOURCE_TIMESTAMP)))
+            whenever(busArrivals.getBusRouteDiagnosticStops(routeId)).thenReturn(path)
+            val bus = SeoulBusRideService.fromVehicle(path.first(), path.last(), "101000091")
+            whenever(busArrivals.getPairedBusArrivals(path)).thenReturn(listOf(
+                com.noLate.transit.infrastructure.SeoulBusPairedArrival(boarding.minusSeconds(1), alighting.minusSeconds(1), at, at, bus),
+                com.noLate.transit.infrastructure.SeoulBusPairedArrival(boarding, alighting, at, at, bus),
+            ))
+        }
+        val evaluator = TransitTransferFeasibilityEvaluator()
+        val timetable = TransitJourneyTimetableEnricher(emptyList())
+        val refresher = PlannedSeoulBusRouteRefresher(busArrivals, evaluator, 60, 120, 1440, timetable,
+            railRouteRefresher = PlannedTransitRouteRefresher(TransitTransferRealtimeGuard(railArrivals), timetable, evaluator),
+            busEta = com.noLate.eta.application.transit.SeoulBusEta(busArrivals, 60, 120))
+        worker(clock = Clock.fixed(at, ZoneOffset.UTC), alarmSyncService = departureAlarmSyncService, busRefresher = refresher).runDueJobs(at)
+
+        val stored = requireNotNull(EffectiveTransitRouteSnapshot.parse(objectMapper, job.lastEffectiveTransitRouteJson))
+        assertEquals(departure, job.lastRecommendedDepartureAt)
+        assertFalse(stored.accepted)
+        verifyNoInteractions(departureAlarmSyncService)
+        if (connectionWindowOpen) {
+            assertNull(stored.deferredSeoulBusTransfer)
+            val prediction = requireNotNull(stored.plannedJourneyArrivalPrediction(at, 120))
+            assertEquals(PlannedJourneyArrivalBasis.MATCHED_TRAIN_AND_BUS_REALTIME, prediction.basis)
+            assertEquals(alighting.plusSeconds(60), prediction.predictedArrivalAt)
+            assertEquals(boarding, prediction.effectiveTransitRoute?.segments?.get(3)?.busRidePrediction?.boardingAt)
+            assertEquals(at.plusSeconds(60), job.nextCheckAt)
+            verify(busArrivals).getPairedBusArrivals(path)
+        } else {
+            assertEquals(pending, stored.deferredSeoulBusTransfer)
+            assertNull(stored.plannedJourneyArrivalPrediction(at, 120))
+            assertEquals("TRANSFER_FORECAST_PENDING", stored.plannedJourneyTimingFailureReason(at))
+            assertTrue(requireNotNull(job.nextCheckAt) <= railAlight.minusSeconds(900))
+            verifyNoInteractions(railArrivals, busArrivals)
+        }
     }
 
     @ParameterizedTest

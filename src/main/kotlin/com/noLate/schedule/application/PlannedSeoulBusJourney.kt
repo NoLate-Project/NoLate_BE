@@ -17,12 +17,12 @@ data class PlannedSeoulBusJourney(
         if (plan == null || plan.provider != "odsay" || plan.identity != routeIdentity ||
             plan.departureAt != departureAt) return false
         val moving = plan.segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }.sortedBy { it.sequence }
-        val busSegments = moving.takeWhile { it.kind == EffectiveTransitRouteSegmentKind.BUS }
+        val busSegments = moving.filter { it.kind == EffectiveTransitRouteSegmentKind.BUS }
         if (busSegments.map { it.sequence } != rides.map { it.sequence } || busSegments.any { it.busRidePrediction == null }) return false
-        val onward = moving.drop(busSegments.size)
-        val supportedMixed = busSegments.size == 1 && onward.size <= 2 &&
-            onward.all { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY && it.rideTiming != null }
-        return onward.isEmpty() || supportedMixed
+        val rail = moving.filterNot { it.kind == EffectiveTransitRouteSegmentKind.BUS }
+        return rail.isEmpty() || (busSegments.size == 1 && rail.size <= 2 &&
+            (moving.first() == busSegments.first() || moving.last() == busSegments.first()) &&
+            rail.all { it.kind == EffectiveTransitRouteSegmentKind.SUBWAY && it.rideTiming != null })
     }
 }
 

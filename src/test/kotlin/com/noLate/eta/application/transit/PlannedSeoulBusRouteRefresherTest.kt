@@ -18,6 +18,7 @@ import com.noLate.schedule.application.EffectiveTransitRideTimingBasis
 import com.noLate.schedule.application.PlannedJourneyArrivalObservation
 import com.noLate.schedule.application.PlannedSeoulBusJourney
 import com.noLate.schedule.application.PlannedSeoulBusRide
+import com.noLate.schedule.application.PlannedTransitRouteUpdate
 import com.noLate.schedule.application.PlannedTransitTimingFailure
 import com.noLate.schedule.application.TrafficResult
 import com.noLate.schedule.domain.PlannedJourneyArrivalBasis
@@ -151,6 +152,60 @@ class PlannedSeoulBusRouteRefresherTest {
         assertEquals(PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE, refreshed.update.failure)
         assertNull(refreshed.update.route)
         assertEquals(journey, refreshed.journey)
+    }
+
+    @Test fun `train delay reconnects the bus and a later direct bus forecast keeps only its live source`() {
+        val table = TransitLegTimetable("seoul-timetable", SeoulSubwayLine.LINE_4, LocalDate.of(2026, 11, 27), "4703", "DOWN",
+            TransitServiceClass.LOCAL, "0431", "0433", "오이도", time(90), time(240), time(-5))
+        val trainTiming = EffectiveTransitRideTiming(table, time(90), time(240), EffectiveTransitRideTimingBasis.TIMETABLE)
+        val train = EffectiveTransitRouteSegment(1, SUBWAY, 4, lineName = "4호선", fromName = "동작", toName = "사당",
+            rideTiming = trainTiming)
+        val plan = route.copy(segments = route.segments.map { if (it.sequence == 1) train else it })
+        val binding = journey.copy(rides = listOf(journey.rides.last()))
+        assertTrue(binding.matches(plan))
+        val rail = mock<PlannedTransitRouteRefresher>()
+        val mixed = PlannedSeoulBusRouteRefresher(provider, evaluator, 60, 120, 1440, railRouteRefresher = rail)
+        val railPrefix = plan.copy(segments = plan.segments.take(2), arrivalAt = time(240), totalMinutes = 4)
+        val observedTrain = train.copy(rideTiming = trainTiming.copy(predictedArrivalAt = time(390),
+            basis = EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME, observationSourceUpdatedAt = time(145)))
+        whenever(rail.refresh(eq(railPrefix), eq(time(150)), eq(railPrefix), isNull()))
+            .thenReturn(PlannedTransitRouteUpdate(plan.identity, time(145), onlyLastRideObserved = true,
+                route = railPrefix.copy(segments = listOf(plan.segments.first(), observedTrain), arrivalAt = time(390), totalMinutes = 7)))
+        onwardBuses(listOf(pair(time(470), time(651), oldSecondVehicle)))
+        val missed = requireNotNull(mixed.refresh(plan, binding, time(150)))
+        assertEquals(PlannedTransitTimingFailure.TRANSFER_RECONNECTION_UNAVAILABLE, missed.update.failure)
+        assertNull(mixed.refresh(plan, binding, time(510), pendingTransferFailure = true))
+
+        onwardBuses(listOf(pair(time(470), time(651), oldSecondVehicle), pair(time(480), time(760), newSecondVehicle)))
+        val reconnected = requireNotNull(mixed.refresh(plan, binding, time(150)))
+        val updated = requireNotNull(reconnected.update.route)
+        assertEquals(start, updated.departureAt)
+        assertEquals(time(820), updated.arrivalAt)
+        assertEquals(time(420), updated.segments[3].transferTiming?.physicalReadyAt)
+        assertEquals(time(480), updated.segments[3].busRidePrediction?.boardingAt)
+        assertEquals(newSecondVehicle, reconnected.journey.rides.single().service)
+        val snapshot = EffectiveTransitRouteSnapshot(inProgressPlannedRoute = plan,
+            plannedSeoulBusJourney = reconnected.journey, plannedRouteUpdate = reconnected.update)
+        assertEquals(PlannedJourneyArrivalBasis.MATCHED_TRAIN_AND_BUS_REALTIME,
+            snapshot.plannedJourneyArrivalPrediction(time(170), 120)?.basis)
+        assertEquals(PlannedJourneyArrivalBasis.LAST_ACCEPTED_PLAN, snapshot.plannedJourneyArrivalPrediction(time(191), 120)?.basis)
+
+        whenever(provider.getBusVehicleObservations(SeoulBusVehicleQuery(
+            newSecondVehicle.routeId, second.first().sequence, second.last().sequence,
+        ))).thenReturn(SeoulBusVehicleObservationBatch(SeoulBusVehicleObservationStatus.AVAILABLE, listOf(
+            SeoulBusVehicleObservation("101000093", newSecondVehicle.routeId, "103000001", second[1].sequence, 300,
+                false, second[1].stationId, time(508), time(510), time(550)),
+        )))
+        whenever(provider.getBusAlightingForecast(second.last(), newSecondVehicle))
+            .thenReturn(SeoulBusAlightingForecast(time(790), time(509), time(512)))
+        val afterBus = requireNotNull(mixed.refresh(updated, reconnected.journey, time(510), departurePlan = plan))
+        val busPrediction = requireNotNull(snapshot.copy(plannedRouteUpdate = afterBus.update).plannedJourneyArrivalPrediction(time(520), 120))
+        assertEquals(time(850), busPrediction.predictedArrivalAt)
+        assertEquals(PlannedJourneyArrivalBasis.MATCHED_BUS_REALTIME, busPrediction.basis)
+        val publicRoute = requireNotNull(busPrediction.effectiveTransitRoute)
+        assertEquals(EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE, publicRoute.segments[1].rideTiming?.basis)
+        assertEquals(time(509), publicRoute.segments[3].busRidePrediction?.alightingObservationSourceUpdatedAt)
+        assertEquals(time(145), afterBus.update.route?.segments?.get(1)?.rideTiming?.observationSourceUpdatedAt)
     }
 
     @Test fun `worker snapshot retains correlation across departure without publishing it in the route DTO`() {

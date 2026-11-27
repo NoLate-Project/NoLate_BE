@@ -3,6 +3,7 @@ package com.noLate.schedule.application.service
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.noLate.global.error.BusinessException
 import com.noLate.global.error.ErrorCode
+import com.noLate.schedule.application.DeferredSeoulBusTransfer
 import com.noLate.schedule.application.EffectiveBusRidePrediction
 import com.noLate.schedule.application.EffectiveTransitRoute
 import com.noLate.schedule.application.EffectiveTransitRouteSegment
@@ -703,6 +704,57 @@ class ScheduleDepartureEtaServiceTest {
         assertEquals(sourceAt.takeIf { fresh }, provisional.sourceUpdatedAt)
         assertEquals(sourceAt.takeIf { fresh }, provisional.effectiveTransitRoute
             ?.segments?.first()?.busRidePrediction?.alightingObservationSourceUpdatedAt)
+    }
+
+    @ParameterizedTest
+    @CsvSource("false", "true")
+    fun `버스 관측 대기 중 보호한 출발과 열차 구간만 제공한다`(statusExpired: Boolean) {
+        val schedule = schedule(travelMode = ScheduleTravelMode.TRANSIT)
+        val job = job(schedule)
+        val departure = queryAt.minusSeconds(1500)
+        val arrival = queryAt.plusSeconds(480)
+        val newerArrival = arrival.plusSeconds(15)
+        val table = com.noLate.eta.domain.TransitLegTimetable("seoul-timetable", com.noLate.eta.domain.SeoulSubwayLine.LINE_4,
+            java.time.LocalDate.of(2026, 7, 24), "4703", "DOWN", com.noLate.eta.domain.TransitServiceClass.LOCAL,
+            "0431", "0433", "오이도", departure.plusSeconds(120), arrival, departure.minusSeconds(60))
+        val walk = EffectiveTransitRouteSegment(0, EffectiveTransitRouteSegmentKind.WALK, 1, durationSeconds = 30)
+        val train = EffectiveTransitRouteSegment(1, EffectiveTransitRouteSegmentKind.SUBWAY, 33, lineName = "4호선",
+            fromName = "동작", toName = "사당", rideTiming = EffectiveTransitRideTiming(table, table.boardingAt,
+                arrival, EffectiveTransitRideTimingBasis.TIMETABLE))
+        val rail = EffectiveTransitRoute("odsay", "b".repeat(64), departure, arrival, 33, listOf(walk, train))
+        val sourceAt = queryAt.minusSeconds(180)
+        val observed = rail.copy(arrivalAt = newerArrival, totalMinutes = 34, segments = listOf(walk,
+            train.copy(rideTiming = train.rideTiming!!.copy(predictedArrivalAt = newerArrival,
+                basis = EffectiveTransitRideTimingBasis.PLANNED_RIDE_ALIGHTING_REALTIME, observationSourceUpdatedAt = sourceAt))))
+        val pending = DeferredSeoulBusTransfer(rail,
+            listOf(walk.copy(sequence = 2, walkingScope = com.noLate.eta.domain.TransitWalkingScope.TRANSFER)),
+            EffectiveTransitRouteSegment(3, EffectiveTransitRouteSegmentKind.BUS, 5),
+            listOf(walk.copy(sequence = 4, durationSeconds = 60)),
+            com.noLate.transit.domain.SeoulBusConnectionStops("100100101", "101000001", "101000002", "01001", "01002"),
+            schedule.startAt, PlannedTransitRouteUpdate(rail.identity, sourceAt, route = observed))
+        val snapshot = EffectiveTransitRouteSnapshot(evaluationCheckCount = job.checkCount,
+            evaluationNotificationGeneration = job.notificationGeneration, deferredSeoulBusTransfer = pending)
+        finish(job, 5, TrafficSource.SELECTED_ROUTE, queryAt.minusSeconds(if (statusExpired) 1500 else 1), snapshotSchedule = schedule,
+            failureReason = TrafficFailureReasons.TRANSIT_TRANSFER_TIMING_UNKNOWN, recommendedDepartureAt = departure,
+            effectiveTransitRouteJson = objectMapper.writeValueAsString(snapshot))
+        stubVisible(schedule)
+        whenever(pushJobRepository.findByScheduleIdAndMemberId(10L, 1L)).thenReturn(job)
+
+        val response = service().getDepartureStatus(1L, 10L)
+
+        assertEquals("TRANSFER_FORECAST_PENDING", response.plannedJourneyTimingFailureReason)
+        assertEquals(departure, response.recommendedDepartureAt)
+        assertNull(response.travelMinutes)
+        assertNull(response.predictedArrivalAt)
+        assertNull(response.plannedJourneyArrivalPrediction)
+        val prefix = requireNotNull(response.pendingTransferRailPlan)
+        assertEquals(listOf(EffectiveTransitRouteSegmentKind.WALK, EffectiveTransitRouteSegmentKind.SUBWAY,
+            EffectiveTransitRouteSegmentKind.WALK), prefix.segments.map { it.kind })
+        assertEquals(newerArrival.plusSeconds(30), prefix.arrivalAt)
+        assertEquals(30L, prefix.segments.last().durationSeconds)
+        assertEquals(newerArrival, prefix.segments[1].rideTiming?.predictedArrivalAt)
+        assertEquals(EffectiveTransitRideTimingBasis.PLANNED_RIDE_BASELINE, prefix.segments[1].rideTiming?.basis)
+        assertNull(prefix.segments[1].rideTiming?.observationSourceUpdatedAt)
     }
 
     @Test

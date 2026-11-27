@@ -317,6 +317,8 @@ data class TrafficResult(
     val futureTimetablePlanEvidence: TransitTimetablePlanEvidence? = null,
     @get:com.fasterxml.jackson.annotation.JsonIgnore
     val seoulBusJourney: PlannedSeoulBusJourney? = null,
+    @get:com.fasterxml.jackson.annotation.JsonIgnore
+    val deferredSeoulBusTransfer: DeferredSeoulBusTransfer? = null,
 ) {
     /**
      * 추천 출발 판단에 정상 provider 결과로 채택할 수 있는지 나타낸다.

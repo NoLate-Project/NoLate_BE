@@ -49,12 +49,15 @@ class TransitJourneyMatcher {
         if (!provider.equals("odsay", ignoreCase = true)) return this
         val rides = rideLegs
         val modes = rides.map { it.mode }
-        if (modes != selected.rides.map { it.mode } || modes.firstOrNull() != TransitLegMode.BUS) return this
-        val supported = modes.size in 1..2 && modes.all { it == TransitLegMode.BUS } ||
-            modes.size in 2..3 && modes.drop(1).all { it == TransitLegMode.SUBWAY }
-        if (!supported) return this
-        val ride = rides.first()
-        val id = selected.rides.first().providerRouteId?.normalizeIdentity() ?: return this
+        if (modes != selected.rides.map { it.mode }) return this
+        val busIndex = when {
+            modes.size in 1..2 && modes.all { it == TransitLegMode.BUS } -> 0
+            modes.size in 2..3 && modes.first() == TransitLegMode.BUS && modes.drop(1).all { it == TransitLegMode.SUBWAY } -> 0
+            modes.size in 2..3 && modes.last() == TransitLegMode.BUS && modes.dropLast(1).all { it == TransitLegMode.SUBWAY } -> modes.lastIndex
+            else -> return this
+        }
+        val ride = rides[busIndex]
+        val id = selected.rides[busIndex].providerRouteId?.normalizeIdentity() ?: return this
         if (ride.line?.providerRouteId?.normalizeIdentity() == id) return this
         val selectedLine = ride.alternativeBusLines.singleOrNull {
             it.providerRouteId?.normalizeIdentity() == id

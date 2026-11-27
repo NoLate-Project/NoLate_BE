@@ -1,0 +1,53 @@
+{
+  "classification": "CONTROLLED_DEFERRED_SUBWAY_TO_BUS_REPLAY",
+  "providerForecastHorizonSeconds": 1200,
+  "departureEvaluation": {
+    "scheduledTrainAlightingOffsetSeconds": 1800,
+    "plannedTrainAlightingOffsetSeconds": 1980,
+    "busProviderCalls": 0,
+    "storedExactBusEndpoints": true,
+    "storedVehicle": false,
+    "predictedArrivalAt": null
+  },
+  "workerReplay": {
+    "plannedTrainAlightingOffsetSeconds": 3480,
+    "observedTrainAlightingOffsetSeconds": 3495,
+    "transferWalkSeconds": 30,
+    "requiredBoardingMarginSeconds": 60,
+    "rejectedBusBoardingOffsetSeconds": 3584,
+    "selectedBusBoardingOffsetSeconds": 3585,
+    "busAlightingOffsetSeconds": 3825,
+    "destinationWalkSeconds": 60,
+    "predictedArrivalOffsetSeconds": 3885,
+    "originalRecommendedDeparturePreserved": true,
+    "hypotheticalOriginReplanAccepted": false,
+    "nextCheckInsideObservationWindowSeconds": 60
+  },
+  "verification": {
+    "backendTargetedTestsPassed": 386,
+    "frontendTargetedTestsPassed": 170,
+    "typeScriptPassed": true,
+    "installedAppReplay": {
+      "result": "PASSED",
+      "dataSource": "isolated H2",
+      "workerHistoryCount": 2,
+      "waitingState": "TRANSFER_FORECAST_PENDING",
+      "waitingPublishedArrivalAt": null,
+      "connectedBasis": "MATCHED_TRAIN_AND_BUS_REALTIME",
+      "trainNumber": "4703",
+      "busLine": "402",
+      "totalMinutes": 65,
+      "transferWalkSeconds": 30,
+      "transferWaitSeconds": 60,
+      "recommendedDepartureAt": "2026-11-27T08:50:44Z",
+      "predictedArrivalAt": "2026-11-27T09:55:29Z",
+      "originalAppEndpointRestored": true,
+      "ownedPortsReleased": true,
+      "waitingScreenshot": "e2e/evidence/2026-11-27-deferred-subway-to-bus/ios-waiting.png",
+      "connectedScreenshot": "e2e/evidence/2026-11-27-deferred-subway-to-bus/ios-connected.png"
+    },
+    "physicalTransitHttpCalls": 0,
+    "matchingNaverAccuracySampleCount": 0,
+    "physicalTripCollected": false
+  }
+}

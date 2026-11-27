@@ -12,6 +12,10 @@ object PlannedTransitRefreshCadencePolicy {
 
     fun nextRefreshAt(now: Instant, snapshot: EffectiveTransitRouteSnapshot?): Instant? {
         val state = snapshot ?: return null
+        state.deferredSeoulBusTransfer?.takeIf { state.isTrackingDeferredTransferAt(now) }?.let { deferred ->
+            val alightingAt = deferred.railUpdate?.route?.arrivalAt ?: deferred.railPlan.arrivalAt
+            return checkForEvents(now, listOf(alightingAt))?.takeIf { it < deferred.trackingUntil }
+        }
         val original = state.plannedRouteAt(now) ?: return null
         if (original.departureAt > now) return null
         fun matchesOriginal(route: com.noLate.schedule.application.EffectiveTransitRoute) =
@@ -19,15 +23,27 @@ object PlannedTransitRefreshCadencePolicy {
         val route = state.plannedRouteUpdate?.route?.takeIf(::matchesOriginal)
             ?: state.lastUpdatedPlannedRoute?.takeIf(::matchesOriginal) ?: original
         val rides = route.segments.filter { it.kind != EffectiveTransitRouteSegmentKind.WALK }
-        if (rides.isEmpty() || rides.any { it.kind != EffectiveTransitRouteSegmentKind.SUBWAY || it.rideTiming == null }) return null
-        if (rides.any { !requireNotNull(it.rideTiming).timetable.isObservableServiceDay(original.departureAt, now) }) return null
-        val events = rides.flatMap { segment -> requireNotNull(segment.rideTiming).let {
-            listOf(it.predictedBoardingAt, it.predictedArrivalAt)
-        } }.filter { it >= now.minusSeconds(LATE_OBSERVATION_SECONDS) }
-        if (events.isEmpty()) return null
+        val validBusPlan = state.plannedSeoulBusJourney?.matches(route) == true
+        if (validBusPlan && route.arrivalAt <= now) return null
+        val events = rides.flatMap { segment ->
+            when (segment.kind) {
+                EffectiveTransitRouteSegmentKind.SUBWAY -> segment.rideTiming
+                    ?.takeIf { it.timetable.isObservableServiceDay(original.departureAt, now) }
+                    ?.let { listOf(it.predictedBoardingAt, it.predictedArrivalAt) } ?: return null
+                EffectiveTransitRouteSegmentKind.BUS -> segment.busRidePrediction?.takeIf { validBusPlan }
+                    ?.let { listOf(it.boardingAt, it.alightingAt) } ?: return null
+                else -> return null
+            }
+        }
+        return checkForEvents(now, events)
+    }
+
+    private fun checkForEvents(now: Instant, events: List<Instant>): Instant? {
+        val observable = events.filter { it >= now.minusSeconds(LATE_OBSERVATION_SECONDS) }
+        if (observable.isEmpty()) return null
         // 공급자의 15분 미래 조회·20분 지연 대조 창 안에서는 120초 신선도보다 짧게 확인한다.
         // 멀리 있는 여정은 기존 저빈도 주기를 유지하되 관측 창이 열리는 경계는 넘기지 않는다.
-        return if (events.any { it <= now.plusSeconds(LOOKAHEAD_SECONDS) }) now.plus(1, ChronoUnit.MINUTES)
-            else events.minOf { it.minusSeconds(LOOKAHEAD_SECONDS) }
+        return if (observable.any { it <= now.plusSeconds(LOOKAHEAD_SECONDS) }) now.plus(1, ChronoUnit.MINUTES)
+            else observable.minOf { it.minusSeconds(LOOKAHEAD_SECONDS) }
     }
 }

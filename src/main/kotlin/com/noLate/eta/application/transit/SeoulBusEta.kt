@@ -4,6 +4,7 @@ import com.noLate.eta.domain.TransitFirstBoardingObservation
 import com.noLate.eta.domain.TransitJourney
 import com.noLate.eta.domain.TransitJourneyLeg
 import com.noLate.eta.domain.TransitLegMode
+import com.noLate.transit.domain.SeoulBusConnectionStops
 import com.noLate.transit.domain.SeoulBusRideService
 import com.noLate.transit.infrastructure.SeoulBusPairedArrival
 import com.noLate.transit.infrastructure.SeoulTransitArrivalClient
@@ -23,9 +24,21 @@ class SeoulBusEta(
 ) {
     internal fun evaluation(): Evaluation = Evaluation()
 
+    internal fun isOutsideConnectionHorizon(boardingReadyAt: Instant, evaluatedAt: Instant): Boolean =
+        boardingReadyAt > evaluatedAt.plusSeconds(FORECAST_HORIZON_SECONDS)
+
+    internal fun connectionStops(ride: TransitJourneyLeg): SeoulBusConnectionStops? {
+        val routeId = ride.line?.localRouteId?.takeIf(providerId::matches) ?: return null
+        val from = ride.from ?: return null
+        val to = ride.to ?: return null
+        val fromId = from.localStopId?.takeIf(providerId::matches) ?: return null
+        val toId = to.localStopId?.takeIf { it != fromId && providerId.matches(it) } ?: return null
+        return SeoulBusConnectionStops(routeId, fromId, toId, from.arsId, to.arsId)
+    }
+
     /** Safe-departure search reuses the same response and never polls another route in this evaluation. */
     internal inner class Evaluation(private val sharedOnward: (() -> Evaluation)? = null) {
-        private var queried: StopPair? = null
+        private var queried: SeoulBusConnectionStops? = null
         private var arrivals = emptyList<SeoulBusPairedArrival>()
         private var providerFailed = false
         private val onward by lazy { sharedOnward?.invoke() ?: Evaluation() }
@@ -114,7 +127,18 @@ class SeoulBusEta(
         }
 
         fun canStillBoard(bus: SeoulSingleBusProjection, at: Instant): Boolean =
-            bus.observation.isFreshAt(maxOf(at, bus.receivedAt), sourceMaxAgeSeconds)
+            canStillBoard(bus.observation, maxOf(at, bus.receivedAt))
+
+        fun canStillBoard(observation: TransitFirstBoardingObservation, at: Instant): Boolean =
+            observation.isFreshAt(at, sourceMaxAgeSeconds)
+
+        fun connectAfterRail(journey: TransitJourney, railArrivalAt: Instant, evaluatedAt: Instant,
+                             maxTravelMinutes: Int, requiredMarginSeconds: Long): SeoulSingleBusProjection? {
+            val additionalMargin = (requiredMarginSeconds - boardingBufferSeconds).coerceAtLeast(0)
+            val connection = journey.copy(departureAt = railArrivalAt.plusSeconds(additionalMargin))
+            return projectRides(connection, evaluatedAt, maxTravelMinutes)
+                .minByOrNull(SeoulSingleBusProjection::destinationAt)
+        }
 
         private fun projectRides(
             journey: TransitJourney,
@@ -130,21 +154,16 @@ class SeoulBusEta(
             val departure = journey.departureAt
             val accessAt = departure.plusSeconds(accessSeconds)
             val readyAt = accessAt.plusSeconds(boardingBufferSeconds)
-            val horizon = evaluatedAt.plusSeconds(20 * 60)
+            val horizon = evaluatedAt.plusSeconds(FORECAST_HORIZON_SECONDS)
             if (readyAt > horizon) return emptyList()
 
-            val routeId = ride.line?.localRouteId?.takeIf(providerId::matches) ?: return emptyList()
-            val lineName = ride.line.name?.takeIf(String::isNotBlank) ?: return emptyList()
-            val from = ride.from ?: return emptyList()
-            val to = ride.to ?: return emptyList()
-            val stationName = from.name?.takeIf(String::isNotBlank) ?: return emptyList()
-            val fromId = from.localStopId?.takeIf(providerId::matches) ?: return emptyList()
-            val toId = to.localStopId?.takeIf { it != fromId && providerId.matches(it) } ?: return emptyList()
-            val key = StopPair(routeId, fromId, toId, from.arsId, to.arsId)
+            val key = connectionStops(ride) ?: return emptyList()
+            val lineName = ride.line?.name?.takeIf(String::isNotBlank) ?: return emptyList()
+            val stationName = ride.from?.name?.takeIf(String::isNotBlank) ?: return emptyList()
             if (queried == null) {
                 queried = key
                 arrivals = try {
-                    fetch(key)
+                    readPairedArrivals(key)
                 } catch (failure: Exception) {
                     if (failure is CancellationException || failure is InterruptedException ||
                         Thread.currentThread().isInterrupted) throw failure
@@ -190,7 +209,7 @@ class SeoulBusEta(
         }
     }
 
-    private fun fetch(pair: StopPair): List<SeoulBusPairedArrival> {
+    internal fun readPairedArrivals(pair: SeoulBusConnectionStops): List<SeoulBusPairedArrival> {
         val stops = client.getBusRouteDiagnosticStops(pair.routeId)
         val board = stops.singleOrNull { it.stationId == pair.from && !it.publicStopNumberInvalid &&
             it.arsId != null && (pair.fromArs == null || it.arsId == pair.fromArs) } ?: return emptyList()
@@ -200,11 +219,8 @@ class SeoulBusEta(
         return client.getPairedBusArrivals(stops.filter { it.sequence in board.sequence..alight.sequence })
     }
 
-    private data class StopPair(
-        val routeId: String, val from: String, val to: String, val fromArs: String?, val toArs: String?,
-    )
-
     private companion object {
+        const val FORECAST_HORIZON_SECONDS = 20 * 60L
         val logger = LoggerFactory.getLogger(SeoulBusEta::class.java)
         val providerId = Regex("[1-9][0-9]{8}")
         fun minutes(from: Instant, to: Instant) = ceil(Duration.between(from, to).toMillis() / 60_000.0).toInt()

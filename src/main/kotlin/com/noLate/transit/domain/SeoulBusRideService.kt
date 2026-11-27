@@ -2,6 +2,19 @@ package com.noLate.transit.domain
 
 import java.security.MessageDigest
 
+/** Exact provider route and endpoints, before any vehicle has been chosen. */
+data class SeoulBusConnectionStops(
+    val routeId: String,
+    val from: String,
+    val to: String,
+    val fromArs: String?,
+    val toArs: String?,
+) {
+    init {
+        require(isSeoulBusIdentifier(routeId) && isSeoulBusIdentifier(from) && isSeoulBusIdentifier(to) && from != to)
+    }
+}
+
 /** A catalog occurrence, checked again at refresh. The same stop ID can occur twice on one route. */
 data class SeoulBusStopOccurrence(val stationId: String, val arsId: String, val order: Int) {
     init {

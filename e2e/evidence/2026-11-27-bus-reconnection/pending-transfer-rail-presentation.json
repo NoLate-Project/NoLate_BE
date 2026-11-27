@@ -1,0 +1,41 @@
+{
+  "classification": "CONTROLLED_DEFERRED_TRANSFER_RAIL_PRESENTATION_REPLAY",
+  "before": {
+    "destinationEtaPublished": false,
+    "displayedSavedTotalMinutes": 10,
+    "displayedSavedRailMinutes": 4,
+    "frontendScreenshot": "e2e/evidence/2026-11-27-deferred-subway-to-bus/ios-waiting.png"
+  },
+  "after": {
+    "displayedSavedTotal": false,
+    "displayedPlannedRailMinutes": 56,
+    "displayedTransferWalkSeconds": 30,
+    "publishedBusBoardingBeforeConnection": false,
+    "destinationEtaPublishedBeforeConnection": false,
+    "pendingBusDisplayedAsUnsupported": false,
+    "publishedConnectedTotalMinutes": 65,
+    "originalRecommendedDeparturePreserved": true
+  },
+  "verification": {
+    "backendTargetedTestsPassed": 388,
+    "frontendTargetedTestsPassed": 172,
+    "typeScriptPassed": true,
+    "installedAppReplay": {
+      "result": "PASSED",
+      "pendingRailScreenPassed": true,
+      "connectedJourneyScreenPassed": true,
+      "workerHistoryCount": 2,
+      "recommendedDepartureAt": "2026-11-27T09:03:04Z",
+      "trainBoardingPlanAt": "2026-11-27T09:05:04Z",
+      "trainAlightingPlanAt": "2026-11-27T10:01:04Z",
+      "transferStopPlanAt": "2026-11-27T10:01:34Z",
+      "connectedDestinationPredictionAt": "2026-11-27T10:07:49Z",
+      "originalAppEndpointRestored": true,
+      "ownedPortsReleased": true,
+      "frontendScreenshot": "e2e/evidence/2026-11-27-pending-transfer-rail/ios-pending-rail-plan.png"
+    },
+    "physicalTransitHttpCalls": 0,
+    "matchingNaverAccuracySampleCount": 0,
+    "physicalTripCollected": false
+  }
+}

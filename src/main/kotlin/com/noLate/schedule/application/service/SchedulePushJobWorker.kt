@@ -326,6 +326,7 @@ class SchedulePushJobWorker(
                     evaluationCheckCount = job.checkCount,
                     notificationGeneration = job.notificationGeneration,
                     evaluatedAt = now,
+                    protectedDepartureAt = job.lastRecommendedDepartureAt ?: job.departureAt,
                     verifiedTimetablePlan = com.noLate.schedule.application.TimetableDeparturePlanPolicy.verifiedRoute(
                         // 시간표 취득은 요청 시작 뒤에 일어난다. 실제 응답 완료 시계로 검증한다.
                         trafficResult, currentAtOrAfter(now), schedule.startAt, boardingBufferSeconds,
@@ -339,10 +340,23 @@ class SchedulePushJobWorker(
                 val busJourney = snapshot.plannedSeoulBusJourney
                 val currentMatched = snapshot.plannedJourneyArrivalPrediction(now, arrivalSourceMaxAgeSeconds)
                     ?.basis == PlannedJourneyArrivalBasis.MATCHED_TRAIN_REALTIME
-                if (plan == null) snapshot else if (busJourney != null) {
+                if (plan == null) {
+                    val pending = snapshot.deferredSeoulBusTransfer
+                    val refreshed = pending?.let { plannedSeoulBusRouteRefresher?.refreshDeferred(it, now) }
+                    val connected = refreshed?.connected
+                    if (connected != null) snapshot.copy(
+                        inProgressPlannedRoute = connected.update.route,
+                        deferredSeoulBusTransfer = null,
+                        plannedSeoulBusJourney = connected.journey,
+                        plannedRouteUpdate = connected.update,
+                        lastUpdatedPlannedRoute = connected.update.route,
+                    ) else if (refreshed != null) snapshot.copy(deferredSeoulBusTransfer = refreshed.pending) else snapshot
+                } else if (busJourney != null) {
                     val baseline = snapshot.lastUpdatedPlannedRoute?.takeIf { busJourney.matches(it) } ?: plan
                     val refreshed = plannedSeoulBusRouteRefresher?.refresh(baseline, busJourney, now,
-                        pendingTransferFailure = snapshot.plannedRouteUpdate?.failure != null)
+                        pendingTransferFailure = snapshot.plannedRouteUpdate?.failure != null,
+                        departurePlan = plan,
+                        previousUpdate = snapshot.plannedRouteUpdate)
                     if (refreshed == null) snapshot else snapshot.copy(
                         plannedSeoulBusJourney = refreshed.journey,
                         plannedRouteUpdate = refreshed.update,
@@ -368,7 +382,8 @@ class SchedulePushJobWorker(
                 ?.effectiveTransitRoute
             val routeChanged = effectiveRouteSnapshot?.routeChanged == true
             // 이미 시작한 계획 여정의 재조회는 새 출발 경로 알림으로 되돌리지 않는다.
-            val routeTransitioned = effectiveRouteSnapshot?.routeTransitioned == true &&
+            val trackingDeferredTransfer = effectiveRouteSnapshot?.isTrackingDeferredTransferAt(now) == true
+            val routeTransitioned = effectiveRouteSnapshot?.routeTransitioned == true && !trackingDeferredTransfer &&
                 effectiveRouteSnapshot.inProgressPlannedRoute == null
             val effectiveRouteSummary = verifiedEffectiveRoute
                 ?.segments
@@ -381,12 +396,12 @@ class SchedulePushJobWorker(
                 ?.joinToString(" → ")
             val etaFailureReason = sanitizeTrafficFailureReason(trafficResult.failureReason)
             val previousEtaFailureReason = sanitizeTrafficFailureReason(job.lastEtaFailureReason)
-            val transferFailureReason = etaFailureReason.takeIf { it.isTransitTransferFailure() }
+            val transferFailureReason = etaFailureReason.takeIf { !trackingDeferredTransfer && it.isTransitTransferFailure() }
             val previousTransferFailureReason = previousEtaFailureReason
                 .takeIf { it.isTransitTransferFailure() }
             val transferFailureTransition = transferFailureReason != null &&
                 transferFailureReason != previousTransferFailureReason
-            val predictedArrivalAt = trafficResult.userVisiblePredictedArrivalAt(schedule.startAt)
+            val predictedArrivalAt = trafficResult.userVisiblePredictedArrivalAt(schedule.startAt).takeUnless { trackingDeferredTransfer }
             operationalMetrics.recordSafely {
                 recordEtaResolution(
                     source = trafficResult.source,
@@ -427,7 +442,7 @@ class SchedulePushJobWorker(
                 ?.takeIf { previousRecommendedDepartureAt != null && it < previousRecommendedDepartureAt }
 
             // 대중교통 재조회 결과가 기존 알림을 뒤로 미루지 못하게 수정
-            val recommendedDepartureAt = if (effectiveRouteSnapshot?.inProgressPlannedRoute != null) {
+            val recommendedDepartureAt = if (effectiveRouteSnapshot?.inProgressPlannedRoute != null || trackingDeferredTransfer) {
                 requireNotNull(previousRecommendedDepartureAt)
             } else selectedRoute.anchoredDepartureAt ?: preventUnsafeTransitPostponement(
                 travelMode = request.travelMode,
@@ -437,7 +452,7 @@ class SchedulePushJobWorker(
             val inProgressPlannedRoute = effectiveRouteSnapshot?.inProgressPlannedRoute
             val degradedTransitPresentation =
                 route.travelMode == ScheduleTravelMode.TRANSIT &&
-                    (!trafficResult.accepted || inProgressPlannedRoute != null)
+                    (!trafficResult.accepted || inProgressPlannedRoute != null || trackingDeferredTransfer)
             val preservedAcceptedRoute = effectiveRouteSnapshot
                 ?.let { inProgressPlannedRoute ?: it.acceptedRoute() }
                 ?.takeIf { degradedTransitPresentation }
@@ -512,7 +527,7 @@ class SchedulePushJobWorker(
             // 조회 실패·시간표 부족 등 나머지 stale 결과는 알람 변경의 근거가 아니다.
             // 기존 알람은 그대로 두고, 채택 가능한 ETA 또는 확정 환승 실패만 동기화한다.
             // 특히 첫 평가의 과거 fallback 출발시각으로 미래 알람을 취소하면 안 된다.
-            val canSynchronizeAlarm = inProgressPlannedRoute == null &&
+            val canSynchronizeAlarm = inProgressPlannedRoute == null && !trackingDeferredTransfer &&
                 (trafficResult.accepted || earlierTimetableDeparture != null ||
                     etaFailureReason == TrafficFailureReasons.TRANSIT_TRANSFER_MISSED)
             val alarmIntent = departureAlarmSyncService?.takeIf { canSynchronizeAlarm }?.let {
@@ -575,7 +590,7 @@ class SchedulePushJobWorker(
             val trafficChangeMinutes = trafficChangeMinutes(
                 previousTravelMinutes = comparableLiveTravelMinutes,
                 currentTravelMinutes = travelMinutes,
-            )
+            ).takeUnless { trackingDeferredTransfer } ?: 0
             val departureAdvanceMinutes = job.lastRecommendedDepartureAt
                 ?.takeIf {
                     trafficResult.recommendedDepartureAt != null &&

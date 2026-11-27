@@ -283,7 +283,8 @@ class ScheduleDepartureEtaService(
             confidence = ScheduleEtaConfidence.LOW,
             failureReason = EtaStatusFailureReasons.ETA_SNAPSHOT_EXPIRED.takeUnless { hasActivePlan },
             plannedJourneyArrivalPrediction = plannedPrediction.takeIf { hasActivePlan },
-            plannedJourneyTimingFailureReason = baseline?.takeIf { hasActivePlan }?.plannedJourneyTimingFailureReason(),
+            plannedJourneyTimingFailureReason = baseline?.takeIf { hasActivePlan }?.plannedJourneyTimingFailureReason(readAt),
+            pendingTransferRailPlan = baseline?.takeIf { hasActivePlan }?.pendingTransferRailPlan(readAt),
             originReplanDiagnostic = if (hasActivePlan) OriginReplanDiagnostic(requireNotNull(job.lastTravelMinutes),
                 requireNotNull(job.lastEtaSource), true, EtaStatusFailureReasons.ETA_SNAPSHOT_EXPIRED,
                 job.lastEtaProviderFetchedAt) else null,
@@ -438,7 +439,8 @@ class ScheduleDepartureEtaService(
             // 출발 후 예측은 정상 출발 ETA와 별개다. 실제 승차는 확인되지 않았고,
             // 이번 평가가 같은 알림 세대/회차일 때만 저장한 계획 편을 읽는다.
             plannedJourneyArrivalPrediction = plannedPrediction.takeIf { inProgressPlan },
-            plannedJourneyTimingFailureReason = currentSnapshot?.takeIf { inProgressPlan }?.plannedJourneyTimingFailureReason(),
+            plannedJourneyTimingFailureReason = currentSnapshot?.takeIf { inProgressPlan }?.plannedJourneyTimingFailureReason(readAt),
+            pendingTransferRailPlan = currentSnapshot?.takeIf { inProgressPlan }?.pendingTransferRailPlan(readAt),
             originReplanDiagnostic = if (inProgressPlan) {
                 OriginReplanDiagnostic(
                     travelMinutes = travelMinutes,

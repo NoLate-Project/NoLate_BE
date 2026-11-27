@@ -1,0 +1,82 @@
+{
+  "classification": "CONTROLLED_SUBWAY_TO_BUS_PROVIDER_REPLAY",
+  "inputs": {
+    "routeModes": ["WALK", "SUBWAY", "WALK", "BUS", "WALK"],
+    "firstTrainNumber": "4703",
+    "transferWalkSeconds": 120,
+    "requiredBoardingMarginSeconds": 60,
+    "destinationWalkSeconds": 60,
+    "firstBusBoardingOffsetSeconds": 840,
+    "firstBusAlightingOffsetSeconds": 960,
+    "nextBusBoardingOffsetSeconds": 960,
+    "nextBusAlightingOffsetSeconds": 1080
+  },
+  "before": {
+    "acceptedConnections": 0,
+    "positiveScenarios": 2,
+    "failedAssertions": 3,
+    "missingConnectionDiagnostic": "TRANSIT_ROUTE_TIMING_ESTIMATE_ONLY"
+  },
+  "after": [
+    {
+      "subwayAlightingOffsetSeconds": 660,
+      "transferReadyWithMarginOffsetSeconds": 840,
+      "selectedBusBoardingOffsetSeconds": 840,
+      "selectedBusAlightingOffsetSeconds": 960,
+      "estimatedArrivalOffsetSeconds": 1020
+    },
+    {
+      "subwayAlightingOffsetSeconds": 675,
+      "transferReadyWithMarginOffsetSeconds": 855,
+      "selectedBusBoardingOffsetSeconds": 960,
+      "selectedBusAlightingOffsetSeconds": 1080,
+      "estimatedArrivalOffsetSeconds": 1140
+    },
+    {
+      "subwayAlightingOffsetSeconds": 675,
+      "transferReadyWithMarginOffsetSeconds": 855,
+      "selectedBusBoardingOffsetSeconds": null,
+      "estimatedArrivalOffsetSeconds": null,
+      "reason": "TRANSIT_TRANSFER_TIMING_UNKNOWN",
+      "firstTrainObservationPreserved": true
+    }
+  ],
+  "postDeparture": {
+    "originalArrivalOffsetSeconds": 600,
+    "trainAlightingOffsetSeconds": 390,
+    "transferWalkSeconds": 30,
+    "requiredBoardingMarginSeconds": 60,
+    "rejectedBusBoardingOffsetSeconds": 470,
+    "selectedBusBoardingOffsetSeconds": 480,
+    "transferWaitSeconds": 60,
+    "updatedArrivalOffsetSeconds": 820,
+    "finalArrivalWithDirectSameBusAlightingOffsetSeconds": 850,
+    "originalRecommendedDeparturePreserved": true
+  },
+  "verification": {
+    "backendTargetedTestsPassed": 374,
+    "frontendTargetedTestsPassed": 169,
+    "typeScriptPassed": true,
+    "installedAppReplay": {
+      "result": "PASSED",
+      "test": "NoLateEtaJourneyE2ETests.testVerifyIsolatedMixedTransfer",
+      "dataSource": "isolated H2",
+      "workerHistoryCount": 1,
+      "basis": "MATCHED_TRAIN_AND_BUS_REALTIME",
+      "trainNumber": "4703",
+      "busLine": "402",
+      "transferWalkSeconds": 30,
+      "transferWaitSeconds": 60,
+      "totalMinutes": 14,
+      "recommendedDepartureAt": "2026-11-27T09:21:15Z",
+      "predictedArrivalAt": "2026-11-27T09:34:55Z",
+      "displayedArrivalClock": "18:34",
+      "originalAppEndpointRestored": true,
+      "ownedPortsReleased": true,
+      "frontendScreenshot": "e2e/evidence/2026-11-27-subway-to-bus/ios-subway-to-bus.png"
+    },
+    "physicalTransitHttpCalls": 0,
+    "matchingNaverAccuracySampleCount": 0,
+    "physicalTripCollected": false
+  }
+}

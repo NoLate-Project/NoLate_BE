@@ -20,6 +20,8 @@ enum class PlannedJourneyArrivalBasis {
     LAST_ACCEPTED_PLAN,
     MATCHED_TRAIN_REALTIME,
     MATCHED_BUS_REALTIME,
+    /** 열차의 관측으로 환승 여유를 대조하고, 탈 수 있는 버스의 승하차 예보를 반영했다. */
+    MATCHED_TRAIN_AND_BUS_REALTIME,
     /** 구간 관측으로 환승을 재판정했으며 관측되지 않은 후속 편은 시간표 기준이다. */
     MATCHED_RIDE_AND_ONWARD_TIMETABLE,
     /** 양 끝 역이 식별한 실제 차량을 선택했다. 원래 시간표 편의 별칭이나 탑승 확인이 아니다. */
@@ -186,6 +188,9 @@ data class ScheduleDepartureEtaStatusDto(
     /** 출발 후에도 동일 편을 확인한 경우만 보정한다. 실제 탑승·정시 도착 확정값이 아니다. */
     val plannedJourneyArrivalPrediction: PlannedJourneyArrivalPrediction? = null,
     val plannedJourneyTimingFailureReason: String? = null,
+    /** Verified rail and transfer walk up to the next bus stop. Its endpoint is not the destination. */
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val pendingTransferRailPlan: EffectiveTransitRoute? = null,
     /** 출발 후 새 출발지 재검색의 진단. 위 잠정 도착이나 보호된 출발 알림에 적용하지 않는다. */
     val originReplanDiagnostic: OriginReplanDiagnostic? = null,
     /** 재조회가 불확실할 때 저장한 대중교통 경로 기준의 출발시각. 예약된 출발시각과 다를 수 있다. */
